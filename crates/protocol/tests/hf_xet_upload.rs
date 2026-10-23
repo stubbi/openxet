@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use openxet_protocol::{
     MAX_REFERENCED_CHUNKS, MerkleHash, ShardFileEntry, UploadShard, VerifyError, XorbChunks,
     hash_to_hex, read_upload_shard, read_xorb_chunks, verify_segment, verify_shard, xorb_hash,
+    xorb_with_footer,
 };
 
 const XORB: &str = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
@@ -53,6 +54,15 @@ fn xorb_chunks() -> XorbChunks {
 
 fn digest_bytes(hex: &str) -> [u8; 32] {
     core::array::from_fn(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+}
+
+#[test]
+fn hf_xet_upload_xorb_is_accepted_as_uploaded() {
+    let body = fs::read(capture(&format!("{XORB}.xorb"))).unwrap();
+    let stored = xorb_with_footer(&body).unwrap();
+    assert_eq!(hash_to_hex(&stored.hash), XORB);
+    assert_eq!(stored.chunks, xorb_chunks());
+    assert!(stored.bytes.starts_with(&body));
 }
 
 #[test]

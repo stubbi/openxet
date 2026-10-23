@@ -50,6 +50,11 @@ one, Shardline, against stock clients. Full results are in
 - We depend on `xet-core`'s release cadence and API stability. The
   `protocol` crate isolates that.
 - License hygiene: the crates are Apache-2.0, and our NOTICE credits them.
+- The `protocol` crate may compose upstream's public primitives with
+  openxet's own policy checks, for example validating each decompressed
+  chunk length and the chunk limits of an uploaded xorb before calling
+  upstream's serializer. It must not reimplement format logic: parsing,
+  serialization, compression and hashing stay upstream's code.
 
 ## Alternatives considered
 

@@ -139,6 +139,10 @@ fn client_serialized_xorb(serialize_footer: bool) -> SerializedXorbObject {
 fn xorb_upload_without_footer_gets_footer_and_reference_hash() {
     let stored = xorb_with_footer(&reference_xorb_bytes()).unwrap();
     assert_eq!(hash_to_hex(&stored.hash), XORB);
+    assert_eq!(
+        stored.chunks.hashes,
+        chunks_listing(&format!("{CSV}.chunks"))
+    );
     // The stored form is the chunk section followed by a footer, which the
     // footer-tolerant path accepts again unchanged.
     assert!(stored.bytes.starts_with(&reference_xorb_bytes()));
@@ -154,7 +158,9 @@ fn xorb_upload_with_and_without_client_footer_yield_reference_hash() {
     assert!(without.footer_start.is_none());
     assert!(with.footer_start.is_some());
     for body in [&without.serialized_data, &with.serialized_data] {
-        assert_eq!(hash_to_hex(&xorb_with_footer(body).unwrap().hash), XORB);
+        let stored = xorb_with_footer(body).unwrap();
+        assert_eq!(hash_to_hex(&stored.hash), XORB);
+        assert_eq!(stored.chunks.hashes, reference_xorb_chunks());
     }
 }
 
