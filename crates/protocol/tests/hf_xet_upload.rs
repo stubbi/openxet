@@ -11,8 +11,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use openxet_protocol::{
-    MerkleHash, ShardFileEntry, UploadShard, VerifyError, XorbChunks, hash_to_hex,
-    read_upload_shard, read_xorb_chunks, verify_file, verify_segment, xorb_hash,
+    MAX_REFERENCED_CHUNKS, MerkleHash, ShardFileEntry, UploadShard, VerifyError, XorbChunks,
+    hash_to_hex, read_upload_shard, read_xorb_chunks, verify_segment, verify_shard, xorb_hash,
 };
 
 const XORB: &str = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
@@ -85,7 +85,7 @@ fn hf_xet_upload_shard_verifies_against_its_xorb() {
         for seg in &file.segments {
             verify_segment(seg, &chunks).unwrap();
         }
-        verify_file(&file, lookup).unwrap();
+        verify_one(&file, lookup).unwrap();
     }
 }
 
@@ -104,12 +104,24 @@ fn empty_file_sha256_must_be_absent_zero_or_the_empty_digest() {
             sha256,
             ..empty.clone()
         };
-        verify_file(&entry, no_xorbs).unwrap();
+        verify_one(&entry, no_xorbs).unwrap();
     }
     let wrong = ShardFileEntry {
         sha256: Some(digest_bytes(FILES[1].1)),
         ..empty
     };
-    let err = verify_file(&wrong, no_xorbs).unwrap_err();
+    let err = verify_one(&wrong, no_xorbs).unwrap_err();
     assert!(matches!(err, VerifyError::EmptyFileSha256 { .. }), "{err}");
+}
+
+/// Verifies one file through the public entry point, under the default cap.
+fn verify_one<'a>(
+    entry: &ShardFileEntry,
+    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
+) -> Result<(), VerifyError> {
+    let shard = UploadShard {
+        files: vec![entry.clone()],
+        xorbs: Vec::new(),
+    };
+    verify_shard(&shard, xorb_chunks, MAX_REFERENCED_CHUNKS)
 }

@@ -12,8 +12,7 @@ use std::path::PathBuf;
 use openxet_protocol::{
     MAX_REFERENCED_CHUNKS, MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError, Segment,
     ShardFileEntry, UploadShard, VerifyError, file_hash, hash_from_hex, hash_to_hex, range_hash,
-    read_upload_shard, read_xorb_chunks, verify_file, verify_segment, verify_shard, xorb_hash,
-    xorb_with_footer,
+    read_upload_shard, read_xorb_chunks, verify_segment, verify_shard, xorb_hash, xorb_with_footer,
 };
 // Only to build client-serialized xorbs and shards as test input; production
 // code reaches upstream through openxet_protocol alone.
@@ -333,18 +332,18 @@ fn file_hash_recomputes_from_segments() {
     assert_eq!(file_hash(&referenced), entry.file_hash);
 
     let lookup = |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks.as_slice());
-    verify_file(&entry, lookup).unwrap();
+    verify_one(&entry, lookup).unwrap();
 
     let mut wrong = entry.clone();
     wrong.file_hash = flip_first_byte(wrong.file_hash);
-    let err = verify_file(&wrong, lookup).unwrap_err();
+    let err = verify_one(&wrong, lookup).unwrap_err();
     assert!(matches!(err, VerifyError::FileHashMismatch { .. }), "{err}");
 }
 
 #[test]
 fn file_referencing_an_unknown_xorb_is_rejected() {
     let entry = reference_upload_shard().files.remove(0);
-    let err = verify_file(&entry, |_| None).unwrap_err();
+    let err = verify_one(&entry, |_| None).unwrap_err();
     assert!(matches!(err, VerifyError::UnknownXorb { .. }), "{err}");
     assert!(err.to_string().contains(XORB), "{err}");
 }
@@ -544,7 +543,7 @@ fn file_hash_streams_across_many_segments() {
         segments,
         sha256: None,
     };
-    verify_file(&entry, reference_lookup(&chunks)).unwrap();
+    verify_one(&entry, reference_lookup(&chunks)).unwrap();
 }
 
 #[test]
@@ -558,4 +557,16 @@ fn reference_dedupe_shard_has_no_files() {
         shard.xorbs.iter().map(hash_to_hex).collect::<Vec<_>>(),
         [XORB]
     );
+}
+
+/// Verifies one file through the public entry point, under the default cap.
+fn verify_one<'a>(
+    entry: &ShardFileEntry,
+    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
+) -> Result<(), VerifyError> {
+    let shard = UploadShard {
+        files: vec![entry.clone()],
+        xorbs: Vec::new(),
+    };
+    verify_shard(&shard, xorb_chunks, MAX_REFERENCED_CHUNKS)
 }

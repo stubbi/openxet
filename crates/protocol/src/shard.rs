@@ -32,7 +32,7 @@ pub const MAX_UPLOAD_SHARD_BYTES: u64 = 64 * 1024 * 1024;
 /// (range hash and file hash), so the cap bounds CPU. Memory doesn't grow
 /// with the cap: besides the parsed shard (at most about the 64 MiB body),
 /// verification holds one buffer of at most one xorb's chunk hashes and an
-/// O(log n) file-hash state per file (see [`verify_file`]). Without
+/// O(log n) file-hash state per file (see [`verify_shard`]). Without
 /// incremental hashing the cap would allow 2^24 × 40 bytes = 640 MiB of
 /// collected `(hash, length)` pairs per shard.
 pub const MAX_REFERENCED_CHUNKS: u64 = 1 << 24;
@@ -57,7 +57,7 @@ pub struct UploadShard {
 /// One file's reconstruction as uploaded in a shard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShardFileEntry {
-    /// The file hash the client claims; [`verify_file`] recomputes it.
+    /// The file hash the client claims; [`verify_shard`] recomputes it.
     pub file_hash: MerkleHash,
     /// The reconstruction terms, in file order.
     pub segments: Vec<Segment>,
@@ -412,10 +412,26 @@ fn verify_segment_with<'a>(
     Ok(chunks)
 }
 
-/// Verifies every file of an upload shard with [`verify_file`], after
-/// checking that the shard references at most `max_referenced_chunks` chunks
-/// in total ([`MAX_REFERENCED_CHUNKS`] is the default). This is the entry
-/// point for untrusted shards: the work it does is bounded by the cap.
+/// Verifies an upload shard: the only public entry point for verification,
+/// so the work bound can't be bypassed.
+///
+/// First the shard must reference at most `max_referenced_chunks` chunks in
+/// total ([`MAX_REFERENCED_CHUNKS`] is the default). Then, for every file:
+/// - every segment's xorb is stored and the segment passes
+///   [`verify_segment`] against its stored chunks
+/// - the file hash recomputed from the referenced chunks, in order, equals
+///   the claimed one (<https://huggingface.co/docs/xet/hashing#file-hashes>)
+/// - a file with no segments is the empty file: its hash must be all zeros
+///   (as upstream's `file_hash` of no chunks is), and its SHA-256 absent, all
+///   zeros (what `hf_xet` 1.7.0 sends), or the digest of zero bytes
+///
+/// The file hash is computed incrementally with upstream's
+/// `MerkleHashSubtree`, so memory stays O(log n) in the referenced chunks in
+/// release builds (debug builds keep every chunk to self-check upstream's
+/// merge). CPU is linear in the referenced chunks, which the cap bounds.
+///
+/// `xorb_chunks` returns the stored `(chunk hash, length)` list for a xorb,
+/// or `None` if the xorb isn't stored.
 ///
 /// # Errors
 ///
@@ -446,28 +462,9 @@ pub fn verify_shard<'a>(
         .try_for_each(|file| verify_file(file, &xorb_chunks))
 }
 
-/// Verifies a file entry: every segment passes [`verify_segment`] against its
-/// xorb's stored chunks, and the file hash recomputed from the referenced
-/// chunks, in order, equals the claimed one
-/// (<https://huggingface.co/docs/xet/hashing#file-hashes>).
-///
-/// A file with no segments is the empty file. Its hash must be all zeros (as
-/// upstream's `file_hash` of no chunks is), and its SHA-256 absent, all
-/// zeros (what `hf_xet` 1.7.0 sends), or the digest of zero bytes.
-///
-/// The file hash is computed incrementally with upstream's
-/// `MerkleHashSubtree`, so memory stays O(log n) in the referenced chunks in
-/// release builds (debug builds keep every chunk to self-check upstream's
-/// merge). CPU is linear in the referenced chunks; bound it with
-/// [`verify_shard`].
-///
-/// `xorb_chunks` returns the stored `(chunk hash, length)` list for a xorb,
-/// or `None` if the xorb isn't stored.
-///
-/// # Errors
-///
-/// The first rule the file breaks, as a [`VerifyError`].
-pub fn verify_file<'a>(
+/// One file's rules, as listed on [`verify_shard`]; callers go through
+/// that function so the work bound applies.
+fn verify_file<'a>(
     entry: &ShardFileEntry,
     xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
 ) -> Result<(), VerifyError> {
