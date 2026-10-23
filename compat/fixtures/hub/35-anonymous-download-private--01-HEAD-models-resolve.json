@@ -1,0 +1,145 @@
+{
+  "step": "35-anonymous-download-private",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/config.json",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "Accept-Encoding",
+        "identity"
+      ],
+      [
+        "X-HF-Download-Counter",
+        "1"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "e885687b-6a6d-45d2-b6c5-fc298a5210a3"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 401,
+    "reason": "Unauthorized",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "29"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:59 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"1d-DMkJvg8tpLoaQbsiq9Mz7l2CJyI\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea83-07ac24dc25f55fd76aa30551;e885687b-6a6d-45d2-b6c5-fc298a5210a3"
+      ],
+      [
+        "RateLimit",
+        "\"resolvers\";r=2999;t=89"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"resolvers\";q=3000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Error-Message",
+        "Invalid username or password."
+      ],
+      [
+        "WWW-Authenticate",
+        "Bearer realm=\"Authentication required\", charset=\"UTF-8\""
+      ],
+      [
+        "X-Cache",
+        "Error from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 327007f1c5fb72f9f4e936cb0d6d11ae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "SrK9WrGA2u2YnnfuCZWdiUNZgMLL8misn8ZrlKLiLoEv12Ez--yxlw=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  }
+}

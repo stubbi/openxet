@@ -1,0 +1,158 @@
+{
+  "step": "08-create-foreign-namespace-cli",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "huggingface-cli/2.2.0; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "106"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "af9b111f-2601-4018-b664-f915cb6da5ea"
+      ]
+    ],
+    "body": {
+      "size": 106,
+      "json": {
+        "name": "openxet-compat-s3-682b4d-cli",
+        "organization": "huggingface",
+        "visibility": "private",
+        "type": "model"
+      }
+    }
+  },
+  "response": {
+    "status": 403,
+    "reason": "Forbidden",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "91"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:00:49 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"5b-CIj48u4ItjWgXTLWiLKCtcuvD6o\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea01-7ddb32cd78cfe38c70b36ebb;af9b111f-2601-4018-b664-f915cb6da5ea"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=992;t=297"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Error-Message",
+        "You don't have the rights to create a model under the namespace \"huggingface\""
+      ],
+      [
+        "X-Cache",
+        "Error from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "BK67PgMSruMrLuCif4hAr-kr3raODM2l90nvRIbIPkDFvYzlMTuVeg=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 91,
+      "json": {
+        "error": "You don't have the rights to create a model under the namespace \"huggingface\""
+      }
+    }
+  }
+}

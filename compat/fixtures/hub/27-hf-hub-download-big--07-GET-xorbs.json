@@ -1,0 +1,94 @@
+{
+  "step": "27-hf-hub-download-big",
+  "seq": 7,
+  "role": "cdn",
+  "request": {
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b?X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&xip=REDACTED&repo_id=6adaea00d1462de6734ee881&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "range",
+        "bytes=0-67048158"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "us.aws.cdn.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 206,
+    "reason": "Partial Content",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "x-cache-status",
+        "Miss"
+      ],
+      [
+        "content-type",
+        "application/octet-stream"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "content-disposition",
+        "attachment"
+      ],
+      [
+        "content-range",
+        "bytes 0-67048158/67090495"
+      ],
+      [
+        "content-length",
+        "67048159"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "access-control-expose-headers",
+        "*"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ6XK7NFNWPJZ8K5ZKSJPY"
+      ],
+      [
+        "x-hf-cdn-pop",
+        "aws-eu-west-3"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 05:02:19 GMT"
+      ]
+    ],
+    "body": {
+      "size": 0,
+      "omitted": "streamed by the capture proxy (over 8 MiB); see Content-Length"
+    }
+  }
+}

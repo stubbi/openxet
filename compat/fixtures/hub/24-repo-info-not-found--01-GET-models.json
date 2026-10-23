@@ -1,0 +1,148 @@
+{
+  "step": "24-repo-info-not-found",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d-missing",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "5cda2a48-e87e-4e09-a02a-7494d6dc9a54"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 404,
+    "reason": "Not Found",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "32"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:18 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"20-bITJowpdmeRi6flSV9yCp5Fkq5k\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea5a-5b7e63b2072979a6651f2d88;5cda2a48-e87e-4e09-a02a-7494d6dc9a54"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=973;t=208"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Error-Code",
+        "RepoNotFound"
+      ],
+      [
+        "X-Error-Message",
+        "Repository not found"
+      ],
+      [
+        "X-Cache",
+        "Error from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "MP5d7Ibh_XblSMRiMax30J_qzUVts1XLPIM_RYf0VsH27gMNEnvaNw=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 32,
+      "json": {
+        "error": "Repository not found"
+      }
+    }
+  }
+}

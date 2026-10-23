@@ -1,0 +1,161 @@
+{
+  "step": "93-delete-model-missing",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/repos/delete",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "74"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "4525aa48-391b-4b5d-a97f-147b94b5839d"
+      ]
+    ],
+    "body": {
+      "size": 74,
+      "json": {
+        "name": "openxet-compat-s3-682b4d",
+        "organization": "openxet-compat",
+        "type": "model"
+      }
+    }
+  },
+  "response": {
+    "status": 404,
+    "reason": "Not Found",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "32"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:03:05 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"20-bITJowpdmeRi6flSV9yCp5Fkq5k\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea89-33579a907230b58555bfcdda;4525aa48-391b-4b5d-a97f-147b94b5839d"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=946;t=161"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Error-Code",
+        "RepoNotFound"
+      ],
+      [
+        "X-Error-Message",
+        "Repository not found"
+      ],
+      [
+        "X-Cache",
+        "Error from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 327007f1c5fb72f9f4e936cb0d6d11ae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "wmfCgjqYo1FZO82XkDmtg-wwULX73LMA5aTdgCa0Nn8cgnnNXMS8cQ=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 32,
+      "json": {
+        "error": "Repository not found"
+      }
+    }
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "step": "50-create-bucket",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "24"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "6c35fad9-08e3-4876-9800-6b4f53f514ab"
+      ]
+    ],
+    "body": {
+      "size": 24,
+      "json": {
+        "visibility": "private"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "145"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:03:00 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"91-XMMkdQeHW371AHQOlwOXXcqtglc\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea84-757a531d6f420114494ebc63;6c35fad9-08e3-4876-9800-6b4f53f514ab"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=959;t=166"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 327007f1c5fb72f9f4e936cb0d6d11ae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "XUMRVt8dcViCmA4EDpJdzsXaQXwIc1HnTo-6w-y6mZ8cTnSo6BcUMA=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 145,
+      "json": {
+        "url": "https://huggingface.co/buckets/openxet-compat/openxet-compat-s3-682b4d",
+        "name": "openxet-compat/openxet-compat-s3-682b4d",
+        "id": "6adaea84c9e6fb018f48591d"
+      }
+    }
+  }
+}

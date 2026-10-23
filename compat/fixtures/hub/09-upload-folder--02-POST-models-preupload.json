@@ -1,0 +1,194 @@
+{
+  "step": "09-upload-folder",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/preupload/main",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "950"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "f2026f32-58c0-406d-a3da-4e76e37772ca"
+      ]
+    ],
+    "body": {
+      "size": 950,
+      "json": {
+        "files": [
+          {
+            "path": "README.md",
+            "sample": "IyBvcGVueGV0IGNvbXBhdCBTMwo=",
+            "size": 20
+          },
+          {
+            "path": "big.bin",
+            "sample": "LGIzbmQrtwxoo/+WIsGokZx3FC13ELPhoR9JvP1JC+Geh5TTuWEA5aEjEJ6atY8/IemjKlzACs92+ObwwE1gsinuqDLToIGmX5jzESe3fxuGV0NZmk9iUAZu73hBGzNSWQH3hRlgrrBTT8uDGPreGpd/+okIEZBh/BTD1cArU5+Rj2ytFE3mGvpICeK0PtbGWDhfnLOkSX+d7xgjNlPc+zXKwzHhtsfeZPzLthFwwftCuaqcTgnQBK2vHvqJaX64DSptZHMnXFayHcylIEWx3kHK9XQg6XwJH6ZMv0cg6z/NUhCvavXo81SYCe7tW/Ehq54VwaaAsMG/+96ILhq2p0cWnEf5ymPyxqjp25LA+sxvl3LavHv9QCPaIS17VGJfCxZ7qboHHrx8UweOop+47JrFqW0Jj5nzO3xfufjEddb1UjweMXxACjtH1LwkzgUMZrcG4rGEXPJ/MMaaXKmDu6VwwPq80xBx2Rtf5UnPaDA0ounSizkjo1jDStTaWhkTEiYC12WxK7NoqiYLwsI+QBsvkQjUhz4K8Bx93UJ+Y5u4gfnXzEfDb44QWPN2SjN3eDD06insjSzVh22gG2KhBqnR9ER11nU2Clgrgy/CEciDo4VRh1YgKVjYs1g3uNcC93xKmqYYqfpRK3+5RIolBSDtXxT7fG+9VA+7NYILU0w=",
+            "size": 209715200
+          },
+          {
+            "path": "config.json",
+            "sample": "eyJoZWxsbyI6ICJvcGVueGV0In0K",
+            "size": 21
+          },
+          {
+            "path": "sub/small.txt",
+            "sample": "c21hbGwgZmlsZQo=",
+            "size": 11
+          }
+        ]
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "326"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:00:49 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"146-o3BtVhvdkueJgZiMzqyEldcbmdE\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea01-627ecf0d6a44f29b3b683a4e;f2026f32-58c0-406d-a3da-4e76e37772ca"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=991;t=297"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 5392c9fe38187e1fd5fc54183671ae90.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "Sdlu7gb6lHZttk4UMY9iRw8Gi0mdLXF0btQtRmBJ1rfeGk_Sbw7U3g=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 326,
+      "json": {
+        "files": [
+          {
+            "path": "README.md",
+            "uploadMode": "regular",
+            "shouldIgnore": false
+          },
+          {
+            "path": "big.bin",
+            "uploadMode": "lfs",
+            "shouldIgnore": false
+          },
+          {
+            "path": "config.json",
+            "uploadMode": "regular",
+            "shouldIgnore": false
+          },
+          {
+            "path": "sub/small.txt",
+            "uploadMode": "regular",
+            "shouldIgnore": false
+          }
+        ],
+        "commitOid": "1c89ba5e5b6721c738aca2b40bc39343da1d508e"
+      }
+    }
+  }
+}

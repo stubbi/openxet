@@ -1,0 +1,148 @@
+{
+  "step": "25-revision-not-found",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/revision/no-such-rev",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "4a9b70e6-ec73-4224-ad9d-12f8bf1ffec2"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 404,
+    "reason": "Not Found",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "39"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:18 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"27-IN0hMnuU+QXfy0Npvt0q4QEVSRg\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea5a-2c9767c9523c50c442740f75;4a9b70e6-ec73-4224-ad9d-12f8bf1ffec2"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=972;t=208"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Error-Code",
+        "RevisionNotFound"
+      ],
+      [
+        "X-Error-Message",
+        "Invalid rev id: no-such-rev"
+      ],
+      [
+        "X-Cache",
+        "Error from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "AxtoCLxyEWInmNXetiU_lbVzT_Wt7tIP7Eyfl1CtQlWzRlD23itlMQ=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 39,
+      "json": {
+        "error": "Invalid rev id: no-such-rev"
+      }
+    }
+  }
+}

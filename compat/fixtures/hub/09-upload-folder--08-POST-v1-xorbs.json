@@ -1,0 +1,85 @@
+{
+  "step": "09-upload-folder",
+  "seq": 8,
+  "role": "cas",
+  "request": {
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "content-length",
+        "67048159"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0,
+      "omitted": "streamed by the capture proxy (over 8 MiB); see Content-Length"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:01:27 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "21"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ473KH4P2R7SFR9JG7KH0"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 21,
+      "json": {
+        "was_inserted": true
+      }
+    }
+  }
+}

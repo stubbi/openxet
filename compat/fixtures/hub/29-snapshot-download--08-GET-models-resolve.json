@@ -1,0 +1,162 @@
+{
+  "step": "29-snapshot-download",
+  "seq": 8,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/.gitattributes",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-HF-Download-Counter",
+        "1"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "0bd1a174-d0c1-41c6-bdc5-62d78f3ac898"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Transfer-Encoding",
+        "chunked"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:57 GMT"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "ETag",
+        "W/\"a6344aac8c09253b3b630fb776ae94478aa0275b\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea81-54aeecd57932c18337edde45;0bd1a174-d0c1-41c6-bdc5-62d78f3ac898"
+      ],
+      [
+        "RateLimit",
+        "\"resolvers\";r=4989;t=169"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"resolvers\";q=5000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Repo-Commit",
+        "9afcd3ea6f3fe303354546da38b78dd1cffb1e07"
+      ],
+      [
+        "Content-Security-Policy",
+        "default-src 'none'; sandbox"
+      ],
+      [
+        "Content-Disposition",
+        "inline; filename*=UTF-8''.gitattributes; filename=\".gitattributes\";"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 f3e30e60e4c3aa07619eea359dbcbdf6.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "KpBWaaHYrqUi8PM20kCUDrZS45CydZUu6H0FgbxwDeuaEdR5xeRIgg=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 275,
+      "text": "*.7z filter=lfs diff=lfs merge=lfs -text\n*.arrow filter=lfs diff=lfs merge=lfs -text\n*.bin filter=lfs diff=lfs merge=lfs -text\n*.bz2 filter=lfs diff=lfs merge=lfs -text\n*.ckpt filter=lfs diff=lfs merge=lfs -text\n*.ftz filter=lfs diff=lfs merge=lfs -text\n*.gz filter=lfs diff=lfs merge=lfs -text\n*.h5 filter=lfs diff=lfs merge=lfs -text\n*.joblib filter=lfs diff=lfs merge=lfs -text\n*.lfs.* filter=lfs diff=lfs merge=lfs -text\n*.mlmodel filter=lfs diff=lfs merge=lfs -text\n*.model filter=lfs diff=lfs merge=lfs -text\n*.msgpack filter=lfs diff=lfs merge=lfs -text\n*.npy filter=lfs diff=lfs merge=lfs -text\n*.npz filter=lfs diff=lfs merge=lfs -text\n*.onnx filter=lfs diff=lfs merge=lfs -text\n*.ot filter=lfs diff=lfs merge=lfs -text\n*.parquet filter=lfs diff=lfs merge=lfs -text\n*.pb filter=lfs diff=lfs merge=lfs -text\n*.pickle filter=lfs diff=lfs merge=lfs -text\n*.pkl filter=lfs diff=lfs merge=lfs -text\n*.pt filter=lfs diff=lfs merge=lfs -text\n*.pth filter=lfs diff=lfs merge=lfs -text\n*.rar filter=lfs diff=lfs merge=lfs -text\n*.safetensors filter=lfs diff=lfs merge=lfs -text\nsaved_model/**/* filter=lfs diff=lfs merge=lfs -text\n*.tar.* filter=lfs diff=lfs merge=lfs -text\n*.tar filter=lfs diff=lfs merge=lfs -text\n*.tflite filter=lfs diff=lfs merge=lfs -text\n*.tgz filter=lfs diff=lfs merge=lfs -text\n*.wasm filter=lfs diff=lfs merge=lfs -text\n*.xz filter=lfs diff=lfs merge=lfs -text\n*.zip filter=lfs diff=lfs merge=lfs -text\n*.zst filter=lfs diff=lfs merge=lfs -text\n*tfevents* filter=lfs diff=lfs merge=lfs -text\n"
+    }
+  }
+}

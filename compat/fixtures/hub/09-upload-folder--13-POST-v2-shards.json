@@ -1,0 +1,105 @@
+{
+  "step": "09-upload-folder",
+  "seq": 13,
+  "role": "cas",
+  "request": {
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v2/shards",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "content-length",
+        "155376"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 155376,
+      "omitted": "binary body"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:14 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/x-ndjson"
+      ],
+      [
+        "Transfer-Encoding",
+        "chunked"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "cache-control",
+        "no-cache"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ6QPY6R5JPDWGTYW0PT2S"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 145,
+      "text": "{\"type\":\"validating\",\"verified\":1,\"total\":7}\n{\"type\":\"committing\",\"stage\":\"uploading\"}\n{\"type\":\"committing\",\"stage\":\"syncing\"}\n{\"type\":\"result\"}\n",
+      "ndjson": [
+        {
+          "type": "validating",
+          "verified": 1,
+          "total": 7
+        },
+        {
+          "type": "committing",
+          "stage": "uploading"
+        },
+        {
+          "type": "committing",
+          "stage": "syncing"
+        },
+        {
+          "type": "result"
+        }
+      ]
+    }
+  }
+}

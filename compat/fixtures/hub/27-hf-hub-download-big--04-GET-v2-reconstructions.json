@@ -1,0 +1,86 @@
+{
+  "step": "27-hf-hub-download-big",
+  "seq": 4,
+  "role": "cas",
+  "request": {
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "range",
+        "bytes=768000000-1023999999"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 416,
+    "reason": "Range Not Satisfiable",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:18 GMT"
+      ],
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "58"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ6WS4KKHHRC5849CANKW8"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 58,
+      "text": "request_id: 01M5KJ6WS4KKHHRC5849CANKW8; (12) invalid range"
+    }
+  }
+}

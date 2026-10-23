@@ -1,0 +1,196 @@
+{
+  "step": "27-hf-hub-download-big",
+  "seq": 5,
+  "role": "cas",
+  "request": {
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "range",
+        "bytes=0-255999999"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:19 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "4975"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-xet-file-size",
+        "209715200"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ6WS2J1RB273YTA6N78S5"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 4975,
+      "json": {
+        "offset_into_first_range": 0,
+        "terms": [
+          {
+            "hash": "06c6aad7d7b42cd5a154d67e5e7492c0fc7fcc2b79a884a8ffe0bd1ca924315f",
+            "unpacked_length": 67070140,
+            "range": {
+              "start": 0,
+              "end": 1018
+            }
+          },
+          {
+            "hash": "534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b",
+            "unpacked_length": 67039711,
+            "range": {
+              "start": 0,
+              "end": 1056
+            }
+          },
+          {
+            "hash": "a6257e8dc572cf6a7e3933fc56d3c7f5c605a60d13cb1e31ac29703f4a053d84",
+            "unpacked_length": 67090305,
+            "range": {
+              "start": 0,
+              "end": 1016
+            }
+          },
+          {
+            "hash": "d190782dfb46007688ce55c6437fd5eacdad34c93dae6a153d2e3650a670f9f5",
+            "unpacked_length": 8515044,
+            "range": {
+              "start": 0,
+              "end": 130
+            }
+          }
+        ],
+        "xorbs": {
+          "534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b": [
+            {
+              "url": "https://us.aws.cdn.hf.co/xorbs/default/534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b?X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&xip=REDACTED&repo_id=6adaea00d1462de6734ee881&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+              "ranges": [
+                {
+                  "chunks": {
+                    "start": 0,
+                    "end": 1056
+                  },
+                  "bytes": {
+                    "start": 0,
+                    "end": 67048158
+                  }
+                }
+              ]
+            }
+          ],
+          "a6257e8dc572cf6a7e3933fc56d3c7f5c605a60d13cb1e31ac29703f4a053d84": [
+            {
+              "url": "https://us.aws.cdn.hf.co/xorbs/default/a6257e8dc572cf6a7e3933fc56d3c7f5c605a60d13cb1e31ac29703f4a053d84?X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&xip=REDACTED&repo_id=6adaea00d1462de6734ee881&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+              "ranges": [
+                {
+                  "chunks": {
+                    "start": 0,
+                    "end": 1016
+                  },
+                  "bytes": {
+                    "start": 0,
+                    "end": 67098432
+                  }
+                }
+              ]
+            }
+          ],
+          "d190782dfb46007688ce55c6437fd5eacdad34c93dae6a153d2e3650a670f9f5": [
+            {
+              "url": "https://us.aws.cdn.hf.co/xorbs/default/d190782dfb46007688ce55c6437fd5eacdad34c93dae6a153d2e3650a670f9f5?user_id=000000000000000000000001&repo_id=6adaea00d1462de6734ee881&xip=REDACTED&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+              "ranges": [
+                {
+                  "chunks": {
+                    "start": 0,
+                    "end": 130
+                  },
+                  "bytes": {
+                    "start": 0,
+                    "end": 8516083
+                  }
+                }
+              ]
+            }
+          ],
+          "06c6aad7d7b42cd5a154d67e5e7492c0fc7fcc2b79a884a8ffe0bd1ca924315f": [
+            {
+              "url": "https://us.aws.cdn.hf.co/xorbs/default/06c6aad7d7b42cd5a154d67e5e7492c0fc7fcc2b79a884a8ffe0bd1ca924315f?user_id=000000000000000000000001&repo_id=6adaea00d1462de6734ee881&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&xip=REDACTED&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+              "ranges": [
+                {
+                  "chunks": {
+                    "start": 0,
+                    "end": 1018
+                  },
+                  "bytes": {
+                    "start": 0,
+                    "end": 67078283
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
