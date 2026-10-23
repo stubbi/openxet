@@ -23,8 +23,8 @@ layers. ADR 0001 keeps the server's use of upstream behind
 2. They are pinned `=1.7.0`, in lockstep with `xet-core-structures`. A bump
    moves all four together, with the compatibility suite run.
 3. The server crates never depend on them. A `cargo deny` ban, added
-   with the crate (M1 Task 13), rejects them anywhere but `openxet-client` and the
-   binaries that wrap it.
+   with the crate (M1 Task 13), rejects them anywhere but
+   `openxet-client` and the binaries that wrap it.
 4. Using `xet-client`'s server-side helpers (for example
    `build_file_chunk_hashes_response`) in a server crate needs a
    superseding ADR.

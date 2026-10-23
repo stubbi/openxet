@@ -423,7 +423,8 @@ CAS tokens are short-lived EdDSA JWTs (ADR 0007), scoped to
 membership (R25) and a revision would enforce nothing. The Hub token route
 still accepts a revision in its URL for compatibility (M2). Every node
 verifies them statelessly against a key set of public keys, so keys rotate
-without downtime, and a platform can sign them itself. `exp` is honoured exactly.
+without downtime, and a platform can sign them itself. `exp` is honoured
+exactly.
 
 **Storage-only mode:** a platform with its own naming layer gets CAS tokens
 for its users either through an admin endpoint or by signing them itself
@@ -1296,7 +1297,8 @@ own UI and leave this role off.
 
 ## 11. Spikes (verify, don't assume)
 
-All ten spikes are answered: S1–S9 in M0, S10 for M1. Each note records versions, method and
+All ten spikes are answered: S1–S9 in M0, S10 for M1. Each note records
+versions, method and
 what was observed versus inferred.
 
 - **S1** *(answered: yes, on MinIO;
@@ -1377,7 +1379,8 @@ what was observed versus inferred.
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and
 current token flow. They are stated in the compatibility matrix and tested
-as the "oldest" leg of the suite. M0 did not pin them. The M1 plan sets `hf_xet` 1.7.0 as the floor (S6, S10).
+as the "oldest" leg of the suite. M0 did not pin them. The M1 plan sets
+`hf_xet` 1.7.0 as the floor (S6, S10).
 
 ## 12. Milestones (v1 = all of them)
 
