@@ -7,7 +7,7 @@ use xet_core_structures::merklehash;
 use xet_core_structures::serialization_utils::read_u32;
 use xet_core_structures::xorb_object::{
     CompressionScheme, XORB_CHUNK_HEADER_LENGTH, XorbObjectInfoV1, deserialize_chunk_header,
-    deserialize_chunks, reconstruct_xorb_with_footer,
+    reconstruct_xorb_with_footer,
 };
 
 use crate::{MerkleHash, ProtocolError, chunk_hash};
@@ -40,28 +40,40 @@ pub struct XorbChunks {
     pub hashes: Vec<(MerkleHash, u64)>,
 }
 
-/// Deserializes a footer-less xorb (the spec's chunk sequence) and hashes
-/// every chunk.
+/// Reads a footer-less xorb (the spec's chunk sequence) and hashes every
+/// chunk, under the same limits as [`xorb_with_footer`].
 ///
 /// Input must end exactly after the last chunk: a xorb footer is rejected
 /// here. Uploads, which may carry a footer, go through [`xorb_with_footer`].
 ///
 /// # Errors
 ///
-/// [`ProtocolError::MalformedXorb`] if a chunk header or chunk body is invalid
-/// or truncated, or bytes follow the last chunk.
-pub fn read_xorb_chunks(mut r: impl Read) -> Result<XorbChunks, ProtocolError> {
-    let (data, chunk_byte_indices) =
-        deserialize_chunks(&mut r).map_err(ProtocolError::MalformedXorb)?;
-    // `chunk_byte_indices` holds every chunk's start offset in `data` plus the
-    // total length, starting with a leading 0, so each window is one chunk.
-    let hashes = chunk_byte_indices
-        .windows(2)
-        .map(|w| {
-            let chunk = &data[w[0] as usize..w[1] as usize];
-            (chunk_hash(chunk), u64::from(w[1] - w[0]))
-        })
-        .collect();
+/// The [`ProtocolError`] `Xorb*` variant naming the rule broken
+/// ([`ProtocolError::XorbTrailingBytes`] for a footer or any other bytes
+/// after the last chunk), or [`ProtocolError::MalformedXorb`] if a chunk
+/// header or a chunk's compressed data is invalid.
+pub fn read_xorb_chunks(r: impl Read) -> Result<XorbChunks, ProtocolError> {
+    let mut body = Vec::new();
+    r.take(MAX_XORB_BODY_BYTES + 1)
+        .read_to_end(&mut body)
+        .map_err(|err| ProtocolError::MalformedXorb(CoreError::Io(err)))?;
+    let len = body.len() as u64;
+    if len > MAX_XORB_BODY_BYTES {
+        return Err(ProtocolError::XorbTooLarge {
+            len,
+            limit: MAX_XORB_BODY_BYTES,
+        });
+    }
+    let (hashes, chunks_end) = validate_chunks(&body)?;
+    if chunks_end < body.len() {
+        return Err(ProtocolError::XorbTrailingBytes {
+            offset: chunks_end as u64,
+            len: (body.len() - chunks_end) as u64,
+        });
+    }
+    if hashes.is_empty() {
+        return Err(ProtocolError::XorbEmpty);
+    }
     Ok(XorbChunks { hashes })
 }
 

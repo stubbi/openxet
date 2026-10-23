@@ -187,7 +187,7 @@ fn read_xorb_chunks_rejects_a_footer() {
     let with = client_serialized_xorb(true);
     assert!(matches!(
         read_xorb_chunks(with.serialized_data.as_slice()),
-        Err(ProtocolError::MalformedXorb(_))
+        Err(ProtocolError::XorbTrailingBytes { .. })
     ));
 }
 

@@ -7,7 +7,7 @@
 
 use openxet_protocol::{
     MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS, ProtocolError,
-    chunk_hash, xorb_with_footer,
+    chunk_hash, read_xorb_chunks, xorb_with_footer,
 };
 // Only to build test bodies; production code reaches upstream through
 // openxet_protocol alone.
@@ -209,4 +209,29 @@ fn malformed_footer_is_rejected() {
     let cut = [&body[..], &stored[body.len()..body.len() + 16]].concat();
     let err = xorb_with_footer(&cut).unwrap_err();
     assert!(matches!(err, ProtocolError::MalformedXorb(_)), "{err}");
+}
+
+#[test]
+fn read_xorb_chunks_applies_the_upload_limits() {
+    let zeros = vec![0u8; 48 * 1024 * 1024];
+    let bomb = raw_chunk(
+        CompressionScheme::LZ4,
+        &lz4_compress_from_slice(&zeros).unwrap(),
+        64 * 1024,
+    );
+    let err = read_xorb_chunks(bomb.as_slice()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            ProtocolError::XorbChunkTooLong {
+                chunk: 0,
+                limit: 65_536
+            }
+        ),
+        "{err}"
+    );
+    assert!(matches!(
+        read_xorb_chunks(&[][..]),
+        Err(ProtocolError::XorbEmpty)
+    ));
 }
