@@ -905,6 +905,33 @@ organization needs a different handle; that is the user's choice. For now the
 repository lives at `github.com/stubbi/openxet` *(decided by the user)*. The user
 owns the openxet.com domain.
 
+## 15a. Best in class on every dimension *(decided by the user)*
+
+The ambition is that no other project comes remotely close, on any
+dimension. An ambition is only useful if it is measured. So each dimension
+below has a bar we hold ourselves to and a way we prove it, publicly where
+possible. Competitors are re-evaluated every minor release in
+`docs/competitive-matrix.md`. The first entries come from the 2026-10-23
+evaluation of Shardline, ggoggam/openxet, kebyn/xet-server and
+guilt/xet-server.
+
+| Dimension | Bar | Proof |
+|---|---|---|
+| Protocol correctness | Byte-exact with `xet-core`; every spec MUST implemented and tested | Reference-file golden tests; real-client suite (pinned, latest, oldest supported); nightly against huggingface.co; spec-section traceability (each MUST maps to a test) |
+| Performance | Fastest Xet server on upload, download, dedup ratio and metadata latency | Public benchmark suite run in CI against competitors on identical hardware; regressions fail CI; results published per release |
+| Code quality | Small, readable, reviewed code with no slop | Strict clippy and `forbid(unsafe)`; mutation testing (`cargo-mutants`) on core crates; fuzzing continuously (OSS-Fuzz once eligible); lines of code tracked as a cost, not a goal |
+| Architecture | Every decision recorded and reversible | ADRs for every significant choice; crate boundaries enforced (no cyclic or upward deps, checked in CI); bucket-as-truth and stateless invariants have dedicated tests |
+| Security | Secure by default, with a verifiable supply chain | `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
+| Documentation | Every user finds the answer in under a minute | Diátaxis structure (tutorials, how-tos, reference, explanation); every example runs in CI; reference generated from code (CLI, config, OpenAPI); `llms.txt`; a docs feedback link on every page |
+| Governance | Trustworthy beyond one person | `GOVERNANCE.md` (roles, decision process, path to maintainer); every change merged via PR with at least one independent review (human, or an agent reviewer plus human sign-off), enforced by branch protection; an RFC process for big changes; DCO; code of conduct; a public roadmap |
+| Community | Contributors feel welcome and succeed | Labelled good-first issues; contributor guide tested by newcomers; first response to issues and PRs within two business days; credit in every release's notes |
+| Release engineering | Boring, predictable releases | SemVer; changelog generated from Conventional Commits; release train cadence; upgrade tests between consecutive versions; a stated support window |
+| UX (humans and agents) | Best on both (§7.1) | Time-to-first-upload measured per release; the agent leg of the suite; accessibility (WCAG 2.2 AA) checked for the web UI |
+| Operations / hosted | openxet.com is the reference deployment (§15) | Public status page and SLO; chaos and failover drills in CI; disaster-recovery restore tested on a schedule |
+
+Bus factor is a real risk while one person leads the project. Governance work
+starts at M0, not after 1.0.
+
 ## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
 
 openxet.com is a first-class product, not an afterthought. "Perfect" is

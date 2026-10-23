@@ -55,6 +55,15 @@ faster path, a doc example that actually runs) rather than what is
 convenient for us. Failure looks like this, even if the code works:
 slow, hard to set up, or users' feedback going nowhere.
 
+## The bar: best in class on every dimension
+
+No other project should come remotely close, in protocol correctness,
+performance, code quality, architecture, security, docs, governance,
+community, release engineering, UX, or hosted operations. An ambition only
+counts if it is measured: design §15a lists the bar and the proof for each
+dimension, and `docs/competitive-matrix.md` tracks where we stand. When a
+change would lower any of those measures, it isn't done.
+
 ## Non-negotiables
 
 1. **Protocol exactness.** Chunking, hashes, xorbs, shards and API behaviour
