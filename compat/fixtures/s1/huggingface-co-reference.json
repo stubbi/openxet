@@ -1,0 +1,69 @@
+{
+ "captured": "2026-10-23 against huggingface.co (anonymous); signed values REDACTED",
+ "resolve_head": {
+  "status": 302,
+  "headers": {
+   "content-type": "text/plain; charset=utf-8",
+   "location": "https://us.aws.cdn.hf.co/xet-bridge-us/68cb1d571350e17be1c74fda/118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97?response-content-type=text/csv%3B+charset%3Dutf-8&response-content-disposition=inline%3B+filename%2A%3DUTF-8%27%27Electric_Vehicle_Population_Data_20250917.csv%3B+filename%3D%22Electric_Vehicle_Population_Data_20250917.csv%22%3B&xip=REDACTED&X-Xet-Cas-Uid=public&user_id=public&Expires=1792733416&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+   "x-repo-commit": "c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8",
+   "accept-ranges": "bytes",
+   "x-linked-size": "63527244",
+   "x-linked-etag": "\"f41255b252f776125f2b657136654e4d4d5d2ccf8ef4db0ec186bd1981b69734\"",
+   "x-xet-hash": "118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97",
+   "link": "<https://huggingface.co/api/datasets/xet-team/xet-spec-reference-files/xet-read-token/c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8>; rel=\"xet-auth\", <https://cas-server.xethub.hf.co/v1/reconstructions/118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97>; rel=\"xet-reconstruction-info\""
+  }
+ },
+ "read_token": {
+  "status": 200,
+  "headers": {
+   "content-type": "application/json; charset=utf-8",
+   "x-xet-cas-url": "https://cas-server.xethub.hf.co",
+   "x-xet-token-expiration": "1792729078",
+   "x-xet-access-token": "REDACTED"
+  },
+  "json": {
+   "casUrl": "https://cas-server.xethub.hf.co",
+   "exp": 1792729078,
+   "accessToken": "REDACTED"
+  }
+ },
+ "v2_reconstruction": {
+  "status": 200,
+  "headers": {
+   "content-type": "application/json",
+   "x-xet-file-size": "63527244"
+  },
+  "json": {
+   "offset_into_first_range": 0,
+   "terms": [
+    {
+     "hash": "eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632",
+     "unpacked_length": 63527244,
+     "range": {
+      "start": 0,
+      "end": 796
+     }
+    }
+   ],
+   "xorbs": {
+    "eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632": [
+     {
+      "url": "https://us.aws.cdn.hf.co/xorbs/default/eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632?user_id=public&xip=REDACTED&repo_id=68cb1d571350e17be1c74fda&Expires=1792731778&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+      "ranges": [
+       {
+        "chunks": {
+         "start": 0,
+         "end": 796
+        },
+        "bytes": {
+         "start": 0,
+         "end": 14737812
+        }
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}
