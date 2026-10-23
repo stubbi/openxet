@@ -1,15 +1,5 @@
 [
   {
-    "run": "g1-https-371-xet",
-    "stub_requests": 7,
-    "stub_flows": 5
-  },
-  {
-    "run": "g1-https-351-xet",
-    "stub_requests": 7,
-    "stub_flows": 5
-  },
-  {
     "run": "g2-https-371-plain",
     "stub_requests": 4,
     "stub_flows": 4
@@ -21,16 +11,6 @@
   },
   {
     "run": "g3-https-371-xet-accessnone",
-    "stub_requests": 7,
-    "stub_flows": 5
-  },
-  {
-    "run": "g4-https-371-xet-hftoken",
-    "stub_requests": 7,
-    "stub_flows": 5
-  },
-  {
-    "run": "g5-https-371-xet-netrc",
     "stub_requests": 7,
     "stub_flows": 5
   },
@@ -53,16 +33,6 @@
     "run": "s2-ssh-371-plain-stuburl",
     "stub_requests": 4,
     "stub_flows": 4
-  },
-  {
-    "run": "s3-ssh-371-xet-stuburl-expiresin",
-    "stub_requests": 7,
-    "stub_flows": 5
-  },
-  {
-    "run": "s6-ssh-371-xet-accessnone-hftoken-netrc",
-    "stub_requests": 7,
-    "stub_flows": 5
   },
   {
     "run": "d1-dl-371-xet",

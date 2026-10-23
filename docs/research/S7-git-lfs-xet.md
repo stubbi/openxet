@@ -102,7 +102,7 @@ Labels used below:
        credentials are used only when the remote has the same scheme and
        host as `lfs.url`.
      - The stub only ever received the stub token
-       (`g1`/`g2`/`s1`/`s2` stub logs).
+       (`g2`/`s1`/`s2` stub logs).
      - 3.7 adds credential-helper `capability[]=authtype` and `state[]`
        (`creds/creds.go`), but not a different host choice (source).
    - **`git-xet` derives its credential lookup from the Git remote**
@@ -133,10 +133,8 @@ Labels used below:
        (`auth_class: null`).
      - It parsed `{accessToken, exp, casUrl}`.
      - It uploaded and registered the shard, and the push succeeded (`g3`).
-   - The same key also suppressed the SSH `git-lfs-authenticate` call.
-     The SSH wrapper logged no invocation (`s6`).
    - `git-lfs` is unaffected, because it keys `access` by the `lfs.url`
-     endpoint. The batch still used the openxet token (`g3`, `s6`).
+     endpoint. The batch still used the openxet token (`g3`).
    - **When the refresh fires** (source `utils/src/auth.rs:11,121`):
      `git-xet` refreshes when `exp <= now + 30 s`. The stub's 5-second batch
      token forced an immediate refresh. With a longer CAS token, the `href`

@@ -58,23 +58,17 @@ Per scenario there are two files:
 
 - `<scenario>.stub-log.jsonl`: one line per request the stub received.
   `auth_class` labels the Authorization header by the throwaway test value
-  it matched, without storing it; `null` means none was sent. JWT labels
-  show only non-secret claim names.
+  it matched, without storing it; `null` means none was sent.
 - `<scenario>.stub-flows.json`: the same requests as seen by mitmproxy, with
   bodies, redacted. Chunk and xorb requests are left out.
 
 | Scenario | Remote | `git-lfs` | `git-xet` | Variation |
 |---|---|---|---|---|
-| `g1-https-{371,351}-xet` | HTTPS | 3.7.1 / 3.5.1 | yes | credential store has Gitea and stub entries |
-| `g2-https-{371,351}-plain` | HTTPS | 3.7.1 / 3.5.1 | no | same |
+| `g2-https-{371,351}-plain` | HTTPS | 3.7.1 / 3.5.1 | no | credential store has Gitea and stub entries |
 | `g3-https-371-xet-accessnone` | HTTPS | 3.7.1 | yes | `lfs.https://gitea:3000/alice/r5.git/info/lfs.access=none` |
-| `g4-https-371-xet-hftoken` | HTTPS | 3.7.1 | yes | `HF_TOKEN` set |
-| `g5-https-371-xet-netrc` | HTTPS | 3.7.1 | yes | `~/.netrc` entry for `gitea` |
 | `g6-https-371-xet-nogiteacred` | HTTPS | 3.7.1 | yes | no Gitea credential anywhere `git-xet` looks |
 | `s1-ssh-{371,351}-xet-stuburl` | SSH | 3.7.1 / 3.5.1 | yes | Gitea's own `git-lfs-authenticate` |
 | `s2-ssh-371-plain-stuburl` | SSH | 3.7.1 | no | |
-| `s3-ssh-371-xet-stuburl-expiresin` | SSH | 3.7.1 | yes | `GIT_SSH_COMMAND` wrapper adds `expires_in` to Gitea's answer |
-| `s6-ssh-371-xet-accessnone-hftoken-netrc` | SSH | 3.7.1 | yes | `access=none` on the derived endpoint, plus `HF_TOKEN`, netrc and the wrapper |
 | `d1-dl-371-xet` | HTTPS | 3.7.1 | yes | `git lfs pull`; stub answers `basic` |
 | `d2-dl-371-xet-serverxet` | HTTPS | 3.7.1 | yes | `git lfs pull`; stub answers `xet` for the download |
 
