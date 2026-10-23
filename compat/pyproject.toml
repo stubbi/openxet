@@ -1,0 +1,18 @@
+[project]
+name = "openxet-compat"
+version = "0.0.0"
+description = "Real-client compatibility suite for openxet"
+requires-python = ">=3.11"
+dependencies = [
+    "huggingface_hub==2.2.0",
+    "hf_xet==1.7.0",
+    "httpx==0.28.1",
+    "pytest==9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "agent: drives the openxet CLI as an agent would (needs OPENXET_BIN)",
+    "pinned: only valid when the locked client versions are installed",
+]

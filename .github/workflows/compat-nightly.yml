@@ -1,0 +1,101 @@
+name: compat-nightly
+
+# Real HF clients against huggingface.co, anonymously. The "latest" leg runs
+# the newest HF client releases (httpx and pytest stay pinned) to catch
+# upstream drift before it reaches users (design section 8). The agent leg
+# runs on every PR, so it is excluded here.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TARGET: https://huggingface.co
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      reachable: ${{ steps.probe.outputs.reachable }}
+    steps:
+      # An upstream outage is not a compatibility failure: skip the suite and
+      # open no issue.
+      - id: probe
+        run: |
+          if curl -fsS --retry 3 --retry-all-errors --max-time 20 -o /dev/null "$TARGET/api/models?limit=1"; then
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::$TARGET is unreachable; skipping the compatibility suite"
+          fi
+
+  compat:
+    name: compat (${{ matrix.clients }})
+    needs: preflight
+    if: needs.preflight.outputs.reachable == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        clients: [pinned, latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: compat
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+      - name: Run suite with the locked client versions
+        if: matrix.clients == 'pinned'
+        run: uv run --frozen pytest -m "not agent" | tee report.txt
+      - name: Run suite with the latest HF client releases
+        if: matrix.clients == 'latest'
+        run: >
+          uv run --no-project --with huggingface_hub --with hf_xet
+          --with httpx==0.28.1 --with pytest==9.1.1
+          pytest -m "not agent and not pinned" | tee report.txt
+      - name: Keep the version header
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-${{ matrix.clients }}
+          path: compat/report.txt
+          if-no-files-found: ignore
+
+  report:
+    needs: [preflight, compat]
+    if: failure() && needs.preflight.outputs.reachable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or update the failure issue
+        run: |
+          failed=$(gh run view "$GITHUB_RUN_ID" --json jobs \
+            --jq '[.jobs[] | select(.conclusion == "failure" and (.name | startswith("compat ("))) | .name] | join(", ")')
+          # Latest-only failure means upstream moved; a pinned failure means we broke.
+          if [[ "$failed" == *"compat (pinned)"* ]]; then
+            label=compat-failure
+            title="Nightly compatibility suite failing"
+          else
+            label=drift
+            title="Upstream HF client drift detected by the nightly suite"
+          fi
+          body="Failed: ${failed:-unknown job}. Run: ${RUN_URL}"
+          gh label create "$label" --force >/dev/null
+          existing=$(gh issue list --state open --label "$label" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --label "$label" --title "$title" --body "$body"
+          fi
