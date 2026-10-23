@@ -348,20 +348,22 @@ async fn ingest(
         .map(|(xorb, table)| (xorb, table.hashes))
         .collect();
 
+    // The parsed shard and its chunk tables are dropped with the closure:
+    // from here on the upload holds only the stored bytes and its files.
     let (permit, verified) = blocking(permit, move || {
         verify_shard(&shard, &lookup, limits).map_err(verification_failed)?;
         let stored = stored_shard(&shard, &lookup).map_err(shard_error)?;
         let hash = shard_hash(&stored);
-        Ok::<_, CasError>((shard, lookup, stored, hash))
+        let files = new_files(&shard, &lookup)?;
+        Ok::<_, CasError>((stored, hash, files))
     })
     .await?;
     drop(permit);
-    let (shard, lookup, stored, hash) = verified?;
+    let (stored, hash, files) = verified?;
     progress.report(Event::Validating {
         verified: total,
         total,
     });
-    let files = new_files(&shard, &lookup)?;
 
     progress.report(Event::Committing {
         stage: Stage::Uploading,
