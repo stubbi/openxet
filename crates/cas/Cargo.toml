@@ -17,13 +17,14 @@ openxet-storage = { path = "../storage", version = "0.0.0" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2"
-tokio = { version = "1.54.1", features = ["sync"] }
+tokio = { version = "1.54.1", features = ["rt", "sync"] }
 tower-http = { version = "0.7.1", features = ["catch-panic", "sensitive-headers", "trace"] }
 tracing = "0.1.44"
 url = "2.5.8"
 uuid = { version = "1.29.0", features = ["v7"] }
 
 [dev-dependencies]
+async-trait = "0.1.92"
 reqwest = { version = "0.13.5", default-features = false }
 sqlx = { version = "0.9", default-features = false, features = ["migrate"] }
 tempfile = "3"

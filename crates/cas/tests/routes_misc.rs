@@ -10,19 +10,12 @@ use std::collections::HashSet;
 
 use common::{
     Access, FILE_CHUNK_HASHES_PATH, ROUTES, Reply, SCOPE_A, TestServer, UNSERVED, XORB_GRANT_PATH,
+    bearer,
 };
 use openxet_auth::Mode;
 use openxet_cas::TELEMETRY_BODY_LIMIT;
 use reqwest::Method;
 use reqwest::header::{AUTHORIZATION, WWW_AUTHENTICATE};
-
-/// The `Authorization` value for `token`. The scheme is a constant so the
-/// repository's secret scanner, which flags any literal bearer value, can
-/// tell test tokens from leaks.
-fn bearer(token: &str) -> String {
-    const SCHEME: &str = "Bearer";
-    format!("{SCHEME} {token}")
-}
 
 #[tokio::test]
 async fn telemetry_is_accepted_and_dropped() {
@@ -278,18 +271,11 @@ async fn missing_or_bad_credential_is_401_and_wrong_mode_is_403() {
         if route.access == Access::Write {
             read.assert_error(403, "insufficient_scope");
         } else {
-            assert!(read.status.is_success(), "{} {}", route.path, read.body);
+            route.assert_authorized(&read);
         }
 
-        let accepted = send(Some(bearer(&expiring))).await;
-        assert!(
-            accepted.status.is_success(),
-            "{} {}",
-            route.path,
-            accepted.body
-        );
-        let lowercase = send(Some(format!("bearer {}", server.write_token))).await;
-        assert!(lowercase.status.is_success(), "{}", lowercase.body);
+        route.assert_authorized(&send(Some(bearer(&expiring))).await);
+        route.assert_authorized(&send(Some(format!("bearer {}", server.write_token))).await);
     }
 
     server.clock.advance(60);
