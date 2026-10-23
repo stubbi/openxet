@@ -479,8 +479,11 @@ Rules for this endpoint:
   every download with `basic`, as huggingface.co does:
   - absolute `href`s, never relative, served by the HTTP read gateway
     (§5.5)
-  - the Xet hash and CAS headers in the action's `header`, for agents that
-    read them
+  - only `X-Xet-Hash` in the action's `header`, which is not a secret. Xet
+    download agents get the CAS token from `GET {lfs-url}/xet-read-token`,
+    so it never appears in batch responses or `GIT_TRACE` output.
+  - openxet's `verify` action never echoes the client's credential
+    (huggingface.co's does)
   ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md))
 - **Closing the Git download gap** *(decided by the user, v1)*. With plain
   `basic`, `git clone` / `git pull` fetch whole files. Two complementary
@@ -704,7 +707,8 @@ says which spec version and client versions are supported.
     those users through `git-lfs-authenticate` plus the HTTPS batch, where
     `xet` is offered (ADR 0003).
 - Git repos whose *remote* is on another host over SSH (e.g.
-  `git@github.com:…`) work as long as `lfs.url` points at openxet.
+  `git@github.com:…`) work as long as `lfs.url` points at openxet and
+  `openxet setup git` has written the `access` key (§10.2).
 
 ### 10.2 `git-xet` with third-party Git hosts: a verified gap and its fix
 
@@ -722,9 +726,12 @@ order, it checks:
 Spike S7 confirmed this end to end against Gitea, with `lfs.url` on another
 host (`docs/research/S7-git-lfs-xet.md`). `git-xet` sent openxet's refresh
 `href` each of these, as `Bearer`:
-- the Gitea password, from the credential helper or netrc
+- the Gitea password, from the credential helper (and, per source, from
+  netrc)
 - `HF_TOKEN`
-- over SSH, Gitea's per-repo LFS JWT
+- over SSH, Gitea's per-repo LFS JWT. This was observed with a wrapper that
+  adds the `expires_in` Gitea omits; hosts that send `expires_in` leak
+  this way.
 
 `git-lfs` itself sends only the `lfs.url` host's credential. `git-xet` looks
 the credential up when each upload starts. With none available it fails

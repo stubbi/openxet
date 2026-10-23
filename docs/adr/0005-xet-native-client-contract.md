@@ -67,13 +67,20 @@ spec, "auth" page). The batch header names match xet-core
     - JSON keys in `actions.*.header` use exactly this casing:
       `X-Xet-Hash`, `X-Xet-Cas-Url`, `X-Xet-Access-Token`,
       `X-Xet-Token-Expiration`, `X-Xet-Session-Id`.
-    - `X-Xet-Hash` is returned for each object in `actions.download.header`
-      of the `basic` download action.
-    - `href` is absolute: a signed capability URL for one scope and one
-      operation. A GET on it returns the token-route response with no
-      Authorization header, until its own expiry, which is at least as long
-      as the CAS token it returns.
-    - Foreign credentials sent to it are ignored and never logged.
+    - The `basic` download action's `header` carries only `X-Xet-Hash`,
+      which is not a secret. It has no CAS access token, CAS URL or
+      expiration. Download agents get those from `GET {lfs-url}/xet-read-token`
+      (item 1). This keeps the token out of `GIT_TRACE` output and out of
+      reach of an off-host redirect of the download `href`.
+    - The upload action's `href` is absolute: a signed capability URL for
+      one scope and one operation. A GET on it returns the token-route
+      response with no Authorization header, until its own expiry, which is
+      at least as long as the CAS token it returns. Foreign credentials sent
+      to it are ignored and never logged.
+    - The download action's `href` is the HTTP read gateway URL for the
+      object (absolute), not a token route.
+    - openxet's `verify` action never echoes the client's credential
+      (huggingface.co's does; S7).
 11. **Dev mode.** `openxet serve` with no config runs SQLite plus local disk,
     prints a static access token and the env/URL lines, and supports `--json`
     startup info. Port and flags are not final.

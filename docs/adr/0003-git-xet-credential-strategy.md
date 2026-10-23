@@ -19,9 +19,13 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
   HTTPS and SSH remotes (observed).
 - `git-xet` calls the batch `href` with a credential for the **Git remote's**
   host (observed):
-  - the Gitea password from the credential helper or netrc
+  - the Gitea password from the credential helper (netrc per source; the
+    netrc run can't be told apart from the helper in the trace)
   - `HF_TOKEN`
-  - over SSH, Gitea's per-repo LFS JWT from `git-lfs-authenticate`
+  - over SSH, Gitea's per-repo LFS JWT from `git-lfs-authenticate`.
+    This case was observed with a `GIT_SSH_COMMAND` wrapper that only adds
+    the `expires_in` Gitea omits. Hosts that send `expires_in` leak this
+    way (inferred).
 
   It looks the credential up eagerly, when each upload starts. With none
   available, the upload fails, or on a terminal prompts for the Git host's
@@ -58,10 +62,16 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
    offered, because the server can't tell `git-xet` 0.2.1 from a
    download-capable agent of the same name.
    - `href`s are absolute and served by the HTTP read gateway (§5.5).
-   - The `basic` download action's `header` carries `X-Xet-Hash`, plus
-     `X-Xet-Cas-Url`, `X-Xet-Access-Token` and `X-Xet-Token-Expiration`,
-     so a download agent can fetch through the CAS. `git-lfs` forwards
-     these headers to the `href`, which ignores them.
+   - The `basic` download action's `header` carries only `X-Xet-Hash`,
+     which is not a secret. There is no CAS token, CAS URL or expiration.
+     A download agent gets those from `GET {lfs-url}/xet-read-token`
+     (ADR 0005 item 1).
+     - `git-lfs` forwards `X-Xet-Hash` to the `href`, which ignores it.
+     - Keeping the CAS token out of the action keeps it out of `GIT_TRACE`
+       output (S7 saw HF's token there) and out of reach of any off-host
+       redirect of the download `href`.
+   - openxet's `verify` action never echoes the client's credential, unlike
+     huggingface.co's (S7).
    - openxet's own download agent (design §10.8) registers under its own
      transfer name, not `xet`. The server chooses that name when it is
      offered.
@@ -123,6 +133,29 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
   - Unit test: download batches never answer `xet`.
   - Contract test (decision 5): the `git-lfs-authenticate` answer
     deserialises into `git-xet`'s `GitLFSAuthenticateResponse` shape.
+
+### jj-xet compatibility
+
+Checked read-only against the jj-xet working tree at `~/repos/git/jj-xet`
+on 2026-10-23. It has no commits yet, so the line numbers are for the
+working tree.
+
+- **The client is compatible with decision 3 as is.**
+  - jj-xet sends a download batch offering `["xet","basic"]`
+    (`src/remote.rs:297-298`).
+  - Its response type has only `objects`; it never reads `transfer`
+    (`src/remote.rs:342-345`).
+  - It reads only `actions.download.header["X-Xet-Hash"]`
+    (`src/remote.rs:321`, `:363-369`).
+  - It never fetches the download `href`. Its CAS read token comes from
+    `{lfs-url}/xet-read-token` (`src/remote.rs:64-69`, used for
+    `Access::Read` in `src/xet.rs:421`).
+- **Its mock diverges, but no test depends on the difference.** The
+  `tests/openxet.rs` mock still answers `"transfer":"xet"`
+  (`tests/openxet.rs:147`) and uses a token-route `href`
+  (`{LFS_PATH}/xet-read-token?cap=x`, `tests/openxet.rs:135`). To match
+  the contract, change the mock to `"transfer":"basic"` and an object URL
+  `href`; the client needs no change.
 
 ## Alternatives considered
 
