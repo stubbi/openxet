@@ -222,8 +222,7 @@ uncompressed length)`: exactly `XorbChunks::hashes`, which xorb ingest
 - It is derived data. Like the rest of the index it can be rebuilt from the
   stored xorbs in the bucket.
 - Shard ingest then runs in memory: one index read per referenced xorb, no
-  object-store reads. Lesson from the competitive review of Shardline:
-  never re-download xorbs to verify a shard.
+  object-store reads. Rule: never re-download xorbs to verify a shard.
 - Global dedup's chunk-to-xorb entries come from the same ingest-time
   listing, never from a shard's CAS info section.
 - `verify_shard` takes a lookup closure, so M1 can batch the index reads per

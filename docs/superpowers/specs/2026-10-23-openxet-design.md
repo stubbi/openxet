@@ -44,22 +44,25 @@ clear seams, no opinions forced on the operator.
 
 ## 1a. User value model *(decided by the user)*
 
-What users get from openxet, and how each value is measured. Every target
-is checked in CI, by the benchmark suite or the compatibility suite (§8),
-and the measured numbers are published with every release. A change that
-misses a target fails CI.
+What users get from openxet, and how each value is measured. The targets
+are initial, like §5.8's, and revised with data. Each is checked by the
+benchmark suite or the compatibility suite (§8), and the measured numbers
+are published with every release. Targets that fit a CI runner gate every
+PR. Those that need hosted infrastructure, 10 GbE hardware or an external
+score (OpenSSF Scorecard) run on the release benchmark rig or as a release
+check.
 
 | Dimension | What it means to the user | How openxet delivers it | Target |
 |---|---|---|---|
 | Speed | Uploads, downloads and listings never wait on openxet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | Reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8); one node saturates 10 GbE on xorb ingest |
-| Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up (stock `hf_xet`) and down (our client), also from a second machine with an empty cache; storage overhead over unique compressed data ≤ 5% |
+| Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up with stock `hf_xet`, also from a second machine with an empty cache; ≤ 2 MB down with our client when the previous revision is in the local Xet chunk cache (§10.8 can seed it from an existing LFS checkout); storage overhead over unique compressed data ≤ 5% |
 | Compatibility | The tools they already use just work, in both directions with huggingface.co | Byte-exact formats on `xet-core`'s crates (ADR 0001); the Hub and LFS surfaces of §6 | 100% of the compatibility suite passes for the oldest supported, pinned and latest clients; zero divergence on the golden vectors |
-| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the bucket alone restores every file and every ref within the 60 s RPO; `verify` has zero false positives and exits non-zero on real corruption |
+| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the bucket alone restores every file, with refs at most 60 s stale (RPO); `verify` has zero false positives and exits non-zero on real corruption |
 | Time to value | Working in minutes, with nothing to learn first | One binary, zero-config dev mode (§7), copy-ready commands | First `hf upload` of a ≥ 1 GiB file < 2 min from a clean machine self-hosted, < 60 s from the landing page on openxet.com (§15) |
 | Control and sovereignty | Their bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse |
 | Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) |
 | Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) |
-| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | Metered physical bytes within 1% of the bucket's actual bytes per tenant; savings shown on every repo page |
+| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-scope` tenants; savings shown on every repo page |
 | Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks |
 
 **Where openxet beats huggingface.co:**
@@ -199,7 +202,10 @@ test suite (§8) is the lasting source of truth.
     `POST /v1/xorb-commits/{prefix}/{hash}/grant/{id}`. A `404` commit
     means no data arrived, and the client asks for a new grant.
   - **Fallback.** A `404` on the grant request makes the client use
-    `POST /v1/xorbs` instead. Any other error fails the upload.
+    `POST /v1/xorbs` instead, and so does running out of re-grants
+    (`HF_XET_CLIENT_MAX_XORB_GRANT_ATTEMPTS`, default 3). Any other error
+    fails the upload.
+  - Browser (wasm) clients use grants too, so grant URLs need CORS.
   - **Who uses it.** `xet-core` `main` has only the types. The client
     flow is on tag `v1.8.0-dev0`, shipped as the PyPI pre-release
     `hf-xet` 1.8.0.dev0 (2026-10-20), where it is on by default
@@ -432,9 +438,11 @@ Xorbs remain globally content-addressed and shared.
   revoke access to it. Anyone in the scope who saw the hash can still
   download the file. Removing a secret takes a force-push **plus** GC, or
   `openxet purge <file-hash>` (M2+). Purge unregisters the file from every
-  scope at once, so reads stop immediately, and logs it; the bytes then
-  leave storage through GC (§5.6), once no other file references their
-  xorbs. Removing a reader from the scope revokes their access once their
+  scope at once and logs it. New reconstructions stop immediately;
+  already-issued URLs expire within their lifetime (at most 60 min,
+  ADR 0002). Purge also evicts the file's ranges from the cache tier. The
+  bytes then leave storage through GC (§5.6), once no other file
+  references their xorbs. Removing a reader from the scope revokes their access once their
   current CAS token expires.
 
 **Global-dedup visibility** is configurable:
@@ -457,6 +465,8 @@ Xorbs remain globally content-addressed and shared.
     its content-addressed key and records its chunk table. A mismatch
     deletes the staged object and fails the commit. Unverified bytes are
     never readable and never count for dedup or shard verification.
+    Staging keys expire with their grant, and GC sweeps the ones left
+    behind. Grant URLs allow CORS for browser clients.
   - Until then `/v1/xorb-grants/*` answers `404`, so grant-aware clients
     fall back to `POST /v1/xorbs`.
 - **Download:** client → CAS reconstruction (small JSON). Then either:
@@ -551,7 +561,7 @@ its test.
 | # | Requirement | Tests |
 |---|---|---|
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
-| 2 | **Credentials are repo-scoped** on every Hub route, CAS route and signed URL. A credential for repo A gets `403` on read, write and create anywhere else. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
+| 2 | **Credentials are repo-scoped.** CAS tokens, signed URLs and capability `href`s are scoped to one repo; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped` |
@@ -685,7 +695,7 @@ Rules for this endpoint:
      installed, or through our agent when it isn't.
   2. **Upstream:** contribute download support to `git-xet` in
      `huggingface/xet-core`, so every Git user benefits, not just ours. The
-     credential-sourcing fix (§10.2) goes in the same effort.
+     credential-sourcing change (§10.2) goes in the same effort.
 - Clients **without** `git-xet`:
   - **Downloads work** the same way. Collaborators who only clone don't need
     anything extra.
@@ -912,46 +922,20 @@ says which spec version and client versions are supported.
   `git@github.com:…`) work as long as `lfs.url` points at openxet and
   `openxet setup git` has written the `access` key (§10.2).
 
-### 10.2 `git-xet` with third-party Git hosts: a verified gap and its fix
+### 10.2 `git-xet` with third-party Git hosts
 
-`git-xet` source (`git_xet/src/auth.rs`, 2026-10-23) finds credentials for
-the Xet token refresh from the **Git remote URL**, not from `lfs.url`. In
-order, it checks:
-1. `lfs.<endpoint derived from the remote>.access`; if `none`, it sends
-   no credential
-2. URL-embedded credentials
-3. `HF_TOKEN`
-4. netrc for the remote's host
-5. SSH `git-lfs-authenticate` against the remote's host
-6. the git credential helper for the remote's host
-
-Spike S7 confirmed this end to end against Gitea, with `lfs.url` on another
-host (`docs/research/S7-git-lfs-xet.md`). `git-xet` sent openxet's refresh
-`href` each of these, as `Bearer`:
-- the Gitea password, from the credential helper (and, per source, from
-  netrc)
-- `HF_TOKEN`
-- over SSH, Gitea's per-repo LFS JWT. This was observed with a wrapper that
-  adds the `expires_in` Gitea omits; hosts that send `expires_in` leak
-  this way.
-
-`git-lfs` itself sends only the `lfs.url` host's credential. `git-xet` looks
-the credential up when each upload starts. With none available it fails
-before calling the `href`, or prompts for the Git host's password.
-Leaking credentials to the wrong host is unacceptable. Three complementary
-fixes, all v1 ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md)):
-- **Upstream:** contribute a fix to `huggingface/xet-core` so `git-xet`
-  derives credentials from the LFS endpoint, matching what `git-lfs` itself
-  does. This is the right fix; we do the extra work for users instead of
-  working around it forever.
-- **Server side, works today:**
+`git-xet`'s credential sourcing assumes the LFS host equals the Git host.
+When `lfs.url` points at openxet and the remote lives elsewhere, that
+doesn't hold, so openxet's refresh `href` needs no credential, and `openxet
+setup git` configures access explicitly
+([ADR 0003](../../adr/0003-git-xet-credential-strategy.md), S7). All three
+parts are v1:
+- **Server side:**
   - The `href` refresh route openxet returns is a short-lived, signed,
     single-repo capability URL, so the refresh needs no credential.
   - CAS tokens issued through the LFS path last for the transfer session.
-  - openxet ignores and never logs foreign `Authorization` headers on that
-    route.
-- **Client setup, works today:** `openxet setup git` writes the clone's
-  git config:
+  - openxet ignores and never logs `Authorization` headers on that route.
+- **Client setup:** `openxet setup git` writes the clone's git config:
   - `lfs.url`
   - `lfs.<endpoint derived from the remote>.access=none`, so `git-xet`
     sends no credential and never prompts; the capability `href` alone
@@ -960,8 +944,10 @@ fixes, all v1 ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md)):
     `git-lfs`'s batch
 
   The `access` key must be in git config, because `git-xet` doesn't read
-  `.lfsconfig`. Clones without it still send their Git host's credential,
-  and the server-side rule above makes sure openxet drops it unread.
+  `.lfsconfig`.
+- **Upstream:** contribute credential sourcing from the LFS endpoint, the
+  way `git-lfs` does it, to `git-xet` in `huggingface/xet-core`,
+  coordinated with Hugging Face.
 
 ### 10.3 Server-side chunking for non-Xet clients
 
@@ -1099,6 +1085,9 @@ It is better to use than the stock tools and never incompatible with them.
   layer, for platforms.
 - **Resumable everything:** interrupted uploads and downloads resume, and
   progress output is human and `--json`.
+- **Chunk-cache seeding:** `openxet` can seed the local Xet chunk cache
+  from an existing Git LFS checkout, so the first `git pull` or download
+  after switching to openxet fetches only changed chunks (§1a).
 - **`login`:** the OIDC device/browser flow that issues openxet access tokens
   and SSH key registration (§5.4, §10.1).
 - **`setup git`:** one command configures `lfs.url`, credentials and
@@ -1122,8 +1111,8 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
 - **Protocols:** Git smart HTTP and SSH, both `upload-pack` and
   `receive-pack`, protocol v2 where clients support it. The LFS endpoint is
   implicit at `{repo}.git/info/lfs`, so `git-xet` and `git-lfs` work with no
-  configuration. The credential gap from §10.2 doesn't arise, because the Git
-  remote *is* openxet.
+  configuration. §10.2 doesn't apply, because the Git remote *is*
+  openxet.
 - **Large files land in Xet automatically:**
   - Pushes with `git-xet` take the Xet path.
   - Plain `git-lfs` pushes go through server-side chunking (§10.3).
@@ -1297,16 +1286,17 @@ what was observed versus inferred.
   verification rules (spec "shard" page) implemented against the
   reference files.
 - **S7** *(answered: `git-xet` 0.2.1 has no download handshake, and
-  downloads must answer `basic`; the §10.2 gap is real over HTTPS and SSH
-  and closed today by a signed `href` plus `access=none`;
+  downloads must answer `basic`; with `lfs.url` on another host, a
+  signed `href` plus `access=none` makes the refresh work over HTTPS and
+  SSH (§10.2);
   `git-lfs-authenticate` must include `href` and `expires_in`;
   `git-lfs-transfer` can't carry `xet`;
   [S7](../../research/S7-git-lfs-xet.md), ADR 0003)*: the `git-xet`
   download handshake, plus `git-lfs` behaviour with a separate `lfs.url`
   host (credentials, `basic` fallback), against a real Gitea in CI (the CI
-  leg is specified in ADR 0003). Includes the credential-source gap
-  (§10.2) over both HTTPS and SSH, and whether `git-lfs-transfer` (pure
-  SSH) can negotiate the `xet` custom transfer.
+  leg is specified in ADR 0003). Includes credential sourcing (§10.2)
+  over both HTTPS and SSH, and whether `git-lfs-transfer` (pure SSH) can
+  negotiate the `xet` custom transfer.
 - **S8** *(answered: the Hub read surface plus CAS reconstruction, with
   every URL and token re-issued by openxet; HF reconstructions can be
   fetched with per-repo 900 s read tokens, but their 3600 s,
@@ -1375,11 +1365,11 @@ but sets no calendar dates.
   - Metrics, tracing and HTTP read gateway.
   - Server-side chunking for non-Xet clients.
   - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
-  - The `git-xet` credential fix: the server-side capability route, plus the
-    upstream PR to `xet-core`.
+  - The `git-xet` setup of §10.2: the server-side capability route, plus
+    the upstream credential-sourcing contribution to `xet-core`.
   - Upstream: Xet download support in `git-xet` (§6.1). This is contributed
-    alongside the credential fix and coordinated with Hugging Face before
-    any PR is filed.
+    alongside the credential-sourcing change and coordinated with Hugging
+    Face before any PR is filed.
 - **M5:** reach.
   - `bucket`, `space` and `kernel` repo types.
   - Cache tier.

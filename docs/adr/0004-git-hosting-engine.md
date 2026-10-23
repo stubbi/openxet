@@ -277,9 +277,17 @@ results below are **observed**.
           one path lookup per candidate tree, never a tree walk.
        2. **Fallback.** Bases no fast path matched share one full walk
           of the objects reachable from the snapshot's refs, trees and
-          blobs included. It has its own budget, separate from R22's:
-          `git.thin_bases.max_objects` (initial default 2,000,000) and
-          `git.thin_bases.max_ms` (2,000), tuned by the M2 benchmark.
+          blobs included. It has its own budget, separate from R22's
+          walk budget:
+          - `git.thin_bases.max_objects` and `git.thin_bases.max_ms`.
+            Their defaults, 2,000,000 objects and 2,000 ms, are
+            placeholders: about 10x the object count of S9's
+            10,001-commit test repo (218,574 objects), and R22's time
+            limit. The M2 benchmark sets the real values.
+          - The fallback walk shares R22's concurrency limits
+            (`git.reachability.max_concurrent_per_repo` and
+            `max_concurrent_per_principal`), so concurrent pushes can't
+            stack full walks.
        3. **Fail closed.** A base not found within the budget refuses
           the push, with the hint `git push --no-thin`.
        - Stock git takes its default thin-pack bases from the edge
@@ -959,8 +967,10 @@ results below are **observed**.
       and the stale-client sequence (the client's view of the server's
       refs is older than the snapshot). Each push either succeeds or is
       refused with the `git push --no-thin` hint, then succeeds with
-      `--no-thin`. None of them makes an unreachable object
-      reachable.
+      `--no-thin`. None of them makes an unreachable object reachable.
+      The test records which path each push took (fast path, fallback
+      walk, or refusal) and asserts it against the expected path, so a
+      fast-path regression fails the test.
   - `hub_read_by_sha_obeys_r22`: `tree`, `resolve`, `paths-info` and
     `commits` at a commit OID succeed for a reachable non-tip commit, and
     answer "revision not found" for a force-pushed-away commit, a tree
