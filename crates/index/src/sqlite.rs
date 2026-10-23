@@ -19,7 +19,7 @@ use crate::{ChunkTable, FileRecord, Index, IndexError, NewFile, Visibility};
 #[cfg(feature = "fault-injection")]
 pub const FAULT_AFTER_FIRST_FILE_SCOPE: &str = "openxet-test/fault-after-first-file";
 
-/// How long a write waits for another connection's write lock before failing.
+/// How long a write waits for another process's write lock before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Hashes bound per `IN (...)` query, well under SQLite's variable limit.
@@ -53,9 +53,19 @@ fn with_placeholders(
 /// so a committed write survives a crash or power loss (design §5.9 req 7).
 /// Several processes may open the same file; writers serialize on SQLite's
 /// write lock.
+///
+/// Writes go through a pool of one connection and reads through their own
+/// pool. SQLite has one write lock per file and its busy handler polls for it
+/// with growing sleeps rather than queueing, so several connections of one
+/// process waiting for it can starve one of them past the busy timeout
+/// (<https://sqlite.org/c3ref/busy_timeout.html>). With one writer connection
+/// sqlx's fair pool queues this process's writes in order, and the busy
+/// handler only arbitrates between processes. WAL readers never block on the
+/// writer (<https://sqlite.org/wal.html#concurrency>).
 #[derive(Debug, Clone)]
 pub struct SqliteIndex {
-    pool: SqlitePool,
+    writer: SqlitePool,
+    reader: SqlitePool,
 }
 
 impl SqliteIndex {
@@ -74,18 +84,22 @@ impl SqliteIndex {
             .synchronous(SqliteSynchronous::Full)
             .foreign_keys(true)
             .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new().connect_with(options).await?;
+        let writer = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options.clone())
+            .await?;
         sqlx::migrate!()
-            .run(&pool)
+            .run(&writer)
             .await
             .map_err(IndexError::Migrate)?;
-        Ok(Self { pool })
+        let reader = SqlitePoolOptions::new().connect_with(options).await?;
+        Ok(Self { writer, reader })
     }
 
     /// Starts a write transaction holding the write lock from the start, so
     /// its reads and writes see one state and it never fails to upgrade.
     async fn begin_write(&self) -> Result<Transaction<'static, Sqlite>, IndexError> {
-        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+        Ok(self.writer.begin_with("BEGIN IMMEDIATE").await?)
     }
 }
 
@@ -243,7 +257,7 @@ impl Index for SqliteIndex {
         .bind(xorb.as_bytes())
         .bind(vis == Visibility::Global)
         .bind(scope)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.reader)
         .await?;
         size.map(|s| to_u64(s, "xorb size")).transpose()
     }
@@ -272,7 +286,7 @@ impl Index for SqliteIndex {
             let rows = query
                 .bind(vis == Visibility::Global)
                 .bind(scope)
-                .fetch_all(&self.pool)
+                .fetch_all(&self.reader)
                 .await?;
             for row in rows {
                 let hash = hash_from(row.try_get::<&[u8], _>(0)?)?;
@@ -343,7 +357,7 @@ impl Index for SqliteIndex {
         let row = sqlx::query("SELECT size, terms FROM file_scopes WHERE file = ? AND scope = ?")
             .bind(file.as_bytes())
             .bind(scope)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.reader)
             .await?;
         row.map(|row| {
             Ok(FileRecord {
@@ -369,7 +383,7 @@ impl Index for SqliteIndex {
         .bind(chunk.as_bytes())
         .bind(vis == Visibility::Global)
         .bind(scope)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.reader)
         .await?;
         xorb.as_deref().map(hash_from).transpose()
     }
