@@ -494,3 +494,25 @@ async fn put_xorb_rejects_malformed_table() {
         None
     );
 }
+
+/// `put_xorb` derives the next `ingested_seq` from the current maximum
+/// under the write lock; it must be an index lookup, not a table scan.
+#[tokio::test]
+async fn next_ingested_seq_is_an_index_lookup() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    drop(open_at(&path).await);
+    let pool = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+    let plan: Vec<(i64, i64, i64, String)> = ok(sqlx::query_as(
+        "EXPLAIN QUERY PLAN SELECT COALESCE(MAX(ingested_seq), 0) + 1 FROM xorbs WHERE true",
+    )
+    .fetch_all(&pool)
+    .await);
+    let details: Vec<&str> = plan.iter().map(|row| row.3.as_str()).collect();
+    // Without an index SQLite still reports `SEARCH xorbs`, but it visits
+    // every row; only a covering index makes MAX a single seek.
+    assert!(
+        details.iter().any(|d| d.contains("USING COVERING INDEX")),
+        "plan visits every xorb: {details:?}"
+    );
+}

@@ -13,6 +13,10 @@ CREATE TABLE xorbs (
     ingested_seq INTEGER NOT NULL
 );
 
+-- put_xorb takes MAX(ingested_seq) + 1 under the write lock; this keeps it
+-- one seek instead of a scan of every xorb.
+CREATE INDEX xorbs_ingested_seq ON xorbs (ingested_seq);
+
 -- The scopes a xorb was uploaded to; per-scope visibility filters on it.
 CREATE TABLE xorb_scopes (
     xorb BLOB NOT NULL REFERENCES xorbs (hash),
