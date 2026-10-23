@@ -224,6 +224,15 @@ async fn put_survives_process_kill() {
     let status = child.wait().unwrap();
     assert!(acked, "child never acknowledged the put");
     assert!(!status.success(), "child should have been killed");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            status.signal(),
+            Some(9),
+            "child must die by SIGKILL, got {status:?}"
+        );
+    }
 
     let bucket = LocalBucket::open(dir.path()).unwrap();
     let key = Key::Xorb(h("kill"));
