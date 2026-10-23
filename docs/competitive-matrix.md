@@ -195,7 +195,9 @@ Each item becomes a case in our compatibility suite or a unit test. The plans
 reference this list.
 
 1. `preupload` must route large files to Xet; `hf upload` of a ≥ 1 GiB file
-   must use the Xet path. Check this via `hf_xet` activity, not just success.
+   must use the Xet path. Check this via `hf_xet` activity, not just success,
+   with a file name that matches no `.gitattributes` pattern, so the test
+   proves routing by size (S3).
 2. `whoami-v2` returns every field `huggingface_hub` reads, including `orgs`.
 3. `resolve` returns `X-Xet-Hash`, `X-Repo-Commit`, `X-Linked-Size`,
    `X-Linked-Etag` and an `xet-auth` link, with **absolute** redirect URLs.

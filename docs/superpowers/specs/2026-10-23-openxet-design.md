@@ -1,11 +1,12 @@
 # openxet — Design
 
-Date: 2026-10-23 · Status: draft for review
+Date: 2026-10-23 · Status: approved; reconciled with the M0 spike results
 
 ## 1. Intent
 
 Hugging Face's Xet storage gives chunk-level deduplicated storage for large,
-versioned files (models, datasets, checkpoints). The client side is open source
+versioned files. Models, datasets and checkpoints are the common examples, not
+the definition. The client side is open source
 (`huggingface/xet-core`, Apache-2.0) and the protocol is published
 (Xet Protocol Specification v1.1.0, https://huggingface.co/docs/xet). The server
 is not. Nobody can run Xet on their own infrastructure.
@@ -24,11 +25,11 @@ clear seams, no opinions forced on the operator.
 
 - Organizations that cannot or will not put data on huggingface.co (regulated,
   sovereign, air-gapped, cost-sensitive) but want HF-style workflows.
-- Internal ML platform teams who today use MinIO + Git LFS / DVC and get no
+- Teams who today keep large files in MinIO + Git LFS / DVC and get no
   cross-version deduplication.
-- Platforms that host other people's models and datasets (aqora is a likely
-  first user) and want Xet storage under their own product, with their own
-  naming, permissions and UI.
+- Platforms that host other people's large files, such as models and
+  datasets (aqora is a likely first user), and want Xet storage under their
+  own product, with their own naming, permissions and UI.
 
 ### What success looks like
 
@@ -40,6 +41,50 @@ clear seams, no opinions forced on the operator.
 - Operators recommend it because it is boring to run.
 - People who don't want to run anything get the same thing, done perfectly, on
   **openxet.com** (§15).
+
+## 1a. User value model *(decided by the user)*
+
+What users get from openxet, and how each value is measured. Every target
+is checked in CI, by the benchmark suite or the compatibility suite (§8),
+and the measured numbers are published with every release. A change that
+misses a target fails CI.
+
+| Dimension | What it means to the user | How openxet delivers it | Target |
+|---|---|---|---|
+| Speed | Uploads, downloads and listings never wait on openxet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | Reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8); one node saturates 10 GbE on xorb ingest |
+| Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up (stock `hf_xet`) and down (our client), also from a second machine with an empty cache; storage overhead over unique compressed data ≤ 5% |
+| Compatibility | The tools they already use just work, in both directions with huggingface.co | Byte-exact formats on `xet-core`'s crates (ADR 0001); the Hub and LFS surfaces of §6 | 100% of the compatibility suite passes for the oldest supported, pinned and latest clients; zero divergence on the golden vectors |
+| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the bucket alone restores every file and every ref within the 60 s RPO; `verify` has zero false positives and exits non-zero on real corruption |
+| Time to value | Working in minutes, with nothing to learn first | One binary, zero-config dev mode (§7), copy-ready commands | First `hf upload` of a ≥ 1 GiB file < 2 min from a clean machine self-hosted, < 60 s from the landing page on openxet.com (§15) |
+| Control and sovereignty | Their bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse |
+| Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) |
+| Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) |
+| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | Metered physical bytes within 1% of the bucket's actual bytes per tenant; savings shown on every repo page |
+| Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks |
+
+**Where openxet beats huggingface.co:**
+- Dedup for every client. Our client fetches only missing chunks on
+  `git clone` / `git pull` (§6.1), and server-side chunking dedups uploads
+  from clients that don't speak Xet (§10.3).
+- Your own bucket and region, plus caches near your GPUs (§10.5, §10.7).
+- Mount and stream any revision (§10.8).
+- Savings shown to the user, in bytes and money (§10.10, §15).
+
+**Explicit trade-offs:**
+- **Dedup vs read fragmentation.** The more a file dedups against others,
+  the more xorbs a read touches. Stock clients already skip dedup of very
+  short ranges (`xet-data` 1.7.0, `deduplication/defrag_prevention.rs`),
+  the cache tier offsets the rest, and the benchmark suite tracks ranges
+  per GB read.
+- **Global dedup vs privacy.** Global dedup reveals whether a chunk
+  already exists, even through HMAC-keyed answers. `per-scope` dedup
+  (§5.4) removes that signal and costs cross-tenant savings.
+- **Direct vs proxied downloads** (ADR 0002). Direct presigned URLs save
+  node bandwidth but need a store that binds a signature to one range.
+  Proxied reads work everywhere and cache, at the cost of node bandwidth.
+- **Client-side vs server-side chunking.** Client-side chunking saves
+  bandwidth; server-side chunking covers every client but costs server
+  CPU and a full transfer.
 
 ## 2. Goals, non-goals, anti-goals
 
@@ -86,8 +131,9 @@ deferred for convenience. Everything below the principles above ships in 1.0.
 
 These were checked against primary sources on 2026-10-23
 (spec at huggingface.co/docs/xet; `huggingface_hub` main @ `03b2828`;
-`xet-core` main). Re-verify before relying on them; the compatibility test suite
-(§8) is the lasting source of truth.
+`xet-core` main), and by the M0 spikes against `huggingface_hub` 2.2.0 and
+`hf_xet` 1.7.0 (§11). Re-verify before relying on them; the compatibility
+test suite (§8) is the lasting source of truth.
 
 - **CAS API** (spec "api" page): `GET /v2/reconstructions/{file_id}` (preferred;
   clients fall back to v1 on 404/501), `GET /v1/reconstructions/{file_id}`
@@ -96,14 +142,37 @@ These were checked against primary sources on 2026-10-23
   `POST /v1/xorbs/default/{hash}`, `HEAD /v1/xorbs/default/{hash}`,
   `POST /v1/shards`, `POST /v2/shards` (NDJSON progress stream; clients fall
   back to v1 on 404), `HEAD /v1/files/{file_id}`, `GET
-  /v2/file-chunk-hashes/{file_id}` (delta uploads). `xet-core/openapi/cas.openapi.yaml`
-  also lists `/v1/telemetry`. Hash-to-hex conversion reverses bytes within each
-  8-byte group, which is a classic source of bugs.
+  /v2/file-chunk-hashes/{file_id}` (delta uploads). Hash-to-hex conversion
+  reverses bytes within each 8-byte group, which is a classic source of
+  bugs.
+- **What stock `hf_xet` 1.7.0 actually sends** (S6, source and observed):
+  - Global dedup queries go to `GET /v1/chunks/default/{hash}`, not the
+    spec's `default-merkledb`. openxet serves both.
+  - It sends `POST /v1/telemetry`. openxet accepts it and drops the body:
+    nothing is stored or forwarded (no telemetry, §7).
+  - It tries `POST /v2/shards` first and falls back to `/v1/shards` on 404.
+  - An empty file is a file entry with 0 segments, an all-zero file hash
+    and an all-zero sha256.
+  - The wasm build uploads shards **with** lookup tables and a footer,
+    although the spec says the footer must be omitted. openxet accepts a
+    consistent footer and discards the tail (S6 rule 3).
+- **Shard sha256** is stored in the hash layout: the raw bytes are the
+  digest with each 8-byte group reversed. It is client-asserted; the
+  server can't check it without the file's bytes, so the sha256 → Xet
+  hash mapping is scoped to the repo whose writer uploaded it (§5.4).
+- **Shard verification** (S6): eleven rules, all checkable from the chunk
+  hashes and lengths recorded at xorb ingest, never by reading a xorb
+  back. `verify_shard` caps the referenced chunks per shard
+  (`MAX_REFERENCED_CHUNKS`, default 2^24, about 1 TiB of logical data) and
+  rejects shards that reference missing xorbs. Reference and real
+  `hf_xet` shards pass.
 - **Auth:** clients obtain `{accessToken, exp, casUrl}` from
   `GET {HF_ENDPOINT}/api/{repo_type}s/{repo_id}/xet-{read|write}-token/{revision}`.
   The CAS token is scoped to repo and ref, and `write` supersedes `read`.
-  The same info can arrive as headers `X-Xet-Cas-Url`, `X-Xet-Access-Token`,
-  `X-Xet-Token-Expiration`. Clients refresh about 30 s before `exp`.
+  The token routes must return the token **twice**: in the JSON body and
+  as headers `X-Xet-Cas-Url`, `X-Xet-Access-Token`,
+  `X-Xet-Token-Expiration`. `huggingface_hub` reads only the headers and
+  `hf_xet` only the body (S3). Clients refresh about 30 s before `exp`.
 - **Download discovery:** `HEAD/GET /{repo}/resolve/{rev}/{path}` returns
   `X-Xet-Hash` plus a `Link: <…>; rel="xet-auth"` (or `X-Xet-Refresh-Route`)
   header. If the redirect is followed, plain HTTP content comes back.
@@ -118,13 +187,29 @@ These were checked against primary sources on 2026-10-23
 
   So the Hub layer must map sha256 to Xet file hash. The shard's file metadata
   carries the sha256.
-- **Uploads pass through the server.** The protocol has no presigned upload;
-  xorb bytes are POSTed to the CAS, which must verify them anyway. My earlier
-  "data never passes through openxet" holds for downloads only. *(True for
-  `hf_xet` 1.7.0. xet-core `main` adds `XorbUploadGrant`, a server-issued
-  direct-upload URL with a CRC64-NVMe checksum; see
-  `docs/research/S1-S2-direct-downloads.md`, "Upstream drift". This needs a
-  spike once a released client uses it.)*
+- **Uploads go through the server today; direct xorb uploads are coming.**
+  Stable clients up to `hf_xet` 1.7.0 POST xorb bytes to the CAS, which
+  verifies them. Upstream is adding **xorb upload grants**
+  (`XorbUploadGrant`, researched 2026-10-23):
+  - **Shape.** `POST /v1/xorb-grants/{prefix}/{hash}` with
+    `{"length", "checksum": {"algo": "crc64nvme", "value": "<decimal>"}}`
+    answers `201` with a grant `{id, method, url, headers}`, or `200` if
+    the xorb exists. The client sends the bytes to `url` with exactly
+    those headers and no CAS credential, then commits with
+    `POST /v1/xorb-commits/{prefix}/{hash}/grant/{id}`. A `404` commit
+    means no data arrived, and the client asks for a new grant.
+  - **Fallback.** A `404` on the grant request makes the client use
+    `POST /v1/xorbs` instead. Any other error fails the upload.
+  - **Who uses it.** `xet-core` `main` has only the types. The client
+    flow is on tag `v1.8.0-dev0`, shipped as the PyPI pre-release
+    `hf-xet` 1.8.0.dev0 (2026-10-20), where it is on by default
+    (`HF_XET_CLIENT_LEGACY_DIRECT_XORB_UPLOAD=1` turns it off). No stable
+    release uses it; `hf-xet` 1.7.0 has no grant code (checked in the
+    published wheels).
+
+  openxet answers `/v1/xorb-grants/*` with `404` until it supports grants,
+  never `501`, so these clients fall back. How it will support them is
+  in §5.5.
 - **Downloads can bypass the server** (verified by spike S1,
   `docs/research/S1-S2-direct-downloads.md`; decided in ADR 0002). v2
   reconstruction returns signed URLs, which `hf_xet` treats as opaque.
@@ -142,7 +227,7 @@ These were checked against primary sources on 2026-10-23
   global dedup index about 1/1000th of the chunk count, which is what makes
   scale tractable.
 - `huggingface_hub` now knows a `bucket` repo type (HF Storage Buckets:
-  mutable, no git revisions). Relevant prior art; not in v1.
+  mutable, no git revisions). openxet serves it in v1 (§10.4).
 - `xet-core` crates (`xet-core-structures`, `xet-data`, `xet-client`) are
   Apache-2.0 and contain the reference merklehash, xorb, shard and chunking
   code.
@@ -204,7 +289,8 @@ These were checked against primary sources on 2026-10-23
 - **protocol**: hash-string conversion, xorb and shard parsing, serialization
   and verification. Prefer depending on `xet-core-structures` for the
   reference implementation; wrap it so upstream churn is contained in one
-  place. Spike S5 checks how usable it is server-side.
+  place. Spike S5 confirmed it covers everything the server needs, with an
+  exact version pin (ADR 0001).
 - **cas**: the CAS endpoints. Xorb ingest: stream, parse, recompute chunk
   hashes and xorb hash, reject on mismatch, write to the object store, record
   the chunk table. Shard ingest: verify that every referenced xorb exists and
@@ -257,18 +343,24 @@ Durability details *(builder-check calls)*:
     (documented RPO ≤ 60 s).
   - So after total database loss, `reindex` may roll a branch back to an
     earlier commit, but no data or commit object is lost. Newer commits it
-    cannot place on a branch are listed as recoverable, by `reindex` and
-    by `verify`.
+    cannot place on a branch, and annotated tags no ref reaches, are
+    listed as recoverable, by `reindex` and by `verify`.
   - A pack that holds no object reachable from a rebuilt ref goes to a
     `recovered` state (ADR 0004). It is never served and GC never
     collects it.
-  - Unplaced commits and recovered packs are persisted in the database.
-    `verify` keeps listing them, and repacks keep everything they need,
-    so nothing restorable is dropped. Full repacks are never blocked.
+  - Unplaced commits, unplaced tags and recovered packs are persisted in
+    the database. `verify` keeps listing them, and repacks keep everything
+    they need, so nothing restorable is dropped. Full repacks are never
+    blocked.
   - Nothing is discarded automatically. A metric and an alert flag
     unresolved repos, and an operator, after review, runs `openxet
     reindex restore` or `openxet reindex discard` (per repo or bulk,
     with `--dry-run`). Until then the data stays stored.
+  - `discard` is **immediate and irreversible** for unplaced objects in
+    committed packs: their mtime is their pack's creation time, so the
+    next full repack drops every one whose pack is older than the grace
+    period, with no further grace. Recovered packs still get
+    GC's grace period. `--dry-run` and the docs say so (ADR 0004 item 4).
 
 ### 5.4 Identity, authorization and tenancy
 
@@ -321,9 +413,29 @@ with a configured key. It then stores Xet file hashes in its own database.
   that nearly free, because only a shard is sent.
 
 **File access scoping:** files registered by a shard upload are associated
-with the token's scope. Reconstruction and head-file only succeed for files
-reachable from the caller's scope. Xorbs remain globally content-addressed
-and shared.
+with the token's scope, and so is the sha256 → Xet hash mapping from the
+shard (never global, since the sha256 is client-asserted). Reconstruction
+and head-file only succeed for files registered to the caller's scope.
+Xorbs remain globally content-addressed and shared.
+
+**Xet reads by hash follow scope membership, not Git reachability**
+*(ruling R25)*:
+- Readers of a scope may read any file registered to it until GC collects
+  it. That includes a file that only force-pushed-away commits referenced,
+  although Git fetches and Hub reads by revision refuse those commits
+  (R22, ADR 0004).
+- Why: a Xet hash is an unguessable 256-bit content hash. A reader can
+  only have it from history they could see while it was current.
+- The trade-off is for users: reads stay stable, so in-flight downloads
+  and caches don't break when a branch moves.
+- **Security implication:** force-pushing a secret out of history does not
+  revoke access to it. Anyone in the scope who saw the hash can still
+  download the file. Removing a secret takes a force-push **plus** GC, or
+  `openxet purge <file-hash>` (M2+). Purge unregisters the file from every
+  scope at once, so reads stop immediately, and logs it; the bytes then
+  leave storage through GC (§5.6), once no other file references their
+  xorbs. Removing a reader from the scope revokes their access once their
+  current CAS token expires.
 
 **Global-dedup visibility** is configurable:
 - `global`, the default, follows HF's model with HMAC-protected responses.
@@ -334,6 +446,19 @@ and shared.
 
 - **Upload:** client → CAS (`POST xorbs` streamed and verified into the object
   store; `POST shards` verified and registered). This scales with node count.
+  Today every xorb byte goes through openxet (§3).
+  - **Xorb upload grants** are a tracked future item, not an ADR yet, since
+    no stable client uses them (§3). When clients ship them, openxet
+    supports them with **verification before registration**: the grant
+    URL is a presigned PUT to a staging key, bound to the declared length
+    and CRC64-NVMe checksum where the store can enforce them. The commit
+    call reads the staged object back, recomputes the chunk hashes and
+    xorb hash exactly as `POST /v1/xorbs` does, and only then moves it to
+    its content-addressed key and records its chunk table. A mismatch
+    deletes the staged object and fails the commit. Unverified bytes are
+    never readable and never count for dedup or shard verification.
+  - Until then `/v1/xorb-grants/*` answers `404`, so grant-aware clients
+    fall back to `POST /v1/xorbs`.
 - **Download:** client → CAS reconstruction (small JSON). Then either:
   - **(a)** direct from the object store via native presigned URLs, one
     range-bound URL per fetch entry (S1, ADR 0002); or
@@ -381,6 +506,11 @@ and shared.
 - `openxet gc --dry-run` reports what would be deleted. Every deletion is
   logged. Branch and commit deletion in the Hub layer only drops references;
   data goes only via GC.
+- **Git pack side files leave with what they describe** (ADR 0004 item 5):
+  a pack's `.idx`, `.rev`, `.bitmap` and `.mtimes` are deleted together
+  with the pack, and a `multi-pack-index` generation (with its `.bitmap`
+  and `.rev`) once a newer generation is committed and the grace period
+  has passed. Neither is ever left behind as an orphan.
 
 ### 5.7 Metering
 
@@ -411,11 +541,34 @@ API and metrics, because platforms need them for quotas and billing.
 - **Time to first upload:** under 2 minutes from a clean machine, measured on
   every release.
 
+### 5.9 Security requirements
+
+Each requirement is a release blocker and has a named test. The tests are
+planned for the milestone that builds the surface (M1 for CAS, M2 for Hub
+and Git, later for caches and the mirror); a surface doesn't ship without
+its test.
+
+| # | Requirement | Tests |
+|---|---|---|
+| 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
+| 2 | **Credentials are repo-scoped** on every Hub route, CAS route and signed URL. A credential for repo A gets `403` on read, write and create anywhere else. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
+| 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
+| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants` |
+| 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped` |
+| 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), `verify` never echoes the caller's credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `verify_never_echoes_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
+| 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_write_is_visible`, `acked_write_survives_sigkill` |
+| 8 | **Git reads check reachability on every path** (R22), and **every ref writer is fenced** (ADR 0004). | ADR 0004's `v2_want_unreachable_refused`, `hub_read_by_sha_obeys_r22`, `writer_cannot_make_unreachable_reachable`, `hub_ref_write_fenced`, `ref_log_in_cas_transaction` |
+
+Xet reads by hash follow scope membership (R25, §5.4); that is by design,
+not a gap in requirement 8.
+
 ## 6. Hub-compatibility layer (v1 surface)
 
 Only what `huggingface_hub` / `hf` need for the workflows below. Exact
 request and response shapes come from `huggingface_hub` source and recorded
-fixtures, pinned by the compatibility suite.
+fixtures, pinned by the compatibility suite. Spike S3 captured them for
+`huggingface_hub` 2.2.0 (`compat/fixtures/hub/`,
+[S3](../../research/S3-hub-api-shapes.md)).
 
 **Workflows:**
 - `hf auth login`
@@ -430,12 +583,18 @@ fixtures, pinned by the compatibility suite.
 
 **Endpoints (verified to be used by `huggingface_hub`):**
 - `GET /api/whoami-v2`
-- `POST /api/repos/create`, `POST /api/repos/delete`
+- `POST /api/repos/create` (a `409` carries `url`, which
+  `create_repo(exist_ok=True)` reads), `DELETE /api/repos/delete` with a
+  JSON body
 - `GET /api/{type}s/{id}[/revision/{rev}]`
 - `GET /api/{type}s/{id}/refs`, `GET /api/{type}s/{id}/commits/{rev}`
 - `GET /api/{type}s/{id}/tree/{rev}/{path}`, `POST /api/{type}s/{id}/paths-info/{rev}`
 - `POST /api/{type}s/{id}/preupload/{rev}`
-- `GET /api/{type}s/{id}/xet-{read|write}-token/{rev}`
+- `GET /api/{type}s/{id}/xet-{read|write}-token/{rev}`, returning the
+  token in both the JSON body and the `X-Xet-*` headers (§3)
+- `POST /api/validate-yaml`: every commit that adds a `README.md` posts it
+  here first, and any non-2xx fails the upload. It answers
+  `200 {"errors":[],"warnings":[]}` or real validation, never `501`.
 - `POST /api/{type}s/{id}/commit/{rev}` (NDJSON)
 - branch and tag create/delete
 - `HEAD|GET /{[datasets/]}{id}/resolve/{rev}/{path}`
@@ -462,11 +621,17 @@ fixtures, pinned by the compatibility suite.
 
 **Small files:** `preupload` decides whether small "regular" files go inline
 in the commit (stored as content-addressed blobs) or through Xet. The
-threshold is the builder's call, informed by benchmarks.
+threshold is the builder's call, informed by benchmarks. Answering
+`"uploadMode": "lfs"` is the server's only lever; `hf_xet` then takes the
+Xet path (S3). The compatibility test for this (competitive-matrix lesson
+1) uploads a file of at least 1 GiB whose name matches no `.gitattributes`
+pattern, so it proves openxet routes by size, not by pattern.
 
 **Explicitly not implemented:** model cards, search, likes, discussions,
 Spaces, inference, collections, org settings. Unimplemented endpoints
-return a clear `501` that names the endpoint, never a confusing `404`.
+return a clear `501` that names the endpoint, never a confusing `404`. The
+exception is a route where stock clients fall back only on `404`, such as
+`/v1/xorb-grants/*` (§3).
 
 ### 6.1 Git LFS endpoint for `git-xet` *(decided by the user: core, v1)*
 
@@ -508,7 +673,6 @@ Rules for this endpoint:
     download agents get the CAS token from `GET {lfs-url}/xet-read-token`,
     so it never appears in batch responses or `GIT_TRACE` output.
   - openxet's `verify` action never echoes the client's credential
-    (huggingface.co's does)
   ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md))
 - **Closing the Git download gap** *(decided by the user, v1)*. With plain
   `basic`, `git clone` / `git pull` fetch whole files. Two complementary
@@ -556,11 +720,13 @@ canonical 3-key form. The full contract is
   - Structured logs. Tokens are never logged.
   - `/healthz`, `/readyz`.
 - **Admin CLI:** `reindex`, `gc [--dry-run]`, `verify` (integrity scan),
-  `token mint`, `migrate`.
+  `token mint`, `migrate`, `purge <file-hash>` (§5.4, M2+).
 - **Feedback loop:**
   - GitHub Discussions, issue templates and a public roadmap.
   - A docs feedback link.
-  - **No telemetry**, by default or ever without explicit opt-in.
+  - **No telemetry**, by default or ever without explicit opt-in. Client
+    telemetry sent to `POST /v1/telemetry` is accepted and dropped unread
+    (§3).
 
 ### 7.1 Humans and agents as first-class users *(decided by the user)*
 
@@ -633,7 +799,8 @@ server, and fails on any prompt, unparseable output or unstable schema.
 - **Golden vectors** from `xet-team/xet-spec-reference-files`, plus vectors
   generated by `xet-core`.
 - **Fuzzing** (`cargo-fuzz`) of every parser that reads untrusted bytes
-  (xorb, shard, NDJSON commit).
+  (xorb, shard, NDJSON commit). The xorb and shard targets
+  (`read_upload_shard` and the xorb parsers) are an M1 task.
 - **Compatibility suite**, the most important test. CI runs real `hf_xet`,
   `huggingface_hub`/`hf` CLI, `huggingface.js` and `git` + `git-lfs` +
   `git-xet` with a Gitea remote (pinned and latest) against
@@ -1016,9 +1183,14 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     `lost`.
   - A writer may only make reachable what was already reachable from its
     snapshot's refs, or what the client itself sent. Bases that git's
-    `--fix-thin` appends don't count as sent, and they must lie in a
-    boundary commit's tree. That stops a push or a Hub `create_branch`
-    from resurrecting, or copying out, a force-pushed-away object.
+    `--fix-thin` appends don't count as sent, so every appended base must
+    be reachable from the snapshot's refs. Path-guided lookups in the
+    trees of boundary commits and ref tips settle most pushes; the rest
+    take a full walk under its own budget, failing closed. That stops a
+    push or a Hub `create_branch` from resurrecting, or copying out, a
+    force-pushed-away object. Until the `git-reachability` bitmap
+    follow-up, some honest thin pushes can be refused (ADR 0004 item 3);
+    the refusal hints `git push --no-thin`, which sends no thin bases.
   - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
     serves `object-info` for any object, so openxet refuses it, along
     with `bundle-uri` and unknown commands.
@@ -1046,10 +1218,11 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     (ADR 0004).
   - A repack publish checks the lease epoch, so a stale leaseholder
     can't publish.
-  - Superseded, lost and expired pending packs go to GC (§5.6).
-    `recovered` packs never do. Objects that reindex could not place
-    stay protected as keep roots, without blocking repacks, until an
-    operator restores or discards them.
+  - Superseded, lost and expired pending packs go to GC (§5.6), with
+    their side files; superseded `multi-pack-index` generations go too.
+    `recovered` packs never do. Commits and annotated tags that reindex
+    could not place stay protected as keep roots, without blocking
+    repacks, until an operator restores or discards them.
 - **gitoxide stays in-process off the wire path,** for Hub API object
   reads, the reachability check and Hub commit writes. It only ever
   opens a request snapshot, never the node cache.
@@ -1085,52 +1258,55 @@ text, discussions, social features, previews of model or dataset contents.
 Easy to restyle and disable; platforms like aqora will typically run their
 own UI and leave this role off.
 
-## 11. Spikes to run first (verify, don't assume)
+## 11. Spikes (verify, don't assume)
+
+All nine M0 spikes are answered. Each note records versions, method and
+what was observed versus inferred.
 
 - **S1** *(answered: yes, on MinIO;
-  `docs/research/S1-S2-direct-downloads.md`, ADR 0002)*: `hf_xet` downloads
-  correctly when v2 reconstruction returns native S3 presigned URLs with
-  one range per fetch entry.
+  [S1–S2](../../research/S1-S2-direct-downloads.md), ADR 0002)*: `hf_xet`
+  downloads correctly when v2 reconstruction returns native S3 presigned
+  URLs with one range per fetch entry.
 - **S2** *(answered: `http://` works for Hub, CAS and store; a private CA
   works via `SSL_CERT_FILE` on Linux but not for `hf_xet` on macOS;
-  `docs/research/S1-S2-direct-downloads.md`)*: `hf_xet` and
+  [S1–S2](../../research/S1-S2-direct-downloads.md))*: `hf_xet` and
   `huggingface_hub` accept `http://` CAS and Hub endpoints for local dev, or
   what TLS setup the quickstart needs.
-- **S3:** the exact `whoami-v2`, `preupload`, `commit` and `tree` response
-  shapes `huggingface_hub` requires, captured as fixtures.
+- **S3** *(answered: 99 exchanges captured as fixtures in
+  `compat/fixtures/hub/`; corrections applied to §3 and §6: `DELETE` for
+  repo delete, `validate-yaml` on the upload path, tokens in body and
+  headers; [S3](../../research/S3-hub-api-shapes.md))*: the exact
+  `whoami-v2`, `preupload`, `commit` and `tree` response shapes
+  `huggingface_hub` requires, captured as fixtures.
 - **S4** *(answered: no for DuckDB and polars `hf://`, yes for fsspec
   `HfFileSystem`; plain HTTPS `resolve` URLs work for all;
-  `docs/research/S4-analytics-clients.md`)*: whether DuckDB `hf://` (and
-  polars or fsspec) can target a custom endpoint; if not, document the
-  plain-HTTPS URL route.
-- **S5:** whether `xet-core-structures` is usable server-side, or which pieces
-  to vendor or reimplement, and its versioning on crates.io.
+  [S4](../../research/S4-analytics-clients.md))*: whether DuckDB `hf://`
+  (and polars or fsspec) can target a custom endpoint; if not, document
+  the plain-HTTPS URL route.
+- **S5** *(answered: yes; everything the server needs is public in
+  `xet-core-structures` 1.7.0, at the cost of a heavy dependency graph,
+  sync-only parsers and API churn within 1.x, contained by an exact pin
+  behind `openxet-protocol`;
+  [S5](../../research/S5-xet-core-structures-server-side.md), ADR 0001)*:
+  whether `xet-core-structures` is usable server-side, or which pieces to
+  vendor or reimplement, and its versioning on crates.io.
 - **S6** *(answered: eleven rules, all checkable from per-xorb chunk hashes
-  and lengths stored at xorb ingest; reference and real `hf_xet` shards
-  pass; `docs/research/S6-shard-verification.md`)*: the shard upload
-  verification rules (spec "shard" page) implemented against the reference
-  files.
+  and lengths stored at xorb ingest, with a work cap per shard; reference
+  and real `hf_xet` shards pass; what stock clients actually send is in
+  §3; [S6](../../research/S6-shard-verification.md))*: the shard upload
+  verification rules (spec "shard" page) implemented against the
+  reference files.
 - **S7** *(answered: `git-xet` 0.2.1 has no download handshake, and
-  downloads must answer `basic`; the §10.2 gap is real over HTTPS and SSH and
-  closed today by a signed `href` plus `access=none`; `git-lfs-authenticate`
-  must include `href` and `expires_in`; `git-lfs-transfer` can't carry
-  `xet`; `docs/research/S7-git-lfs-xet.md`, ADR 0003)*: the `git-xet`
+  downloads must answer `basic`; the §10.2 gap is real over HTTPS and SSH
+  and closed today by a signed `href` plus `access=none`;
+  `git-lfs-authenticate` must include `href` and `expires_in`;
+  `git-lfs-transfer` can't carry `xet`;
+  [S7](../../research/S7-git-lfs-xet.md), ADR 0003)*: the `git-xet`
   download handshake, plus `git-lfs` behaviour with a separate `lfs.url`
   host (credentials, `basic` fallback), against a real Gitea in CI (the CI
-  leg is specified in ADR 0003). Includes the
-  credential-source gap (§10.2) over both HTTPS and SSH, and whether
-  `git-lfs-transfer` (pure SSH) can negotiate the `xet` custom transfer.
-- **S9** *(answered: the `git` binary serves the protocol on per-request
-  snapshot repos, over openxet-owned database refs and bucket packs, with
-  gix in-process off the wire path; gix 0.90 has no upload-pack or
-  receive-pack server, no delta compression and no bitmaps, and cost 16x
-  git's CPU to serve a 10k-commit clone; database CAS gave exactly one
-  winner in 60/60 concurrent-push rounds across two nodes; JGit DFS,
-  go-git, libgit2, Gitaly and Mononoke were assessed and rejected;
-  `docs/research/S9-git-engine.md`, ADR 0004)*: Git hosting engine:
-  gitoxide server-side capabilities (upload-pack/receive-pack, protocol
-  v2) against the `git` binary on a cached bare repo. Measure throughput
-  and latency, and check that bucket-backed packs keep nodes stateless.
+  leg is specified in ADR 0003). Includes the credential-source gap
+  (§10.2) over both HTTPS and SSH, and whether `git-lfs-transfer` (pure
+  SSH) can negotiate the `xet` custom transfer.
 - **S8** *(answered: the Hub read surface plus CAS reconstruction, with
   every URL and token re-issued by openxet; HF reconstructions can be
   fetched with per-repo 900 s read tokens, but their 3600 s,
@@ -1138,15 +1314,26 @@ own UI and leave this role off.
   the mirror ingests verified chunks into local xorbs; the legal texts
   best support self-hosted mirroring of public repos, while a hosted
   third-party mirror and shared gated access are high-risk and need a
-  lawyer; policy decided in R19; `docs/research/S8-hf-mirror.md`,
-  §10.6)*: HF pull-through mirroring.
-  Which HF endpoints, and what Xet read-token behaviour, a mirror depends
-  on, and the terms-of-use constraints for caching HF content.
+  lawyer; policy decided in R19; [S8](../../research/S8-hf-mirror.md),
+  §10.6)*: HF pull-through mirroring. Which HF endpoints, and what Xet
+  read-token behaviour, a mirror depends on, and the terms-of-use
+  constraints for caching HF content.
+- **S9** *(answered: the `git` binary serves the protocol on per-request
+  snapshot repos, over openxet-owned database refs and bucket packs, with
+  gix in-process off the wire path; gix 0.90 has no upload-pack or
+  receive-pack server, no delta compression and no bitmaps, and cost 16x
+  git's CPU to serve a 10k-commit clone; database CAS gave exactly one
+  winner in 60/60 concurrent-push rounds across two nodes; JGit DFS,
+  go-git, libgit2, Gitaly and Mononoke were assessed and rejected;
+  [S9](../../research/S9-git-engine.md), ADR 0004)*: Git hosting engine:
+  gitoxide server-side capabilities (upload-pack/receive-pack, protocol
+  v2) against the `git` binary on a cached bare repo. Measure throughput
+  and latency, and check that bucket-backed packs keep nodes stateless.
 
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and
-current token flow. These are pinned in M0 from spike results, stated in the
-compatibility matrix, and tested as the "oldest" leg of the suite.
+current token flow. They are stated in the compatibility matrix and tested
+as the "oldest" leg of the suite. M0 did not pin them; the M1 plan does.
 
 ## 12. Milestones (v1 = all of them)
 
@@ -1166,6 +1353,10 @@ but sets no calendar dates.
 - **M1:** CAS core on SQLite with local disk and static tokens.
   - Storage-only mode passes `hf_xet` upload and download, plus the golden
     vectors.
+  - The stock-client paths of §3: `/v1/chunks/default/{hash}`,
+    `/v1/telemetry` dropped, `/v1/xorb-grants/*` answering `404`.
+  - Fuzz targets for the xorb and shard parsers.
+  - The M1 rows of the security tests (§5.9).
 - **M2:** Hub-compat layer and Git hosting.
   - `hf auth login`, `hf upload`, `hf download` and listing work unmodified.
   - `git clone` / `git push` over HTTPS against openxet-hosted repos, sharing
@@ -1173,6 +1364,8 @@ but sets no calendar dates.
   - The Git LFS endpoint works: `git push` / `git clone` with `git-xet`
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
+  - The pack-lifecycle prototype and the ADR 0004 test checklist.
+  - `openxet purge <file-hash>` (§5.4).
 - **M3:** production backends.
   - Postgres; S3, GCS and Azure; presigned downloads.
   - OIDC and webhook auth.
@@ -1297,7 +1490,7 @@ guilt/xet-server.
 | Performance | Fastest Xet server on upload, download, dedup ratio and metadata latency | Public benchmark suite run in CI against competitors on identical hardware; regressions fail CI; results published per release |
 | Code quality | Small, readable, reviewed code with no slop | Strict clippy and `forbid(unsafe)`; mutation testing (`cargo-mutants`) on core crates; fuzzing continuously (OSS-Fuzz once eligible); lines of code tracked as a cost, not a goal |
 | Architecture | Every decision recorded and reversible | ADRs for every significant choice; crate boundaries enforced (no cyclic or upward deps, checked in CI); bucket-as-truth and stateless invariants have dedicated tests |
-| Security | Secure by default, with a verifiable supply chain | `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
+| Security | Secure by default, with a verifiable supply chain | The §5.9 requirements, each with its test; `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
 | Documentation | Every user finds the answer in under a minute | Diátaxis structure (tutorials, how-tos, reference, explanation); every example runs in CI; reference generated from code (CLI, config, OpenAPI); `llms.txt`; a docs feedback link on every page |
 | Governance | Trustworthy beyond one person | `GOVERNANCE.md` (roles, decision process, path to maintainer); every change merged via PR with at least one independent review (human, or an agent reviewer plus human sign-off), enforced by branch protection; an RFC process for big changes; DCO; code of conduct; a public roadmap |
 | Community | Contributors feel welcome and succeed | Labelled good-first issues; contributor guide tested by newcomers; first response to issues and PRs within two business days; credit in every release's notes |
