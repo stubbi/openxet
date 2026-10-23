@@ -668,6 +668,12 @@ says which spec version and client versions are supported.
       compose-internal service name
   - Terraform examples for AWS, GCP and Azure
   - library crates on crates.io for embedding the storage core
+  - **The `git` role needs `git` ≥ 2.34 on `PATH`** (ADR 0004).
+    - Container images ship the distro's unmodified git package, which is
+      GPL-2.0, and list it in their licence notice.
+    - The static binaries don't bundle git. They check for it at start-up
+      when the `git` or `ssh` role is enabled, and fail with an actionable
+      error.
 - Also v1:
   - one-click templates (Railway, Fly, Render)
   - a Nix package
@@ -937,10 +943,31 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
 - **Hooks for integrators:** post-receive webhooks (repo, ref, old/new sha)
   so platforms can react to pushes, e.g. to trigger CI.
 
-**Left to the builder:** in-process Git via gitoxide versus shelling out to
-`git` on a cached bare repo, and the pack layout and repacking strategy.
-Spike S9 decides this. This is the hardest new component; budget for it
-accordingly.
+**Engine** *(decided by S9, ADR 0004)*:
+- **The `git` binary serves the wire protocol.**
+  - Each request runs `git upload-pack` / `receive-pack` on a throwaway
+    snapshot repo: `packed-refs` from the database, and objects through
+    `objects/info/alternates` into the node's pack cache.
+  - openxet answers the protocol v2 capability advertisement and `ls-refs`
+    in-process.
+  - Ref updates go through a `proc-receive` hook back into openxet, which
+    publishes the pushed pack to the bucket, then runs the ref CAS, then
+    acknowledges.
+  - Nodes read the ref snapshot before syncing the pack list.
+- **Repacking** is geometric with a multi-pack-index bitmap, on one
+  leaseholder per repo. Superseded and orphaned packs go to GC (§5.6).
+- **gitoxide stays in-process off the wire path,** for Hub API object
+  reads and Hub commit writes.
+- **git ≥ 2.34 is a runtime dependency.** Container images ship it from
+  the distro (GPL-2.0, run as a separate program).
+- **Measured** (`docs/research/S9-git-engine.md`):
+  - A full clone of a 10k-commit repo cost git 0.18 s CPU, against 2.86 s
+    for an in-process gix server. gix 0.90 has no server side, no delta
+    compression and no bitmaps.
+  - Concurrent pushes across two nodes produced exactly one winner in
+    60/60 rounds.
+
+This is the hardest new component; budget for it accordingly.
 
 ### 10.10 Minimal self-service web UI *(decided by the user: v1)*
 
@@ -998,10 +1025,17 @@ own UI and leave this role off.
   leg is specified in ADR 0003). Includes the
   credential-source gap (§10.2) over both HTTPS and SSH, and whether
   `git-lfs-transfer` (pure SSH) can negotiate the `xet` custom transfer.
-- **S9:** Git hosting engine: gitoxide server-side capabilities
-  (upload-pack/receive-pack, protocol v2) against the `git` binary on a
-  cached bare repo. Measure throughput and latency, and check that
-  bucket-backed packs keep nodes stateless.
+- **S9** *(answered: the `git` binary serves the protocol on per-request
+  snapshot repos, over openxet-owned database refs and bucket packs, with
+  gix in-process off the wire path; gix 0.90 has no upload-pack or
+  receive-pack server, no delta compression and no bitmaps, and cost 16x
+  git's CPU to serve a 10k-commit clone; database CAS gave exactly one
+  winner in 60/60 concurrent-push rounds across two nodes; JGit DFS,
+  go-git, libgit2, Gitaly and Mononoke were assessed and rejected;
+  `docs/research/S9-git-engine.md`, ADR 0004)*: Git hosting engine:
+  gitoxide server-side capabilities (upload-pack/receive-pack, protocol
+  v2) against the `git` binary on a cached bare repo. Measure throughput
+  and latency, and check that bucket-backed packs keep nodes stateless.
 - **S8** *(answered: the Hub read surface plus CAS reconstruction, with
   every URL and token re-issued by openxet; HF reconstructions can be
   fetched with per-repo 900 s read tokens, but their 3600 s,
