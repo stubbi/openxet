@@ -303,10 +303,46 @@ async fn responses_never_echo_credential() {
             assert!(!reply.body.contains(token.as_str()));
         }
     }
+    // A credential in a path segment or the query must not reach the logs
+    // either: spans record the route template, never the raw path.
+    for token in &tokens {
+        for (method, path) in [
+            (Method::GET, format!("/{token}")),
+            (Method::HEAD, format!("/v1/xorbs/default/{token}")),
+            (Method::POST, format!("/v1/telemetry/{token}")),
+            (Method::POST, format!("/v1/telemetry?sig={token}")),
+        ] {
+            let reply = Reply::of(
+                server
+                    .request(method, &path)
+                    .header(AUTHORIZATION, bearer(&server.read_token)),
+            )
+            .await;
+            assert!(!reply.body.contains(token.as_str()), "{path} body");
+        }
+    }
     let logs = server.logs();
     for token in &tokens {
         assert!(!logs.contains(token.as_str()), "a credential was logged");
     }
+}
+
+#[tokio::test]
+async fn spans_record_the_route_template() {
+    let server = TestServer::start_default().await;
+
+    Reply::of(
+        server
+            .request(Method::POST, "/v1/telemetry")
+            .header(AUTHORIZATION, bearer(&server.read_token)),
+    )
+    .await;
+    Reply::of(server.request(Method::GET, "/v1/some/raw/path")).await;
+
+    let logs = server.logs();
+    assert!(logs.contains("route=/v1/telemetry"), "{logs}");
+    assert!(logs.contains("route=unmatched"), "{logs}");
+    assert!(!logs.contains("/v1/some/raw/path"), "{logs}");
 }
 
 #[tokio::test]

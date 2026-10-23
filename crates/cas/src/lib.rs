@@ -127,9 +127,10 @@ impl AppState {
 ///
 /// - Every response carries `X-Request-Id`, which is also the `request_id`
 ///   field of the request's tracing span.
-/// - The trace layer logs method, path, status and latency. It never logs a
-///   query string (a signed URL's `sig` is a credential), a header value or a
-///   body, and `Authorization` is marked sensitive besides.
+/// - The trace layer logs the method, the matched route template, status
+///   and latency. It never logs the raw path or query (a signed URL's `sig`
+///   is a credential), a header value or a body, and `Authorization` is
+///   marked sensitive besides.
 /// - A path no route serves answers `404`, whatever the method: `404` is how
 ///   stock clients learn a route doesn't exist here (S10 "Status codes and
 ///   retries"). A known path with an unserved method answers `405`.

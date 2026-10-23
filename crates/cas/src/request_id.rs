@@ -1,6 +1,6 @@
 use std::fmt;
 
-use axum::extract::Request;
+use axum::extract::{MatchedPath, Request};
 use axum::http::HeaderValue;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -42,15 +42,24 @@ pub(crate) async fn assign(mut request: Request, next: Next) -> Response {
     response
 }
 
-/// The request's tracing span. It records the method, the path and the
-/// request id, never the query (a signed URL's `sig` is a credential),
-/// headers or body.
+/// The request's tracing span: the request id, the method and the matched
+/// route template (`MatchedPath`, e.g. `/v1/xorbs/{prefix}/{hash}`), or
+/// `unmatched` when no route matched.
+///
+/// Invariant: nothing from the URI, the headers or the body is ever
+/// recorded. The raw path is never logged, so a credential or signature
+/// in any path segment or the query is structurally unloggable; a request is
+/// found by its id, which the client logs too.
 pub(crate) fn span(request: &Request) -> tracing::Span {
     let id = request.extensions().get::<RequestId>();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("unmatched", MatchedPath::as_str);
     tracing::info_span!(
         "request",
         request_id = id.map(tracing::field::display),
         method = %request.method(),
-        path = request.uri().path(),
+        route = %route,
     )
 }
