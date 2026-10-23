@@ -32,6 +32,24 @@ of them worse:
   hosted service needs something, it is built into the core, behind the
   same seams self-hosters use.
 
+Each of them may be a **human, an AI agent, or both working together**. Each
+deserves the best possible experience; neither is a degraded mode of the
+other (design §7.1):
+- **Humans** get readable output, safe defaults and docs that teach.
+- **Agents** get:
+  - `--json` with versioned schemas
+  - stable exit codes
+  - structured errors with a hint for the next action
+  - non-interactive modes, idempotency and `--dry-run`
+  - OpenAPI, an MCP server, and `llms.txt`
+- **Together** they get:
+  - delegated tokens that are narrower than the human's own
+  - audit entries that attribute each action
+  - approval gates for destructive agent actions
+
+Every new command, endpoint or error must work well for both. The agent leg
+of the compatibility suite enforces this.
+
 Think from their side. Do the extra round for them (a clearer error, a
 faster path, a doc example that actually runs) rather than what is
 convenient for us. Failure looks like this, even if the code works:

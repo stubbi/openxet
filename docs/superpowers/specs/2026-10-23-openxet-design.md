@@ -471,6 +471,62 @@ Rules for this endpoint:
   - A docs feedback link.
   - **No telemetry**, by default or ever without explicit opt-in.
 
+### 7.1 Humans and agents as first-class users *(decided by the user)*
+
+openxet is built for people **and** AI agents, and for the two working
+together. Each gets the best possible experience, and neither is a
+degraded mode of the other.
+
+**For humans:**
+- Readable output, progress bars and helpful prompts. Safe defaults with
+  confirmation before destructive actions.
+- The web UI, and docs that teach.
+
+**For agents:**
+- **Every surface is machine-usable:**
+  - Every CLI command has `--json` output with a documented, versioned
+    schema.
+  - Exit codes are stable and documented.
+  - `--yes` / non-interactive mode never blocks on a prompt.
+  - Admin, Hub and CAS APIs are described by a published OpenAPI
+    document that is generated from code and checked in CI.
+- **Errors are structured:** a stable code, a message, and a `hint` with
+  the next action, in both CLI JSON and HTTP responses. An agent can recover
+  without parsing prose.
+- **Predictable and safe to retry:**
+  - Commands and API writes are idempotent where possible, with
+    idempotency keys where not.
+  - `--dry-run` on everything that changes state.
+  - Explicit, deterministic pagination.
+- **An MCP server** (`openxet mcp`, in the client) exposes repos, files,
+  upload, download, search over paths, usage and admin operations as tools
+  with tight schemas. It respects the caller's token scope.
+- **Agent-readable docs:** `llms.txt` and per-page plain Markdown on the docs
+  site. Every CLI command's help matches the docs, and both are generated
+  from one source.
+
+**For humans and agents together:**
+- **Delegated, attenuated tokens.** A human mints a token for an agent that
+  is narrower than their own:
+  - specific repos
+  - read-only or write
+  - expiry measured in hours
+  - optional limits on bytes or operations
+
+  It is revocable from the web UI.
+- **Every action is attributed** in the audit log as human, or as agent on
+  behalf of a human. The web UI shows what an agent did.
+- **Approval gates:** operators can require human approval for
+  agent-initiated destructive or costly actions (deleting a repo or branch,
+  force-moving refs, GC runs, large egress). The agent gets a pending state
+  it can poll; the human approves in the UI or CLI.
+- **Handoff:** any CLI or UI action can produce the equivalent command or
+  API call, so a human can hand a task to an agent and back.
+
+**Quality bar:** the compatibility suite has an "agent leg." It runs scripted,
+non-interactive workflows using only `--json`, exit codes and the MCP
+server, and fails on any prompt, unparseable output or unstable schema.
+
 ## 8. Engineering practice
 
 **Language and tooling:**
@@ -844,8 +900,9 @@ is ever needed.
 
 Prior art found on 2026-10-23: another repository already uses the name
 (`ggoggam/openxet`, Apache-2.0, 8 stars). The GitHub organization `openxet`
-exists (created 2025-08-15, empty); whether it is ours is unconfirmed. The
-user owns the openxet.com domain.
+exists (created 2025-08-15, empty) and belongs to someone else, so our GitHub
+organization needs a different handle; that is the user's choice. The user
+owns the openxet.com domain.
 
 ## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
 
