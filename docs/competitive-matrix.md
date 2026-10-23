@@ -62,7 +62,7 @@ affiliated with ggoggam/openxet; the names collide.
 | Setup | PARTIAL | ~5 min from clone to a running server (4m20s cold build). `examples/README.md` claims stock `huggingface_hub` works via `endpoint` (it can't: `405` on `/api/repos/create`); `demo.sh` installs an unpinned `hf_xet`, gets 1.7.0, and its own demo fails |
 | Upload via `hf_xet` | FAIL on 1.7.0 and 1.6.0, PASS on 1.5.2 | 1.7.0: `405 Method Not Allowed` on `/v2/shards`; only `/v1/shards` is routed. 1.5.2: 5 xorbs, shard 200 |
 | Download via `hf_xet` | PASS (1.5.2 and 1.7.0) | sha256 matches for all 3 files |
-| Xet URLs without headers | PARTIAL | Stock `hf_xet` 1.7.0 and 1.5.2 fetch unsigned `/v1/xorbs/default/<h>` URLs with no extra headers; sha256 matches. They are not signed, self-authorizing URLs (L4) |
+| Xet URLs without headers | PARTIAL | Stock `hf_xet` 1.7.0 and 1.5.2 download with no extra headers; sha256 matches. L4's signed, self-authorizing URL requirement is not met |
 | Range | FAIL | A 1000-byte `/v2/reconstructions` range returns chunks `0..1030`, ~67 MB: term, not chunk, granularity |
 | Dedup, same machine | PASS | A 1 MB edit sends 1,134,889 B; an identical copy sends 0 B of xorbs |
 | Dedup, second machine (bytes sent) | FAIL | 314,611,672 B re-sent for a 1 MB edit: every `GET /v1/chunks/default/<h>` is 404; only `default-merkledb` is routed |
