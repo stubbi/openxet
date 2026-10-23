@@ -436,9 +436,23 @@ async fn register_shard_is_atomic() {
             None
         );
     }
-    // Nothing of the failed attempt counts: the shard is new for the scope.
+    // The shard_scopes row rolled back too: registering the shard again in
+    // the same scope is new. No files means the fault point isn't reached.
     assert!(ok(index
-        .register_shard(&shard, &files, A, Visibility::Global)
+        .register_shard(
+            &shard,
+            &[],
+            FAULT_AFTER_FIRST_FILE_SCOPE,
+            Visibility::Global
+        )
+        .await));
+    assert!(!ok(index
+        .register_shard(
+            &shard,
+            &[],
+            FAULT_AFTER_FIRST_FILE_SCOPE,
+            Visibility::Global
+        )
         .await));
 }
 
