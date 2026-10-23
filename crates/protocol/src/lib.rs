@@ -13,8 +13,8 @@ mod xorb;
 
 pub use hash::{MerkleHash, chunk_hash, file_hash, hash_from_hex, hash_to_hex, range_hash};
 pub use shard::{
-    MAX_UPLOAD_SHARD_BYTES, Segment, ShardFileEntry, UploadShard, VerifyError, read_upload_shard,
-    verify_file, verify_segment,
+    MAX_REFERENCED_CHUNKS, MAX_UPLOAD_SHARD_BYTES, Segment, ShardFileEntry, UploadShard,
+    VerifyError, read_upload_shard, verify_file, verify_segment, verify_shard,
 };
 pub use xorb::{StoredXorb, XorbChunks, read_xorb_chunks, xorb_hash, xorb_with_footer};
 

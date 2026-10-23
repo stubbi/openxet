@@ -14,11 +14,34 @@ use xet_core_structures::metadata_shard::streaming_shard::{
 };
 use xet_core_structures::metadata_shard::{MDBShardFileFooter, MDBShardFileHeader};
 
-use crate::{MerkleHash, ProtocolError, file_hash, range_hash};
+use xet_core_structures::merklehash::MerkleHashSubtree;
+
+use crate::{MerkleHash, ProtocolError, range_hash};
 
 /// The largest shard upload accepted, in bytes. Clients must split larger
 /// shards (<https://huggingface.co/docs/xet/upload-protocol#6-shard-serialization-and-upload>).
 pub const MAX_UPLOAD_SHARD_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The default cap on chunks one shard may reference, summed over all its
+/// segments, for [`verify_shard`]: 2^24 chunks, about 1 TiB of logical file
+/// data at the ~64 KiB average chunk size.
+///
+/// The parse budget alone doesn't bound verification: a 64 MiB shard holds
+/// ~700k segments, and each may span a whole xorb, so the referenced count
+/// could reach billions. Verification hashes each referenced chunk hash once
+/// (range hash and file hash), so the cap bounds CPU. Memory doesn't grow
+/// with the cap: besides the parsed shard (at most about the 64 MiB body),
+/// verification holds one buffer of at most one xorb's chunk hashes and an
+/// O(log n) file-hash state per file (see [`verify_file`]). Without
+/// incremental hashing the cap would allow 2^24 × 40 bytes = 640 MiB of
+/// collected `(hash, length)` pairs per shard.
+pub const MAX_REFERENCED_CHUNKS: u64 = 1 << 24;
+
+/// SHA-256 of zero bytes, one of the values accepted for an empty file.
+const EMPTY_SHA256: [u8; 32] = [
+    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
+    0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+];
 
 /// A parsed upload shard.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +171,28 @@ pub enum VerifyError {
         expected: MerkleHash,
         /// The file hash in the shard.
         actual: MerkleHash,
+    },
+    /// An empty file (no segments) claims the SHA-256 of non-empty content.
+    #[error(
+        "empty file {file} claims SHA-256 {actual}; an empty file's SHA-256 must be absent, all \
+         zeros, or the digest of zero bytes"
+    )]
+    EmptyFileSha256 {
+        /// The empty file's hash.
+        file: MerkleHash,
+        /// The claimed SHA-256, as hex of the digest bytes.
+        actual: String,
+    },
+    /// The shard references more chunks than the server verifies per shard.
+    #[error(
+        "shard references {referenced_chunks} chunks in total, over the limit of {limit}; split \
+         the upload into smaller shards"
+    )]
+    TooMuchWork {
+        /// The chunks referenced, summed over every segment of every file.
+        referenced_chunks: u64,
+        /// The limit applied.
+        limit: u64,
     },
 }
 
@@ -319,6 +364,16 @@ fn sha256_digest(stored: &MerkleHash) -> [u8; 32] {
 ///
 /// The first rule the segment breaks, as a [`VerifyError`].
 pub fn verify_segment(seg: &Segment, xorb_chunks: &[(MerkleHash, u64)]) -> Result<(), VerifyError> {
+    verify_segment_with(seg, xorb_chunks, &mut Vec::new()).map(|_| ())
+}
+
+/// [`verify_segment`] with a reusable buffer for the range's chunk hashes;
+/// returns the segment's chunks.
+fn verify_segment_with<'a>(
+    seg: &Segment,
+    xorb_chunks: &'a [(MerkleHash, u64)],
+    hashes: &mut Vec<MerkleHash>,
+) -> Result<&'a [(MerkleHash, u64)], VerifyError> {
     let (xorb, start, end) = (seg.xorb, seg.chunk_start, seg.chunk_end);
     let chunks = xorb_chunks
         .get(start as usize..end as usize)
@@ -332,8 +387,9 @@ pub fn verify_segment(seg: &Segment, xorb_chunks: &[(MerkleHash, u64)]) -> Resul
     let actual = seg
         .verification
         .ok_or(VerifyError::MissingVerification { xorb, start, end })?;
-    let hashes: Vec<MerkleHash> = chunks.iter().map(|(hash, _)| *hash).collect();
-    let expected = range_hash(&hashes);
+    hashes.clear();
+    hashes.extend(chunks.iter().map(|(hash, _)| *hash));
+    let expected = range_hash(hashes);
     if actual != expected {
         return Err(VerifyError::RangeHashMismatch {
             xorb,
@@ -353,14 +409,57 @@ pub fn verify_segment(seg: &Segment, xorb_chunks: &[(MerkleHash, u64)]) -> Resul
             actual: seg.unpacked_bytes,
         });
     }
-    Ok(())
+    Ok(chunks)
+}
+
+/// Verifies every file of an upload shard with [`verify_file`], after
+/// checking that the shard references at most `max_referenced_chunks` chunks
+/// in total ([`MAX_REFERENCED_CHUNKS`] is the default). This is the entry
+/// point for untrusted shards: the work it does is bounded by the cap.
+///
+/// # Errors
+///
+/// [`VerifyError::TooMuchWork`] if the shard is over the cap, else the first
+/// rule a file breaks.
+pub fn verify_shard<'a>(
+    shard: &UploadShard,
+    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
+    max_referenced_chunks: u64,
+) -> Result<(), VerifyError> {
+    // Each term is at most u32::MAX chunks and a 64 MiB shard holds well under
+    // 2^32 terms, so the sum fits in u64; saturate anyway rather than trust it.
+    let referenced_chunks = shard
+        .files
+        .iter()
+        .flat_map(|file| &file.segments)
+        .map(|seg| u64::from(seg.chunk_end.saturating_sub(seg.chunk_start)))
+        .fold(0u64, u64::saturating_add);
+    if referenced_chunks > max_referenced_chunks {
+        return Err(VerifyError::TooMuchWork {
+            referenced_chunks,
+            limit: max_referenced_chunks,
+        });
+    }
+    shard
+        .files
+        .iter()
+        .try_for_each(|file| verify_file(file, &xorb_chunks))
 }
 
 /// Verifies a file entry: every segment passes [`verify_segment`] against its
 /// xorb's stored chunks, and the file hash recomputed from the referenced
 /// chunks, in order, equals the claimed one
-/// (<https://huggingface.co/docs/xet/hashing#file-hashes>). A file with no
-/// segments is the empty file, whose hash upstream defines as all zeros.
+/// (<https://huggingface.co/docs/xet/hashing#file-hashes>).
+///
+/// A file with no segments is the empty file. Its hash must be all zeros (as
+/// upstream's `file_hash` of no chunks is), and its SHA-256 absent, all
+/// zeros (what `hf_xet` 1.7.0 sends), or the digest of zero bytes.
+///
+/// The file hash is computed incrementally with upstream's
+/// `MerkleHashSubtree`, so memory stays O(log n) in the referenced chunks in
+/// release builds (debug builds keep every chunk to self-check upstream's
+/// merge). CPU is linear in the referenced chunks; bound it with
+/// [`verify_shard`].
 ///
 /// `xorb_chunks` returns the stored `(chunk hash, length)` list for a xorb,
 /// or `None` if the xorb isn't stored.
@@ -372,16 +471,34 @@ pub fn verify_file<'a>(
     entry: &ShardFileEntry,
     xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
 ) -> Result<(), VerifyError> {
-    let mut referenced = Vec::new();
-    for seg in &entry.segments {
-        let chunks = xorb_chunks(&seg.xorb).ok_or(VerifyError::UnknownXorb {
+    let mut hashes = Vec::new();
+    let mut tree: Option<MerkleHashSubtree> = None;
+    let last = entry.segments.len().saturating_sub(1);
+    for (i, seg) in entry.segments.iter().enumerate() {
+        let xorb = xorb_chunks(&seg.xorb).ok_or(VerifyError::UnknownXorb {
             file: entry.file_hash,
             xorb: seg.xorb,
         })?;
-        verify_segment(seg, chunks)?;
-        referenced.extend_from_slice(&chunks[seg.chunk_start as usize..seg.chunk_end as usize]);
+        let chunks = verify_segment_with(seg, xorb, &mut hashes)?;
+        let part = MerkleHashSubtree::from_chunks(i == 0, chunks, i == last);
+        match &mut tree {
+            None => tree = Some(part),
+            Some(tree) => tree.merge_into(&part).unwrap_or_else(|_| {
+                unreachable!("only the first part is at_start and only the last at_end")
+            }),
+        }
     }
-    let expected = file_hash(&referenced);
+    let expected = if let Some(tree) = tree {
+        let aggregated = tree
+            .final_hash()
+            .unwrap_or_else(|| unreachable!("the first part is at_start and the last at_end"));
+        // hashing#file-hashes: the aggregated hash, keyed with 32 zero bytes;
+        // `merklehash::file_hash` does the same over a chunk list.
+        aggregated.hmac([0; 32].into())
+    } else {
+        check_empty_file_sha256(entry)?;
+        MerkleHash::default()
+    };
     if expected != entry.file_hash {
         return Err(VerifyError::FileHashMismatch {
             expected,
@@ -389,6 +506,21 @@ pub fn verify_file<'a>(
         });
     }
     Ok(())
+}
+
+fn check_empty_file_sha256(entry: &ShardFileEntry) -> Result<(), VerifyError> {
+    match entry.sha256 {
+        None => Ok(()),
+        Some(sha) if sha == [0; 32] || sha == EMPTY_SHA256 => Ok(()),
+        Some(sha) => Err(VerifyError::EmptyFileSha256 {
+            file: entry.file_hash,
+            actual: sha.iter().fold(String::with_capacity(64), |mut hex, b| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{b:02x}");
+                hex
+            }),
+        }),
+    }
 }
 
 /// Counts bytes read, so the footer's offsets can be checked against where

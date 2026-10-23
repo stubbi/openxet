@@ -10,9 +10,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use openxet_protocol::{
-    MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError, Segment, UploadShard, VerifyError,
-    file_hash, hash_from_hex, hash_to_hex, range_hash, read_upload_shard, read_xorb_chunks,
-    verify_file, verify_segment, xorb_hash, xorb_with_footer,
+    MAX_REFERENCED_CHUNKS, MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError, Segment,
+    ShardFileEntry, UploadShard, VerifyError, file_hash, hash_from_hex, hash_to_hex, range_hash,
+    read_upload_shard, read_xorb_chunks, verify_file, verify_segment, verify_shard, xorb_hash,
+    xorb_with_footer,
 };
 // Only to build client-serialized xorbs and shards as test input; production
 // code reaches upstream through openxet_protocol alone.
@@ -440,15 +441,110 @@ fn wrong_header_version_is_rejected() {
 
 #[test]
 fn oversized_section_claim_is_rejected_before_allocation() {
-    // A file header claiming u32::MAX segments asks for ~200 GiB; the size
-    // budget must refuse it instead of allocating.
+    // 1,000,000 segments with verification and metadata entries claim
+    // (2 * 1_000_000 + 1) * 48 bytes, about 96 MB: no arithmetic overflow,
+    // just over the 64 MiB budget, which must refuse it before allocating.
     let mut bytes = fs::read(fixture(UPLOAD_SHARD)).unwrap();
-    bytes[48 + 36..48 + 40].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert!(matches!(
-        read_upload_shard(bytes.as_slice()),
-        Err(ProtocolError::MalformedShard(_))
-    ));
+    bytes[48 + 36..48 + 40].copy_from_slice(&1_000_000u32.to_le_bytes());
+    let err = read_upload_shard(bytes.as_slice()).unwrap_err();
+    assert!(matches!(err, ProtocolError::MalformedShard(_)), "{err}");
+    let source = std::error::Error::source(&err).unwrap().to_string();
+    assert!(source.contains("exceeds limit"), "{source}");
     assert_eq!(MAX_UPLOAD_SHARD_BYTES, 64 * 1024 * 1024);
+}
+
+fn reference_lookup<'a>(
+    chunks: &'a [(MerkleHash, u64)],
+) -> impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]> {
+    move |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks)
+}
+
+#[test]
+fn shard_work_at_the_cap_passes_and_over_it_is_rejected() {
+    // The reference shard references all 796 chunks once.
+    let chunks = reference_xorb_chunks();
+    let shard = reference_upload_shard();
+    verify_shard(&shard, reference_lookup(&chunks), 796).unwrap();
+    let err = verify_shard(&shard, reference_lookup(&chunks), 795).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::TooMuchWork {
+                referenced_chunks: 796,
+                limit: 795
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(MAX_REFERENCED_CHUNKS, 1 << 24);
+}
+
+#[test]
+fn shard_work_count_cannot_overflow() {
+    // About as many maximal segments as fit in 64 MiB, each spanning u32::MAX
+    // chunks: 1_400_000 * (2^32 - 1) chunks. The count must be exact (no u32
+    // wrap, no panic), and the cap rejects it before any xorb is looked up.
+    let seg = Segment {
+        xorb: MerkleHash::default(),
+        chunk_start: 0,
+        chunk_end: u32::MAX,
+        unpacked_bytes: 0,
+        verification: None,
+    };
+    let entry = ShardFileEntry {
+        file_hash: MerkleHash::default(),
+        segments: vec![seg; 1_400_000],
+        sha256: None,
+    };
+    let shard = UploadShard {
+        files: vec![entry],
+        xorbs: Vec::new(),
+    };
+    let err = verify_shard(&shard, |_| unreachable!(), MAX_REFERENCED_CHUNKS).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::TooMuchWork {
+                referenced_chunks: 6_012_954_213_000_000,
+                limit: MAX_REFERENCED_CHUNKS,
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn file_hash_streams_across_many_segments() {
+    // The same 796 chunks split into segments of varying size, each with a
+    // correct verification entry, still recompute to the reference file hash.
+    let chunks = reference_xorb_chunks();
+    let xorb = hash_from_hex(XORB).unwrap();
+    let mut segments = Vec::new();
+    let mut start = 0;
+    for size in (1..).cycle().take(796) {
+        if start == chunks.len() {
+            break;
+        }
+        let end = (start + size).min(chunks.len());
+        let range = &chunks[start..end];
+        segments.push(Segment {
+            xorb,
+            chunk_start: u32::try_from(start).unwrap(),
+            chunk_end: u32::try_from(end).unwrap(),
+            unpacked_bytes: u32::try_from(range.iter().map(|(_, l)| l).sum::<u64>()).unwrap(),
+            verification: Some(range_hash(
+                &range.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
+            )),
+        });
+        start = end;
+    }
+    assert_eq!(segments.len(), 40);
+    let entry = ShardFileEntry {
+        file_hash: hash_from_hex(&read_trimmed(&format!("{CSV}.xet-file-hash"))).unwrap(),
+        segments,
+        sha256: None,
+    };
+    verify_file(&entry, reference_lookup(&chunks)).unwrap();
 }
 
 #[test]

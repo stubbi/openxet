@@ -11,8 +11,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use openxet_protocol::{
-    MerkleHash, UploadShard, XorbChunks, hash_to_hex, read_upload_shard, read_xorb_chunks,
-    verify_file, verify_segment, xorb_hash,
+    MerkleHash, ShardFileEntry, UploadShard, VerifyError, XorbChunks, hash_to_hex,
+    read_upload_shard, read_xorb_chunks, verify_file, verify_segment, xorb_hash,
 };
 
 const XORB: &str = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
@@ -87,4 +87,29 @@ fn hf_xet_upload_shard_verifies_against_its_xorb() {
         }
         verify_file(&file, lookup).unwrap();
     }
+}
+
+/// SHA-256 of zero bytes.
+const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+#[test]
+fn empty_file_sha256_must_be_absent_zero_or_the_empty_digest() {
+    let empty = shard().files.remove(0);
+    assert!(empty.segments.is_empty());
+    // hf_xet 1.7.0 sends all zeros.
+    assert_eq!(empty.sha256, Some([0; 32]));
+    let no_xorbs = |_: &MerkleHash| None;
+    for sha256 in [None, Some([0; 32]), Some(digest_bytes(EMPTY_SHA256))] {
+        let entry = ShardFileEntry {
+            sha256,
+            ..empty.clone()
+        };
+        verify_file(&entry, no_xorbs).unwrap();
+    }
+    let wrong = ShardFileEntry {
+        sha256: Some(digest_bytes(FILES[1].1)),
+        ..empty
+    };
+    let err = verify_file(&wrong, no_xorbs).unwrap_err();
+    assert!(matches!(err, VerifyError::EmptyFileSha256 { .. }), "{err}");
 }
