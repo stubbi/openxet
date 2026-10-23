@@ -13,9 +13,9 @@
 - Stub: a throwaway FastAPI app (not in the repo) serving one dataset repo
   `datasets/openxet-spike/ev-data` over plain `http://127.0.0.1:8765`. It
   implements the Hub read shapes from `compat/fixtures/hub/` and
-  `S3-hub-api-shapes.md` (repo info, `tree`, `paths-info`, `resolve` with
-  `HEAD`, `ETag`, `Accept-Ranges: bytes`, `X-Repo-Commit` and single-range
-  `206`). The data is the Xet reference CSV
+  [`S3-hub-api-shapes.md`](S3-hub-api-shapes.md) (repo info, `tree`,
+  `paths-info`, `resolve` with `HEAD`, `ETag`, `Accept-Ranges: bytes`,
+  `X-Repo-Commit` and single-range `206`). The data is the Xet reference CSV
   (`Electric_Vehicle_Population_Data_20250917.csv`, 261,698 rows)
   converted to Parquet (4.47 MB, 14 row groups of at most 20,000 rows).
   The stub logs every request, so "zero requests" below is a measured fact.
@@ -188,10 +188,11 @@ the clients.
 ## Gateway conformance checklist for M1
 
 Each item is pass/fail against the plain URL
-`https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. "Done" means the
-item was run against the S4 stub (so the client behaviour is known and the
-stub is a reference); "M1 test" means it has not been run against openxet's
-real gateway, or not at all.
+`https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. "Result on the S4
+stub" is what the item did against the stub, so the client behaviour is
+known and the stub is a reference. "Status for openxet" says what openxet's
+real gateway still needs: every row is an M1 test, because none has run
+against it yet.
 
 | # | Check | Result on the S4 stub | Status for openxet |
 |---|---|---|---|
@@ -218,8 +219,8 @@ itself was checked, not an engine.
 ## Notes carried over for M1
 
 - `HfFileSystem` (and so pandas `hf://`) needs the Hub read shapes already
-  captured in `docs/research/S3-hub-api-shapes.md` (repo info, `tree`,
-  `paths-info` form or JSON, `resolve`); a Hub-compatible openxet serves
+  captured in [`S3-hub-api-shapes.md`](S3-hub-api-shapes.md) (repo info,
+  `tree`, `paths-info` form or JSON, `resolve`); a Hub-compatible openxet serves
   them for the other clients anyway.
 - Both engines issue many small ranges per scan (see G16), so the gateway
   must be cheap per range and cacheable.

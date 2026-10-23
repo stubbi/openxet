@@ -305,9 +305,10 @@ The exact commands and status/header lines are in
   (`cas_types/mod.rs`): a server-issued URL, method and exact headers for
   uploading a xorb directly, with a CRC64-NVMe checksum. Nothing uses them
   yet.
-- Design §3 states "the protocol has no presigned upload". That is true
-  for 1.7.0 but may change. This needs its own spike once a client ships
-  it.
+- Follow-up (2026-10-23): the client flow that uses them is on tag
+  `v1.8.0-dev0` and in the PyPI pre-release `hf-xet` 1.8.0.dev0, not in a
+  stable release. Design §3 records the API shape and §5.5 how openxet
+  will support it.
 
 ## Not verified here
 

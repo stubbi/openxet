@@ -141,7 +141,7 @@ Notes:
   (`utils/_http.py:265-300`). Inferred: HF counts one download per mirror
   ingest, not per mirror user, so authors' download statistics drop.
 
-## How the mirror should ingest (proposed)
+## How the mirror ingests (decided by R19; design §10.6)
 
 Inferred from the observations above, and tested only in the pieces
 named:
@@ -487,8 +487,9 @@ Sharing one operator token's gated access across users is the pattern
 the texts single out.
 
 ⚖ Lawyer:
-- Is an org-wide mirror of a gated model, fetched with one member's
-  grant, permitted, even with accept-on-behalf flows?
+- An org-wide mirror of a gated model, fetched with one member's grant,
+  even with accept-on-behalf flows: R19 forbids this; confirm counsel
+  agrees.
 - If openxet.com ever enables the mirror (R19 disables it for every
   tenant), tenants mirroring their **own** private HF repos would raise
   data-processing (DPA) and confidentiality questions, as for any hosted
