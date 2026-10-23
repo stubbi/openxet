@@ -12,7 +12,9 @@ is not. Nobody can run Xet on their own infrastructure.
 
 **openxet is the open-source, self-hostable server for the Xet protocol.** The
 official, unmodified Hugging Face clients (`hf_xet`, `huggingface_hub` /
-`hf` CLI, `@huggingface/hub`) work against it. `git-xet` follows after v1 (§10). It runs on storage
+`hf` CLI, `git-xet`, `@huggingface/hub`) work against it. Git repos can live
+on any Git host (GitHub, GitLab, Gitea and others) and keep their large files
+in openxet (§6.1). It runs on storage
 and identity systems people already own.
 
 It is not a Hugging Face copy. It is plug-and-play infrastructure: small surface,
@@ -56,8 +58,8 @@ clear seams, no opinions forced on the operator.
 
 - No web UI, model cards, discussions, likes, search, Spaces or inference.
 - No user accounts, passwords or user database. openxet never owns users.
-- No git protocol hosting (`git clone` of repos). Git/LFS integration comes
-  after v1 (§10).
+- No Git hosting (`git clone` of repos from openxet). Git repos stay on the
+  user's existing Git host; openxet is their large-file store (§6.1).
 - No custom distributed object store (§5.3).
 - No openxet-specific client in v1. The design keeps room for one (§10).
 - No legacy (non-Xet) Git LFS upload path. Clients without `hf_xet` get a
@@ -404,6 +406,41 @@ threshold is the builder's call, informed by benchmarks.
 Spaces, inference, collections, org settings. Unimplemented endpoints
 return a clear `501` that names the endpoint, never a confusing `404`.
 
+### 6.1 Git LFS endpoint for `git-xet` *(decided by the user: core, v1)*
+
+The point is Xet dedup for any Git repo, wherever it is hosted. A repo on
+GitHub, GitLab, Gitea or Bitbucket sets
+`git config lfs.url https://openxet.example/{namespace}/{repo}.git/info/lfs`
+(or commits it in `.lfsconfig`), and `git push` / `git pull` move large
+files through openxet with chunk-level dedup.
+
+How it works (verified in `xet-core/git_xet` source, 2026-10-23):
+- `git-lfs` sends the Git LFS Batch API request with its registered transfer
+  agents.
+- openxet answers with transfer `xet`. Each object's `action` carries
+  `href` (the token refresh route) and headers `X-Xet-Cas-Url`,
+  `X-Xet-Access-Token`, `X-Xet-Token-Expiration` and optionally
+  `X-Xet-Session-Id`.
+- `git-lfs` hands off to `git-xet`, which talks to the CAS directly.
+
+Server work is small because it reuses pieces v1 needs anyway:
+- the Batch API endpoint
+- the sha256 → Xet file hash mapping (LFS pointers are sha256 oids)
+- the token route
+
+Rules for this endpoint:
+- Auth uses Git's normal credential flow: an openxet access token as the
+  HTTP password.
+- LFS repos are scopes like Hub repos. Creating one is an authorizer
+  `create` decision, so the first push can create it.
+- Clients **without** `git-xet`:
+  - **Downloads work** via the `basic` transfer, served by the HTTP read
+    gateway (§5.5). Collaborators who only clone don't need anything extra.
+  - **Uploads are refused** with a message that says to install `git-xet`.
+    This is consistent with no server-side chunking.
+- The exact download handshake (how `git-xet` gets the Xet hash for a
+  pointer) is pinned by spike S7 and the compatibility suite.
+
 ## 7. Operability and user experience
 
 - **Zero-config dev mode:** `openxet serve` runs with SQLite and a local
@@ -440,7 +477,8 @@ return a clear `501` that names the endpoint, never a confusing `404`.
 - **Fuzzing** (`cargo-fuzz`) of every parser that reads untrusted bytes
   (xorb, shard, NDJSON commit).
 - **Compatibility suite**, the most important test. CI runs real `hf_xet`,
-  `huggingface_hub`/`hf` CLI and `huggingface.js` (pinned and latest) against
+  `huggingface_hub`/`hf` CLI, `huggingface.js` and `git` + `git-lfs` +
+  `git-xet` with a Gitea remote (pinned and latest) against
   openxet, across a matrix:
   - SQLite with local disk
   - Postgres with MinIO
@@ -500,8 +538,8 @@ says which spec version and client versions are supported.
 
 ## 10. After v1 (designed for, not built)
 
-- **Git/LFS integration:** an LFS endpoint so Git repos on GitHub, GitLab or
-  Gitea store large files in openxet via `git-xet`.
+- **SSH-based LFS auth** (`git-lfs-authenticate`) for Git remotes reached
+  over SSH; v1 uses the HTTPS `lfs.url`.
 - **`bucket` repo type** (mutable, non-versioned), mirroring HF Storage Buckets.
 - **Our own client/CLI:** sync, mount (FUSE), works without the Hub layer,
   speaks storage-only mode natively. The CAS API and protocol crates are the
@@ -524,6 +562,9 @@ says which spec version and client versions are supported.
   to vendor or reimplement, and its versioning on crates.io.
 - **S6:** the shard upload verification rules (spec "shard" page) implemented
   against the reference files.
+- **S7:** the `git-xet` download handshake, plus `git-lfs` behaviour with a
+  separate `lfs.url` host (credentials, `basic` fallback), against a real
+  Gitea in CI.
 
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and
@@ -546,6 +587,9 @@ calendar dates.
     vectors.
 - **M2:** Hub-compat layer.
   - `hf auth login`, `hf upload`, `hf download` and listing work unmodified.
+  - The Git LFS endpoint works: `git push` / `git clone` with `git-xet`
+    against a Gitea-hosted repo, and `basic` download for clients without
+    `git-xet`.
 - **M3:** production backends.
   - Postgres; S3, GCS and Azure; presigned downloads.
   - OIDC and webhook auth.
