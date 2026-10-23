@@ -1,0 +1,56 @@
+# Multi-range vs single-range GETs on public cloud objects (anonymous, NOT presigned; not hf_xet).
+# Captured 2026-10-23T04:42:58Z with curl 8.7.1. Spike S1, see docs/research/S1-S2-direct-downloads.md.
+# Only the status line and Content-Type/Content-Length/Content-Range headers are kept; GCS error body shown in full.
+
+## AWS S3, Range: bytes=0-9,100-109
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9,100-109' 'https://noaa-ghcn-pds.s3.amazonaws.com/ghcnd-stations.txt'
+HTTP/1.1 200 OK
+Content-Type: application/octet-stream
+Content-Length: 11441354
+
+## AWS S3, Range: bytes=0-9
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9' 'https://noaa-ghcn-pds.s3.amazonaws.com/ghcnd-stations.txt'
+HTTP/1.1 206 Partial Content
+Content-Range: bytes 0-9/11441354
+Content-Type: application/octet-stream
+Content-Length: 10
+
+## GCS, Range: bytes=0-9,100-109
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9,100-109' 'https://storage.googleapis.com/gcp-public-data-landsat/index.csv.gz'
+HTTP/2 400 
+content-type: application/xml; charset=UTF-8
+content-length: 194
+body: <?xml version='1.0' encoding='UTF-8'?><Error><Code>InvalidArgument</Code><Message>Invalid argument.</Message><Details>Multiple ranges are not supported; Range:bytes=0-9,100-109</Details></Error>
+
+## GCS, Range: bytes=0-9
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9' 'https://storage.googleapis.com/gcp-public-data-landsat/index.csv.gz'
+HTTP/2 206 
+content-type: text/csv
+content-range: bytes 0-9/767466786
+content-length: 10
+
+## Azure Blob, Range: bytes=0-9,100-109
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9,100-109' 'https://azureopendatastorage.blob.core.windows.net/mnist/train-labels-idx1-ubyte.gz'
+HTTP/1.1 200 OK
+Content-Length: 28881
+Content-Type: application/x-gzip
+
+## Azure Blob, Range: bytes=0-9
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9' 'https://azureopendatastorage.blob.core.windows.net/mnist/train-labels-idx1-ubyte.gz'
+HTTP/1.1 206 Partial Content
+Content-Length: 10
+Content-Type: application/x-gzip
+Content-Range: bytes 0-9/28881
+
+## Azure Blob (x-ms-version 2021-08-06), Range: bytes=0-9,100-109
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9,100-109' -H 'x-ms-version: 2021-08-06' 'https://azureopendatastorage.blob.core.windows.net/mnist/train-labels-idx1-ubyte.gz'
+HTTP/1.1 200 OK
+Content-Length: 28881
+Content-Type: application/x-gzip
+
+## Azure Blob (x-ms-version 2021-08-06), Range: bytes=0-9
+$ curl -s -o body.bin -D - -H 'Range: bytes=0-9' -H 'x-ms-version: 2021-08-06' 'https://azureopendatastorage.blob.core.windows.net/mnist/train-labels-idx1-ubyte.gz'
+HTTP/1.1 206 Partial Content
+Content-Length: 10
+Content-Type: application/x-gzip
+Content-Range: bytes 0-9/28881
