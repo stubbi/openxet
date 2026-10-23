@@ -1,7 +1,7 @@
 //! Shard bodies and the `/v2/shards` event stream, for shard upload tests.
 //!
 //! [`Event`] is a copy of `hf_xet` 1.7.0's own stream type
-//! (`xet-client` 1.7.0, `cas_types/mod.rs:309-343`; S10 §4), so a stream
+//! (`xet-client` 1.7.0, `cas_types/mod.rs:320-343`; S10 §4), so a stream
 //! that parses here parses in the stock client.
 
 use std::path::PathBuf;

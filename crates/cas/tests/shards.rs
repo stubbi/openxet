@@ -719,3 +719,53 @@ async fn rejections_are_logged_with_their_full_reason() {
         "{logs}"
     );
 }
+
+#[tokio::test]
+async fn stored_shard_is_the_servers_reserialization() {
+    // The bucket keeps a shard rebuilt from verified file info and the
+    // server's chunk tables, never the raw body (S6 "What gets stored"). The
+    // reference shard carries lookup tables and a footer, which the
+    // stored form drops.
+    const XORB: &str = "eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632";
+    let reference = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/xet-spec-reference");
+    let read = |name: &str| {
+        std::fs::read(reference.join(name)).unwrap_or_else(|e| {
+            panic!("missing fixture {name} ({e}): run scripts/fetch-reference-files.sh")
+        })
+    };
+    // The reference xorb file ends in 4 stray bytes (`XETB`).
+    let mut xorb = read(&format!("{XORB}.xorb"));
+    xorb.truncate(xorb.len() - 4);
+    let body = read("Electric_Vehicle_Population_Data_20250917.csv.shard.verification");
+    let server = TestServer::start_default().await;
+    let reply = Reply::of(
+        server
+            .request(Method::POST, &xorb_path(&hash_from_hex(XORB).unwrap()))
+            .header(AUTHORIZATION, bearer(&server.write_token))
+            .body(xorb.clone()),
+    )
+    .await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+
+    assert_result_v1(
+        &upload_v1(&server, body.clone(), &server.write_token).await,
+        1,
+    );
+
+    let stored_xorb = stored(&xorb);
+    let chunks: Arc<[(MerkleHash, u64)]> = stored_xorb.chunks.hashes.into();
+    let lookup = move |x: &MerkleHash| (*x == stored_xorb.hash).then(|| Arc::clone(&chunks));
+    let shard = openxet_protocol::read_upload_shard(body.as_slice()).unwrap();
+    let expected = openxet_protocol::stored_shard(&shard, &lookup).unwrap();
+    assert_ne!(expected, body);
+    let bucket = Arc::clone(&server.bucket);
+    let key = Key::Shard(shard_hash(&expected));
+    let in_bucket = server
+        .on_server(async move {
+            let size = bucket.size(&key).await.unwrap()?;
+            Some(bucket.get_range(&key, 0, size - 1).await.unwrap().to_vec())
+        })
+        .await;
+    assert_eq!(in_bucket, Some(expected));
+}
