@@ -610,7 +610,7 @@ results below are **observed**.
      `WHERE state = 'committed'`. Otherwise it aborts as a whole.
      - Superseded bucket objects are kept for the full grace period, so
        in-flight requests and `reindex` can still read them.
-   - **GC** (§5.6, default grace 7 days) deletes:
+   - **GC** (§5.6, default grace 30 days) deletes:
      - `superseded` packs past their grace
      - `lost` packs past their grace
      - `pending` packs older than the grace period, first marked
