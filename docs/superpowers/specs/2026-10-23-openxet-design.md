@@ -121,12 +121,15 @@ These were checked against primary sources on 2026-10-23
 - **Uploads pass through the server.** The protocol has no presigned upload;
   xorb bytes are POSTed to the CAS, which must verify them anyway. My earlier
   "data never passes through openxet" holds for downloads only.
-- **Downloads can bypass the server.** v2 reconstruction returns signed URLs.
-  The client sends a `Range` header, multi-range when one fetch entry has
-  several ranges, and expects `multipart/byteranges`. S3/GCS/Azure do not
-  serve multi-range GETs. `xet-core`'s client treats the URL as opaque (no
-  parsing of `X-Xet-Signed-Range`), so emitting **one range per fetch entry
-  pointing at a native presigned URL** should work. This is spike S1.
+- **Downloads can bypass the server** (verified by spike S1,
+  `docs/research/S1-S2-direct-downloads.md`; decided in ADR 0002). v2
+  reconstruction returns signed URLs, which `hf_xet` treats as opaque.
+  `hf_xet` 1.7.0 splits multi-range fetch entries into single-range GETs by
+  default; with `HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING` on, it sends a
+  multi-range header, which S3, MinIO and Azure answer with the whole object
+  and GCS rejects. openxet therefore emits **one range per fetch entry, each
+  with its own range-bound URL**; stock `hf_xet` downloads correctly from
+  such native presigned (SigV4) URLs.
 - **Global dedup:** only "eligible" chunks are queryable: the first chunk of
   each file, plus chunks whose hash's last 8 bytes (LE u64) % 1024 == 0.
   Responses are shards whose chunk hashes are HMAC-keyed. This keeps the
@@ -176,7 +179,7 @@ These were checked against primary sources on 2026-10-23
  ┌──────────────────────────────── openxet (stateless nodes, one binary) ─────────────────────────┐
  │ git + ssh │ hub layer          │ cas core           │ transfer               │ web (optional) │
  │ upload/   │ repos/refs/commits │ xorb/shard verify, │ signed-range reads,    │ tokens, keys,  │
- │ receive-  │ tree/resolve/      │ index, reconstruct,│ multipart, HTTP gateway│ browse, usage  │
+ │ receive-  │ tree/resolve/      │ index, reconstruct,│ HTTP gateway,          │ browse, usage  │
  │ pack, LFS │ tokens, LFS batch  │ server-side chunk  │ cache tier, HF mirror  │                │
  └─────┬─────┴─────────┬──────────┴─────────┬──────────┴───────────┬────────────┴────────────────┘
        │ auth adapters │ metadata index     │ object store pools   │
@@ -213,8 +216,8 @@ These were checked against primary sources on 2026-10-23
   and S3-compatible stores, GCS, Azure, local filesystem. Presigned-URL
   generation where the backend supports it.
 - **transfer**: serves xorb byte ranges for backends without presigned URLs
-  (local disk), for multi-range efficiency and for an optional NVMe or CDN
-  cache tier. Signed, short-lived, range-bound URLs.
+  (local disk), for backends that cannot bind a range, and for an
+  optional NVMe or CDN cache tier. Signed, short-lived, range-bound URLs.
 - **hub** (optional): the Hub-compat API (§6).
 - **auth**: authenticators, authorizers and CAS token minting (§5.4).
 - **gc**: garbage collection (§5.6).
@@ -311,10 +314,11 @@ and shared.
 - **Upload:** client → CAS (`POST xorbs` streamed and verified into the object
   store; `POST shards` verified and registered). This scales with node count.
 - **Download:** client → CAS reconstruction (small JSON). Then either:
-  - **(a)** direct from the object store via native presigned URLs, one range
-    per fetch entry (S1); or
-  - **(b)** via the transfer role, with signed range URLs and
-    `multipart/byteranges`, for local disk and caching setups.
+  - **(a)** direct from the object store via native presigned URLs, one
+    range-bound URL per fetch entry (S1, ADR 0002); or
+  - **(b)** via the transfer role, with openxet-signed range URLs (also one
+    range per entry, so no `multipart/byteranges`), for local disk, caching
+    setups and backends that cannot bind a range.
 
   Mode (a) is the default when the backend supports it. v1 reconstruction is
   served too, for older clients.
