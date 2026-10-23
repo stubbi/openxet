@@ -1,0 +1,35 @@
+[package]
+name = "openxet-cas"
+version = "0.0.0"
+description = "openxet's Xet CAS HTTP API: routes, errors, request ids and authentication"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = "0.8.9"
+http-body-util = "0.1.5"
+openxet-auth = { path = "../auth", version = "0.0.0" }
+openxet-index = { path = "../index", version = "0.0.0" }
+openxet-protocol = { path = "../protocol", version = "0.0.0" }
+openxet-storage = { path = "../storage", version = "0.0.0" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2"
+tokio = { version = "1.54.1", features = ["sync"] }
+tower-http = { version = "0.7.1", features = ["trace", "sensitive-headers"] }
+tracing = "0.1.44"
+url = "2.5.8"
+uuid = { version = "1.29.0", features = ["v7"] }
+
+[dev-dependencies]
+reqwest = { version = "0.13.5", default-features = false }
+tempfile = "3"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt", "rt-multi-thread"] }
+tower = { version = "0.5.3", features = ["util"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+uuid = { version = "1.29.0", features = ["v4"] }
+
+[lints]
+workspace = true
