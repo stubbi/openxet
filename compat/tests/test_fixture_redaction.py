@@ -1,7 +1,8 @@
-"""Captured fixtures and research notes must never carry credentials or signed URLs.
+"""No tracked file may carry credentials or signed URLs.
 
 Fixtures are real exchanges with huggingface.co and object stores, and the
-research notes quote them. Every secret value is replaced by the literal
+research notes, ADRs and code quote them, so every text file `git ls-files`
+lists is scanned, except the allowlist below. Every secret value is replaced by the literal
 `REDACTED`; parameter and header names stay so the shape remains visible. A
 pattern hit is allowed only when the value that follows it is that
 placeholder.
@@ -10,18 +11,22 @@ placeholder.
 import base64
 import binascii
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-FIXTURES = REPO / "compat" / "fixtures"
-SCANNED = (
-    FIXTURES,
-    REPO / "docs" / "research",
-    REPO / "docs" / "adr",
-    REPO / "docs" / "superpowers" / "specs",
+# This guard spells out leak shapes on purpose; plans quote them while
+# designing redaction.
+ALLOWLIST = (
+    "compat/tests/test_fixture_redaction.py",
+    "docs/superpowers/plans/",
 )
+
+# The placeholder, ending where a value would: `REDACTEDabc` or
+# `REDACTED.x` is a real value that merely starts with it.
+_R = r"REDACTED(?![\w%+/=-]|\.\w)"
 
 _SECRET_PATTERNS = {
     "HF user token": re.compile(r"hf_[A-Za-z0-9]{20,}"),
@@ -30,18 +35,18 @@ _SECRET_PATTERNS = {
     "Xet token": re.compile(r"(?<![A-Za-z0-9_])xet_[A-Za-z0-9]{20,}"),
     # `Bearer realm=` is the RFC 6750 challenge huggingface.co sends with a 401;
     # `<token>`-style placeholders and the word "token" appear in prose.
-    "bearer credential": re.compile(r"Bearer (?!REDACTED|realm=|<[^>]+>|token\b)"),
-    "URL signature": re.compile(r"Signature=(?!REDACTED)", re.IGNORECASE),
+    "bearer credential": re.compile(
+        rf"Bearer (?!{_R}|realm=|<[^>]+>|token(?![\w.-]))"
+    ),
+    "URL signature": re.compile(rf"Signature=(?!{_R})", re.IGNORECASE),
     "S3 signature header": re.compile(
-        r"X-Amz-Signature\"?\s*:\s*\"?(?!REDACTED)", re.IGNORECASE
+        rf"X-Amz-Signature\"?\s*:\s*\"?(?!{_R})", re.IGNORECASE
     ),
-    "S3 credential": re.compile(r"X-Amz-Credential=(?!REDACTED)", re.IGNORECASE),
-    "S3 session token": re.compile(
-        r"X-Amz-Security-Token=(?!REDACTED)", re.IGNORECASE
-    ),
-    "CloudFront key pair": re.compile(r"Key-Pair-Id=(?!REDACTED)", re.IGNORECASE),
-    "CloudFront policy": re.compile(r"[?&]Policy=(?!REDACTED)", re.IGNORECASE),
-    "CDN client address": re.compile(r"[?&]xip=(?!REDACTED)"),
+    "S3 credential": re.compile(rf"X-Amz-Credential=(?!{_R})", re.IGNORECASE),
+    "S3 session token": re.compile(rf"X-Amz-Security-Token=(?!{_R})", re.IGNORECASE),
+    "CloudFront key pair": re.compile(rf"Key-Pair-Id=(?!{_R})", re.IGNORECASE),
+    "CloudFront policy": re.compile(rf"[?&]Policy=(?!{_R})", re.IGNORECASE),
+    "CDN client address": re.compile(rf"[?&]xip=(?!{_R})"),
     # Xet access tokens on huggingface.co are JWTs, not `xet_`-prefixed.
     "JWT": re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\."),
     # Headers appear as `"name": "value"`, as `["name", "value"]` pairs, or
@@ -52,9 +57,10 @@ _SECRET_PATTERNS = {
         re.IGNORECASE,
     ),
     "credential header line": re.compile(
-        # `> ` / `< ` is the GIT_CURL_VERBOSE request/response prefix.
-        r"^(?:[<>] )?(authorization|proxy-authorization|cookie|set-cookie|x-xet-access-token)"
-        r":(?![ \t]*(Bearer )?REDACTED)",
+        # `> ` / `< ` is the GIT_CURL_VERBOSE request/response prefix; docs
+        # also indent, quote (`> `) and list (`* `, `- `) header lines.
+        r"^[ \t<>*-]*(authorization|proxy-authorization|cookie|set-cookie|x-xet-access-token)"
+        rf":(?![ \t]*(Bearer )?{_R})",
         re.IGNORECASE | re.MULTILINE,
     ),
     # Also inside a JSON body that is itself stored as an escaped string.
@@ -68,7 +74,10 @@ _SECRET_PATTERNS = {
 # line or an action header. Prose such as "Basic auth" also matches the
 # shape, so a hit only counts when the base64 decodes to printable
 # `user:password` text.
-_BASIC = re.compile(r"\bBasic (?!REDACTED\b|realm=)([A-Za-z0-9+/]{8,}={0,2})")
+# The scheme name is case-insensitive (RFC 9110 section 11.1).
+_BASIC = re.compile(
+    rf"\bBasic (?!{_R}|realm=)([A-Za-z0-9+/]{{8,}}={{0,2}})", re.IGNORECASE
+)
 
 
 def _is_basic_credential(candidate: str) -> bool:
@@ -96,12 +105,28 @@ def secrets_in(text: str) -> list[str]:
 
 
 def _scanned_files() -> list[Path]:
-    return sorted(p for root in SCANNED for p in root.rglob("*") if p.is_file())
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True
+    ).stdout.decode()
+    names = [n for n in listed.split("\0") if n and not n.startswith(ALLOWLIST)]
+    return sorted(p for p in (REPO / n for n in names) if p.is_file() and _is_text(p))
 
 
-@pytest.mark.parametrize("root", SCANNED, ids=lambda p: str(p.relative_to(REPO)))
-def test_scanned_directories_exist(root):
-    assert any(root.rglob("*")), f"nothing under {root}; did the path move?"
+def _is_text(path: Path) -> bool:
+    with path.open("rb") as f:
+        return b"\0" not in f.read(8192)
+
+
+def test_scan_covers_fixtures_and_docs():
+    scanned = {p.relative_to(REPO).as_posix() for p in _scanned_files()}
+    for expected in (
+        "compat/fixtures/lfs/README.md",
+        "docs/research/S7-git-lfs-xet.md",
+        "docs/superpowers/specs/2026-10-23-openxet-design.md",
+        "AGENTS.md",
+    ):
+        assert expected in scanned, f"{expected} is not scanned; did the path move?"
+    assert not any(p.startswith(ALLOWLIST) for p in scanned)
 
 
 @pytest.mark.parametrize(
@@ -150,6 +175,24 @@ def test_file_has_no_secrets(path):
         "> authorization: Basic dXNlcjpwYXNz",
         '{\\"Authorization\\":\\"Basic dXNlcjpwYXNz\\"}',
         "header Basic dXNlcjp4eHh4eHh4eA==",
+        # Quoted, indented or listed header lines in docs.
+        "> > Authorization: Bearer abc",
+        "  Authorization: Bearer abc",
+        "* Cookie: session=abc",
+        "- X-Xet-Access-Token: abc",
+        "\tProxy-Authorization: Basic dXNlcjpwYXNz",
+        # A value that merely starts with the placeholder.
+        "Authorization: Bearer REDACTEDabc",
+        "https://cdn/x?Signature=REDACTEDZm9v",
+        "https://s3/x?X-Amz-Credential=REDACTED.AKIA",
+        '"accessToken": "REDACTEDeyJ"',
+        "Bearer REDACTED-abc",
+        # The word "token" glued to a real value.
+        "Authorization: Bearer token.abc123",
+        "Bearer token-abc",
+        # Scheme names are case-insensitive (RFC 9110 §11.1).
+        "authorization: basic dXNlcjpwYXNz",
+        "BASIC dXNlcjpwYXNz",
     ],
 )
 def test_guard_catches_known_leak_shapes(leak):
@@ -187,6 +230,13 @@ def test_guard_catches_known_leak_shapes(leak):
         "a Basic base64 pair",
         "Basic credentials from the helper",
         "> Authorization: REDACTED",
+        "> > Authorization: Bearer REDACTED",
+        "  - Cookie: REDACTED",
+        "https://cdn/x?Signature=REDACTED&Expires=1",
+        '"Authorization": "Bearer REDACTED"',
+        "a Bearer token is required",
+        "basic auth is accepted",
+        'lfs-authenticate: basic realm="x"',
     ],
 )
 def test_guard_allows_redacted_placeholders(redacted):
