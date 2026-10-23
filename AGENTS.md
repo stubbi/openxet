@@ -169,5 +169,19 @@ scratch on `xet-core`'s crates (after evaluating existing Xet servers; see
 `docs/competitive-matrix.md`). Next is the M0 foundation plan in
 `docs/superpowers/plans/`.
 
-The workspace scaffold adds a **Commands** section here (build, test,
-compatibility suite, benchmarks). Keep it exact and current.
+## Commands
+
+Run from the repository root. The toolchain is pinned in
+`rust-toolchain.toml`; `cargo nextest` needs `cargo install cargo-nextest
+--locked` once. Keep this list exact and current; the compatibility suite and
+benchmarks are added when they exist.
+
+```bash
+cargo build                                                # build the workspace
+cargo nextest run --workspace                              # run all tests
+cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
+cargo fmt --check                                          # formatting (CI gate)
+cargo deny check                                           # licenses, advisories, bans
+```
+
+Exit codes and JSON output schemas are documented in `docs/reference/`.
