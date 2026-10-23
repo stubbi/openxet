@@ -3,6 +3,9 @@
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `git`, `ssh`, `storage`, `index`, `gc`, `server`, `hub`
+- Amended: 2026-10-23, in the M0 design reconciliation (rulings on the
+  ADR's review): item 3's thin-base predicate and its known limitation,
+  item 4's `tag` entries and discard semantics, item 5's GC of side files
 
 ## Context
 
@@ -261,18 +264,48 @@ results below are **observed**.
      - For a Hub commit, the sent objects are the ones openxet built
        from the request. The Hub pack is written whole, with no thin
        bases.
-     - **Appended bases must be reachable.** A delta the client sent can
-       copy bytes out of its base, so the content of a sent object can
-       be derived from an unreachable base. Every appended base must
-       therefore be an object in the tree of a boundary commit, from
-       `git rev-list --boundary N --not <snapshot ref tips>`. Boundary
-       commits are reachable from the snapshot's refs by definition.
-       - Stock git takes its thin-pack bases only from those edge
-         commits' trees (source: `builtin/pack-objects.c`, `show_edge` →
-         `add_preferred_base`, which reads the commit's tree), so honest
-         pushes pass.
-       - The tree walk shares the R22 budget and fails closed, with the
-         hint `git push --no-thin`.
+     - **Every appended base must be reachable from the snapshot's
+       refs.** A delta the client sent can copy bytes out of its base, so
+       the content of a sent object can be derived from an unreachable
+       base. openxet checks each appended base in this order:
+       1. **Fast paths.** The base is the root tree of, or the entry at
+          the path where the client's delta uses it in, the tree of a
+          boundary commit (`git rev-list --boundary N --not <snapshot
+          ref tips>`) or of any snapshot ref tip. Boundary commits and
+          tips are reachable by definition, so a match proves the base
+          reachable. The path comes from the sent trees, so each check is
+          one path lookup per candidate tree, never a tree walk.
+       2. **Fallback.** Bases no fast path matched share one full walk
+          of the objects reachable from the snapshot's refs, trees and
+          blobs included. It has its own budget, separate from R22's:
+          `git.thin_bases.max_objects` (initial default 2,000,000) and
+          `git.thin_bases.max_ms` (2,000), tuned by the M2 benchmark.
+       3. **Fail closed.** A base not found within the budget refuses
+          the push, with the hint `git push --no-thin`.
+       - Stock git takes its default thin-pack bases from the edge
+         commits' trees at the same path (source:
+         `builtin/pack-objects.c`, `show_edge` → `add_preferred_base`,
+         which reads the commit's tree), so a default push from an
+         up-to-date full clone takes the fast paths.
+       - **Known limitation: some honest thin pushes can be refused.**
+         Their bases miss the fast paths, and in a large repo the
+         fallback walk can run out of budget. Until the
+         `git-reachability` bitmap follow-up, these cases may be refused
+         (fail closed, never accepted wrongly):
+         - **bitmap-enabled clients**, whose bases can come from anywhere
+           in what they believe the server has, not from the edge trees
+           at the same path
+         - **aggressive shallow edges**, where a shallow client's bases
+           come from its own shallow boundary rather than from the
+           server's boundary commits
+         - **stale clients**, whose view of the server's refs is older
+           than the snapshot, so their bases sit in commits that are
+           still reachable but are neither boundary commits nor tips
+         - **commit-type bases**, which are never tree entries, so no
+           fast path can match them
+
+         Each refusal carries the `git push --no-thin` hint, which sends
+         no thin bases.
      - A writer with no pack (a Hub ref create or update) must get an
        empty list, so N must already be reachable from the snapshot's
        refs. N is checked exactly like an R22 want (item 2): a ref tip or
@@ -289,12 +322,17 @@ results below are **observed**.
      - Every refusal under this rule uses the same reason text that git
        gives for a missing object, so that the answer doesn't separate
        "exists but unreachable" from "absent".
-     - Honest clients are unaffected: a push sends every object that is
-       not reachable from the refs the server advertised.
-     - Cost: the walk is proportional to the new objects, the same order
-       as receive-pack's own connectivity check.
+     - The sent-object part never refuses an honest client: a push sends
+       every object that is not reachable from the refs the server
+       advertised. Only the appended-base check can, in the known
+       limitation above.
+     - Cost: listing the new objects is proportional to them, the same
+       order as receive-pack's own connectivity check. Placing appended
+       bases costs one path lookup per base and candidate tree on the
+       fast paths. The fallback walk is proportional to the repo, not to
+       the push, which is why it has its own budget.
      - The operator's `reindex` restore is the one exception, since
-       making an unplaced commit reachable is its purpose (item 4).
+       making an unplaced commit or tag reachable is its purpose (item 4).
    - **Invariant I1: every database ref's closure lies in `committed`
      packs.**
      - A writer's snapshot satisfies I1. With the reachability rule, the
@@ -405,6 +443,8 @@ results below are **observed**.
        expiry later.
      - **Unplaced commits** are commits that no rebuilt ref reaches, in a
        `recovered` pack or in a committed pack that is not a cruft pack.
+       **Unplaced tags** are annotated tag objects in such packs that no
+       rebuilt ref reaches; their target may be any object kind.
      - Objects that sit only in cruft packs were already unreachable from
        every ref and keep ref at the last full repack. They keep their
        normal cruft lifecycle and are listed for information only.
@@ -415,16 +455,19 @@ results below are **observed**.
      discarded automatically.
      - **The `reindex_unplaced` table.** Reindex persists what it could
        not place, one row per entry: repo, kind, OID, pack and
-       `found_at`. There are three kinds:
+       `found_at`. There are four kinds:
        - `commit`: an unplaced commit tip
+       - `tag`: an unplaced annotated tag, a tip of any target kind.
+         Without it, the tag object itself would have no keep root,
+         whatever it points at.
        - `pack`: a `recovered` pack
        - `edge`: an object in a committed pack that a `recovered` pack's
          objects reference directly
      - `openxet reindex` prints the table, and `openxet verify` reads it
        and lists every entry as recoverable until it is resolved.
      - **Keep roots.** Full repacks run normally. Before each one, the
-       leaseholder adds every `commit` and `edge` entry whose object is
-       in the working copy as an extra keep ref (item 5).
+       leaseholder adds every `commit`, `tag` and `edge` entry whose
+       object is in the working copy as an extra keep ref (item 5).
        - Unplaced commits in committed packs therefore keep their whole
          closure.
        - So do the committed-pack objects that recovered commits build
@@ -434,9 +477,10 @@ results below are **observed**.
      - **`recovered` packs** stay out of every snapshot and out of every
        repack input. GC never collects them.
      - **Restore** (`openxet reindex restore <repo> <oid> <ref>`) makes
-       an unplaced commit a ref.
+       an unplaced commit or annotated tag a ref. `<oid>` may be a commit
+       or a tag OID.
        - openxet takes a snapshot of the committed packs plus the
-         recovered packs that hold the commit's closure, and checks
+         recovered packs that hold the object's closure, and checks
          connectivity against it.
        - The commit transaction (item 3) then moves those packs
          `recovered` → `committed`, with `WHERE state = 'recovered'`
@@ -449,10 +493,21 @@ results below are **observed**.
          `WHERE state = 'recovered'`, and GC deletes them after the
          grace period.
        - The repo's entries are deleted, so their keep roots go too.
-         Unplaced commits in committed packs return to the normal cruft
-         lifecycle.
+         Unplaced commits and tags in committed packs return to the
+         normal cruft lifecycle.
+       - **Discard is immediate and irreversible for objects in
+         committed packs.** Their mtime is their pack's creation time
+         (item 4, hydration), not the discard time. So the next full
+         repack drops every one whose pack is older than the grace
+         period, with no further grace. Only the recovered packs, now
+         `lost`, keep GC's grace period. This is intended: the operator
+         has reviewed the entries.
        - `--dry-run` prints the packs, objects and bytes it would
-         release, and changes nothing.
+         release, and changes nothing. It lists committed-pack objects
+         under the heading "deleted at the next full repack, with no
+         grace period; this cannot be undone", separately from the
+         recovered packs that GC deletes after the grace period. The
+         operator docs use the same wording.
      - **Visibility.** openxet exports the gauges
        `openxet_reindex_unplaced_entries{repo}` and
        `openxet_reindex_unplaced_oldest_seconds{repo}`.
@@ -493,8 +548,8 @@ results below are **observed**.
    - **Extra roots.** Before every repack, the leaseholder writes
      temporary refs `refs/openxet/keep/<n>` into the working copy. They
      hold every old and new OID in the database `ref_log` within the
-     grace window, plus every `reindex_unplaced` `commit` and `edge`
-     entry whose object is in the working copy (item 4).
+     grace window, plus every `reindex_unplaced` `commit`, `tag` and
+     `edge` entry whose object is in the working copy (item 4).
      - Objects that became unreachable less than a grace period ago
        (force-pushed or deleted refs) therefore stay reachable for the
        repack, whatever their mtime.
@@ -551,6 +606,13 @@ results below are **observed**.
        `expired` with `WHERE state = 'pending'` so no CAS can commit them
      - never a `committed` or `recovered` pack, and never a bucket object
        that no row describes
+     - **Side files go with what they describe.** A pack's `.idx`, `.rev`,
+       `.bitmap` and `.mtimes` are deleted in the same GC step as its
+       `.pack`. Each geometric publish records its `multi-pack-index`
+       generation (with its `.bitmap` and `.rev`) in the publish
+       transaction, and GC deletes a generation once a newer one is
+       committed and the grace period has passed. Otherwise every repack
+       would leak its side files into the bucket.
    - **Orphan reclaim.**
      - Lost pushes' objects are reclaimed with their pack. They were
        never exposed, and no ref reaches them.
@@ -682,8 +744,8 @@ results below are **observed**.
     for images.
   - openxet must parse v0/v1/v2 upload-pack wants and keep the
     reachability check in step with git's protocol. Fail-closed budgets
-    can refuse rare deep wants in huge repos until the bitmap follow-up
-    (`git-reachability`) lands.
+    can refuse rare deep wants in huge repos, and some honest thin pushes
+    (item 3), until the bitmap follow-up (`git-reachability`) lands.
   - Snapshots link a committed pack set instead of pointing at the whole
     cache, and they must share the cache's filesystem. Repack writes
     temporary keep refs and re-pins mtimes, and `.mtimes` files must be
@@ -727,14 +789,24 @@ results below are **observed**.
       R22 accepts
     - [ ] the writer reachability rule, for pushes and Hub writes alike:
       only client-sent objects count, and every `--fix-thin` base must be
-      in a boundary commit's tree
+      reachable from the snapshot's refs: path-matched fast paths in
+      boundary-commit and ref-tip trees, then a full walk under its own
+      budget, failing closed with the `--no-thin` hint
+    - [ ] the known-limitation clients (bitmap-enabled, shallow, stale)
+      either push or are refused with the hint, and succeed with
+      `--no-thin`
     - [ ] Hub reads by OID pass R22
     - [ ] the v2 command allowlist: only `ls-refs` and `fetch`
     - [ ] the lease epoch check at every repack publish
     - [ ] `recovered` packs are never exposed, never repack inputs and
-      never collected. `reindex_unplaced` entries persist, become keep
-      roots and never block a full repack. Only restore or discard
-      clears them, and they have a metric and an alert.
+      never collected. `reindex_unplaced` entries (`commit`, `tag`,
+      `pack`, `edge`) persist, become keep roots and never block a full
+      repack. Only restore or discard clears them, and they have a
+      metric and an alert.
+    - [ ] unplaced annotated tags stay protected across full repacks,
+      and `restore` accepts a tag OID
+    - [ ] `discard --dry-run` labels committed-pack objects as deleted at
+      the next full repack with no grace period, and discard behaves so
     - [ ] `ref_log` has the retention of item 3, and the bucket ref log is
       derived from it, for every ref writer
     - [ ] new snapshots expose exactly the `committed` packs of one
@@ -748,6 +820,8 @@ results below are **observed**.
     - [ ] full-repack fence in both directions: the `full_repack_gen` bump,
       and the publish abort on `ref_log` advance
     - [ ] `.mtimes`, `.rev` and MIDX files travel through the bucket
+    - [ ] GC deletes pack side files with their pack and superseded MIDX
+      generations after the grace period, leaving no orphan
     - [ ] GC deletes only superseded, lost and expired packs past the
       grace period. Superseded bucket objects survive their grace period.
     - [ ] snapshot root on the cache filesystem, a sweep at start-up, and
@@ -878,8 +952,15 @@ results below are **observed**.
     The checks:
     - The refusal text matches git's text for a missing object.
     - The same push succeeds when it sends the object itself.
-    - A stock thin push, whose bases come from boundary commits' trees,
-      succeeds.
+    - A stock thin push from an up-to-date full clone, whose bases come
+      from boundary commits' trees, succeeds through the fast paths.
+    - Three real clients from the known limitation (item 3): a bare
+      client with bitmaps, a shallow client with two refs pushing both,
+      and the stale-client sequence (the client's view of the server's
+      refs is older than the snapshot). Each push either succeeds or is
+      refused with the `git push --no-thin` hint, then succeeds with
+      `--no-thin`. None of them makes an unreachable object
+      reachable.
   - `hub_read_by_sha_obeys_r22`: `tree`, `resolve`, `paths-info` and
     `commits` at a commit OID succeed for a reachable non-tip commit, and
     answer "revision not found" for a force-pushed-away commit, a tree
@@ -900,13 +981,17 @@ results below are **observed**.
     - the rebuilt refs have complete closures
     - unreached packs are `recovered` and get `created_at` from the
       bucket
-    - `commit`, `pack` and `edge` entries are written to
-      `reindex_unplaced`, survive a restart, and are listed by `verify`
+    - `commit`, `tag`, `pack` and `edge` entries are written to
+      `reindex_unplaced`, survive a restart, and are listed by `verify`.
+      An unplaced annotated tag that points at a tree survives a full
+      repack.
     - with the clock moved far past the grace period, nothing is
       discarded and GC keeps the recovered packs
     - the metric and the alert report count and age
-    - `discard --dry-run` changes nothing
-    - `restore` makes the commit fetchable and clears its entries.
+    - `discard --dry-run` changes nothing, and labels committed-pack
+      objects as deleted at the next full repack with no grace period
+    - `restore` makes the commit, or a tag given by its OID, fetchable
+      and clears its entries.
       `discard`, per repo and with `--all`, clears the rest and moves the
       recovered packs to `lost`.
   - `reindex_hold_never_blocks_repack`: with unresolved entries, full
@@ -914,6 +999,9 @@ results below are **observed**.
     committed pack, and every `edge` object, is still present with its
     closure, and no recovered pack was an input. A restore after several
     full repacks yields a complete, fetchable closure.
+  - `gc_removes_pack_side_files`: after GC deletes a pack, none of its
+    side files remain in the bucket, and a superseded MIDX generation is
+    gone once the grace period has passed.
   - `hydrated_pack_mtime_pinned`:
     - hydrated pack files carry the row's `created_at`
     - the leaseholder re-pins mtimes right before each repack
