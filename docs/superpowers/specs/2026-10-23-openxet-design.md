@@ -450,6 +450,22 @@ Xorbs remain globally content-addressed and shared.
 - `per-scope` is for multi-tenant hosting, where revealing whether a chunk
   already exists across tenants is unacceptable.
 
+**Existence checks in `per-scope` mode** answer per scope too, or they
+would reveal what dedup answers hide. Every check that says whether
+something exists is filtered by the caller's scope:
+- `HEAD /v1/xorbs/…`, `HEAD /v1/files/…` and dedup lookups
+  (`GET /v1/chunks/…`)
+- the xorb lookups of shard verification (`verify_shard`'s
+  `XorbChunkLookup`)
+
+A xorb counts as registered to a scope once it was uploaded under that
+scope or a file registered to the scope references it. A xorb or file not
+registered to the caller's scope answers exactly as if it were absent
+(`404`, no dedup match, `UnknownXorb`), so the client uploads it, which
+registers it to its scope. Storage stays shared: the upload of a xorb
+already stored writes nothing new. Test:
+`per_scope_existence_checks_hide_other_tenants`.
+
 ### 5.5 Data paths
 
 - **Upload:** client → CAS (`POST xorbs` streamed and verified into the object
@@ -563,7 +579,7 @@ its test.
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
 | 2 | **Credentials are repo-scoped.** CAS tokens, signed URLs and capability `href`s are scoped to one repo; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
-| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants` |
+| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants`, `per_scope_existence_checks_hide_other_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped` |
 | 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
 | 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_write_is_visible`, `acked_write_survives_sigkill` |
