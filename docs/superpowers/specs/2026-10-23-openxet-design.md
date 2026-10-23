@@ -47,23 +47,23 @@ clear seams, no opinions forced on the operator.
 What users get from openxet, and how each value is measured. The targets
 are initial, like §5.8's, and revised with data. Each is checked by the
 benchmark suite or the compatibility suite (§8), and the measured numbers
-are published with every release. Targets that fit a CI runner gate every
-PR. Those that need hosted infrastructure, 10 GbE hardware or an external
-score (OpenSSF Scorecard) run on the release benchmark rig or as a release
-check.
+are published with every release. "Checked in" says where: targets that
+fit a CI runner gate every PR, and those that need hosted infrastructure,
+10 GbE hardware or an external score (OpenSSF Scorecard) run on the
+release benchmark rig or as a release check.
 
-| Dimension | What it means to the user | How openxet delivers it | Target |
-|---|---|---|---|
-| Speed | Uploads, downloads and listings never wait on openxet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | Reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8); one node saturates 10 GbE on xorb ingest |
-| Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up with stock `hf_xet`, also from a second machine with an empty cache; ≤ 2 MB down with our client when the previous revision is in the local Xet chunk cache (§10.8 can seed it from an existing LFS checkout); storage overhead over unique compressed data ≤ 5% |
-| Compatibility | The tools they already use just work, in both directions with huggingface.co | Byte-exact formats on `xet-core`'s crates (ADR 0001); the Hub and LFS surfaces of §6 | 100% of the compatibility suite passes for the oldest supported, pinned and latest clients; zero divergence on the golden vectors |
-| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the bucket alone restores every file, with refs at most 60 s stale (RPO); `verify` has zero false positives and exits non-zero on real corruption |
-| Time to value | Working in minutes, with nothing to learn first | One binary, zero-config dev mode (§7), copy-ready commands | First `hf upload` of a ≥ 1 GiB file < 2 min from a clean machine self-hosted, < 60 s from the landing page on openxet.com (§15) |
-| Control and sovereignty | Their bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse |
-| Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) |
-| Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) |
-| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-scope` tenants; savings shown on every repo page |
-| Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks |
+| Dimension | What it means to the user | How openxet delivers it | Target | Checked in |
+|---|---|---|---|---|
+| Speed | Uploads, downloads and listings never wait on openxet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | At 1,000 requests/s per node, against an index of 10⁷ files and 10⁷ xorbs: reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8). ≥ 9 Gbit/s sustained xorb ingest on one node | Release rig |
+| Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up with stock `hf_xet`, also from a second machine with an empty cache; ≤ 2 MB down with our client when the previous revision is in the local Xet chunk cache (§10.8 can seed it from an existing LFS checkout); storage overhead over unique compressed data ≤ 5% | Per-PR CI |
+| Compatibility | The tools they already use just work, in both directions with huggingface.co | Byte-exact formats on `xet-core`'s crates (ADR 0001); the Hub and LFS surfaces of §6 | 100% of the compatibility suite passes for the oldest supported, pinned and latest clients; zero divergence on the golden vectors | Per-PR CI; latest clients also nightly |
+| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the bucket alone restores every file, with refs at most 60 s stale (RPO); `verify` has zero false positives and exits non-zero on real corruption | Per-PR CI |
+| Time to value | Working in minutes, with nothing to learn first | One binary, zero-config dev mode (§7), copy-ready commands | First `hf upload` of a ≥ 1 GiB file < 2 min from a clean machine self-hosted, < 60 s from the landing page on openxet.com (§15) | Release check (rig for self-hosted, the hosted service for openxet.com) |
+| Control and sovereignty | Their bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse | Per-PR CI |
+| Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) | Per-PR CI; Scorecard as a release check |
+| Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) | Release check (upgrade tests) |
+| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-scope` tenants; savings shown on every repo page | Per-PR CI |
+| Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks | Per-PR CI |
 
 **Where openxet beats huggingface.co:**
 - Dedup for every client. Our client fetches only missing chunks on
@@ -546,7 +546,7 @@ API and metrics, because platforms need them for quotas and billing.
 - **Server-side metadata latency:** reconstruction p99 < 50 ms for files up
   to 100k terms; token, head and resolve p99 < 10 ms (excluding the
   authorizer webhook).
-- **Ingest:** a single node saturates 10 GbE on xorb upload; throughput
+- **Ingest:** a single node sustains ≥ 9 Gbit/s of xorb upload; throughput
   scales roughly linearly with nodes.
 - **Time to first upload:** under 2 minutes from a clean machine, measured on
   every release.
@@ -565,7 +565,7 @@ its test.
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped` |
-| 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), `verify` never echoes the caller's credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `verify_never_echoes_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
+| 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
 | 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_write_is_visible`, `acked_write_survives_sigkill` |
 | 8 | **Git reads check reachability on every path** (R22), and **every ref writer is fenced** (ADR 0004). | ADR 0004's `v2_want_unreachable_refused`, `hub_read_by_sha_obeys_r22`, `writer_cannot_make_unreachable_reachable`, `hub_ref_write_fenced`, `ref_log_in_cas_transaction` |
 
@@ -682,7 +682,8 @@ Rules for this endpoint:
   - only `X-Xet-Hash` in the action's `header`, which is not a secret. Xet
     download agents get the CAS token from `GET {lfs-url}/xet-read-token`,
     so it never appears in batch responses or `GIT_TRACE` output.
-  - openxet's `verify` action never echoes the client's credential
+  - No action `header` or response ever carries the client's own
+    credential (§5.9 req 6).
   ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md))
 - **Closing the Git download gap** *(decided by the user, v1)*. With plain
   `basic`, `git clone` / `git pull` fetch whole files. Two complementary
@@ -938,8 +939,8 @@ parts are v1:
 - **Client setup:** `openxet setup git` writes the clone's git config:
   - `lfs.url`
   - `lfs.<endpoint derived from the remote>.access=none`, so `git-xet`
-    sends no credential and never prompts; the capability `href` alone
-    completes the refresh (S7, observed)
+    skips its credential lookup (and never prompts); the capability
+    `href` alone completes the refresh (S7, observed)
   - the openxet token in the credential helper under the openxet host, for
     `git-lfs`'s batch
 

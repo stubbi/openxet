@@ -149,7 +149,7 @@ def test_file_has_no_secrets(path):
         "> Authorization: Basic dXNlcjpwYXNz",
         "> authorization: Basic dXNlcjpwYXNz",
         '{\\"Authorization\\":\\"Basic dXNlcjpwYXNz\\"}',
-        "echoes Basic c3R1YmJpOnh4eHh4eHh4",
+        "header Basic dXNlcjp4eHh4eHh4eA==",
     ],
 )
 def test_guard_catches_known_leak_shapes(leak):

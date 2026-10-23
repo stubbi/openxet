@@ -108,7 +108,7 @@ Labels used below:
    - **`git-xet` derives its credential lookup from the Git remote**
      (source, `git_xet/src/auth.rs`). The one switch that applies to it is
      `lfs.<endpoint derived from the remote>.access`; with `none`, it
-     sends no credential (question 3).
+     skips its credential lookup (and never prompts) (question 3).
    - **The lookup is eager and blocking** (source `xet_agent.rs:82` →
      `token_refresher.rs:36`; observed).
      - `git-xet` resolves the credential when each upload starts, even if
@@ -126,7 +126,8 @@ Labels used below:
        (`git2::Repository::config`, `git_repo.rs:116`), not `.lfsconfig`.
        So the `access` key below must be in the clone's git config.
 3. **Yes. A signed capability `href` with no Authorization satisfies
-   `git-xet`'s refresh, but only when `git-xet` decides to send nothing.**
+   `git-xet`'s refresh, when `access=none` makes `git-xet` skip its
+   credential lookup.**
    - **Observed:** with `lfs.https://gitea:3000/alice/r5.git/info/lfs.access=none`
      set in the clone's git config:
      - `git-xet` called the `href` with **no Authorization header**
@@ -211,9 +212,6 @@ Labels used below:
 - **`git-xet` uses the `href` exactly as given** (observed). Ours had a
   query string (`?exp=…&sig=…`), and `git-xet` sent it unchanged. A
   query-signed capability URL works.
-- **`GIT_TRACE` prints LFS action headers** (observed). openxet keeps
-  secrets out of action headers, and our docs warn before asking users for
-  `GIT_TRACE` logs.
 
 ## Implications for openxet
 
@@ -221,8 +219,8 @@ Labels used below:
   can't use `.lfsconfig` for the second key, because `git-xet` doesn't read
   it.
   - `lfs.url`
-  - `lfs.<endpoint-derived-from-the-remote>.access=none`, which stops
-    `git-xet` from looking up or sending any credential
+  - `lfs.<endpoint-derived-from-the-remote>.access=none`, with which
+    `git-xet` skips its credential lookup (and never prompts)
 
   It also stores the openxet token in the credential helper under the
   openxet host, for `git-lfs`'s batch. Repos hosted on openxet and reached
@@ -238,7 +236,7 @@ Labels used below:
     it). It carries no CAS token: Xet download agents use
     `{lfs-url}/xet-read-token`. That keeps the token out of `GIT_TRACE`
     output.
-  - The `verify` action never echoes the client's credential.
+  - No action `header` or response ever carries the client's own credential (§5.9 req 6).
 - **The capability `href` must:**
   - accept requests with no Authorization
   - ignore and never log any Authorization it receives

@@ -91,7 +91,7 @@ Probed with a stdlib Python client against the public dataset
 | Xorb URL | `https://us.aws.cdn.hf.co/xorbs/default/{xorb}?user_id=…&repo_id=…&xip=REDACTED&Expires=…&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED`. It expires 3600 s after issue. Its policy is `{"DateLessThan": {"EpochTime": …}, "ByteRange": {"ExpectedHeader": "bytes=A-B"}}`, and `xip` is part of the signed resource. |
 | Range enforcement on a xorb URL signed for `bytes=0-14737812` | exact `206`; `0-99` `206`; `1-14737812` `206`; `14737700-14737812` `206`; `0-0` `206`. `0-14737813` `403 invalid range`; `14737813-14769748` (the footer) `403`; `0-` `403`; no `Range` `403 expected range header`. Dropping `xip`: `403 invalid resource`. |
 | `user_id` in URLs | `public` for anonymous tokens; the **token owner's user id** for the private repo. |
-| `xip` | Identical across requests from one host. The URL also worked over an IPv6 connection, but this host's IPv6 egress could not be shown to differ, so **IP enforcement is unverified**. |
+| `xip` | `xip` enforcement was not tested. |
 | Bytes | The CDN range for the reference CSV is byte-identical to the first 14737813 bytes of `testdata/xet-spec-reference/eea25d6e….xorb`. `reference_file_hash_matches` (`crates/protocol/tests/reference_files.rs`) recomputes `118a5332…`, the `X-Xet-Hash`, from those chunks. |
 | Shared xorbs | The private 10528-byte file uses chunks 0–1 (bytes 0–1727) of a 22598282-byte xorb. `gpt2/model.safetensors` has 9 terms over 9 xorbs, one range per URL. |
 | `HEAD /v1/files/{hash}` | `200`, `Content-Length` = file size |
@@ -216,16 +216,13 @@ How it works:
   it "*not* a dependable way to construct a complete offline library" and
   recommend download-then-upload seeding.
 - **Non-Xet files** are always relayed live, and never cached.
-- **Metadata** is refreshed upstream first by default, and a cached value
-  is used when upstream is unavailable.
+- **Metadata** is refreshed upstream first by default.
 - **Writes** (commit, preupload, repo create) are relayed to HF.
 
 What to reuse conceptually:
 - the mirror writes through the same storage and serving code as normal
   uploads, so mirrored data is native, dedups and survives without the
   upstream;
-- serve-stale-on-upstream-failure for metadata, limited for openxet to
-  public, ungated content (R19);
 - single-flight healing of an expired upstream token;
 - rate-limiting misses by caller, because a miss costs an upstream call;
 - the two-phase "download, then upload" seeding as the fallback when
@@ -235,16 +232,7 @@ What openxet avoids:
 - **Caching whole xorbs only.** Partial-xorb files are common (observed
   above). Re-packing verified chunks avoids the problem.
 - **Handing HF URLs to clients** on the relay path.
-- **Forwarding writes upstream.** That is outside a mirror's job, and it
-  mixes the user's credentials with the operator's.
-
-## Design rules for openxet's mirror
-
-These are openxet's own requirements (design §5.9 requirement 3, §10.6):
-- Token and response caches are keyed by caller, repo and revision.
-- A fallback never serves authorized content without a fresh upstream
-  check. When the check can't run, the mirror fails closed.
-- A user's credential is never combined with the operator's.
+- **Forwarding writes upstream.** That is outside a mirror's job.
 
 ## Legal risk for the user
 
@@ -520,6 +508,13 @@ R19 decided the policy:
 - the mirror is disabled on openxet.com until counsel review and,
   ideally, an agreement with HF.
 
+Design rules for openxet's mirror, from openxet's own requirements
+(design §5.9 requirement 3, §10.6):
+- Token and response caches are keyed by caller, repo and revision.
+- A fallback never serves authorized content without a fresh upstream
+  check. When the check can't run, the mirror fails closed.
+- A user's credential is never combined with the operator's.
+
 The ADR below records the mechanics and stays proposed until it is filed.
 Design §10.6 now states:
 - **Native ingest by verified chunks.** Never cache whole HF xorbs, and
@@ -641,9 +636,7 @@ Design §10.6 now states:
 
 ## Not verified
 
-- Whether CloudFront enforces `xip` as a client-IP binding. The same URL
-  worked over an IPv6 connection, but this host's distinct IPv6 egress
-  could not be confirmed.
+- `xip` enforcement was not tested.
 - The `file-chunk-hashes` subtree merge for per-window verification. We
   read the source but did not run it.
 - Files whose Xet chunks HF created by migrating from LFS. We assumed

@@ -93,11 +93,8 @@ cdn status 206 bytes 14737813 sha256 b4670b1f13ab42a77490f53ce9167307ffbb9128f82
 reference prefix sha256 b4670b1f13ab42a77490f53ce9167307ffbb9128f82ac82f721f85d2dce0a3a3 ref len 14737817 trailing 58455442
 identical: True
 
-## 4. Is the signed URL bound to the client address? (xip)
-xip identical across two requests from this host: True
-same URL fetched over IPv4 and over an IPv6 connection: 206 and 206
-(this host's IPv6 egress reported an IPv4 address to an echo service, so a
- different source address is NOT proven; IP enforcement remains unverified)
+## 4. xip
+xip enforcement was not tested.
 
 ## 5. Gated repos (anonymous, and with a fine-grained token that has canReadGatedRepos but no grant)
 meta-llama/Llama-3.2-1B info anon 200 gated= manual license tags= ['license:llama3.2']

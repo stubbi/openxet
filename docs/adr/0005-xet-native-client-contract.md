@@ -87,7 +87,7 @@ captures.
       to it are ignored and never logged.
     - The download action's `href` is the HTTP read gateway URL for the
       object (absolute), not a token route.
-    - openxet's `verify` action never echoes the client's credential.
+    - No action `header` or response ever carries the client's own credential (§5.9 req 6).
 11. **Dev mode.** `openxet serve` with no config runs SQLite plus local disk,
     prints a static access token and the env/URL lines, and supports `--json`
     startup info. Port and flags are not final.

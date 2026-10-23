@@ -2,7 +2,7 @@
 
 - Date: 2026-10-23
 - Versions examined: `xet-core-structures` 1.7.0 (the pinned format crate),
-  `xet-client` 1.7.0 (upstream's reference server,
+  `xet-client` 1.7.0 (upstream's in-process test backend,
   `cas_client/simulation/local_client.rs` and `local_server/handlers.rs`),
   `xet-data` 1.7.0 (the client's shard upload path), `hf_xet` 1.7.0 (run for
   real), and the spec pages
@@ -30,8 +30,8 @@ tests in `crates/protocol/tests/reference_files.rs` and
 - The spec's reference upload shard and a shard captured from a real
   `hf_xet` 1.7.0 upload both pass every rule.
 
-Upstream's reference server applies none of the verification rules (see
-"Upstream vs. openxet"). openxet is stricter, but only by rules that
+Upstream's in-process test backend applies none of the verification rules
+(see "Upstream vs. openxet"). openxet is stricter, but only by rules that
 upstream's own client satisfies by construction, which the two stock shards
 demonstrate.
 
@@ -87,11 +87,12 @@ SHA-256 for every file.
 
 ## Upstream vs. openxet
 
-Upstream's reference server (`xet-client` 1.7.0, `LocalClient::upload_shard`)
-parses with `MDBMinimalShard::from_reader`, re-serializes and stores. That
-is all it does:
+Upstream's in-process test backend (`xet-client` 1.7.0,
+`LocalClient::upload_shard`), which is not a network service, parses with
+`MDBMinimalShard::from_reader`, re-serializes and stores. That is all it
+does:
 
-| Check | Upstream reference server | openxet |
+| Check | `xet-core` in-process test backend (not a network service) | openxet |
 |---|---|---|
 | Header version | not checked (`MDBShardFileHeader::deserialize` checks only the magic) | rule 1 |
 | Size limit | none (`from_reader` passes `None` budgets) | rule 2 |
@@ -103,7 +104,7 @@ is all it does:
 | Duplicate file hashes | the first entry wins (`from_reader` dedups) | all entries kept and each verified; M1 registers idempotently |
 
 Hugging Face's production CAS validates in `validate_shard_from_async_read`
-(named in the reference server's comments). That code isn't published, so
+(named in the test backend's comments). That code isn't published, so
 the spec's error list (api#4-upload-shard: "Shard contents failed
 verification", missing xorb, too large) is the only description of it.
 

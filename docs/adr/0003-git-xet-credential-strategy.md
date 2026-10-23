@@ -21,8 +21,8 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
   relied on (observed).
 - The only client-side switch is the git config key
   `lfs.<endpoint derived from the remote>.access=none`. With it, `git-xet`
-  sends no Authorization at all, and a signed capability `href` alone
-  completes the refresh and the upload (observed). `git-xet` does not read
+  skips its credential lookup (and never prompts), and a signed capability
+  `href` alone completes the refresh and the upload (observed). `git-xet` does not read
   `.lfsconfig`, so the key must be in the clone's git config.
 - `git-xet` 0.2.1 registers for downloads but can't do them. A server that
   answers `xet` to a download batch breaks `git lfs pull` with no fallback
@@ -59,7 +59,7 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
      - Keeping the CAS token out of the action keeps it out of `GIT_TRACE`
        output and out of reach of any off-host redirect of the download
        `href`.
-   - openxet's `verify` action never echoes the client's credential.
+   - No action `header` or response ever carries the client's own credential (§5.9 req 6).
    - openxet's own download agent (design §10.8) registers under its own
      transfer name, not `xet`. The server chooses that name when it is
      offered.
@@ -113,7 +113,8 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
     `openxet setup git`, asserting that the refresh succeeds with no
     Authorization header.
   - Same leg, without the setup (decision 2): asserts the push still
-    succeeds and no Authorization value appears in openxet's logs.
+    succeeds when the `href` receives an Authorization header, and that no
+    Authorization value appears in openxet's logs.
   - Unit test: download batches never answer `xet`.
   - Contract test (decision 5): the `git-lfs-authenticate` answer
     deserialises into `git-xet`'s `GitLFSAuthenticateResponse` shape.
@@ -146,9 +147,9 @@ working tree.
 - **Authenticate the `href` with the user's openxet token.** Rejected:
   `git-xet` sources its credential from the Git remote's host, not from
   the openxet host.
-- **Accept other hosts' credentials and map them to an identity.**
-  Rejected: it makes openxet a consumer of GitHub/GitLab/Gitea secrets,
-  which conflicts with "openxet never owns users" (AGENTS.md).
+- **Use the Git host's identity for the `href`.** Rejected: openxet would
+  depend on every Git host's identity system, which conflicts with
+  "openxet never owns users".
 - **Answer `xet` for downloads, as ADR 0005 item 10 implied.** Rejected:
   observed to break `git lfs pull` for every `git-xet` 0.2.1 user.
 - **Wait for the upstream change alone.** Rejected: released `git-xet`
