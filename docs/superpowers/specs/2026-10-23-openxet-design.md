@@ -447,8 +447,18 @@ Rules for this endpoint:
   uploads only ("custom transfer for download is not implemented yet",
   observed 2026-10-23), so `git-lfs` downloads through `basic`. openxet offers
   `basic` (absolute `href`s, never relative) served by the HTTP read gateway
-  (§5.5), and also offers `xet` for downloads so it is ready when `git-xet`
-  gains download support.
+  (§5.5), and also offers `xet` for downloads so Xet-capable agents use it.
+- **Closing the Git download gap** *(decided by the user, v1)*. With plain
+  `basic`, `git clone` / `git pull` fetch whole files. Two complementary
+  fixes:
+  1. **Our client is a Git LFS transfer agent for downloads** (§10.8).
+     `openxet setup git` registers it, so Git fetches only the chunks missing
+     from the local Xet cache. The cache is shared with `hf` and `hf_xet`
+     (same `HF_XET_CACHE`). Uploads keep going through `git-xet` when it is
+     installed, or through our agent when it isn't.
+  2. **Upstream:** contribute download support to `git-xet` in
+     `huggingface/xet-core`, so every Git user benefits, not just ours. The
+     credential-sourcing fix (§10.2) goes in the same effort.
 - Clients **without** `git-xet`:
   - **Downloads work** the same way. Collaborators who only clone don't need
     anything extra.
@@ -738,7 +748,9 @@ It is better to use than the stock tools and never incompatible with them.
 - **`login`:** the OIDC device/browser flow that issues openxet access tokens
   and SSH key registration (§5.4, §10.1).
 - **`setup git`:** one command configures `lfs.url`, credentials and
-  `git-xet` for a repo (§10.2).
+  `git-xet` for a repo (§10.2). It also registers `openxet` as the Git LFS
+  transfer agent, so `git clone` / `git pull` download only missing chunks
+  (§6.1). It works against openxet and huggingface.co alike.
 - **Diagnostics:** `doctor` checks connectivity, auth, clock skew and
   versions, then says what to fix.
 
@@ -867,13 +879,16 @@ but sets no calendar dates.
   - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
   - The `git-xet` credential fix: the server-side capability route, plus the
     upstream PR to `xet-core`.
+  - Upstream: Xet download support in `git-xet` (§6.1). This is contributed
+    alongside the credential fix and coordinated with Hugging Face before
+    any PR is filed.
 - **M5:** reach.
   - `bucket`, `space` and `kernel` repo types.
   - Cache tier.
   - HF pull-through mirror.
   - Multiple storage pools, residency and KMS.
 - **M6:** our own client (§10.8).
-  - `sync`, `mount`, storage-only mode, `login`, `setup git`, `doctor`.
+  - `sync`, `mount`, storage-only mode, `login`, `setup git` (including the Git LFS download agent), `doctor`.
   - Python bindings.
   - The minimal self-service web UI (§10.10).
   - The two-way compatibility suite, including nightly runs against
