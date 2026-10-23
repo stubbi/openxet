@@ -60,7 +60,7 @@ slow, hard to set up, or users' feedback going nowhere.
 No other project should come remotely close, in protocol correctness,
 performance, code quality, architecture, security, docs, governance,
 community, release engineering, UX, or hosted operations. An ambition only
-counts if it is measured: design §15a lists the bar and the proof for each
+counts if it is measured: design §16 lists the bar and the proof for each
 dimension, and `docs/competitive-matrix.md` tracks where we stand. When a
 change would lower any of those measures, it isn't done.
 
