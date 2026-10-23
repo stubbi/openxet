@@ -380,8 +380,8 @@ fn shard_without_verification_entries_is_rejected_for_upload() {
 fn footered_shard_parses_like_the_footerless_one() {
     // The spec says uploads omit the footer
     // (https://huggingface.co/docs/xet/shard#shard-upload), but upstream's
-    // reference server accepts one, so a footer that matches the sections is
-    // tolerated and discarded.
+    // in-process test backend accepts one, so a footer that matches the
+    // sections is tolerated and discarded.
     let footered =
         read_upload_shard(fs::File::open(fixture(&format!("{CSV}.shard.verification"))).unwrap())
             .unwrap();

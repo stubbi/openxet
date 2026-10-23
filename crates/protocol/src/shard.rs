@@ -292,8 +292,8 @@ pub enum VerifyError {
 /// native clients send. A body that declares a footer, as upstream's full
 /// serializer writes it (lookup tables, then the footer), is accepted when the
 /// footer's offsets match the sections; the tail is discarded. The wasm build
-/// of `xet-data` 1.7.0 uploads that form, and upstream's reference server
-/// accepts both.
+/// of `xet-data` 1.7.0 uploads that form, and upstream's in-process test
+/// backend accepts both.
 ///
 /// # Errors
 ///

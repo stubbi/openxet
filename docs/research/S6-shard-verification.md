@@ -119,7 +119,7 @@ can't be reconstructed, or that claim content they don't have.
 - **Footers on upload.** The spec says the footer "MUST be omitted", but the
   wasm build of `xet-data` 1.7.0 uploads `MDBInMemoryShard::to_bytes`
   (`processing/shard_interface/wasm.rs`): sections, lookup tables and a
-  footer. Upstream's server accepts it. openxet accepts it too when the
+  footer. Upstream's in-process test backend accepts it. openxet accepts it too when the
   footer's size and offsets are consistent (rule 3), and discards the tail.
   The native client strips the footer and lookup tables
   (`read_shard_to_bytes_remove_footer`, `processing/shard_interface/native.rs`).
