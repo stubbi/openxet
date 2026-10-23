@@ -103,8 +103,10 @@ decision.
   - A push publishes its pack and index to the bucket and registers it in
     the database before the ref CAS. A cold node downloads the registered
     packs: 80 MB took 0.4–0.6 s.
-  - Each request runs on a throwaway snapshot repo: `packed-refs` from the
-    database, objects through `objects/info/alternates` to the node cache.
+  - Each request runs on a throwaway snapshot repo. The prototype used
+    `packed-refs` from the database and `objects/info/alternates` to the
+    node cache. The post-review design links exactly the request's
+    committed pack set instead.
   - The invariant: **read the ref snapshot before syncing the pack list**,
     both from the primary or one consistent snapshot. The prototype first
     did it the other way round, which leaves a race window.
@@ -113,7 +115,9 @@ decision.
   - git's v2 `fetch` serves any object in the odb, alternates included.
     openxet therefore enforces want reachability itself (R22).
   - Pack rows need states, so a repack can't drop a push that sits between
-    publish and CAS.
+    publish and CAS. Only committed packs are exposed. Repack keeps
+    ref-log-recent objects through keep refs, because cruft expiry goes by
+    mtime.
   - The hook route and git's environment must be locked down.
 - **Licences.** git is GPL-2.0-only (source).
   - openxet runs it as a separate program. That is aggregation, so openxet
@@ -407,66 +411,91 @@ database and bucket. The repo is the LFS-pointer history.
 
 ## Bucket-backed packs and stateless nodes
 
-What the prototype showed (observed), and what follows from it (inferred):
+What the prototype showed (observed). Where the post-review design
+departs from the prototype it is marked (inferred), and ADR 0004 is
+binding.
 
 1. **How pushed packs land in the bucket.**
-   - receive-pack (or gix) indexes the incoming pack into the snapshot's
-     object directory. `unpackLimit=1` means a pushed pack is never
-     exploded into loose objects.
-   - openxet then uploads `.pack` and `.idx` to the bucket and inserts
-     the pack row as `pending`.
-   - The ref CAS sets that row to `committed` in the same transaction. A
-     failed CAS sets it to `lost`. Then the ref log is appended, and only
-     then does the client get `ok`. (The prototype had no states; this is
-     the post-review design, inferred.)
+   - receive-pack (or gix) indexes the incoming pack into the request's
+     quarantine. `unpackLimit=1` means a pushed pack is never exploded
+     into loose objects.
+   - openxet uploads `.pack` and `.idx` to the bucket and inserts the
+     pack row as `pending`.
+   - The ref CAS and the update
+     `packs.state = 'committed' WHERE state = 'pending'` commit in one
+     transaction. A failed CAS sets the row to `lost`, and a pending pack
+     already expired by GC can't be committed. Then the ref log is
+     appended, and only then does the client get `ok` (inferred; the
+     prototype had no states).
    - A crash before the CAS leaves a `pending` pack and no ref change. GC
-     deletes it after the grace period. A crash after the CAS loses
+     expires it after the grace period. A crash after the CAS loses
      nothing, because the pack is already durable (§5.3).
 2. **How a cold node hydrates.**
-   - It reads the ref snapshot, then downloads every `pending` or
-     `committed` pack registered for the repo that it does not have, and
-     skips `lost` ones. Both reads come from the primary or one consistent
-     snapshot, never from replicas with different lag (§5.8). For `tf10k` that is 80 MB in under
-     0.6 s on an unloaded path.
+   - **Observed (prototype).** The node read the ref snapshot, then
+     downloaded every registered pack it lacked. For `tf10k` that is
+     80 MB in under 0.6 s on an unloaded path.
+   - **Post-review (inferred).** Only `committed` packs, plus
+     `superseded` packs inside their grace period, are hydrated or
+     exposed. `pending` and `lost` packs never are, and a cached pack is
+     evicted once it becomes `lost`.
+     - Otherwise a push could pass the connectivity check using objects
+       that exist only in another in-flight or lost pack. GC of that pack
+       would then leave a committed ref dangling.
+   - Refs and the pack set are read in one database snapshot, from the
+     primary or a single consistent snapshot, never from replicas with
+     different lag (§5.8).
+   - Hydrated pack files get their mtime pinned to the pack row's
+     `created_at`, so cruft expiry measures age from creation, not
+     download.
    - Git can't serve from a partial pack, so hydration is per pack, not
      per object (inferred). Large fleets want repo-affinity routing
      (consistent hashing) to keep caches warm. Any node can still serve
      any repo, just slower when cold.
-   - The **ordering invariant** (inferred from review, then fixed in the
-     prototype): read refs before syncing packs.
-     - Packs are registered before the CAS commits. So every pack
-       reachable from a ref snapshot is registered by the time the
-       snapshot is read.
-     - Syncing first and reading refs second leaves a window: a CAS that
-       commits in between yields refs whose objects the node lacks.
+   - **Snapshot exposure (inferred).** Each request snapshot's
+     `objects/pack` holds hard links to exactly its pack set, with no
+     alternates to the whole cache dir.
+     - The prototype used alternates. That served the same bitmap at the
+       same cost (observed), but exposed every cached pack.
+     - A push's own new pack is visible only to its own receive-pack,
+       through quarantine.
 3. **Repacking strategy** (measured above, design inferred).
    - The cost is geometric:
      - every push adds one small pack
      - a background job (one leaseholder per repo, via a database lease)
        runs `git repack --geometric=2 -d --write-midx --write-bitmap-index`
        on a copy built from `committed` packs only
+     - geometric repack leaves cruft packs alone (source: git v2.39.5
+       `builtin/repack.c` line 355)
      - it uploads the new pack, MIDX and bitmap, and commits a new pack
        list in the database in one transaction
    - Inputs become `superseded`, with a timestamp. GC deletes them after
-     the grace period (§5.6, default 7 days). A node that still serves
-     from an old pack is unaffected until then.
+     the grace period (§5.6, default 7 days).
    - A periodic full `repack -adb --cruft --cruft-expiration=<grace>`
-     (git ≥ 2.37) folds the history into one pack. Unreachable objects
-     younger than the grace period go to a cruft pack instead of being
-     dropped.
-   - **Why only committed packs, and why cruft.** A plain `repack -adb`
-     can drop objects that a push between publish and CAS still needs:
-     - its own pack, if that pack were an input
-     - objects on another branch that a concurrent force-push just made
-       unreachable, and which the pending push builds on
-
-     Either way, the CAS then succeeds onto missing objects (found in
-     review, inferred).
-   - **Orphan reclaim.** Losers' packs are `lost`, and their objects are
-     reachable from no ref, so GC deletes the whole pack after the grace
-     period. `pending` packs older than the grace period go the same way.
-     Unreachable objects inside committed packs leave through cruft expiry
-     at the next full repack.
+     (git ≥ 2.37) folds the history into one pack.
+   - **Cruft expiry is by object mtime, not by when an object became
+     unreachable** (source: git's cruft packs record per-object mtimes
+     in `.mtimes`).
+     - So an old commit that was just force-pushed away would be dropped
+       at the next full repack.
+     - The leaseholder therefore writes temporary
+       `refs/openxet/keep/<n>` for every old and new OID in the database
+       ref log within the grace window. Recently unreachable objects stay
+       reachable for the repack.
+     - Example: a pending push on branch B that builds on a commit just
+       force-pushed away from branch A stays safe.
+     - `pack.recentObjectsHook` would do the same, but needs git 2.42
+       (source: RelNotes 2.42.0), so keep refs keep the floor at 2.37.
+   - Each cruft pack's `.mtimes` is a pack artifact, uploaded and
+     hydrated with the pack.
+   - **Why only committed packs.** A plain `repack -adb` over all packs
+     could drop a pending push's own pack contents, and the CAS would
+     then succeed onto missing objects (inferred).
+   - **Orphan reclaim.**
+     - Lost and expired-pending packs are deleted whole by GC after the
+       grace period. Their objects were never exposed.
+     - Unreachable objects inside committed packs leave by cruft expiry,
+       once they are outside the keep-ref window and older than the grace
+       period.
    - The bucket stays the truth: `reindex` rebuilds the pack list by
      listing `repos/<id>/packs/`. A pack is `committed` if the ref-log tips
      reach its objects; otherwise it is `pending` and ages out.
@@ -490,10 +519,10 @@ What the prototype showed (observed), and what follows from it (inferred):
 
 ## Safety rules
 
-These came out of review after the spike. They are binding through
-ADR 0004.
+These came out of two review rounds after the spike. They are binding
+through ADR 0004.
 
-1. **v2 `fetch` serves any object in the odb (source).**
+1. **Upload-pack serves any object in the odb (source).**
    - git v2.39.5 `upload-pack.c`, `parse_want` (lines 1413–1442), only
      checks that the wanted object parses. Objects from alternates
      count.
@@ -504,43 +533,71 @@ ADR 0004.
      - losers' orphan packs
      - with shared alternates, another repo's objects
 
-   **Ruling R22:** openxet checks every v2 `want` before spawning git:
-   - A current database ref tip passes. That covers every normal clone
-     and fetch.
-   - Otherwise a bounded gix reachability walk from the current refs
-     must find the object.
-   - Anything else is refused.
+   **Ruling R22, fully specified in ADR 0004 item 2.**
+   - **Scope.** openxet parses the wants of every upload-pack request
+     before spawning git: v2 `fetch`, and the v0/v1 want lines.
+     - Checking v0/v1 too removes the cost asymmetry of git spawning
+       `rev-list` for non-advertised v0/v1 wants.
+   - **Walk.** One walk per request, starting from the same ref snapshot
+     written to `packed-refs`.
+     - Ref tips and peeled tag targets pass without walking.
+     - All other wants share one commit-graph-assisted gix walk.
+   - **Commit and tag wants** are checked by the walk. **Tree and blob
+     wants** pass only when a ref or peeled tag points at them directly;
+     with no tree traversal, every other one is refused.
+   - **Budget, per request and with config defaults:**
+     - `git.reachability.max_commits` 200,000
+     - `git.reachability.max_ms` 2,000
+     - `git.reachability.max_concurrent_per_repo` 2
+     - `git.reachability.max_concurrent_per_principal` 4
+     - Over the concurrency limits, the request gets a retryable error
+       (HTTP 429).
+   - **Fail closed.** Anything not found within the budget is refused.
+     - This can refuse a legitimate deep `fetch <sha>` or submodule pin
+       in a huge repo.
+     - The mitigation, bitmap-backed reachability, is a follow-up issue
+       labelled `git-reachability`.
    - Only non-tip wants pay for the walk, and stock clients send them
-     rarely (submodule pins, `git fetch <sha>`).
+     rarely.
    - **Pinned config:**
      - `uploadpack.allowAnySHA1InWant=false`
      - `uploadpack.allowReachableSHA1InWant=true`
      - `uploadpack.allowFilter=false` until partial clone is designed
-     - `core.alternateRefsCommand=true`
-   - **Alternates** point only at that repo's own cache, derived from its
-     internal ID. There is no cross-repo object sharing (fork pools)
-     without a layer that enforces reachability.
-2. **Pack states** (inferred). The states are `pending`, `committed` (set
-   in the CAS transaction), `lost` and `superseded`. Repack inputs are
-   committed packs only. GC deletes lost, superseded and stale pending
-   packs after the grace period. Hydration skips lost packs. See
-   "Bucket-backed packs", item 3.
+     - `core.alternateRefsCommand=true`, as defence in depth
+   - **No alternates.** Snapshots link exactly their pack set, so there is
+     no cross-repo object sharing (fork pools) without a layer that
+     enforces reachability.
+2. **Pack states** (inferred). See "Bucket-backed packs", items 1–3.
+   - `pending`, then `committed` in the CAS transaction, and only while
+     the row is still `pending`
+   - `lost`, on a failed CAS
+   - `expired`, a stale pending pack marked by GC
+   - `superseded`, a repack input
+   - Only committed packs, and superseded packs in their grace period,
+     are hydrated and exposed.
+   - Repack runs over committed packs, with keep refs from the ref-log
+     grace window. Pack mtimes are pinned to `created_at`, and `.mtimes`
+     files are carried through the bucket.
 3. **Hook route and git process** (inferred hardening).
-   - The hook channel is an inherited `socketpair` fd with no path. Where
-     that is impossible, it is a `0600` Unix socket in an openxet-private
-     `0700` directory.
-   - Each request gets a single-use token bound to repo ID, principal and
-     request, which expires at request end.
+   - **Hook channel:** an inherited `socketpair` fd with no path, over
+     HTTP and SSH alike.
+     - openxet clears `FD_CLOEXEC` on that one fd for the git child,
+       which passes it on to the hook.
+     - The hook finds it through `OPENXET_HOOK_FD`.
+   - **Token:** single-use, delivered as `OPENXET_HOOK_TOKEN`, bound to
+     repo ID, principal and request, and expiring at request end.
    - openxet takes the repo and authorization from the token's context,
      never from hook-supplied data.
    - It accepts a pack path only if the path resolves inside that
      request's snapshot or quarantine directory.
    - It re-checks fast-forward and branch policy itself.
-   - git runs with an empty environment, plus three things:
+   - **git's environment** starts empty and contains only:
+     - `PATH`, a fixed list: the git exec dir and openxet's hook dir
+     - a private `HOME`
+     - `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`
      - a validated `GIT_PROTOCOL` (`version=0|1|2`)
-     - `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` and a
-       private `HOME`
-     - only openxet's hooks (`core.hooksPath`)
+     - `OPENXET_HOOK_FD` and `OPENXET_HOOK_TOKEN`, for receive-pack only
+   - Hooks run from openxet's directory only (`core.hooksPath`).
    - Snapshot and cache paths derive from internal repo IDs, never from
      user-supplied names.
 
@@ -598,13 +655,18 @@ Columns per the task brief. Each cell says how it is known.
   enable it.
 - **Shallow, partial clone and `include-tag`** were not exercised.
 - **Very large repos** (millions of objects) and many repos per node.
-- **MIDX bitmaps through alternates.** The test served a single-pack
-  bitmap through `objects/info/alternates` (observed). Serving a
-  multi-pack-index bitmap from the alternate after a geometric repack was
-  not tested.
+- **MIDX bitmaps in the production layout.** The test served a
+  single-pack bitmap through `objects/info/alternates` (observed). Two
+  things were not tested: a multi-pack-index bitmap, and the post-review
+  layout, where hard-linked pack sets replace alternates.
 - **PostgreSQL CAS.** The concurrency evidence comes from SQLite only.
-- **Reachability enforcement (R22) and pack states.** These were specified
-  after the spike and are not prototyped.
+- **Not prototyped.** All of the following were specified after the spike
+  and are untested:
+  - reachability enforcement (R22)
+  - pack states
+  - per-snapshot pack sets
+  - keep refs and pinned mtimes, and carrying `.mtimes` through the
+    bucket
 - The JGit and go-git rows use their stdio upload-pack, not a DFS or
   bucket-backed `Storer`. They compare protocol and pack-generation cost
   on identical input, not their storage layers.

@@ -954,30 +954,39 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     `objects/info/alternates` into the node's pack cache.
   - openxet answers the protocol v2 capability advertisement and `ls-refs`
     in-process.
-  - openxet enforces reachability for every v2 `fetch` want (R22), because
-    git's v2 `upload-pack` serves any object in the odb.
-    - A current ref tip passes.
-    - Any other want needs a bounded gix reachability walk to find it.
-    - Anything else is refused.
-  - Alternates point only at the repo's own cache. Objects are never shared
-    across repos.
+  - openxet enforces reachability for every upload-pack want, v0 to v2
+    (R22), because git's v2 `upload-pack` serves any object in the odb.
+    - Ref tips pass.
+    - All other wants share one gix walk per request, within a configured
+      commit, time and concurrency budget.
+    - Anything not found is refused (fail closed).
+  - Objects are never shared across repos.
   - Ref updates go through a hardened `proc-receive` hook back into
     openxet:
-    - an inherited socketpair and a single-use token bound to repo,
-      principal and request
+    - an inherited socketpair fd (HTTP and SSH) and a single-use token
+      bound to repo, principal and request
     - pack paths confined to the request's snapshot
     - policy re-checked in openxet
     - a sanitised git environment
   - openxet then publishes the pushed pack to the bucket as `pending`, and
     runs the ref CAS, which marks the pack `committed` in the same
-    transaction. Losing pushes mark their pack `lost`. Then it
-    acknowledges.
-  - Nodes read the ref snapshot and then the pack list, from the primary
-    or one consistent snapshot, and skip `lost` packs.
+    transaction, and only while it is still `pending`. Losing pushes mark
+    their pack `lost`. Then it acknowledges.
+  - Each request reads refs and its pack set in one database snapshot,
+    from the primary.
+    - The pack set is `committed` packs, plus `superseded` ones still in
+      their grace period.
+    - The snapshot hard-links exactly that set, with no alternates.
+    - `pending` and `lost` packs are never hydrated or exposed, so a
+      push's connectivity check can't lean on another in-flight pack.
 - **Repacking** takes committed packs only, on one leaseholder per repo:
-  - geometric, with a multi-pack-index bitmap
-  - plus a periodic full `repack --cruft --cruft-expiration=<grace>`
-  - Superseded, lost and stale pending packs go to GC (§5.6).
+  - geometric, with a multi-pack-index bitmap, which leaves cruft packs
+    alone
+  - plus a periodic full `repack -adb --cruft --cruft-expiration=<grace>`
+  - Temporary keep refs hold every ref-log tip from the grace window.
+    Cruft expiry goes by object mtime, so hydrated packs keep their
+    creation mtime and `.mtimes` files travel through the bucket.
+  - Superseded, lost and expired pending packs go to GC (§5.6).
 - **gitoxide stays in-process off the wire path,** for Hub API object
   reads, the reachability check and Hub commit writes.
 - **git ≥ 2.37 is a runtime dependency** (§9). Container images ship it
