@@ -55,14 +55,24 @@ pub enum AuthError {
         reason: &'static str,
     },
 
-    /// A signed-URL lifetime below [`crate::UrlSigner::MIN_LIFETIME`] was
-    /// configured.
+    /// A signed-URL lifetime outside [`crate::UrlSigner::MIN_LIFETIME`] to
+    /// [`crate::UrlSigner::MAX_LIFETIME`] was configured.
     #[error(
-        "the signed-URL lifetime of {lifetime_secs} s is below the 1800 s (30 min) floor; configure at least 30 minutes"
+        "the signed-URL lifetime of {lifetime_secs} s is outside 30 min to 24 h (1800 s to 86400 s); configure a lifetime in that range (default 60 min)"
     )]
-    LifetimeTooShort {
-        /// The rejected lifetime, in seconds.
+    LifetimeOutOfRange {
+        /// The rejected lifetime, in whole seconds (saturating).
         lifetime_secs: u64,
+    },
+
+    /// A transfer URL was requested for a range whose start is after its
+    /// end, which no `Range` header could ever match.
+    #[error("cannot sign byte range {start}-{end}: the start is after the end")]
+    ReversedRange {
+        /// The requested first byte.
+        start: u64,
+        /// The requested last byte, inclusive.
+        end: u64,
     },
 
     /// The operating system's random number generator failed.
@@ -84,6 +94,11 @@ pub enum ForbiddenReason {
     /// The URL is at or past its `exp`.
     #[error("the URL has expired")]
     Expired,
+
+    /// The URL's `exp` lies further ahead than this node's lifetime plus
+    /// clock skew allows, so it was not issued under this configuration.
+    #[error("the URL expires later than this server's URL lifetime allows")]
+    ExpiryBeyondLifetime,
 
     /// The signature does not match the xorb, range and expiry.
     #[error("the signature does not match the xorb, range and expiry")]

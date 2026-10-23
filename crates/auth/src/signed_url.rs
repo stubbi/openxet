@@ -18,6 +18,7 @@ use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::Deserialize;
 use sha2::Sha256;
 use url::Url;
+use zeroize::Zeroize as _;
 
 use crate::{AuthError, ForbiddenReason};
 
@@ -57,19 +58,29 @@ impl UrlSigner {
     /// §5 from how long `hf_xet` holds a URL before its last use.
     pub const MIN_LIFETIME: Duration = Duration::from_mins(30);
 
+    /// The longest accepted URL lifetime: 24 hours (ruling M1-R19), so a
+    /// leaked URL stays usable for a bounded time.
+    pub const MAX_LIFETIME: Duration = Duration::from_hours(24);
+
     /// A signer using `key`, issuing URLs valid for `lifetime`.
+    ///
+    /// The local copy of `key` is wiped once the HMAC state is derived, and
+    /// that state is wiped on drop (`sha2`'s `zeroize` feature). Callers
+    /// should hold their own copy in [`zeroize::Zeroizing`].
     ///
     /// # Errors
     ///
-    /// [`AuthError::LifetimeTooShort`] if `lifetime` is below
-    /// [`UrlSigner::MIN_LIFETIME`].
-    pub fn new(key: [u8; 32], lifetime: Duration) -> Result<Self, AuthError> {
-        if lifetime < Self::MIN_LIFETIME {
-            return Err(AuthError::LifetimeTooShort {
+    /// [`AuthError::LifetimeOutOfRange`] if `lifetime` is outside
+    /// [`UrlSigner::MIN_LIFETIME`] to [`UrlSigner::MAX_LIFETIME`].
+    pub fn new(mut key: [u8; 32], lifetime: Duration) -> Result<Self, AuthError> {
+        let mac = Hmac::<Sha256>::new_from_slice(&key);
+        key.zeroize();
+        if !(Self::MIN_LIFETIME..=Self::MAX_LIFETIME).contains(&lifetime) {
+            return Err(AuthError::LifetimeOutOfRange {
                 lifetime_secs: lifetime.as_secs(),
             });
         }
-        let mac = Hmac::<Sha256>::new_from_slice(&key).map_err(|_| AuthError::InvalidKey {
+        let mac = mac.map_err(|_| AuthError::InvalidKey {
             reason: "the URL-signing key was rejected by HMAC-SHA256",
         })?;
         Ok(Self { mac, lifetime })
@@ -78,7 +89,10 @@ impl UrlSigner {
     /// A URL under `base` serving bytes `start..=end_incl` of `xorb`, valid
     /// for this signer's lifetime from `now` (Unix seconds). Any path in
     /// `base` is kept as a prefix; its query and fragment are dropped.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::ReversedRange`] if `start > end_incl`.
     pub fn sign_xorb_range(
         &self,
         base: &Url,
@@ -86,7 +100,13 @@ impl UrlSigner {
         start: u64,
         end_incl: u64,
         now: u64,
-    ) -> Url {
+    ) -> Result<Url, AuthError> {
+        if start > end_incl {
+            return Err(AuthError::ReversedRange {
+                start,
+                end: end_incl,
+            });
+        }
         let xorb_hex = hash_to_hex(xorb);
         let exp = now.saturating_add(self.lifetime.as_secs());
         let sig = URL_SAFE_NO_PAD.encode(
@@ -106,7 +126,7 @@ impl UrlSigner {
             .append_pair("range", &format!("{start}-{end_incl}"))
             .append_pair("exp", &exp.to_string())
             .append_pair("sig", &sig);
-        url
+        Ok(url)
     }
 
     /// Checks a request for `xorb` carrying `query` and `range_header`,
@@ -116,8 +136,10 @@ impl UrlSigner {
     ///
     /// - [`AuthError::BadRange`] if `range_header` is absent (HTTP `400`).
     /// - [`AuthError::Forbidden`] (HTTP `403`) if the signature does not
-    ///   match (compared in constant time), the URL is at or past `exp`, or
-    ///   `range_header` is not exactly `bytes={start}-{end}`.
+    ///   match (compared in constant time), the URL is at or past `exp`, its
+    ///   `exp` is more than this signer's lifetime plus
+    ///   [`MAX_CLOCK_SKEW`](crate::MAX_CLOCK_SKEW) ahead, or `range_header`
+    ///   is not exactly `bytes={start}-{end}`.
     pub fn check(
         &self,
         xorb: &MerkleHash,
@@ -137,6 +159,12 @@ impl UrlSigner {
             .map_err(|_| forbidden(ForbiddenReason::BadSignature))?;
         if now >= query.exp {
             return Err(forbidden(ForbiddenReason::Expired));
+        }
+        let latest_exp = now
+            .saturating_add(self.lifetime.as_secs())
+            .saturating_add(crate::MAX_CLOCK_SKEW.as_secs());
+        if query.exp > latest_exp {
+            return Err(forbidden(ForbiddenReason::ExpiryBeyondLifetime));
         }
         if range_header.strip_prefix("bytes=") != Some(query.range.as_str()) {
             return Err(forbidden(ForbiddenReason::RangeMismatch));

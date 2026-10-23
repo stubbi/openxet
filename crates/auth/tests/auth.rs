@@ -714,7 +714,9 @@ fn signed_url_has_the_documented_shape() {
     let signer = url_signer();
     let base = Url::parse("https://cas.example/prefix/").expect("url");
     let x = xorb(1);
-    let url = signer.sign_xorb_range(&base, &x, 0, 99, NOW);
+    let url = signer
+        .sign_xorb_range(&base, &x, 0, 99, NOW)
+        .expect("valid range");
     assert_eq!(
         url.path(),
         format!("/prefix/v1/transfer/xorbs/{}", hash_to_hex(&x))
@@ -734,7 +736,9 @@ fn signed_url_bound_to_range() {
     let signer = url_signer();
     let base = Url::parse("https://cas.example").expect("url");
     let x = xorb(2);
-    let url = signer.sign_xorb_range(&base, &x, 100, 199, NOW);
+    let url = signer
+        .sign_xorb_range(&base, &x, 100, 199, NOW)
+        .expect("valid range");
     let q = query_of(&url);
 
     assert_eq!(
@@ -780,7 +784,9 @@ fn signed_url_bound_to_range() {
 fn signed_url_bound_to_xorb_and_query_fields() {
     let signer = url_signer();
     let base = Url::parse("https://cas.example").expect("url");
-    let url = signer.sign_xorb_range(&base, &xorb(3), 0, 9, NOW);
+    let url = signer
+        .sign_xorb_range(&base, &xorb(3), 0, 9, NOW)
+        .expect("valid range");
     let q = query_of(&url);
     let forbidden = Err(AuthError::Forbidden {
         reason: ForbiddenReason::BadSignature,
@@ -828,7 +834,11 @@ fn signed_url_rejects_range_header_with_extra_spaces_or_multiple_ranges() {
     let signer = url_signer();
     let base = Url::parse("https://cas.example").expect("url");
     let x = xorb(5);
-    let q = query_of(&signer.sign_xorb_range(&base, &x, 0, 1, NOW));
+    let q = query_of(
+        &signer
+            .sign_xorb_range(&base, &x, 0, 1, NOW)
+            .expect("valid range"),
+    );
     for header in [
         "bytes=0-1,2-3",
         "bytes=0-1, 2-3",
@@ -855,11 +865,11 @@ fn signed_url_rejects_range_header_with_extra_spaces_or_multiple_ranges() {
 fn url_lifetime_floor() {
     assert!(matches!(
         UrlSigner::new([1; 32], Duration::from_mins(29)),
-        Err(AuthError::LifetimeTooShort { .. })
+        Err(AuthError::LifetimeOutOfRange { .. })
     ));
     assert!(matches!(
         UrlSigner::new([1; 32], Duration::ZERO),
-        Err(AuthError::LifetimeTooShort { .. })
+        Err(AuthError::LifetimeOutOfRange { .. })
     ));
     let floor_error = UrlSigner::new([1; 32], Duration::from_mins(29)).unwrap_err();
     assert!(floor_error.to_string().contains("30 min"));
@@ -867,6 +877,83 @@ fn url_lifetime_floor() {
     assert!(UrlSigner::new([1; 32], Duration::from_hours(1)).is_ok());
     assert_eq!(UrlSigner::DEFAULT_LIFETIME, Duration::from_hours(1));
     assert_eq!(UrlSigner::MIN_LIFETIME, Duration::from_mins(30));
+}
+
+#[test]
+fn url_lifetime_ceiling() {
+    assert_eq!(UrlSigner::MAX_LIFETIME, Duration::from_hours(24));
+    assert!(UrlSigner::new([1; 32], Duration::from_hours(24)).is_ok());
+    for lifetime in [
+        Duration::from_secs(24 * 3600 + 1),
+        Duration::from_hours(48),
+        Duration::MAX,
+    ] {
+        let error = UrlSigner::new([1; 32], lifetime).expect_err("above the ceiling");
+        assert!(
+            matches!(error, AuthError::LifetimeOutOfRange { .. }),
+            "{lifetime:?}"
+        );
+        assert!(error.to_string().contains("24 h"), "{error}");
+    }
+}
+
+#[test]
+fn signed_url_rejects_expiry_beyond_lifetime() {
+    // A URL minted under a longer configuration, or with a forged far `exp`
+    // under a leaked key, is refused by a signer with a shorter lifetime.
+    let long = UrlSigner::new([9; 32], Duration::from_hours(24)).expect("valid");
+    let short = UrlSigner::new([9; 32], Duration::from_hours(1)).expect("valid");
+    let base = Url::parse("https://cas.example").expect("url");
+    let x = xorb(10);
+
+    let q = query_of(
+        &long
+            .sign_xorb_range(&base, &x, 0, 9, NOW)
+            .expect("valid range"),
+    );
+    assert!(long.check(&x, &q, Some("bytes=0-9"), NOW).is_ok());
+    assert_eq!(
+        short.check(&x, &q, Some("bytes=0-9"), NOW),
+        Err(AuthError::Forbidden {
+            reason: ForbiddenReason::ExpiryBeyondLifetime
+        })
+    );
+
+    // Five minutes of clock skew between nodes are tolerated, not more.
+    let skewed = query_of(
+        &short
+            .sign_xorb_range(&base, &x, 0, 9, NOW + 300)
+            .expect("valid range"),
+    );
+    assert!(short.check(&x, &skewed, Some("bytes=0-9"), NOW).is_ok());
+    let too_far = query_of(
+        &short
+            .sign_xorb_range(&base, &x, 0, 9, NOW + 301)
+            .expect("valid range"),
+    );
+    assert_eq!(
+        short.check(&x, &too_far, Some("bytes=0-9"), NOW),
+        Err(AuthError::Forbidden {
+            reason: ForbiddenReason::ExpiryBeyondLifetime
+        })
+    );
+}
+
+#[test]
+fn sign_xorb_range_rejects_reversed_range() {
+    let signer = url_signer();
+    let base = Url::parse("https://cas.example").expect("url");
+    assert_eq!(
+        signer.sign_xorb_range(&base, &xorb(11), 9, 7, NOW),
+        Err(AuthError::ReversedRange { start: 9, end: 7 })
+    );
+    let single = signer
+        .sign_xorb_range(&base, &xorb(11), 7, 7, NOW)
+        .expect("one byte");
+    assert_eq!(
+        signer.check(&xorb(11), &query_of(&single), Some("bytes=7-7"), NOW),
+        Ok((7, 7))
+    );
 }
 
 #[test]
@@ -884,7 +971,10 @@ fn auth_errors_never_contain_the_credential() {
 
     let us = url_signer();
     let base = Url::parse("https://cas.example").expect("url");
-    let q = query_of(&us.sign_xorb_range(&base, &xorb(6), 0, 9, NOW));
+    let q = query_of(
+        &us.sign_xorb_range(&base, &xorb(6), 0, 9, NOW)
+            .expect("valid range"),
+    );
 
     let mut cases: Vec<(String, AuthError)> = vec![
         (
@@ -963,7 +1053,10 @@ fn secret_holders_debug_is_redacted() {
     assert!(!format!("{us:?}").contains("171, 171"));
 
     let base = Url::parse("https://cas.example").expect("url");
-    let q = query_of(&us.sign_xorb_range(&base, &xorb(8), 0, 9, NOW));
+    let q = query_of(
+        &us.sign_xorb_range(&base, &xorb(8), 0, 9, NOW)
+            .expect("valid range"),
+    );
     assert!(!format!("{q:?}").contains(&q.sig));
 }
 

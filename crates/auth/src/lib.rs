@@ -67,6 +67,10 @@ impl Principal {
     }
 }
 
+/// How far apart issuer and verifier clocks may be: 5 minutes. It bounds a
+/// CAS token's `iat` and a signed URL's `exp` from above.
+pub const MAX_CLOCK_SKEW: Duration = Duration::from_mins(5);
+
 /// Verifies bearer credentials: static tokens and CAS tokens.
 #[derive(Debug)]
 pub struct Authenticator {
@@ -78,10 +82,6 @@ pub struct Authenticator {
 impl Authenticator {
     /// The default longest CAS-token lifetime: 24 hours.
     pub const DEFAULT_MAX_TOKEN_LIFETIME: Duration = Duration::from_hours(24);
-
-    /// How far a CAS token's `iat` may lie in the future, for clock skew
-    /// between issuer and verifier: 5 minutes.
-    pub const MAX_CLOCK_SKEW: Duration = Duration::from_mins(5);
 
     /// An authenticator accepting `static_tokens` and CAS tokens signed by
     /// any of `jwt_keys` (several keys allow rotation, ADR 0007 §3). A CAS
@@ -121,7 +121,7 @@ impl Authenticator {
     /// a CAS token at or past its `exp`, and [`AuthError::Invalid`] for
     /// anything else that does not verify, including a CAS token before its
     /// `nbf`, beyond the lifetime cap, or with `iat` more than
-    /// [`Authenticator::MAX_CLOCK_SKEW`] ahead.
+    /// [`MAX_CLOCK_SKEW`] ahead.
     pub fn authenticate(&self, bearer: &str, now: u64) -> Result<Principal, AuthError> {
         if bearer.is_empty() {
             return Err(AuthError::Missing);

@@ -15,7 +15,7 @@
 //! - claims `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and `iat`,
 //!   plus optional `nbf`, and nothing else; `exp` is exclusive and `nbf`
 //!   inclusive, with no leeway; `exp` at most the lifetime cap after `now`
-//!   and `iat` at most [`Authenticator::MAX_CLOCK_SKEW`] ahead of it; `sub` and `scope` pass
+//!   and `iat` at most [`crate::MAX_CLOCK_SKEW`] ahead of it; `sub` and `scope` pass
 //!   [`check_identity`](crate::check_identity).
 
 use std::fmt::{self, Write as _};
@@ -33,7 +33,7 @@ use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::{AuthError, Authenticator, Mode, Principal};
+use crate::{AuthError, Mode, Principal};
 
 /// The longest accepted CAS token, in bytes. Real tokens are a few hundred
 /// bytes; the cap bounds decoding work for hostile input.
@@ -284,7 +284,7 @@ pub(crate) fn verify(
         return Err(AuthError::Expired);
     }
     if claims.exp > now.saturating_add(max_lifetime.as_secs())
-        || claims.iat > now.saturating_add(Authenticator::MAX_CLOCK_SKEW.as_secs())
+        || claims.iat > now.saturating_add(crate::MAX_CLOCK_SKEW.as_secs())
     {
         return Err(AuthError::Invalid);
     }
@@ -338,6 +338,7 @@ fn kid_of(key: &VerifyingKey) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Authenticator;
 
     // RFC 8037 Appendix A: the A.1 key pair and the A.4 example JWS, whose
     // header `{"alg":"EdDSA"}` deliberately lacks openxet's `typ`/`kid`, so
