@@ -11,6 +11,7 @@
 
 #![allow(dead_code)]
 
+use std::cell::Cell;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
@@ -24,6 +25,8 @@ use openxet_storage::LocalBucket;
 use reqwest::Method;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
+use tracing::Dispatch;
+use tracing::dispatcher::{self, DefaultGuard};
 use url::Url;
 
 /// The scope of [`TestServer::write_token`] and [`TestServer::read_token`].
@@ -112,6 +115,15 @@ impl Write for Logs {
     }
 }
 
+thread_local! {
+    /// The log capture of a runtime thread, held for the thread's lifetime.
+    static THREAD_CAPTURE: Cell<Option<DefaultGuard>> = const { Cell::new(None) };
+}
+
+fn capture_on_this_thread(dispatch: &Dispatch) {
+    THREAD_CAPTURE.set(Some(dispatcher::set_default(dispatch)));
+}
+
 /// A running CAS server. Dropping it shuts the server down.
 pub struct TestServer {
     /// The server's origin, without a trailing slash, as clients configure
@@ -129,6 +141,8 @@ pub struct TestServer {
     pub clock: ManualClock,
     /// A client for requests to the server.
     pub http: reqwest::Client,
+    /// The server's runtime, for running code where the server's code runs.
+    pub runtime: tokio::runtime::Handle,
     logs: Logs,
     shutdown: Option<oneshot::Sender<()>>,
     _dir: TempDir,
@@ -138,9 +152,10 @@ impl TestServer {
     /// Starts a server with `cfg`. Its `public_url` is replaced by the bound
     /// address, since the port is known only once bound.
     ///
-    /// The server runs on its own thread and single-threaded runtime, with a
-    /// log subscriber installed for that thread only, so tests running in
-    /// parallel never see each other's logs.
+    /// The server runs on its own thread and single-threaded runtime. The
+    /// log capture is installed on that thread and on every thread the
+    /// runtime starts, including `spawn_blocking` threads, and on no other
+    /// thread, so tests running in parallel never see each other's logs.
     pub async fn start(cfg: CasConfig) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let write_token = new_token();
@@ -176,14 +191,18 @@ impl TestServer {
         let server_clock = clock.clone();
         let server_logs = logs.clone();
         std::thread::spawn(move || {
-            let subscriber = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::TRACE)
-                .with_ansi(false)
-                .with_writer(move || server_logs.clone())
-                .finish();
-            let _guard = tracing::subscriber::set_default(subscriber);
+            let dispatch = Dispatch::new(
+                tracing_subscriber::fmt()
+                    .with_max_level(tracing::Level::TRACE)
+                    .with_ansi(false)
+                    .with_writer(move || server_logs.clone())
+                    .finish(),
+            );
+            let _guard = dispatcher::set_default(&dispatch);
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
+                .on_thread_start(move || capture_on_this_thread(&dispatch))
+                .on_thread_stop(|| THREAD_CAPTURE.set(None))
                 .build()
                 .unwrap();
             runtime.block_on(async move {
@@ -198,7 +217,7 @@ impl TestServer {
                 )
                 .with_clock(Arc::new(server_clock));
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-                ready_tx.send(()).unwrap();
+                ready_tx.send(tokio::runtime::Handle::current()).unwrap();
                 axum::serve(listener, router(state))
                     .with_graceful_shutdown(async {
                         let _ = stop.await;
@@ -207,10 +226,11 @@ impl TestServer {
                     .unwrap();
             });
         });
-        tokio::task::spawn_blocking(move || ready_rx.recv_timeout(Duration::from_secs(30)))
-            .await
-            .unwrap()
-            .expect("the test server did not start");
+        let runtime =
+            tokio::task::spawn_blocking(move || ready_rx.recv_timeout(Duration::from_secs(30)))
+                .await
+                .unwrap()
+                .expect("the test server did not start");
 
         Self {
             base_url,
@@ -220,6 +240,7 @@ impl TestServer {
             signer,
             clock,
             http: reqwest::Client::new(),
+            runtime,
             logs,
             shutdown: Some(shutdown),
             _dir: dir,
