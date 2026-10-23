@@ -11,7 +11,7 @@ mod hash;
 mod xorb;
 
 pub use hash::{MerkleHash, chunk_hash, file_hash, hash_from_hex, hash_to_hex, range_hash};
-pub use xorb::{XorbChunks, read_xorb_chunks, xorb_hash};
+pub use xorb::{StoredXorb, XorbChunks, read_xorb_chunks, xorb_hash, xorb_with_footer};
 
 /// Errors from parsing protocol data.
 #[derive(Debug, thiserror::Error)]

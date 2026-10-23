@@ -11,8 +11,11 @@ use std::path::PathBuf;
 
 use openxet_protocol::{
     MerkleHash, ProtocolError, file_hash, hash_from_hex, hash_to_hex, range_hash, read_xorb_chunks,
-    xorb_hash,
+    xorb_hash, xorb_with_footer,
 };
+// Only to build client-serialized xorbs as test input; production code
+// reaches upstream through openxet_protocol alone.
+use xet_core_structures::xorb_object::{Chunk, RawXorbData, SerializedXorbObject};
 
 const CSV: &str = "Electric_Vehicle_Population_Data_20250917.csv";
 const XORB: &str = "eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632";
@@ -56,9 +59,10 @@ fn chunks_listing(name: &str) -> Vec<(MerkleHash, u64)> {
 
 /// The reference xorb is its 796 serialized chunks followed by the 4 bytes
 /// `XETB` (the start of a footer ident, `XETBLOB`), which is neither the
-/// footer-less form clients upload nor a full footer. Upstream's
-/// `deserialize_chunks` rejects such trailing bytes (tested below), so the
-/// golden hashes are checked over the chunk section returned here.
+/// footer-less form clients upload nor a full footer. Upstream rejects such
+/// trailing bytes on both the strict and the footer-tolerant path (tested
+/// below), so the golden hashes are checked over the chunk section returned
+/// here.
 fn reference_xorb_bytes() -> Vec<u8> {
     let mut bytes = fs::read(fixture(&format!("{XORB}.xorb"))).unwrap();
     let trailer = bytes.split_off(bytes.len() - 4);
@@ -105,6 +109,67 @@ fn reference_xorb_with_trailing_bytes_is_rejected() {
     let file = fs::File::open(fixture(&format!("{XORB}.xorb"))).unwrap();
     assert!(matches!(
         read_xorb_chunks(file),
+        Err(ProtocolError::MalformedXorb(_))
+    ));
+}
+
+/// The reference CSV serialized by upstream's client serializer
+/// (`SerializedXorbObject::from_xorb`, the call `xet-data` makes on upload),
+/// cut at the chunk boundaries of the `.chunks` listing.
+fn client_serialized_xorb(serialize_footer: bool) -> SerializedXorbObject {
+    let csv = bytes::Bytes::from(fs::read(fixture(CSV)).unwrap());
+    let mut offset = 0;
+    let chunks: Vec<Chunk> = chunks_listing(&format!("{CSV}.chunks"))
+        .into_iter()
+        .map(|(_, len)| {
+            let len = usize::try_from(len).unwrap();
+            let chunk = Chunk::new(csv.slice(offset..offset + len));
+            offset += len;
+            chunk
+        })
+        .collect();
+    assert_eq!(offset, csv.len());
+    let raw = RawXorbData::from_chunks(&chunks, vec![0]);
+    SerializedXorbObject::from_xorb(raw, serialize_footer, "auto", 0).unwrap()
+}
+
+#[test]
+fn xorb_upload_without_footer_gets_footer_and_reference_hash() {
+    let stored = xorb_with_footer(&reference_xorb_bytes()).unwrap();
+    assert_eq!(hash_to_hex(&stored.hash), XORB);
+    // The stored form is the chunk section followed by a footer, which the
+    // footer-tolerant path accepts again unchanged.
+    assert!(stored.bytes.starts_with(&reference_xorb_bytes()));
+    let again = xorb_with_footer(&stored.bytes).unwrap();
+    assert_eq!(again.hash, stored.hash);
+    assert_eq!(again.bytes, stored.bytes);
+}
+
+#[test]
+fn xorb_upload_with_and_without_client_footer_yield_reference_hash() {
+    let without = client_serialized_xorb(false);
+    let with = client_serialized_xorb(true);
+    assert!(without.footer_start.is_none());
+    assert!(with.footer_start.is_some());
+    for body in [&without.serialized_data, &with.serialized_data] {
+        assert_eq!(hash_to_hex(&xorb_with_footer(body).unwrap().hash), XORB);
+    }
+}
+
+#[test]
+fn xorb_upload_with_stray_trailing_bytes_is_rejected() {
+    let file = fs::read(fixture(&format!("{XORB}.xorb"))).unwrap();
+    assert!(matches!(
+        xorb_with_footer(&file),
+        Err(ProtocolError::MalformedXorb(_))
+    ));
+}
+
+#[test]
+fn read_xorb_chunks_rejects_a_footer() {
+    let with = client_serialized_xorb(true);
+    assert!(matches!(
+        read_xorb_chunks(with.serialized_data.as_slice()),
         Err(ProtocolError::MalformedXorb(_))
     ));
 }
