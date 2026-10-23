@@ -14,7 +14,7 @@ use common::shard::{CommitStage, Event, Line, hf_xet_files, hf_xet_shard, lines,
 use common::xorb::{HF_XET_XORB, hf_xet_xorb, stored, xorb_path};
 use common::{FailingBucket, Reply, SCOPE_A, SCOPE_B, SlowIndex, TestServer, bearer, config};
 use openxet_index::{ChunkTable, FileRecord, Visibility};
-use openxet_protocol::{MerkleHash, VerifyLimits, hash_from_hex, shard_hash};
+use openxet_protocol::{MerkleHash, VerifyLimits, hash_from_hex, hash_to_hex, shard_hash};
 use openxet_storage::Key;
 use reqwest::Method;
 use reqwest::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
@@ -310,7 +310,8 @@ async fn tampered_shard_rejected_in_stream_not_404() {
 
     let (message, retryable) =
         stream_error(&upload_v2(&server, tampered_shard(), &server.write_token).await);
-    assert!(message.contains("file hash is"), "{message}");
+    assert!(message.contains("doesn't hash to"), "{message}");
+    assert!(message.contains("rebuild the shard"), "{message}");
     assert!(message.contains("hashing#file-hashes"), "{message}");
     assert!(!retryable);
 
@@ -561,4 +562,131 @@ async fn refused_shard_uploads_answer_with_a_status() {
         assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
         assert!(answer.contains("\"shard_too_large\""), "{answer}");
     }
+}
+
+/// Every run of 64 lowercase hex characters in `text`.
+fn hexes(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let run = bytes[i..]
+            .iter()
+            .take_while(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            .count();
+        if run == 64 {
+            out.push(text[i..i + 64].to_owned());
+        }
+        i += run.max(1);
+    }
+    out
+}
+
+fn find(body: &[u8], hash: &MerkleHash) -> Option<usize> {
+    body.windows(32).position(|w| w == hash.as_bytes())
+}
+
+/// What the server derived from the capture's stored chunks: the true
+/// verification and file hashes, as hex, and the segment lengths.
+fn capture_secrets() -> (Vec<String>, Vec<u32>) {
+    let shard = openxet_protocol::read_upload_shard(hf_xet_shard().as_slice()).unwrap();
+    let mut hashes = Vec::new();
+    let mut lengths = Vec::new();
+    for file in shard.files.iter().filter(|f| !f.segments.is_empty()) {
+        hashes.push(hash_to_hex(&file.file_hash));
+        for seg in &file.segments {
+            hashes.push(hash_to_hex(&seg.verification.unwrap()));
+            lengths.push(seg.unpacked_bytes);
+        }
+    }
+    (hashes, lengths)
+}
+
+fn assert_reveals_nothing(text: &str, secrets: &(Vec<String>, Vec<u32>), chunks: usize) {
+    for hash in &secrets.0 {
+        assert!(!text.contains(hash.as_str()), "leaks {hash}: {text}");
+    }
+    for length in &secrets.1 {
+        assert!(
+            !text.contains(&length.to_string()),
+            "leaks {length}: {text}"
+        );
+    }
+    assert!(
+        !text.contains(&format!("{chunks} chunks")),
+        "leaks the chunk count: {text}"
+    );
+}
+
+#[tokio::test]
+async fn foreign_writer_cannot_forge_shard_under_global() {
+    // Ruling M1-R23. Verification proves the uploader holds the chunks it
+    // references. Under global visibility a writer of another scope may
+    // learn a xorb's hash; if errors echoed the values the server derives
+    // from its stored chunks, it could patch a shard from them until it
+    // verifies, and register files over data it never had.
+    let server = TestServer::start_default().await;
+    upload_xorb(&server, &server.write_token).await;
+    let xorb = hash_from_hex(HF_XET_XORB).unwrap();
+    let chunks = stored(&hf_xet_xorb()).chunks.hashes.len();
+    let secrets = capture_secrets();
+
+    // The attacker's shard: the capture's layout, with every verification
+    // and file hash replaced by a guess.
+    let mut body = hf_xet_shard();
+    for hash in &secrets.0 {
+        let at = find(&body, &hash_from_hex(hash).unwrap()).unwrap();
+        body[at] ^= 0xff;
+    }
+    // From each message, the attacker takes any hash it didn't send and
+    // writes it over a hash it did.
+    for _ in 0..10 {
+        let reply = upload_v1(&server, body.clone(), &server.other_scope_token).await;
+        assert_ne!(reply.status, 200, "forged shard accepted: {}", reply.body);
+        let message = reply.json()["message"].as_str().unwrap().to_owned();
+        let (message_v2, _) =
+            stream_error(&upload_v2(&server, body.clone(), &server.other_scope_token).await);
+        assert_reveals_nothing(&message, &secrets, chunks);
+        assert_reveals_nothing(&message_v2, &secrets, chunks);
+        let seen: Vec<MerkleHash> = hexes(&message)
+            .iter()
+            .map(|h| hash_from_hex(h).unwrap())
+            .collect();
+        let revealed = seen.iter().find(|h| find(&body, h).is_none());
+        let sent = seen
+            .iter()
+            .find(|h| **h != xorb && find(&body, h).is_some());
+        if let (Some(revealed), Some(sent)) = (revealed, sent) {
+            let at = find(&body, sent).unwrap();
+            body[at..at + 32].copy_from_slice(revealed.as_bytes());
+        }
+    }
+    assert_eq!(files(&server, SCOPE_B).await, [None, None, None]);
+
+    // The length and bounds rules don't reveal the stored values either.
+    let original = hf_xet_shard();
+    // The first segment entry follows the empty file: xorb hash, flags,
+    // unpacked bytes, chunk start, chunk end, each a u32 LE
+    // (https://huggingface.co/docs/xet/shard#filedatasequenceentry).
+    let at = find(&original, &xorb).unwrap();
+    assert_eq!(
+        u32::from_le_bytes(original[at + 36..at + 40].try_into().unwrap()),
+        secrets.1[0]
+    );
+    let mut length = original.clone();
+    length[at + 36..at + 40].copy_from_slice(&1u32.to_le_bytes());
+    let mut bounds = original.clone();
+    let past_end = u32::try_from(chunks + 1).unwrap();
+    bounds[at + 44..at + 48].copy_from_slice(&past_end.to_le_bytes());
+    for (body, rule) in [(length, "unpacked bytes"), (bounds, "out of bounds")] {
+        let reply = upload_v1(&server, body.clone(), &server.other_scope_token).await;
+        reply.assert_error(400, "shard_verification_failed");
+        let message = reply.json()["message"].as_str().unwrap().to_owned();
+        assert!(message.contains(rule), "{message}");
+        assert_reveals_nothing(&message, &secrets, chunks);
+        let (message_v2, _) =
+            stream_error(&upload_v2(&server, body, &server.other_scope_token).await);
+        assert_reveals_nothing(&message_v2, &secrets, chunks);
+    }
+    assert_eq!(files(&server, SCOPE_B).await, [None, None, None]);
 }

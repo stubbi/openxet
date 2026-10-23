@@ -315,10 +315,17 @@ fn tampered_unpacked_bytes_is_rejected() {
     seg.unpacked_bytes += 1;
     let err = verify_segment(&seg, &chunks).unwrap_err();
     assert!(matches!(err, VerifyError::LengthMismatch { .. }), "{err}");
+    // The client sees its own claim; the stored length is for the log only
+    // (ruling M1-R23).
     let msg = err.to_string();
     assert!(
-        msg.contains("63527245") && msg.contains("63527244"),
+        msg.contains("63527245") && !msg.contains("63527244"),
         "{msg}"
+    );
+    let detail = err.detail();
+    assert!(
+        detail.contains("63527245") && detail.contains("63527244"),
+        "{detail}"
     );
 }
 

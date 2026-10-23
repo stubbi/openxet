@@ -92,7 +92,8 @@ keeps them true, and a change that weakens one is a release blocker:
   is authorized per namespace.
 - Caches and proxies are keyed by the caller's credential and fail closed.
 - Dedup answers are HMAC-keyed and never expose raw chunk hashes.
-- Uploaded xorbs and shards are verified before anything is registered.
+- Uploaded xorbs and shards are verified before anything is registered,
+  and verification errors never reveal server-derived values.
 - Credentials are never echoed or logged.
 - No silent no-op success; acknowledged writes survive a crash.
 - Git reads check reachability, and every ref writer is fenced.
