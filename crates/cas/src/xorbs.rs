@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::Json;
 use axum::Router;
 use axum::body::{Body, Bytes, HttpBody as _};
@@ -207,15 +209,24 @@ fn too_large() -> CasError {
     }
 }
 
-/// Runs `xorb_with_footer` on a blocking thread under a `validate` permit,
-/// released as soon as validation ends: decompression is the expensive step
-/// the permits bound (ruling M1-R8), not the I/O after it.
+/// Runs `xorb_with_footer` on a blocking thread under a `validate` permit.
+/// Decompression is the expensive step the permits bound (ruling M1-R8), not
+/// the I/O after it, so the permit is held by the blocking task itself: it
+/// is returned when validation ends, never before. A blocking task can't be
+/// cancelled, so a permit held by the handler would be returned early when
+/// a client disconnects mid-validation, while the work runs on unbounded.
 async fn validate(state: &AppState, body: Bytes) -> Result<StoredXorb, CasError> {
-    let _permit = state.validate.acquire().await.map_err(CasError::internal)?;
-    tokio::task::spawn_blocking(move || xorb_with_footer(&body))
+    let permit = Arc::clone(&state.validate)
+        .acquire_owned()
         .await
-        .map_err(CasError::internal)?
-        .map_err(rejected)
+        .map_err(CasError::internal)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        xorb_with_footer(&body)
+    })
+    .await
+    .map_err(CasError::internal)?
+    .map_err(rejected)
 }
 
 /// The answer to a body `xorb_with_footer` refused: `400 xorb_<rule>` per
@@ -345,5 +356,46 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "xorb_too_large");
+    }
+
+    #[tokio::test]
+    async fn the_validation_permit_lives_as_long_as_the_blocking_work() {
+        // A handler dropped mid-validation (the client disconnected) can't
+        // cancel the blocking task, so the permit must stay with the task
+        // or M1-R8's bound doesn't hold. A near-limit body of uncompressed
+        // 64 KiB chunks takes tens of milliseconds to hash.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![]).await;
+        state.validate = Arc::new(tokio::sync::Semaphore::new(1));
+        let chunk = {
+            let mut chunk = vec![0, 0, 0, 1, 0, 0, 0, 1];
+            chunk.extend(std::iter::repeat_n(7u8, 64 * 1024));
+            chunk
+        };
+        let body = Bytes::from(chunk.repeat(1000));
+
+        let validating = {
+            let state = state.clone();
+            tokio::spawn(async move { validate(&state, body).await.map(|_| ()) })
+        };
+        while state.validate.available_permits() == 1 {
+            tokio::task::yield_now().await;
+        }
+        validating.abort();
+        assert!(validating.await.unwrap_err().is_cancelled());
+
+        assert_eq!(
+            state.validate.available_permits(),
+            0,
+            "the permit was released while validation still runs"
+        );
+        let released = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while state.validate.available_permits() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        });
+        released
+            .await
+            .expect("the permit is returned once validation ends");
     }
 }
