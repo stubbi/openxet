@@ -130,10 +130,19 @@ impl TokenSigner {
     /// Limits the lifetime of tokens this signer mints; it should match the
     /// verifiers' `max_token_lifetime`. The default is
     /// [`Authenticator::DEFAULT_MAX_TOKEN_LIFETIME`](crate::Authenticator::DEFAULT_MAX_TOKEN_LIFETIME).
-    #[must_use]
-    pub fn with_max_token_lifetime(mut self, max_token_lifetime: Duration) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::LifetimeOutOfRange`] outside
+    /// [`Authenticator::MIN_TOKEN_LIFETIME`](crate::Authenticator::MIN_TOKEN_LIFETIME)
+    /// to [`Authenticator::MAX_TOKEN_LIFETIME`](crate::Authenticator::MAX_TOKEN_LIFETIME).
+    pub fn with_max_token_lifetime(
+        mut self,
+        max_token_lifetime: Duration,
+    ) -> Result<Self, AuthError> {
+        crate::check_token_lifetime(max_token_lifetime)?;
         self.max_token_lifetime = max_token_lifetime;
-        self
+        Ok(self)
     }
 
     /// A CAS token for `subject` limited to `scope` and `mode`, issued at

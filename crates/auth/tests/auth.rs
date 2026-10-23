@@ -224,7 +224,9 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
         assert!(auth.authenticate(&token, NOW).is_ok(), "{exp}");
     }
 
-    let hourly = signer().with_max_token_lifetime(Duration::from_hours(1));
+    let hourly = signer()
+        .with_max_token_lifetime(Duration::from_hours(1))
+        .expect("valid lifetime");
     assert!(
         hourly
             .sign("alice", "org/model", Mode::Read, NOW + 3600, NOW)
@@ -624,6 +626,115 @@ fn static_tokens_with_invalid_subject_or_scope_are_rejected_at_construction() {
 }
 
 #[test]
+fn token_lifetime_cap_is_bounded() {
+    assert_eq!(Authenticator::MIN_TOKEN_LIFETIME, Duration::from_mins(1));
+    assert_eq!(
+        Authenticator::MAX_TOKEN_LIFETIME,
+        Duration::from_hours(30 * 24)
+    );
+    let thirty_days = Duration::from_hours(30 * 24);
+    for cap in [
+        Duration::ZERO,
+        Duration::from_secs(59),
+        Duration::from_mins(1) - Duration::from_nanos(1),
+        thirty_days + Duration::from_nanos(1),
+        Duration::MAX,
+    ] {
+        let error = Authenticator::new(vec![], vec![], cap).expect_err("cap out of range");
+        assert!(
+            matches!(error, AuthError::LifetimeOutOfRange { .. }),
+            "{cap:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("lifetime {cap:?} is outside")),
+            "{error}"
+        );
+        let error = signer()
+            .with_max_token_lifetime(cap)
+            .expect_err("cap out of range");
+        assert!(
+            matches!(error, AuthError::LifetimeOutOfRange { .. }),
+            "{cap:?}"
+        );
+    }
+    for cap in [
+        Duration::from_mins(1),
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+        thirty_days,
+    ] {
+        assert!(Authenticator::new(vec![], vec![], cap).is_ok(), "{cap:?}");
+        assert!(signer().with_max_token_lifetime(cap).is_ok(), "{cap:?}");
+    }
+}
+
+#[test]
+fn subject_and_scope_reject_invisible_separator_and_blank_values() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    let s = signer();
+    let mut bad: Vec<String> = [
+        '\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}',
+        '\u{202C}', '\u{202D}', '\u{202E}', '\u{2060}', '\u{2061}', '\u{2062}', '\u{2063}',
+        '\u{2064}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{FEFF}', '\u{2028}',
+        '\u{2029}', '\u{061C}',
+    ]
+    .iter()
+    .map(|c| format!("org/{c}model"))
+    .collect();
+    bad.extend([" ", "\u{3000}", " \u{A0} ", "\u{2003}"].map(str::to_owned));
+
+    for value in &bad {
+        for field in ["sub", "scope"] {
+            let token = sign_raw(
+                &key,
+                &header,
+                &b64(&with_claim(field, value.as_str().into()).to_string()),
+            );
+            assert_eq!(
+                auth.authenticate(&token, NOW),
+                Err(AuthError::Invalid),
+                "{field}={value:?}"
+            );
+        }
+        assert!(
+            s.sign(value, "org/model", Mode::Read, NOW + 60, NOW)
+                .is_err(),
+            "{value:?}"
+        );
+        assert!(
+            s.sign("alice", value, Mode::Read, NOW + 60, NOW).is_err(),
+            "{value:?}"
+        );
+        let mut token = static_token(STATIC_SECRET, Mode::Read);
+        token.scope = value.clone();
+        assert!(
+            Authenticator::new(
+                vec![token],
+                vec![],
+                Authenticator::DEFAULT_MAX_TOKEN_LIFETIME
+            )
+            .is_err(),
+            "{value:?}"
+        );
+    }
+
+    for value in [
+        "org/my model",
+        "Jürgen Müller",
+        "日本/モデル",
+        " org/model ",
+    ] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("scope", value.into()).to_string()),
+        );
+        assert!(auth.authenticate(&token, NOW).is_ok(), "{value:?}");
+    }
+}
+
+#[test]
 fn jwt_rejects_oversized_token() {
     let (key, public_pem, _) = raw_keypair();
     let kid = PublicKey::from_pem(&public_pem)
@@ -935,7 +1046,13 @@ fn url_lifetime_floor() {
         Err(AuthError::LifetimeOutOfRange { .. })
     ));
     let floor_error = UrlSigner::new([1; 32], Duration::from_mins(29)).unwrap_err();
-    assert!(floor_error.to_string().contains("30 min"));
+    assert_eq!(
+        floor_error.to_string(),
+        "the signed-URL lifetime 1740s is outside 1800s to 86400s inclusive; configure a value in that range"
+    );
+    let just_under = Duration::from_mins(30) - Duration::from_nanos(1);
+    let error = UrlSigner::new([1; 32], just_under).unwrap_err();
+    assert!(error.to_string().contains("1799.999999999s"), "{error}");
     assert!(UrlSigner::new([1; 32], Duration::from_mins(30)).is_ok());
     assert!(UrlSigner::new([1; 32], Duration::from_hours(1)).is_ok());
     assert_eq!(UrlSigner::DEFAULT_LIFETIME, Duration::from_hours(1));
@@ -947,6 +1064,7 @@ fn url_lifetime_ceiling() {
     assert_eq!(UrlSigner::MAX_LIFETIME, Duration::from_hours(24));
     assert!(UrlSigner::new([1; 32], Duration::from_hours(24)).is_ok());
     for lifetime in [
+        Duration::from_hours(24) + Duration::from_nanos(1),
         Duration::from_secs(24 * 3600 + 1),
         Duration::from_hours(48),
         Duration::MAX,
@@ -956,8 +1074,17 @@ fn url_lifetime_ceiling() {
             matches!(error, AuthError::LifetimeOutOfRange { .. }),
             "{lifetime:?}"
         );
-        assert!(error.to_string().contains("24 h"), "{error}");
+        // The rejected value prints exactly, so it never reads as the bound.
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("lifetime {lifetime:?} is outside")),
+            "{error}"
+        );
     }
+    let error =
+        UrlSigner::new([1; 32], Duration::from_hours(24) + Duration::from_nanos(1)).unwrap_err();
+    assert!(error.to_string().contains("86400.000000001s"), "{error}");
 }
 
 #[test]

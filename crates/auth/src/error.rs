@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// An authentication failure.
 ///
 /// No variant carries the presented credential, so neither `Debug` nor
@@ -62,14 +64,24 @@ pub enum AuthError {
         reason: &'static str,
     },
 
-    /// A signed-URL lifetime outside [`crate::UrlSigner::MIN_LIFETIME`] to
-    /// [`crate::UrlSigner::MAX_LIFETIME`] was configured.
+    /// A configured lifetime is outside its accepted range: the signed-URL
+    /// lifetime ([`crate::UrlSigner::MIN_LIFETIME`] to
+    /// [`crate::UrlSigner::MAX_LIFETIME`]) or the CAS-token lifetime cap
+    /// ([`crate::Authenticator::MIN_TOKEN_LIFETIME`] to
+    /// [`crate::Authenticator::MAX_TOKEN_LIFETIME`]). Durations print
+    /// exactly, so a value just past a bound never reads as the bound.
     #[error(
-        "the signed-URL lifetime of {lifetime_secs} s is outside 30 min to 24 h (1800 s to 86400 s); configure a lifetime in that range (default 60 min)"
+        "the {setting} {lifetime:?} is outside {min:?} to {max:?} inclusive; configure a value in that range"
     )]
     LifetimeOutOfRange {
-        /// The rejected lifetime, in whole seconds (saturating).
-        lifetime_secs: u64,
+        /// Which setting was rejected.
+        setting: &'static str,
+        /// The rejected value.
+        lifetime: Duration,
+        /// The smallest accepted value.
+        min: Duration,
+        /// The largest accepted value.
+        max: Duration,
     },
 
     /// A transfer URL was requested for a range whose start is after its

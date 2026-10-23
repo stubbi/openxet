@@ -75,11 +75,12 @@ impl UrlSigner {
     pub fn new(mut key: [u8; 32], lifetime: Duration) -> Result<Self, AuthError> {
         let mac = Hmac::<Sha256>::new_from_slice(&key);
         key.zeroize();
-        if !(Self::MIN_LIFETIME..=Self::MAX_LIFETIME).contains(&lifetime) {
-            return Err(AuthError::LifetimeOutOfRange {
-                lifetime_secs: lifetime.as_secs(),
-            });
-        }
+        crate::check_lifetime(
+            "signed-URL lifetime",
+            lifetime,
+            Self::MIN_LIFETIME,
+            Self::MAX_LIFETIME,
+        )?;
         let mac = mac.map_err(|_| AuthError::InvalidKey {
             reason: "the URL-signing key was rejected by HMAC-SHA256",
         })?;
@@ -194,4 +195,35 @@ fn parse_range(range: &str) -> Option<(u64, u64)> {
     let (start, end) = range.split_once('-')?;
     let (start, end) = (start.parse::<u64>().ok()?, end.parse::<u64>().ok()?);
     (start <= end && format!("{start}-{end}") == range).then_some((start, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reversed range with a valid MAC, which `sign_xorb_range` refuses to
+    /// mint, must still be refused by `check`: the `start <= end` guard in
+    /// `parse_range` is the only thing that stops it.
+    #[test]
+    fn check_refuses_a_validly_signed_reversed_range() {
+        let signer = UrlSigner::new([3; 32], UrlSigner::DEFAULT_LIFETIME).expect("valid");
+        let xorb = openxet_protocol::chunk_hash(b"reversed");
+        let exp = 1_000;
+        let query = TransferQuery {
+            range: "9-7".to_owned(),
+            exp,
+            sig: URL_SAFE_NO_PAD.encode(
+                signer
+                    .mac_for(&hash_to_hex(&xorb), 9, 7, exp)
+                    .finalize()
+                    .into_bytes(),
+            ),
+        };
+        assert_eq!(
+            signer.check(&xorb, &query, Some("bytes=9-7"), 0),
+            Err(AuthError::Forbidden {
+                reason: ForbiddenReason::BadSignature
+            })
+        );
+    }
 }

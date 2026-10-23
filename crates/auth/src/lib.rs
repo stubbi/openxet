@@ -83,6 +83,12 @@ impl Authenticator {
     /// The default longest CAS-token lifetime: 24 hours.
     pub const DEFAULT_MAX_TOKEN_LIFETIME: Duration = Duration::from_hours(24);
 
+    /// The smallest accepted lifetime cap: 1 minute.
+    pub const MIN_TOKEN_LIFETIME: Duration = Duration::from_mins(1);
+
+    /// The largest accepted lifetime cap: 30 days.
+    pub const MAX_TOKEN_LIFETIME: Duration = Duration::from_hours(30 * 24);
+
     /// An authenticator accepting `static_tokens` and CAS tokens signed by
     /// any of `jwt_keys` (several keys allow rotation, ADR 0007 §3). A CAS
     /// token whose `exp` lies more than `max_token_lifetime` after the
@@ -91,6 +97,10 @@ impl Authenticator {
     ///
     /// # Errors
     ///
+    /// [`AuthError::LifetimeOutOfRange`] if `max_token_lifetime` is outside
+    /// [`Authenticator::MIN_TOKEN_LIFETIME`] to
+    /// [`Authenticator::MAX_TOKEN_LIFETIME`]: `ZERO` would refuse every
+    /// token and `Duration::MAX` would disable the cap.
     /// [`AuthError::InvalidStaticToken`] if a static token's subject or
     /// scope fails the checks CAS-token claims must pass: non-empty, no
     /// control characters, scope at most [`MAX_SCOPE_BYTES`].
@@ -99,6 +109,7 @@ impl Authenticator {
         jwt_keys: Vec<PublicKey>,
         max_token_lifetime: Duration,
     ) -> Result<Self, AuthError> {
+        check_token_lifetime(max_token_lifetime)?;
         for (index, token) in static_tokens.iter().enumerate() {
             check_identity(&token.subject, &token.scope)
                 .map_err(|reason| AuthError::InvalidStaticToken { index, reason })?;
@@ -136,24 +147,71 @@ impl Authenticator {
 /// The longest accepted scope, in bytes.
 pub const MAX_SCOPE_BYTES: usize = 1024;
 
-/// Checks a principal's subject and scope (ruling M1-R19): both non-empty
-/// and free of control characters, so neither can widen a scope match or
-/// forge lines in logs, and the scope at most [`MAX_SCOPE_BYTES`].
+/// Checks a principal's subject and scope (rulings M1-R19 and the Task 6
+/// re-review): both must contain something other than whitespace, and
+/// neither may contain characters that can forge or disguise log lines or
+/// widen a scope match ([`is_disallowed`]). The scope is at most
+/// [`MAX_SCOPE_BYTES`].
 pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static str> {
-    if subject.is_empty() {
-        return Err("the subject is empty");
+    if subject.trim().is_empty() {
+        return Err("the subject is empty or only whitespace");
     }
-    if subject.chars().any(char::is_control) {
-        return Err("the subject contains control characters");
+    if subject.chars().any(is_disallowed) {
+        return Err("the subject contains control, format or line-separator characters");
     }
-    if scope.is_empty() {
-        return Err("the scope is empty");
+    if scope.trim().is_empty() {
+        return Err("the scope is empty or only whitespace");
     }
     if scope.len() > MAX_SCOPE_BYTES {
         return Err("the scope is longer than 1024 bytes");
     }
-    if scope.chars().any(char::is_control) {
-        return Err("the scope contains control characters");
+    if scope.chars().any(is_disallowed) {
+        return Err("the scope contains control, format or line-separator characters");
     }
     Ok(())
+}
+
+/// Control characters (`Cc`), the line and paragraph separators (`Zl`,
+/// `Zp`), and the invisible or bidirectional format characters (`Cf`) that
+/// can reorder or hide text: zero-width and directional marks, bidi
+/// embeddings, overrides and isolates (the "Trojan Source" set, CVE-2021-42574),
+/// invisible operators, the word joiner and the byte-order mark.
+fn is_disallowed(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+pub(crate) fn check_token_lifetime(lifetime: Duration) -> Result<(), AuthError> {
+    check_lifetime(
+        "maximum CAS-token lifetime",
+        lifetime,
+        Authenticator::MIN_TOKEN_LIFETIME,
+        Authenticator::MAX_TOKEN_LIFETIME,
+    )
+}
+
+pub(crate) fn check_lifetime(
+    setting: &'static str,
+    lifetime: Duration,
+    min: Duration,
+    max: Duration,
+) -> Result<(), AuthError> {
+    if (min..=max).contains(&lifetime) {
+        Ok(())
+    } else {
+        Err(AuthError::LifetimeOutOfRange {
+            setting,
+            lifetime,
+            min,
+            max,
+        })
+    }
 }
