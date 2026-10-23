@@ -18,6 +18,7 @@ mod body;
 mod error;
 mod misc;
 mod request_id;
+mod shards;
 #[cfg(test)]
 mod test_support;
 mod xorbs;
@@ -25,7 +26,7 @@ mod xorbs;
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::http::header::AUTHORIZATION;
@@ -56,6 +57,16 @@ pub struct CasConfig {
     pub visibility: Visibility,
     /// The work bounds shard verification enforces.
     pub verify_limits: VerifyLimits,
+    /// How often a `/v2/shards` stream repeats its last progress event
+    /// while the upload's work runs. `hf_xet` fails a stream silent for its
+    /// 300 s read timeout (S10 §4).
+    pub heartbeat_interval: Duration,
+}
+
+impl CasConfig {
+    /// The default [`CasConfig::heartbeat_interval`]: 5 s, well inside the
+    /// client's 300 s read timeout.
+    pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 }
 
 /// The current time, in Unix seconds. Credentials are checked against it, so
@@ -94,7 +105,7 @@ pub struct AppState {
     /// This server's configuration.
     pub cfg: CasConfig,
     /// Bounds concurrent xorb validation, which decompresses up to 2 × the
-    /// xorb's size (ruling M1-R8).
+    /// xorb's size, and shard parsing and verification (ruling M1-R8).
     pub validate: Arc<Semaphore>,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,
@@ -147,7 +158,10 @@ impl AppState {
 /// - Responses are never compressed: clients send no `Accept-Encoding`.
 pub fn router(state: AppState) -> Router {
     with_middleware(
-        Router::new().merge(misc::routes()).merge(xorbs::routes()),
+        Router::new()
+            .merge(misc::routes())
+            .merge(xorbs::routes())
+            .merge(shards::routes()),
         state,
     )
 }
