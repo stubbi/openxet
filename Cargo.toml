@@ -22,4 +22,4 @@ expect_used = "deny"
 # Dependencies (xet-core's hashing and decompression) dominate debug-build test
 # time; our own crates stay unoptimized and debuggable.
 [profile.dev.package."*"]
-opt-level = 3
+opt-level = 1
