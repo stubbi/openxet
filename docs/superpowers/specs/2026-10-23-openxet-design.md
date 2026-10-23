@@ -120,16 +120,22 @@ These were checked against primary sources on 2026-10-23
   carries the sha256.
 - **Uploads pass through the server.** The protocol has no presigned upload;
   xorb bytes are POSTed to the CAS, which must verify them anyway. My earlier
-  "data never passes through openxet" holds for downloads only.
+  "data never passes through openxet" holds for downloads only. *(True for
+  `hf_xet` 1.7.0. xet-core `main` adds `XorbUploadGrant`, a server-issued
+  direct-upload URL with a CRC64-NVMe checksum; see
+  `docs/research/S1-S2-direct-downloads.md`, "Upstream drift". This needs a
+  spike once a released client uses it.)*
 - **Downloads can bypass the server** (verified by spike S1,
   `docs/research/S1-S2-direct-downloads.md`; decided in ADR 0002). v2
   reconstruction returns signed URLs, which `hf_xet` treats as opaque.
   `hf_xet` 1.7.0 splits multi-range fetch entries into single-range GETs by
-  default; with `HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING` on, it sends a
-  multi-range header, which S3, MinIO and Azure answer with the whole object
-  and GCS rejects. openxet therefore emits **one range per fetch entry, each
-  with its own range-bound URL**; stock `hf_xet` downloads correctly from
-  such native presigned (SigV4) URLs.
+  default. With `HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING` on, it sends a
+  multi-range header. Presigned MinIO answered that with the whole object
+  (observed with `hf_xet`). Anonymous public-object GETs on AWS S3 and Azure
+  also returned the whole object, and GCS rejected them; presigned behaviour
+  on those three is unverified. openxet therefore emits **one range per
+  fetch entry, each with its own range-bound URL**. Stock `hf_xet`
+  downloads correctly from such SigV4 presigned URLs on MinIO.
 - **Global dedup:** only "eligible" chunks are queryable: the first chunk of
   each file, plus chunks whose hash's last 8 bytes (LE u64) % 1024 == 0.
   Responses are shards whose chunk hashes are HMAC-keyed. This keeps the
@@ -318,10 +324,19 @@ and shared.
     range-bound URL per fetch entry (S1, ADR 0002); or
   - **(b)** via the transfer role, with openxet-signed range URLs (also one
     range per entry, so no `multipart/byteranges`), for local disk, caching
-    setups and backends that cannot bind a range.
+    setups and any pool that fails the range-binding probe.
 
-  Mode (a) is the default when the backend supports it. v1 reconstruction is
-  served too, for older clients.
+  Mode (a) is gated per deployment and pool by a **range-binding
+  enforcement probe**, not by a backend list (ADR 0002). It runs at
+  startup and in `openxet doctor` / `openxet config check`. openxet
+  presigns a GET for one range of a probe object and requires all three:
+  the signed range returns `206`, a different range returns `403`, and no
+  `Range` header returns a `4xx`. Only then does the pool serve direct
+  URLs; otherwise it falls back to (b) and logs why. This applies to every
+  backend (S3, R2, Garage, MinIO, and GCS or Azure once their signers can
+  bind a range). CI runs the probe against MinIO. URL lifetime defaults to
+  60 min with a 30 min minimum, as derived in ADR 0002. v1 reconstruction
+  is served too, for older clients.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`
   support. This makes openxet readable by anything that speaks HTTP or `hf://`
@@ -622,7 +637,13 @@ says which spec version and client versions are supported.
     (cargo-dist or equivalent), a Homebrew tap and `cargo install`
   - multi-arch container images on GHCR
   - a Helm chart
-  - `docker compose` quickstart with MinIO
+  - `docker compose` quickstart with MinIO. Per the S2 outcomes
+    (`docs/research/S1-S2-direct-downloads.md`):
+    - `http://` on loopback by default
+    - TLS docs per platform: on macOS `hf_xet` ignores `SSL_CERT_FILE`, so
+      a private CA must be trusted in the system store
+    - openxet presigns with a store endpoint the client can reach, not the
+      compose-internal service name
   - Terraform examples for AWS, GCP and Azure
   - library crates on crates.io for embedding the storage core
 - Also v1:
@@ -827,10 +848,15 @@ own UI and leave this role off.
 
 ## 11. Spikes to run first (verify, don't assume)
 
-- **S1:** `hf_xet` downloads correctly when v2 reconstruction returns native S3
-  presigned URLs with one range per fetch entry.
-- **S2:** `hf_xet` and `huggingface_hub` accept `http://` CAS and Hub endpoints
-  for local dev, or what TLS setup the quickstart needs.
+- **S1** *(answered: yes, on MinIO;
+  `docs/research/S1-S2-direct-downloads.md`, ADR 0002)*: `hf_xet` downloads
+  correctly when v2 reconstruction returns native S3 presigned URLs with
+  one range per fetch entry.
+- **S2** *(answered: `http://` works for Hub, CAS and store; a private CA
+  works via `SSL_CERT_FILE` on Linux but not for `hf_xet` on macOS;
+  `docs/research/S1-S2-direct-downloads.md`)*: `hf_xet` and
+  `huggingface_hub` accept `http://` CAS and Hub endpoints for local dev, or
+  what TLS setup the quickstart needs.
 - **S3:** the exact `whoami-v2`, `preupload`, `commit` and `tree` response
   shapes `huggingface_hub` requires, captured as fixtures.
 - **S4:** whether DuckDB `hf://` (and polars or fsspec) can target a custom
