@@ -34,7 +34,9 @@ a run against the stub; **inferred** = our conclusion.
 Practical summary: for the two engines that matter most (DuckDB, polars),
 `hf://` cannot reach openxet today. The §5.5 read gateway URL
 `{endpoint}/{repo_type}/{repo}/resolve/{rev}/{path}` works with both as a
-plain `https://` URL, provided it honours `HEAD` and `Range` (below).
+plain URL if it meets the conformance checklist below. Private repos work
+with DuckDB (`http` secret) but **not** with polars on a plain URL (only
+through an fsspec file object); see the checklist and "Round 2".
 
 ## Evidence
 
@@ -73,7 +75,7 @@ Observed (`HF_ENDPOINT=http://127.0.0.1:8765`, `python -I`):
   returns 261,698 rows, and a `group by` returns `TESLA 108777,
   CHEVROLET 18908`. The stub saw `HEAD` then ranged `GET`s (footer
   `bytes=4452352-4471462`, then individual column chunks, all `206`).
-  Observed over `http://`; `https://` uses the same code path (inferred).
+  Observed over `http://`; `https://` with a private CA is covered in "Round 2".
 - A glob in a plain HTTP URL is refused (`Globs (*) for generic HTTP file
   is are not supported`), so multi-file reads need explicit URLs or an
   `hf://`-style listing, which a custom host cannot get (observed).
@@ -134,23 +136,78 @@ Observed (all against the stub, `huggingface_hub` 2.2.0):
   fsspec does not rescue DuckDB. This is independent of the stub (inferred
   from the method's own message; observed as the failure).
 
-## What this means for openxet
+## Round 2: tests of the gateway behaviour (observed)
 
-- §5.5 must not promise DuckDB `hf://`. The promise that holds:
-  `https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}` is readable by
-  DuckDB, polars, pandas and curl, as long as the gateway answers:
-  - `HEAD` with `Content-Length`, `Accept-Ranges: bytes` and `ETag`;
-  - `GET` with `Range: bytes=a-b`, `bytes=a-` and the suffix form
-    `bytes=-n`, each as `206` with a correct `Content-Range`.
-- Both engines issue many small ranges (16 KiB-ish column chunks for
-  DuckDB). The gateway should be cheap per range and cacheable.
-- For private repos the engines need a token on the plain URL. DuckDB: a
-  `http` secret with `bearer_token` scoped to the host (inferred from the
-  httpfs secret scopes; not tested). polars: `storage_options` headers
-  (not tested).
-- `HfFileSystem` needs the Hub read shapes already captured in S3 (repo
-  info, `tree`, `paths-info`, `resolve`), which a Hub-compatible openxet
-  serves for the other clients anyway.
+Stub variant (still throwaway, same app): `If-Range`, `Last-Modified`,
+`416`, `a-` ranges, a `302` pair (relative and absolute `Location`) and a
+bearer-protected path. `curl` rows test the stub itself; engine rows are
+the clients.
+
+- Stub conformance by `curl` (HEAD gives 200 with `Content-Length`,
+  `Accept-Ranges: bytes`, `ETag`, `Last-Modified`; no `Range` gives `200`
+  and the full 4,471,463 bytes; `0-9`, `4471460-` and `-8` give `206` with
+  the right `Content-Range` and `Content-Length`; `4471463-` gives `416`
+  with `Content-Range: bytes */4471463`; `ETag` identical on HEAD and
+  ranged GET; `If-Range` with the matching ETag gives `206`, with a
+  mismatching one `200` and the full body).
+- `302` from `resolve` with a **relative** `Location` and with an
+  **absolute** `Location`: DuckDB 2.0.0 and polars 2.0.0 both followed
+  both, and read 261,698 rows. The stub log shows `302` on the
+  redirecting path and `206` on the target (`/v/blob/`).
+- Private path (stub answers `401` unless `Authorization: Bearer ...`):
+  - DuckDB without credentials: `HTTP 401`. With
+    `create secret (type http, bearer_token '...', scope
+    'http://127.0.0.1:8765')`: 261,698 rows, and every request the stub
+    answered with 200/206 carried the `Authorization` header (the
+    anonymous ones got `401`). An `http` secret with
+    `extra_http_headers map {'Authorization': ...}` also works.
+  - polars without credentials: `401` (`PermissionError`). `storage_options`
+    cannot carry headers for a plain `http(s)` URL: `CloudType::Http =>
+    Ok(Self::default())` ignores the config (source,
+    `cloud/options.rs:788`); the only `Authorization` that polars adds is
+    for `hf://` (`options.rs:852-855`). Observed: keys `authorization`,
+    `bearer_token` and `http_headers` still gave `401`, and `headers` with
+    a dict raised `ValueError (expected str)`.
+  - polars through an fsspec file object works with the token:
+    `fsspec.filesystem("http", headers={"Authorization": ...})`, then
+    `pl.scan_parquet(f)` and `pl.read_parquet(f)` returned 261,698 rows
+    with `Authorization` on every request (observed). This reads through
+    fsspec, not polars' native reader.
+- `https://` with a private CA (local CA, `localhost` certificate):
+  - DuckDB fails by default (`SSL peer certificate ... was not OK`) and
+    works after `SET ca_cert_file='/path/ca.pem'` (observed).
+  - polars failed both with and without `SSL_CERT_FILE` on macOS
+    (`Generic HTTP error ... after 10 retries`), which is the S2 caveat for
+    the system trust store (observed). `curl --cacert` worked.
+  - So self-hosted deployments with a private CA need a publicly trusted
+    certificate for polars on macOS, or the fsspec route.
+
+## Gateway conformance checklist for M1
+
+Each item is pass/fail against the plain URL
+`https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. "Done" means the
+item was run against the S4 stub (so the client behaviour is known and the
+stub is a reference); "M1 test" means it has not been run against openxet's
+real gateway, or not at all.
+
+| # | Check | Status |
+|---|---|---|
+| G1 | `HEAD` returns `200`, `Content-Length` = file size, `Accept-Ranges: bytes`, `ETag`; `Last-Modified` if the backend has one | client need observed (DuckDB sends `HEAD` first); M1 test on openxet |
+| G2 | `GET` without `Range` returns `200` with the full body | stub done; M1 test |
+| G3 | `Range: bytes=a-b` returns `206`, `Content-Range: bytes a-b/N`, `Content-Length` = b-a+1 | engines use it (DuckDB, polars); M1 test |
+| G4 | `Range: bytes=a-` returns `206` to end of file with correct `Content-Range` and `Content-Length` | `curl` against stub done; neither engine sent this form; M1 test |
+| G5 | `Range: bytes=-n` (suffix) returns `206` with the last n bytes | polars sends it for the footer (observed); M1 test |
+| G6 | A range with start >= N returns `416` and `Content-Range: bytes */N` | stub done by `curl`; engines not observed hitting it; M1 test |
+| G7 | End beyond EOF is clamped (`a-b` with b >= N returns `206` up to N-1) | M1 test (the stub clamps; engines were not observed relying on it) |
+| G8 | `ETag` is identical on `HEAD`, full `GET` and ranged `GET` | stub done; M1 test |
+| G9 | `If-Range` with the current `ETag` returns `206`; with another value `200` and the full body | stub done by `curl`; engines did not send it; M1 test |
+| G10 | `302` from `resolve` to a relative `Location` is followed with `Range` by DuckDB and polars | observed on the stub; M1 test against real storage redirects |
+| G11 | Same with an absolute `Location` (a presigned object-store URL) | observed on the stub with an absolute `http://localhost` URL; M1 test with presigned URLs and range-bound signatures (ADR 0002) |
+| G12 | Private repo: unauthenticated request returns `401` with `X-Error-Code`; DuckDB `http` secret (`bearer_token`, host-scoped) is accepted on `HEAD` and every ranged `GET` | observed on the stub; M1 test with openxet tokens |
+| G13 | `Authorization` is not forwarded to a different origin on redirect | **not tested**; M1 test (client behaviour unknown) |
+| G14 | polars on a private repo: documented route is an fsspec file object with `headers=`; native `scan_parquet(url)` cannot send `Authorization` | observed on the stub |
+| G15 | `https://` with the deployment's certificate: DuckDB (`ca_cert_file` for a private CA), polars (system trust store only on macOS) | observed on the stub; M1 test with the real certificate |
+| G16 | Performance floor: the read pattern of one Parquet scan (about 20 ranges, tail 8 to 256 KiB, then column chunks of 12 to 16 KiB) completes without per-request setup cost that scales with file size | **not tested**; M1 test |
 
 ## Upstream draft
 
@@ -204,6 +261,7 @@ Not filed; per the standing ruling, the controller decides.
 - Scratch venv with `duckdb 2.0.0`, `polars 2.0.0`, `huggingface_hub 2.2.0`,
   `pandas 3.1.0`, `pyarrow 26.0.0`; everything that read downloaded data
   ran with `python -I`.
-- Not tested: HTTPS to the stub, authenticated reads, DuckDB's `http`
-  secrets, `models` repos through `HfFileSystem`, and the S3 redirect path
-  of the real gateway (the stub serves bytes directly).
+- Not tested: `models` repos through `HfFileSystem`, the real gateway's
+  redirect to presigned object-store URLs, `Authorization` forwarding on
+  cross-origin redirects, and Windows/Linux trust-store behaviour (the
+  HTTPS run was on macOS). Everything else in the checklist is marked.

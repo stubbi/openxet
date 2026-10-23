@@ -339,14 +339,16 @@ and shared.
   is served too, for older clients.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`
-  support. This makes openxet readable by anything that speaks HTTP or `hf://`
-  (curl, browsers, fsspec, pandas, polars and DuckDB). DuckDB and polars
-  hard-code huggingface.co in their `hf://` handlers (spike S4,
+  support. This makes openxet readable by anything that speaks HTTP (curl,
+  browsers, pandas, polars, DuckDB via the plain resolve URL) or `hf://`
+  through fsspec `HfFileSystem`. DuckDB and polars hard-code
+  huggingface.co in their own `hf://` handlers (spike S4,
   `docs/research/S4-analytics-clients.md`), so they read openxet through
-  the plain URL `https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`;
-  only fsspec `HfFileSystem` (and pandas through it) accepts a custom
-  endpoint. The gateway must therefore answer `HEAD` and single-range
-  `GET`s, including suffix ranges. It is served by the transfer role so
+  `https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. The gateway
+  must pass the conformance checklist in that note (HEAD, all three
+  `Range` forms, `416`, `ETag`/`If-Range`, redirects, auth); private
+  repos need a DuckDB `http` secret, and polars needs an fsspec file
+  object. It is served by the transfer role so
   it scales and caches independently.
 
 ### 5.6 Garbage collection and retention
