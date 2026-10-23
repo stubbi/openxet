@@ -1,12 +1,12 @@
 use axum::Router;
 use axum::body::Body;
 use axum::body::HttpBody as _;
-use axum::http::header::CONNECTION;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::post;
 use http_body_util::BodyExt as _;
 
+use crate::error::closing;
 use crate::{AppState, CasError, ReadAccess};
 
 /// The largest telemetry body accepted. `hf_xet` 1.7.0 sends five keys and
@@ -47,15 +47,9 @@ async fn telemetry(_: ReadAccess, mut body: Body) -> Result<StatusCode, Response
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `413` for a body left unread. It closes the connection: the unread bytes
-/// would otherwise be parsed as the next request on a pooled connection.
+/// `413` for a body left unread, closing the connection.
 fn too_large() -> Response {
-    let mut response = CasError::PayloadTooLarge {
+    closing(CasError::PayloadTooLarge {
         limit: TELEMETRY_BODY_LIMIT,
-    }
-    .into_response();
-    response
-        .headers_mut()
-        .insert(CONNECTION, HeaderValue::from_static("close"));
-    response
+    })
 }

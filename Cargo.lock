@@ -1570,6 +1570,7 @@ dependencies = [
 name = "openxet-cas"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "axum",
  "http-body-util",
  "openxet-auth",

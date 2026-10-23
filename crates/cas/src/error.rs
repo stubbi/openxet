@@ -1,12 +1,12 @@
 use std::error::Error as StdError;
 
 use axum::Json;
-use axum::http::header::WWW_AUTHENTICATE;
+use axum::http::header::{CONNECTION, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{AuthError, ForbiddenReason};
 use openxet_index::IndexError;
-use openxet_protocol::{MerkleHash, hash_to_hex};
+use openxet_protocol::{MerkleHash, ProtocolError, hash_to_hex};
 use openxet_storage::StorageError;
 use serde::Serialize;
 
@@ -76,6 +76,52 @@ pub enum CasError {
     UnknownXorb {
         /// The first xorb found that isn't visible.
         xorb: MerkleHash,
+    },
+
+    /// A hash in the path is not 64 lowercase hex characters.
+    /// `400 invalid_hash`. The segment is never echoed: it may be anything,
+    /// a pasted credential included.
+    #[error("the hash in the request path is not 64 lowercase hex characters")]
+    InvalidHash,
+
+    /// No xorb with the path's hash is visible to the caller.
+    /// `404 xorb_not_found`; under `PerScope` visibility another scope's
+    /// xorb reads the same as a missing one.
+    #[error("xorb {} is not stored on this server", hash_to_hex(.xorb))]
+    XorbNotFound {
+        /// The xorb asked for.
+        xorb: MerkleHash,
+    },
+
+    /// An uploaded xorb's content hash is not the hash in its path.
+    /// `400 xorb_hash_mismatch`, final.
+    #[error(
+        "the xorb body hashes to {}, but was uploaded as {}",
+        hash_to_hex(.computed),
+        hash_to_hex(.path)
+    )]
+    XorbHashMismatch {
+        /// The hash in the request path.
+        path: MerkleHash,
+        /// The xorb hash computed from the body's chunks.
+        computed: MerkleHash,
+    },
+
+    /// An uploaded xorb breaks a format rule or limit. `400` with `code`
+    /// `xorb_<rule>`, final.
+    #[error("{reason}")]
+    InvalidXorb {
+        /// `xorb_` and the snake-case name of the rule broken.
+        code: &'static str,
+        /// The rule broken, with the chunk it was found in.
+        reason: Box<ProtocolError>,
+    },
+
+    /// An uploaded xorb body exceeds the limit. `413 xorb_too_large`.
+    #[error("the xorb body is larger than this server accepts ({limit} bytes)")]
+    XorbTooLarge {
+        /// [`openxet_protocol::MAX_XORB_BODY_BYTES`].
+        limit: u64,
     },
 
     /// The request body ended before its declared length, or its transfer
@@ -257,6 +303,38 @@ impl CasError {
                 "Send `Range: bytes={start}-{end}` equal to the URL's `range` query parameter.",
             ),
             Self::UnknownXorb { .. } => (StatusCode::BAD_REQUEST, "unknown_xorb", STALE_CACHE_HINT),
+            Self::InvalidHash => (
+                StatusCode::BAD_REQUEST,
+                "invalid_hash",
+                "Write the hash as 64 lowercase hex characters in Xet byte order \
+                 (https://huggingface.co/docs/xet/api#converting-hashes-to-strings).",
+            ),
+            Self::XorbNotFound { .. } => (
+                StatusCode::NOT_FOUND,
+                "xorb_not_found",
+                "Upload the xorb with `POST /v1/xorbs/default/{hash}` and a write token for this \
+                 scope.",
+            ),
+            Self::XorbHashMismatch { .. } => (
+                StatusCode::BAD_REQUEST,
+                "xorb_hash_mismatch",
+                "Upload the xorb under its content hash: the xorb hash of its chunks \
+                 (https://huggingface.co/docs/xet/hashing#xorb-hashes). Stock clients do; a \
+                 mismatch means the body was changed or truncated on the way.",
+            ),
+            Self::InvalidXorb { code, .. } => (
+                StatusCode::BAD_REQUEST,
+                code,
+                "Send the xorb as stock clients serialize it: its chunks, optionally followed by \
+                 one footer (https://huggingface.co/docs/xet/xorb). The message names the rule \
+                 broken and the chunk it was found in.",
+            ),
+            Self::XorbTooLarge { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "xorb_too_large",
+                "Split the data into xorbs of at most 64 MiB of chunks, as stock clients do \
+                 (https://huggingface.co/docs/xet/xorb#collecting-chunks).",
+            ),
             Self::UnreadableBody => (
                 StatusCode::BAD_REQUEST,
                 "bad_request",
@@ -316,6 +394,17 @@ impl IntoResponse for CasError {
         }
         response
     }
+}
+
+/// The response to `e` for a request whose body is left unread. It closes
+/// the connection: the unread bytes would otherwise be parsed as the next
+/// request on a pooled connection.
+pub(crate) fn closing(e: CasError) -> Response {
+    let mut response = e.into_response();
+    response
+        .headers_mut()
+        .insert(CONNECTION, HeaderValue::from_static("close"));
+    response
 }
 
 /// The fallback for paths no route serves.

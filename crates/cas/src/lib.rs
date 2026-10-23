@@ -19,6 +19,7 @@ mod misc;
 mod request_id;
 #[cfg(test)]
 mod test_support;
+mod xorbs;
 
 use std::any::Any;
 use std::num::NonZeroUsize;
@@ -144,7 +145,10 @@ impl AppState {
 ///   request id, never the panic message.
 /// - Responses are never compressed: clients send no `Accept-Encoding`.
 pub fn router(state: AppState) -> Router {
-    with_middleware(Router::new().merge(misc::routes()), state)
+    with_middleware(
+        Router::new().merge(misc::routes()).merge(xorbs::routes()),
+        state,
+    )
 }
 
 /// The response to a handler panic: `500 internal`, logged inside the
