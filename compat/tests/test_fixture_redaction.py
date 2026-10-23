@@ -7,6 +7,8 @@ pattern hit is allowed only when the value that follows it is that
 placeholder.
 """
 
+import base64
+import binascii
 import re
 from pathlib import Path
 
@@ -14,7 +16,12 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = REPO / "compat" / "fixtures"
-SCANNED = (FIXTURES, REPO / "docs" / "research")
+SCANNED = (
+    FIXTURES,
+    REPO / "docs" / "research",
+    REPO / "docs" / "adr",
+    REPO / "docs" / "superpowers" / "specs",
+)
 
 _SECRET_PATTERNS = {
     "HF user token": re.compile(r"hf_[A-Za-z0-9]{20,}"),
@@ -45,7 +52,8 @@ _SECRET_PATTERNS = {
         re.IGNORECASE,
     ),
     "credential header line": re.compile(
-        r"^(authorization|proxy-authorization|cookie|set-cookie|x-xet-access-token)"
+        # `> ` / `< ` is the GIT_CURL_VERBOSE request/response prefix.
+        r"^(?:[<>] )?(authorization|proxy-authorization|cookie|set-cookie|x-xet-access-token)"
         r":(?![ \t]*(Bearer )?REDACTED)",
         re.IGNORECASE | re.MULTILINE,
     ),
@@ -56,13 +64,35 @@ _SECRET_PATTERNS = {
 }
 
 
+# A Basic credential can appear anywhere: in prose, escaped JSON, or a trace
+# line. huggingface.co even echoes the client's own one in the `verify`
+# action. Prose such as "Basic auth" also matches the shape, so a hit only
+# counts when the base64 decodes to printable `user:password` text.
+_BASIC = re.compile(r"\bBasic (?!REDACTED\b|realm=)([A-Za-z0-9+/]{8,}={0,2})")
+
+
+def _is_basic_credential(candidate: str) -> bool:
+    try:
+        decoded = base64.b64decode(candidate + "=" * (-len(candidate) % 4), validate=True)
+        text = decoded.decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    return ":" in text and text.isprintable()
+
+
 def secrets_in(text: str) -> list[str]:
     """Names and offsets of hits; never the matched value, so CI logs stay clean."""
-    return [
+    hits = [
         f"{name} at offset {match.start()}"
         for name, pattern in _SECRET_PATTERNS.items()
         for match in pattern.finditer(text)
     ]
+    hits += [
+        f"Basic credential at offset {match.start()}"
+        for match in _BASIC.finditer(text)
+        if _is_basic_credential(match.group(1))
+    ]
+    return hits
 
 
 def _scanned_files() -> list[Path]:
@@ -116,6 +146,10 @@ def test_file_has_no_secrets(path):
         "Cookie: token=abc",
         "HTTP/1.1 200 OK\nset-cookie: session=abc; Path=/",
         '"authorization": "Bearer REDACTEDabc"',
+        "> Authorization: Basic dXNlcjpwYXNz",
+        "> authorization: Basic dXNlcjpwYXNz",
+        '{\\"Authorization\\":\\"Basic dXNlcjpwYXNz\\"}',
+        "echoes Basic c3R1YmJpOnh4eHh4eHh4",
     ],
 )
 def test_guard_catches_known_leak_shapes(leak):
@@ -148,6 +182,11 @@ def test_guard_catches_known_leak_shapes(leak):
         "Cookie: REDACTED",
         "HTTP/1.1 200 OK\nset-cookie: REDACTED",
         "the Set-Cookie header is dropped",
+        'LFS-Authenticate: Basic realm="x"',
+        "Basic auth is accepted",
+        "a Basic base64 pair",
+        "Basic credentials from the helper",
+        "> Authorization: REDACTED",
     ],
 )
 def test_guard_allows_redacted_placeholders(redacted):
