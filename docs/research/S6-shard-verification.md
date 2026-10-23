@@ -17,7 +17,8 @@
 ## Answer
 
 The rules below are implemented in `openxet-protocol` (`src/shard.rs`) as
-`read_upload_shard`, `verify_segment` and `verify_file`, and enforced by
+`read_upload_shard`, `verify_shard`, `verify_file` and `verify_segment`, and
+enforced by
 tests in `crates/protocol/tests/reference_files.rs` and
 `crates/protocol/tests/hf_xet_upload.rs`.
 
@@ -47,12 +48,15 @@ demonstrate.
 | 7 | `unpacked_segment_bytes` equals the sum of the stored chunk lengths for that range. | [shard#filedatasequenceentry](https://huggingface.co/docs/xet/shard#filedatasequenceentry) ("term size when unpacked") | `tampered_unpacked_bytes_is_rejected` |
 | 8 | Every xorb a segment references is already stored. | [upload-protocol#ordering-and-concurrency](https://huggingface.co/docs/xet/upload-protocol#ordering-and-concurrency), [api#4-upload-shard](https://huggingface.co/docs/xet/api#4-upload-shard) | `file_referencing_an_unknown_xorb_is_rejected` |
 | 9 | The file hash recomputed from the referenced chunks, in segment order, equals the claimed one. | [hashing#file-hashes](https://huggingface.co/docs/xet/hashing#file-hashes) | `file_hash_recomputes_from_segments` |
-| 10 | Stock clients' shards pass all of the above. | | `every_reference_segment_verifies_against_the_reference_xorb`, `hf_xet_upload_shard_verifies_against_its_xorb`, `hf_xet_upload_shard_names_its_files_and_xorb` |
+| 10 | The shard references at most `max_referenced_chunks` chunks in total, summed over all segments (default `MAX_REFERENCED_CHUNKS` = 2^24). Checked by `verify_shard` before any xorb lookup. | none (spec silent; see "Gaps") | `shard_work_at_the_cap_passes_and_over_it_is_rejected`, `shard_work_count_cannot_overflow` |
+| 11 | A file with no segments (empty file) has file hash all zeros and SHA-256 absent, all zeros, or SHA-256 of zero bytes. | [hashing#file-hashes](https://huggingface.co/docs/xet/hashing#file-hashes); otherwise silent, see below | `empty_file_sha256_must_be_absent_zero_or_the_empty_digest` |
+| 12 | Stock clients' shards pass all of the above. | | `every_reference_segment_verifies_against_the_reference_xorb`, `hf_xet_upload_shard_verifies_against_its_xorb`, `hf_xet_upload_shard_names_its_files_and_xorb` |
 
 Every `VerifyError` names the xorb and chunk range (or the file), and the
 expected and actual values, so a client author can see which term is wrong.
 `verify_segment` checks in this order: bounds, verification present, range
-hash, length.
+hash, length. `verify_shard` is the entry point for untrusted shards: it
+applies rule 10, then `verify_file` (rules 5 to 9 and 11) to each file.
 
 Rule 9 matters beyond integrity. Rules 5 to 7 only prove the client knows
 each term's chunk hashes; without rule 9 a client could register any file
@@ -141,8 +145,15 @@ can't be reconstructed, or that claim content they don't have.
   global dedup at `/v1/chunks/default/{hash}`. The spec says the only
   acceptable prefix is `default-merkledb`
   ([api#2-query-chunk-deduplication-global-deduplication](https://huggingface.co/docs/xet/api#2-query-chunk-deduplication-global-deduplication)).
-  The client also tries `POST /v2/shards` first, falls back to `/v1/shards`
-  on 404, and then sends `POST /v1/telemetry`.
+  Source: `xet-client` 1.7.0 `cas_client/remote_client.rs:41`
+  (`PREFIX_DEFAULT = "default"`, used as the dedup prefix via
+  `xet-data`'s `default_prefix`) and `:172` (`/v1/chunks/{key}`). The client
+  tries `POST /v2/shards` first (`remote_client.rs:393`) and falls back to
+  `/v1/shards` on 404. It also sends `POST /v1/telemetry`
+  (`cas_client/telemetry/mod.rs:123`). The capture shows all three. M1 must
+  serve `/v1/chunks/default/{hash}`, and accept `/v1/telemetry` and drop the
+  body without storing or forwarding anything (no telemetry, AGENTS.md
+  non-negotiable 6).
 
 ## Gaps where the spec is silent, and what openxet does
 
@@ -152,6 +163,30 @@ can't be reconstructed, or that claim content they don't have.
   read. Lookup tables between the sections and the footer are discarded
   unread, as upstream's parser does.
 - **Bytes after the bookend with no footer declared.** Rejected.
+- **Verification work per shard.** The 64 MiB parse budget doesn't bound
+  verification. A shard holds up to ~700k segments (96 bytes each with
+  verification), and each may span a whole xorb. With an 8192-chunk xorb
+  that is ~5.7e9 referenced chunks: billions of hash operations, and ~229 GB
+  if the referenced chunk list were collected. openxet therefore:
+  - caps the total referenced chunks per shard (rule 10), default 2^24, about
+    1 TiB of logical file data at the ~64 KiB average chunk size; a larger
+    upload splits into more shards. The count is a saturating u64 sum of
+    `chunk_end - chunk_start`, so it can't wrap.
+  - computes the file hash incrementally with upstream's public
+    `MerkleHashSubtree` (`from_chunks` per segment, `merge_into`,
+    `final_hash`, then the spec's zero-key `hmac`), so memory per file is
+    O(log n) in release builds, independent of the cap. Debug builds keep the
+    chunks so upstream can self-check the merge against its
+    `aggregated_node_hash`. The rest of the working memory is one reused
+    buffer of at most one xorb's chunk hashes, plus the parsed shard (at most
+    about the 64 MiB body).
+  - `file_hash_streams_across_many_segments` pins the incremental hash
+    to the reference file hash across 40 segments.
+- **Empty-file SHA-256.** With no segments, nothing ties the SHA-256 to
+  content. `hf_xet` 1.7.0 sends all zeros (the capture), so openxet accepts
+  absent, all zeros, or the real SHA-256 of zero bytes (`e3b0c442…`), and
+  rejects anything else (rule 11). Otherwise an empty file could be
+  registered under an arbitrary LFS oid.
 - **Empty chunk ranges** (`chunk_index_start == chunk_index_end`). Rejected
   as out of bounds: a term must cover data, and no stock client writes one.
 - **Duplicate file entries.** Kept and each verified. Registering the same
@@ -166,6 +201,9 @@ can't be reconstructed, or that claim content they don't have.
 - **Reserved flag bits** (`cas_flags`, other `file_flags` bits). Ignored.
 - **The size limit** includes everything in the body, footer and lookup
   tables too.
+- **What gets stored.** The footer tail (lookup tables) is discarded
+  unvalidated, so ingest must persist a shard re-serialized from
+  `UploadShard` and server-side data, never the raw request body.
 
 ## M1 index implication
 
@@ -181,8 +219,17 @@ uncompressed length)`: exactly `XorbChunks::hashes`, which xorb ingest
   never re-download xorbs to verify a shard.
 - Global dedup's chunk-to-xorb entries come from the same ingest-time
   listing, never from a shard's CAS info section.
-- `verify_file` takes a lookup closure, so M1 can batch the index reads per
-  shard and pass a map.
+- `verify_shard` and `verify_file` take a lookup closure, so M1 can batch
+  the index reads per shard and pass a map. M1 calls `verify_shard` with
+  `MAX_REFERENCED_CHUNKS` (or an operator-set value), never `verify_file`
+  alone on an untrusted shard.
+- Worst-case verify memory per request is the parsed shard (about the
+  64 MiB body), the index entries it looks up (40 bytes per chunk of each
+  distinct referenced xorb), and O(log n) per file. CPU is bounded by the
+  cap: at most 2^24 chunk hashes, each hashed once for its range hash and
+  once for the file hash.
+- Ingest persists a re-serialized shard built from `UploadShard` and server
+  data, never the raw body: its footer tail is unvalidated.
 
 Parsing is synchronous over a buffered body, so M1 runs it in
 `spawn_blocking`, as S5 recommends.
