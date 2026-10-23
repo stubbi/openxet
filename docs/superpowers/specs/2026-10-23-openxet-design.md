@@ -796,6 +796,44 @@ tokens are not revision-scoped, matching `huggingface_hub`.
 - Xet data is stored natively, so mirrored content dedups with local data.
 - Air-gapped teams can pre-seed a mirror and carry it across.
 
+*Proposed by spike S8 (`docs/research/S8-hf-mirror.md`); pending the
+controller's ADR:*
+- **Ingest verified chunks; never relay HF's xorbs or URLs.**
+  huggingface.co signs only the ranges a file needs, and files often use
+  part of a shared xorb. Its xorb URLs expire 3600 s after issue, are
+  range-contained, and carry `xip` and, for private repos, the token
+  owner's `user_id`. Read tokens live 900 s and are scoped per repo
+  (observed). So the mirror:
+  - fetches term ranges promptly with a per-repo upstream token;
+  - decompresses and hashes every chunk;
+  - checks the file hash against `X-Xet-Hash` and sha256 against
+    `X-Linked-ETag`;
+  - re-packs the verified chunks into local xorbs with a shard registered
+    to the mirrored repo's scope.
+
+  Re-packing keeps the file hash, which depends only on chunk hashes and
+  sizes. Clients only ever see openxet URLs and tokens.
+- **Authorise per caller.**
+  - Public, non-gated repos: the openxet authorizer.
+  - Gated and private repos: also an upstream check with the caller's own
+    HF credential, cached briefly, failing closed.
+
+  HF grants gated access to individual users. A shared operator token
+  needs explicit operator acknowledgement and is off by default.
+- **Freshness and removal.**
+  - Refs are re-resolved upstream on a short TTL; data keyed by commit is
+    immutable.
+  - Public content may be served stale while upstream is down.
+  - Repos HF removes are hidden, and their data is reclaimed only by GC.
+- **Mirrored namespaces are read-only.**
+- **Seeding.** `openxet mirror pull` pre-seeds through the same ingest
+  path. Mirrored commit metadata lives in the bucket, so moving bucket
+  objects plus `reindex` carries a mirror across an air gap.
+- **openxet.com does not offer third-party mirroring** until counsel
+  clears the legal risks in the S8 note. HF's licence to users covers
+  "through our Services", per-model licences put duties on distributors,
+  and the Content Policy names proxies.
+
 ### 10.7 Multiple storage pools and data residency
 
 - One deployment can hold several storage pools (buckets or regions). Pools
@@ -938,9 +976,17 @@ own UI and leave this role off.
   (upload-pack/receive-pack, protocol v2) against the `git` binary on a
   cached bare repo. Measure throughput and latency, and check that
   bucket-backed packs keep nodes stateless.
-- **S8:** HF pull-through mirroring. Which HF endpoints, and what Xet
-  read-token behaviour, a mirror depends on, and the terms-of-use
-  constraints for caching HF content.
+- **S8** *(answered: the Hub read surface plus CAS reconstruction, with
+  every URL and token re-issued by openxet; HF reconstructions can be
+  fetched with per-repo 900 s read tokens, but their 3600 s,
+  range-contained, `xip`-tagged URLs must not be cached or handed out, so
+  the mirror ingests verified chunks into local xorbs; the legal texts
+  best support self-hosted mirroring of public repos, while a hosted
+  third-party mirror and shared gated access are high-risk and need a
+  lawyer;
+  `docs/research/S8-hf-mirror.md`, §10.6)*: HF pull-through mirroring.
+  Which HF endpoints, and what Xet read-token behaviour, a mirror depends
+  on, and the terms-of-use constraints for caching HF content.
 
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and

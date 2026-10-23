@@ -1,0 +1,211 @@
+# S8 probes against huggingface.co and its CDN, 2026-10-23 (UTC 07:05-07:10).
+# Produced by a stdlib-only Python probe (http.client, no redirects followed).
+# Signed-URL parameters (Policy, Signature, Key-Pair-Id, xip) and tokens are REDACTED;
+# CloudFront policies are shown decoded with the same redaction. The private repo,
+# its owner and user ids are anonymised as <private-repo>, <user-id>, <repo-id>.
+
+## 1. Public dataset xet-team/xet-spec-reference-files, anonymous
+## HEAD resolve auth=False: 302
+   Content-Length: 1296
+   Date: Fri, 23 Oct 2026 07:05:07 GMT
+   Location: https://us.aws.cdn.hf.co/xet-bridge-us/68cb1d571350e17be1c74fda/118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97?X-Xet-Cas-Uid=public&user_id=public&xip=REDACTED&response-content-type=text%2Fcsv%3B+charset%3Dutf-8&response-content-disposition=inline%3B+filename%2A%3DUTF-8%27%27Electric_Vehicle_Population_Data_20250917.csv%3B+filename%3D%22Electric_Vehicle_Population_Data_20250917.csv%22%3B&Expires=1792742707&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256
+   RateLimit: "resolvers";r=2999;t=261
+   RateLimit-Policy: "fixed window";"resolvers";q=3000;w=300
+   Vary: Origin, Accept
+   X-Repo-Commit: c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8
+   Accept-Ranges: bytes
+   X-Linked-Size: 63527244
+   X-Linked-ETag: "f41255b252f776125f2b657136654e4d4d5d2ccf8ef4db0ec186bd1981b69734"
+   Cache-Control: no-store
+   X-Xet-Hash: 118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97
+   Link: <https://huggingface.co/api/datasets/xet-team/xet-spec-reference-files/xet-read-token/c4aa3a3f15b1395fff5ce934784bf6c8f2d62de8>; rel="xet-auth", <https://cas-server.xethub.hf.co/v1/reconstructions/118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97>; rel="xet-reconstruction-info"
+   X-Cache: Miss from cloudfront
+   resolve Location Expires - now = 3600 s
+   resolve Location policy: {"Statement": [{"Resource": "https://us.aws.cdn.hf.co/xet-bridge-us/68cb1d571350e17be1c74fda/118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97\\?X-Xet-Cas-Uid=public&user_id=public&xip=REDACTED&response-content-type=text%2Fcsv%3B+charset%3Dutf-8&response-content-disposition=inline%3B+filename%2A%3DUTF-8%27%27Electric_Vehicle_Population_Data_20250917.csv%3B+filename%3D%22Electric_Vehicle_Population_Data_20250917.csv%22%3B", "Condition": {"DateLessThan": {"EpochTime": 1792742707}}}]}
+   bridge GET range=bytes=0-99: 206 content-range=bytes 0-99/63527244 len=100 body=100 cache=None
+   bridge GET range=bytes=1000-1999: 206 content-range=bytes 1000-1999/63527244 len=1000 body=1000 cache=None
+   bridge GET range=None: 200 content-range=None len=63527244 body=0 cache=None
+## GET xet-read-token: 200
+   Content-Length: 486
+   Date: Fri, 23 Oct 2026 07:05:08 GMT
+   ETag: W/"1e6-XZZt5eG6AAf2oMmjPCKb4zfVz+w"
+   RateLimit: "api";r=499;t=260
+   RateLimit-Policy: "fixed window";"api";q=500;w=300
+   Vary: Origin
+   X-Cache: Miss from cloudfront
+   casUrl=https://cas-server.xethub.hf.co exp-now=900 s; token chars=408
+   JWT claim keys: ['access', 'exp', 'forceS3Link', 'hfCdnTier', 'iat', 'iss', 'jti', 'repoId', 'repo_storage_type', 'userId'] {'access': 'READ', 'iat': 1792739108, 'exp': 1792740008}
+## GET v2 reconstruction: 200
+   Date: Fri, 23 Oct 2026 07:05:08 GMT
+   Content-Type: application/json
+   Content-Length: 1111
+   vary: accept-encoding
+   vary: origin, access-control-request-method, access-control-request-headers
+   top keys: ['offset_into_first_range', 'terms', 'xorbs']
+   terms: 1 first: {'hash': 'eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632', 'unpacked_length': 63527244, 'range': {'start': 0, 'end': 796}}
+   xorbs: 1
+   entry keys: ['ranges', 'url'] ranges: [{'chunks': {'start': 0, 'end': 796}, 'bytes': {'start': 0, 'end': 14737812}}]
+   xorb url: https://us.aws.cdn.hf.co/xorbs/default/eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632?user_id=public&repo_id=68cb1d571350e17be1c74fda&xip=REDACTED&Expires=1792742708&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256
+   xorb URL Expires - now = 3600 s
+   xorb url policy: {"Statement": [{"Resource": "https://us.aws.cdn.hf.co/xorbs/default/eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632\\?user_id=public&repo_id=68cb1d571350e17be1c74fda&xip=REDACTED", "Condition": {"DateLessThan": {"EpochTime": 1792742708}, "ByteRange": {"ExpectedHeader": "bytes=0-14737812"}}}]}
+   xorb GET exact bytes=0-14737812: 206 content-range=bytes 0-14737812/14769749 body=14737813 cache=None/Hit msg=
+   xorb GET sub bytes=0-99: 206 content-range=bytes 0-99/14769749 body=100 cache=None/Hit msg=
+   xorb GET other bytes=1-14737812: 206 content-range=bytes 1-14737812/14769749 body=14737812 cache=None/Hit msg=
+   xorb GET open bytes=0-: 403 content-range=None body=26 cache=None/None msg=b'Auth failed: invalid range'
+   xorb GET none None: 403 content-range=None body=48 cache=None/None msg=b'Auth failed: ParsingError: expected range header'
+## GET v1 reconstruction: 200
+   Date: Fri, 23 Oct 2026 07:05:14 GMT
+   Content-Type: application/json
+   Content-Length: 1108
+   vary: accept-encoding
+   vary: origin, access-control-request-method, access-control-request-headers
+   top keys: ['fetch_info', 'offset_into_first_range', 'terms']
+   terms: 1 first: {'hash': 'eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632', 'unpacked_length': 63527244, 'range': {'start': 0, 'end': 796}}
+   fetch_info entry keys: ['range', 'url', 'url_range'] range: {'start': 0, 'end': 796} url_range: {'start': 0, 'end': 14737812}
+   xorb url: https://us.aws.cdn.hf.co/xorbs/default/eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632?user_id=public&repo_id=68cb1d571350e17be1c74fda&xip=REDACTED&Expires=1792742714&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256
+   xorb URL Expires - now = 3600 s
+   xorb url policy: {"Statement": [{"Resource": "https://us.aws.cdn.hf.co/xorbs/default/eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632\\?user_id=public&repo_id=68cb1d571350e17be1c74fda&xip=REDACTED", "Condition": {"DateLessThan": {"EpochTime": 1792742714}, "ByteRange": {"ExpectedHeader": "bytes=0-14737812"}}}]}
+   xorb GET exact bytes=0-14737812: 206 content-range=bytes 0-14737812/14769749 body=14737813 cache=None/Hit msg=
+   xorb GET sub bytes=0-99: 206 content-range=bytes 0-99/14769749 body=100 cache=None/Hit msg=
+   xorb GET other bytes=1-14737812: 206 content-range=bytes 1-14737812/14769749 body=14737812 cache=None/Hit msg=
+   xorb GET open bytes=0-: 403 content-range=None body=26 cache=None/None msg=b'Auth failed: invalid range'
+   xorb GET none None: 403 content-range=None body=48 cache=None/None msg=b'Auth failed: ParsingError: expected range header'
+## v2 reconstruction without token: 401 b'(4) Unauthorized'
+
+## 2. Range containment, cross-repo token, reconstruction Range (anonymous)
+xorb GET bytes=0-14737813: 403 content-range=None msg=b'Auth failed: invalid range'
+xorb GET bytes=14737813-14769748: 403 content-range=None msg=b'Auth failed: invalid range'
+xorb GET bytes=14737700-14737812: 206 content-range=bytes 14737700-14737812/14769749 msg=
+xorb GET bytes=0-0: 206 content-range=bytes 0-0/14769749 msg=
+xorb GET without xip param: 403 b'Auth failed: invalid resource'
+gpt2 model.safetensors resolve: 302 xet-hash present: True
+reconstruction of gpt2 file with reference-files token: 404 b'request_id: 01M5KS9042SCD32BTQABBV2W6F; (1) not found'
+reconstruction of gpt2 file with gpt2 token: 200 terms: 9
+  gpt2 xorbs: 9 fetch entries/ranges per xorb: [(1, [1]), (1, [1]), (1, [1]), (1, [1]), (1, [1])]
+  first terms: [{'hash': '3e9cecc0bbba57a239e30b9d9b9e1332ae866f7cfce32475f880d7302509bbe1', 'unpacked_length': 67098044, 'range': {'start': 0, 'end': 1040}}, {'hash': '2e6ac951ab788d7409c058591571c937770043bd0f38c51032a49e915a39f7de', 'unpacked_length': 67032765, 'range': {'start': 0, 'end': 996}}, {'hash': '2f9b43182258b06bce20af273f2167437603e6c57d73ec6b09bcb862e89b770a', 'unpacked_length': 66987011, 'range': {'start': 0, 'end': 1056}}]
+xet-read-token cache-control: None exp-now: 900
+GET /v1/chunks with read token: 404 b'request_id: 01M5KS911HTHGF5ETKXSCK42YD; (1) not found'
+v2 recon Range bytes=1000000-1999999: 200, offset_into_first_range=12424, 1 term {xorb eea25d6e…, unpacked_length 1075457, chunks 12-26}, one xorbs entry with a fresh 3600 s URL
+
+## 3. CDN xorb bytes vs the reference xorb in testdata/xet-spec-reference
+cdn status 206 bytes 14737813 sha256 b4670b1f13ab42a77490f53ce9167307ffbb9128f82ac82f721f85d2dce0a3a3
+reference prefix sha256 b4670b1f13ab42a77490f53ce9167307ffbb9128f82ac82f721f85d2dce0a3a3 ref len 14737817 trailing 58455442
+identical: True
+
+## 4. Is the signed URL bound to the client address? (xip)
+xip identical across two requests from this host: True
+same URL fetched over IPv4 and over an IPv6 connection: 206 and 206
+(this host's IPv6 egress reported an IPv4 address to an echo service, so a
+ different source address is NOT proven; IP enforcement remains unverified)
+
+## 5. Gated repos (anonymous, and with a fine-grained token that has canReadGatedRepos but no grant)
+meta-llama/Llama-3.2-1B info anon 200 gated= manual license tags= ['license:llama3.2']
+  tree anon 200 files: 11
+  HEAD config.json anon: 401 code=GatedRepo msg=Access to model meta-llama/Llama-3.2-1B is restricted. You must have access to it and be authenticated to access it. Please log in. xet=False
+  HEAD config.json token: 403 code=GatedRepo msg=Access to model meta-llama/Llama-3.2-1B is restricted and you are not in the authorized list. Visit https://huggingface.co/meta-llama/Llama-3.2-1B to ask for access. xet=False
+  HEAD model.safetensors anon: 401 code=GatedRepo msg=Access to model meta-llama/Llama-3.2-1B is restricted. You must have access to it and be authenticated to access it. Please log in. xet=False
+  HEAD model.safetensors token: 403 code=GatedRepo msg=Access to model meta-llama/Llama-3.2-1B is restricted and you are not in the authorized list. Visit https://huggingface.co/meta-llama/Llama-3.2-1B to ask for access. xet=False
+  HEAD README.md anon: 200 code=None msg=None xet=False
+  HEAD README.md token: 200 code=None msg=None xet=False
+  HEAD LICENSE.txt anon: 200 code=None msg=None xet=False
+  HEAD LICENSE.txt token: 200 code=None msg=None xet=False
+  xet-read-token anon: 401 b'{"error":"Access to model meta-llama/Llama-3.2-1B is restricted. You must have access to it and be authenticated to access it. Please log in."}'
+  xet-read-token token: 403 b'{"error":"Access to model meta-llama/Llama-3.2-1B is restricted and you are not in the authorized list. Visit https://huggingface.co/meta-llama/Llama-3.2-1B to '
+google/gemma-2-2b info anon 200 gated= manual license tags= ['license:gemma']
+  tree anon 200 files: 12
+  HEAD config.json anon: 401 code=GatedRepo msg=Access to model google/gemma-2-2b is restricted. You must have access to it and be authenticated to access it. Please log in. xet=False
+  HEAD config.json token: 403 code=GatedRepo msg=Your request to access model google/gemma-2-2b is awaiting a review from the repo authors. xet=False
+  HEAD model.safetensors anon: 401 code=GatedRepo msg=Access to model google/gemma-2-2b is restricted. You must have access to it and be authenticated to access it. Please log in. xet=False
+  HEAD model.safetensors token: 403 code=GatedRepo msg=Your request to access model google/gemma-2-2b is awaiting a review from the repo authors. xet=False
+  HEAD README.md anon: 200 code=None msg=None xet=False
+  HEAD README.md token: 200 code=None msg=None xet=False
+  HEAD LICENSE.txt anon: 404 code=EntryNotFound msg=Entry not found xet=False
+  HEAD LICENSE.txt token: 404 code=EntryNotFound msg=Entry not found xet=False
+  xet-read-token anon: 401 b'{"error":"Access to model google/gemma-2-2b is restricted. You must have access to it and be authenticated to access it. Please log in."}'
+  xet-read-token token: 403 b'{"error":"Your request to access model google/gemma-2-2b is awaiting a review from the repo authors."}'
+
+## 6. Private model repo, with the owner's token, then anonymous (10528-byte Xet file)
+## HEAD resolve auth=True: 302
+   Content-Length: 1124
+   Date: Fri, 23 Oct 2026 07:06:57 GMT
+   Location: https://us.aws.cdn.hf.co/xet-bridge-us/<repo-id>/8b7d70beca2af65654a56402f0d31659953e120041598ba8ff28c35600fbc83c?user_id=<user-id>&xip=REDACTED&X-Xet-Cas-Uid=<user-id>&response-content-disposition=inline%3B+filename%2A%3DUTF-8%27%27sample_input.pkl%3B+filename%3D%22sample_input.pkl%22%3B&Expires=1792742817&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256
+   RateLimit: "resolvers";r=4999;t=229
+   RateLimit-Policy: "fixed window";"resolvers";q=5000;w=300
+   Vary: Origin, Accept
+   X-Repo-Commit: ac42393d1442739976ffc8439704f57b1937795a
+   Accept-Ranges: bytes
+   X-Linked-Size: 10528
+   X-Linked-ETag: "32a3e4a8659840b831bc1227c06effc3fa1246f982693362ff3a281ce97adac3"
+   Cache-Control: no-store
+   X-Xet-Hash: 8b7d70beca2af65654a56402f0d31659953e120041598ba8ff28c35600fbc83c
+   Link: <https://huggingface.co/api/models/<private-repo>/xet-read-token/ac42393d1442739976ffc8439704f57b1937795a>; rel="xet-auth", <https://cas-server.xethub.hf.co/v1/reconstructions/8b7d70beca2af65654a56402f0d31659953e120041598ba8ff28c35600fbc83c>; rel="xet-reconstruction-info"
+   X-Cache: Miss from cloudfront
+   resolve Location Expires - now = 3600 s
+   resolve Location policy: {"Statement": [{"Resource": "https://us.aws.cdn.hf.co/xet-bridge-us/<repo-id>/8b7d70beca2af65654a56402f0d31659953e120041598ba8ff28c35600fbc83c\\?user_id=<user-id>&xip=REDACTED&X-Xet-Cas-Uid=<user-id>&response-content-disposition=inline%3B+filename%2A%3DUTF-8%27%27sample_input.pkl%3B+filename%3D%22sample_input.pkl%22%3B", "Condition": {"DateLessThan": {"EpochTime": 1792742817}}}]}
+   bridge GET range=bytes=0-99: 206 content-range=bytes 0-99/10528 len=100 body=100 cache=None
+   bridge GET range=bytes=1000-1999: 206 content-range=bytes 1000-1999/10528 len=1000 body=1000 cache=None
+   bridge GET range=None: 200 content-range=None len=10528 body=0 cache=None
+## GET xet-read-token: 200
+   Content-Length: 507
+   Date: Fri, 23 Oct 2026 07:06:58 GMT
+   ETag: W/"1fb-+aelCrerBSDuYqu+z8hF8bN1LCo"
+   RateLimit: "api";r=989;t=228
+   RateLimit-Policy: "fixed window";"api";q=1000;w=300
+   Vary: Origin
+   X-Cache: Miss from cloudfront
+   casUrl=https://cas-server.xethub.hf.co exp-now=900 s; token chars=429
+   JWT claim keys: ['access', 'exp', 'forceS3Link', 'hfCdnTier', 'iat', 'iss', 'jti', 'repoId', 'repo_storage_type', 'userId'] {'access': 'READ', 'iat': 1792739218, 'exp': 1792740118}
+## GET v2 reconstruction: 200
+   Date: Fri, 23 Oct 2026 07:06:58 GMT
+   Content-Type: application/json
+   Content-Length: 1134
+   vary: accept-encoding
+   vary: origin, access-control-request-method, access-control-request-headers
+   top keys: ['offset_into_first_range', 'terms', 'xorbs']
+   terms: 1 first: {'hash': '8f0c32272e75cc5313658b04ae0df7bfe17b034a612575a416ec13ca92f5edcd', 'unpacked_length': 10528, 'range': {'start': 0, 'end': 1}}
+   xorbs: 1
+   entry keys: ['ranges', 'url'] ranges: [{'chunks': {'start': 0, 'end': 1}, 'bytes': {'start': 0, 'end': 1727}}]
+   xorb url: https://us.aws.cdn.hf.co/xorbs/default/8f0c32272e75cc5313658b04ae0df7bfe17b034a612575a416ec13ca92f5edcd?repo_id=<repo-id>&user_id=<user-id>&xip=REDACTED&Expires=1792742818&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256
+   xorb URL Expires - now = 3600 s
+   xorb url policy: {"Statement": [{"Resource": "https://us.aws.cdn.hf.co/xorbs/default/8f0c32272e75cc5313658b04ae0df7bfe17b034a612575a416ec13ca92f5edcd\\?repo_id=<repo-id>&user_id=<user-id>&xip=REDACTED", "Condition": {"DateLessThan": {"EpochTime": 1792742818}, "ByteRange": {"ExpectedHeader": "bytes=0-1727"}}}]}
+   xorb GET exact bytes=0-1727: 206 content-range=bytes 0-1727/22598282 body=1728 cache=None/Miss msg=
+   xorb GET sub bytes=0-99: 206 content-range=bytes 0-99/22598282 body=100 cache=None/Hit msg=
+   xorb GET other bytes=1-1727: 206 content-range=bytes 1-1727/22598282 body=1727 cache=None/Hit msg=
+   xorb GET open bytes=0-: 403 content-range=None body=26 cache=None/None msg=b'Auth failed: invalid range'
+   xorb GET none None: 403 content-range=None body=48 cache=None/None msg=b'Auth failed: ParsingError: expected range header'
+## GET v1 reconstruction: 200
+   Date: Fri, 23 Oct 2026 07:06:59 GMT
+   Content-Type: application/json
+   Content-Length: 1131
+   vary: accept-encoding
+   vary: origin, access-control-request-method, access-control-request-headers
+   top keys: ['fetch_info', 'offset_into_first_range', 'terms']
+   terms: 1 first: {'hash': '8f0c32272e75cc5313658b04ae0df7bfe17b034a612575a416ec13ca92f5edcd', 'unpacked_length': 10528, 'range': {'start': 0, 'end': 1}}
+   fetch_info entry keys: ['range', 'url', 'url_range'] range: {'start': 0, 'end': 1} url_range: {'start': 0, 'end': 1727}
+   xorb url: https://us.aws.cdn.hf.co/xorbs/default/8f0c32272e75cc5313658b04ae0df7bfe17b034a612575a416ec13ca92f5edcd?user_id=<user-id>&xip=REDACTED&repo_id=<repo-id>&Expires=1792742819&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256
+   xorb URL Expires - now = 3600 s
+   xorb url policy: {"Statement": [{"Resource": "https://us.aws.cdn.hf.co/xorbs/default/8f0c32272e75cc5313658b04ae0df7bfe17b034a612575a416ec13ca92f5edcd\\?user_id=<user-id>&xip=REDACTED&repo_id=<repo-id>", "Condition": {"DateLessThan": {"EpochTime": 1792742819}, "ByteRange": {"ExpectedHeader": "bytes=0-1727"}}}]}
+   xorb GET exact bytes=0-1727: 206 content-range=bytes 0-1727/22598282 body=1728 cache=None/Hit msg=
+   xorb GET sub bytes=0-99: 206 content-range=bytes 0-99/22598282 body=100 cache=None/Hit msg=
+   xorb GET other bytes=1-1727: 206 content-range=bytes 1-1727/22598282 body=1727 cache=None/Hit msg=
+   xorb GET open bytes=0-: 403 content-range=None body=26 cache=None/None msg=b'Auth failed: invalid range'
+   xorb GET none None: 403 content-range=None body=48 cache=None/None msg=b'Auth failed: ParsingError: expected range header'
+## v2 reconstruction without token: 401 b'(4) Unauthorized'
+## HEAD resolve auth=False: 401
+   Content-Length: 29
+   Date: Fri, 23 Oct 2026 07:07:00 GMT
+   ETag: W/"1d-DMkJvg8tpLoaQbsiq9Mz7l2CJyI"
+   RateLimit: "resolvers";r=2997;t=148
+   RateLimit-Policy: "fixed window";"resolvers";q=3000;w=300
+   Vary: Origin
+   X-Error-Message: Invalid username or password.
+   WWW-Authenticate: Bearer realm="Authentication required", charset="UTF-8"
+   X-Cache: Error from cloudfront
+no xet-auth link; done
+
+## 7. Other CAS read endpoints with an anonymous read token (public CSV file)
+GET  /v2/file-chunk-hashes/{file} without X-Range-Dirty: 400 "(3) BadRequest: x-range-dirty header is required"
+GET  /v2/file-chunk-hashes/{file} with X-Range-Dirty: bytes=1000000-1999999: 200 application/json
+     {"totalChunks": 796, "fileSize": 63527244, "windows": [{"dirtyByteRange": [987576, 2327521]}], "hashRanges": <2 subtrees>, "gapVerification": []}
+HEAD /v1/files/{file}: 200, Content-Length 63527244
+GET  /v1/files/{file}: 405
