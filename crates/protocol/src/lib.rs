@@ -31,7 +31,7 @@ pub enum ProtocolError {
     /// A string is not a hash in the spec's 64-character hex form.
     #[error(
         "invalid Xet hash: expected 64 hex characters as in \
-         https://huggingface.co/docs/xet/hashing#converting-hashes-to-strings"
+         https://huggingface.co/docs/xet/api#converting-hashes-to-strings"
     )]
     InvalidHex(#[source] xet_core_structures::merklehash::DataHashError),
     /// Bytes are not a valid serialized xorb.

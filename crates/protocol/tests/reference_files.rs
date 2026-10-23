@@ -98,8 +98,14 @@ fn hex_round_trip_matches_spec_example() {
 
 #[test]
 fn invalid_hex_is_rejected() {
-    assert!(hash_from_hex("not a hash").is_err());
     assert!(hash_from_hex(&"g".repeat(64)).is_err());
+    let err = hash_from_hex("not a hash").unwrap_err();
+    // The spec's string form lives on its api page.
+    assert!(
+        err.to_string()
+            .contains("https://huggingface.co/docs/xet/api#converting-hashes-to-strings"),
+        "{err}"
+    );
 }
 
 #[test]
