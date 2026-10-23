@@ -571,11 +571,11 @@ fn file_info(file: &ShardFileEntry) -> Result<MDBFileInfo, ProtocolError> {
             FileDataSequenceEntry::new(seg.xorb, seg.unpacked_bytes, seg.chunk_start, seg.chunk_end)
         })
         .collect::<Vec<_>>();
-    let num_entries = u32::try_from(segments.len()).map_err(|_| {
-        ProtocolError::ShardSerialization(CoreError::invalid_shard(
-            "a file has more than u32::MAX segments",
-        ))
-    })?;
+    // A parsed shard is at most MAX_UPLOAD_SHARD_BYTES with 96 bytes per
+    // verified segment, so under 2^20 segments; a hand-built UploadShard would
+    // need over 4 billion Segment values in memory to get here.
+    let num_entries = u32::try_from(segments.len())
+        .unwrap_or_else(|_| unreachable!("a 64 MiB shard holds under 2^20 segments"));
     Ok(MDBFileInfo {
         metadata: FileDataSequenceHeader::new(
             file.file_hash,

@@ -63,9 +63,9 @@ pub fn dedup_shard(
         key,
         // Replaced by `expiry_unix` below.
         Duration::ZERO,
-        false,
-        true,
-        true,
+        /* include_file_info */ false,
+        /* include_xorb_lookup_table */ true,
+        /* include_chunk_lookup_table */ true,
     )
     .map_err(ProtocolError::ShardSerialization)?;
 
