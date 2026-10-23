@@ -198,10 +198,17 @@ results below are **observed**.
      repack's own bitmaps include the keep refs (item 5) and must never
      be used for this. It is a follow-up, tracked as an issue labelled
      `git-reachability`, with no code until then.
-   - **Known limitation: `have` acknowledgements.** git ACKs a `have`
-     whose object is in the snapshot's packs, reachable or not. That
-     confirms an object exists, but never sends it. Filtering haves
-     through the same walk is part of the `git-reachability` follow-up.
+   - **Known limitation: `have` and `shallow` existence oracles.**
+     - git ACKs a `have` whose object is in the snapshot's packs,
+       reachable or not. A client's `shallow <oid>` lines are likewise
+       treated differently when the object exists.
+     - That confirms an object exists, but never sends it.
+     - It still matters, because a blob OID is a hash of its content. A
+       reader can confirm a guessed low-entropy content, such as a short
+       secret or a config value, by asking whether its blob exists.
+     - Filtering haves and shallow lines through the same walk is part
+       of the `git-reachability` follow-up. Until then, this is a
+       documented residual.
 3. **Ref updates go through a `proc-receive` hook, and every ref writer
    commits in one fenced transaction.**
    - Before the hook runs, git has already done three things:
@@ -238,7 +245,34 @@ results below are **observed**.
        new, actor, request and time
    - **Writer reachability rule (R22 for writers).** For each new ref
      target N, every object listed by `git rev-list --objects N --not
-     <snapshot ref tips>` must be in the writer's own new pack.
+     <snapshot ref tips>` must be one the writer **sent itself**.
+     - **Sent means sent by the client, not appended by git.**
+       receive-pack always runs `index-pack --fix-thin` (source: git
+       v2.39.5 `builtin/receive-pack.c` line 2263), and `index-pack`
+       appends every missing delta base, in full, from the snapshot to
+       the end of the pushed pack (`builtin/index-pack.c`,
+       `fix_unresolved_deltas` → `append_obj_to_pack`, line 1430).
+       Those appended bases are not sent objects.
+     - **How openxet tells them apart.** openxet is the transport layer,
+       so it reads the incoming pack header's object count and counts
+       the bytes of the client's pack. Appended objects are exactly the
+       entries whose `.idx` offset lies past the end of the client's
+       data, after its N entries.
+     - For a Hub commit, the sent objects are the ones openxet built
+       from the request. The Hub pack is written whole, with no thin
+       bases.
+     - **Appended bases must be reachable.** A delta the client sent can
+       copy bytes out of its base, so the content of a sent object can
+       be derived from an unreachable base. Every appended base must
+       therefore be an object in the tree of a boundary commit, from
+       `git rev-list --boundary N --not <snapshot ref tips>`. Boundary
+       commits are reachable from the snapshot's refs by definition.
+       - Stock git takes its thin-pack bases only from those edge
+         commits' trees (source: `builtin/pack-objects.c`, `show_edge` →
+         `add_preferred_base`, which reads the commit's tree), so honest
+         pushes pass.
+       - The tree walk shares the R22 budget and fails closed, with the
+         hint `git push --no-thin`.
      - A writer with no pack (a Hub ref create or update) must get an
        empty list, so N must already be reachable from the snapshot's
        refs. N is checked exactly like an R22 want (item 2): a ref tip or
@@ -248,9 +282,13 @@ results below are **observed**.
      - **Why.** receive-pack's connectivity check, and gix, accept any
        object present in the snapshot's committed packs. Those include
        objects no ref reaches any more: force-pushed away, not yet
-       expired. Without this rule a writer could point a ref at one, or
-       name it as a parent without sending it, and then fetch it. That
-       would bypass R22.
+       expired. Without this rule a writer could point a ref at one,
+       name it as a parent or tree entry without sending it, or send a
+       `REF_DELTA` against it so that `--fix-thin` copies it in. Then
+       the writer could fetch it, which would bypass R22.
+     - Every refusal under this rule uses the same reason text that git
+       gives for a missing object, so that the answer doesn't separate
+       "exists but unreachable" from "absent".
      - Honest clients are unaffected: a push sends every object that is
        not reachable from the refs the server advertised.
      - Cost: the walk is proportional to the new objects, the same order
@@ -290,19 +328,17 @@ results below are **observed**.
    - It answers `ok` or `ng <ref> <reason>`, and the reason reaches the
      client verbatim.
    - A pack is durable in the bucket before any ref points to it.
-   - **Known limitation: thin-pack bases.**
-     - A thin push may send a delta against a base it doesn't send.
-       `index-pack --fix-thin` then copies that base from the snapshot
-       into the pushed pack.
-     - The base itself never becomes reachable, but the new object's
-       content is derived from it. A writer who knows an unreachable
-       object's OID and its exact size could use this to reconstruct its
-       content.
-     - It needs write access to the same repo. Sizes are not served,
-       because `object-info` is refused (item 2).
-     - Checking that every appended base is reachable is part of the
-       `git-reachability` follow-up, since bitmaps can answer it for
-       trees and blobs.
+   - **Known limitation: writers get an existence oracle only.**
+     - With the rule above, no content of an unreachable object can be
+       made reachable or derived through a push.
+     - What remains is existence. A push that names an unreachable
+       object fails in openxet's check, and one that names an absent
+       object fails earlier, in git's connectivity check. The reason
+       text is the same, but the timing and the stage of failure may
+       still differ.
+     - It needs write access to the same repo. It is deferred to the
+       `git-reachability` follow-up, together with the `have` oracle of
+       item 2.
    - **The database ref log** is the `ref_log` table, and this item
      defines it.
      - Every ref writer inserts its rows in the commit transaction above.
@@ -369,32 +405,67 @@ results below are **observed**.
        expiry later.
      - **Unplaced commits** are commits that no rebuilt ref reaches, in a
        `recovered` pack or in a committed pack that is not a cruft pack.
-       `openxet reindex` lists them with their packs. `openxet verify`
-       keeps listing them as recoverable until an operator resolves
-       them.
      - Objects that sit only in cruft packs were already unreachable from
        every ref and keep ref at the last full repack. They keep their
        normal cruft lifecycle and are listed for information only.
      - `multi-pack-index` files are not reindexed. The next geometric
        repack writes a new one.
-   - **The `recovered` state.**
-     - A `recovered` pack is never exposed to a snapshot, never a repack
-       input, and never collected by GC.
-     - While a repo has any `recovered` pack or unplaced commit, its full
-       repack is held, because it is the only step that drops objects.
-       Geometric repacks still run over committed packs.
-     - Only an explicit operator action, after review, ends the state:
-       - **Restore** an unplaced commit as a ref. openxet takes a
-         snapshot of the committed packs plus the recovered packs that
-         hold the commit's closure, and checks connectivity against it.
-         The commit transaction (item 3) then also moves those packs
+   - **Unplaced data is persisted, protected, and never blocks repacks
+     (ruling R24).** Full repacks are never blocked, and data is never
+     discarded automatically.
+     - **The `reindex_unplaced` table.** Reindex persists what it could
+       not place, one row per entry: repo, kind, OID, pack and
+       `found_at`. There are three kinds:
+       - `commit`: an unplaced commit tip
+       - `pack`: a `recovered` pack
+       - `edge`: an object in a committed pack that a `recovered` pack's
+         objects reference directly
+     - `openxet reindex` prints the table, and `openxet verify` reads it
+       and lists every entry as recoverable until it is resolved.
+     - **Keep roots.** Full repacks run normally. Before each one, the
+       leaseholder adds every `commit` and `edge` entry whose object is
+       in the working copy as an extra keep ref (item 5).
+       - Unplaced commits in committed packs therefore keep their whole
+         closure.
+       - So do the committed-pack objects that recovered commits build
+         on. Refs may point at trees and blobs, so `edge` entries need
+         no commit.
+       - Nothing an operator might restore is dropped.
+     - **`recovered` packs** stay out of every snapshot and out of every
+       repack input. GC never collects them.
+     - **Restore** (`openxet reindex restore <repo> <oid> <ref>`) makes
+       an unplaced commit a ref.
+       - openxet takes a snapshot of the committed packs plus the
+         recovered packs that hold the commit's closure, and checks
+         connectivity against it.
+       - The commit transaction (item 3) then moves those packs
          `recovered` → `committed`, with `WHERE state = 'recovered'`
          matching every one.
-       - **Discard.** The remaining recovered packs go `recovered` →
-         `lost` with `WHERE state = 'recovered'`, and GC deletes them
-         after the grace period. Unplaced commits in committed packs
-         return to the normal cruft lifecycle.
-     - Once nothing is left to resolve, the hold lifts.
+       - The same transaction deletes the `reindex_unplaced` entries
+         that the new ref now covers.
+     - **Discard** (`openxet reindex discard`, per repo or bulk with
+       `--all`, and `--dry-run` for both) ends recovery for a repo.
+       - The remaining recovered packs go `recovered` → `lost` with
+         `WHERE state = 'recovered'`, and GC deletes them after the
+         grace period.
+       - The repo's entries are deleted, so their keep roots go too.
+         Unplaced commits in committed packs return to the normal cruft
+         lifecycle.
+       - `--dry-run` prints the packs, objects and bytes it would
+         release, and changes nothing.
+     - **Visibility.** openxet exports the gauges
+       `openxet_reindex_unplaced_entries{repo}` and
+       `openxet_reindex_unplaced_oldest_seconds{repo}`.
+       - A shipped alert fires when a repo has entries older than
+         `reindex.unplaced_alert_after`, default 7 days.
+       - The alert says what to do: review the entries, then restore or
+         discard.
+     - **No auto-discard.** There is no time-based expiry. Data is kept
+       until an operator decides.
+       - Cost: the recovered packs, and the objects that keep roots hold
+         in committed packs, stay stored, and billed to the repo, until
+         then.
+       - That is bounded by what the bucket held at reindex time.
 5. **Repacking, the repack fence and orphan reclaim.** These run on one
    leaseholder per repo.
    - **Lease fencing.** The lease row carries an `epoch` that increases
@@ -422,7 +493,8 @@ results below are **observed**.
    - **Extra roots.** Before every repack, the leaseholder writes
      temporary refs `refs/openxet/keep/<n>` into the working copy. They
      hold every old and new OID in the database `ref_log` within the
-     grace window.
+     grace window, plus every `reindex_unplaced` `commit` and `edge`
+     entry whose object is in the working copy (item 4).
      - Objects that became unreachable less than a grace period ago
        (force-pushed or deleted refs) therefore stay reachable for the
        repack, whatever their mtime.
@@ -441,9 +513,9 @@ results below are **observed**.
      - It leaves cruft packs alone (source: `builtin/repack.c` line 355,
        `if (p->is_cruft) continue`).
    - **Full repack:** a periodic
-     `git repack -adb --cruft --cruft-expiration=<grace>`. It is held
-     while the repo has anything left to resolve after `reindex`
-     (item 4).
+     `git repack -adb --cruft --cruft-expiration=<grace>`. It is never
+     blocked by unresolved `reindex` entries. They add keep roots
+     instead (item 4).
      - Objects that are unreachable even from the keep refs go into a
        cruft pack.
      - git expires cruft objects by **object mtime**, the pinned pack
@@ -623,8 +695,10 @@ results below are **observed**.
     requests. Hub reads by commit OID pay the R22 walk when the OID is
     not a ref tip.
   - After database loss, a repo with unplaced commits keeps its
-    `recovered` packs, and skips full repacks, until an operator reviews
-    them.
+    `recovered` packs and the objects its keep roots hold. They stay
+    stored, and billed, until an operator restores or discards them.
+    There is no auto-discard, so an alert on unresolved entries is
+    shipped. Full repacks are never blocked.
   - Hook plumbing: an inherited socketpair and tokens.
   - Large repos need repo-affinity routing to keep caches warm.
 - **Not yet proven: the pack lifecycle must be prototyped first, in M2.**
@@ -651,12 +725,16 @@ results below are **observed**.
       pass a connectivity check against it before the commit
       transaction, and Hub ref creates and updates target only objects
       R22 accepts
-    - [ ] the writer reachability rule, for pushes and Hub writes alike
+    - [ ] the writer reachability rule, for pushes and Hub writes alike:
+      only client-sent objects count, and every `--fix-thin` base must be
+      in a boundary commit's tree
     - [ ] Hub reads by OID pass R22
     - [ ] the v2 command allowlist: only `ls-refs` and `fetch`
     - [ ] the lease epoch check at every repack publish
     - [ ] `recovered` packs are never exposed, never repack inputs and
-      never collected, and the full repack is held while any remain
+      never collected. `reindex_unplaced` entries persist, become keep
+      roots and never block a full repack. Only restore or discard
+      clears them, and they have a metric and an alert.
     - [ ] `ref_log` has the retention of item 3, and the bucket ref log is
       derived from it, for every ref writer
     - [ ] new snapshots expose exactly the `committed` packs of one
@@ -753,8 +831,8 @@ results below are **observed**.
     `objects/pack` holds exactly the `committed` pack set read with its
     refs. The test checks that:
     - there are no alternates
-    - no `superseded`, `pending` or `lost` pack is linked, for upload-pack
-      and receive-pack alike
+    - no `superseded`, `pending`, `lost`, `expired` or `recovered` pack
+      is linked, for upload-pack, receive-pack and Hub requests alike
     - an in-flight request keeps its links across a repack publish
   - `push_cannot_use_superseded_objects`: after a full repack drops an
     expired object, a push that references it is rejected by the
@@ -788,10 +866,20 @@ results below are **observed**.
       reference it
     - a Hub commit whose objects are not connected in the snapshot fails
       before the commit transaction, and nothing it wrote is visible
-  - `writer_cannot_make_unreachable_reachable`: a push, or a Hub write,
-    that points a ref at, or names as a parent, an object that is in a
-    committed pack but unreachable is refused. The same push succeeds
-    when it sends that object itself.
+  - `writer_cannot_make_unreachable_reachable`. A push or a Hub write is
+    refused when it makes an object that sits in a committed pack, but is
+    unreachable, reachable by any of these routes:
+    - pointing a ref at it
+    - naming it as a parent or as a tree entry
+    - sending a `REF_DELTA` against it, together with a tree that names
+      it, so that `--fix-thin` appends it as a base
+    - sending a delta against it that copies its bytes into a new object
+
+    The checks:
+    - The refusal text matches git's text for a missing object.
+    - The same push succeeds when it sends the object itself.
+    - A stock thin push, whose bases come from boundary commits' trees,
+      succeeds.
   - `hub_read_by_sha_obeys_r22`: `tree`, `resolve`, `paths-info` and
     `commits` at a commit OID succeed for a reachable non-tip commit, and
     answer "revision not found" for a force-pushed-away commit, a tree
@@ -807,14 +895,25 @@ results below are **observed**.
     was taken over can't publish, geometric or full, and its pending
     outputs end `lost` or `expired`. A publish whose inputs are no longer
     all `committed` aborts.
-  - `reindex_keeps_unplaced_commits`: after deleting the database,
-    reindex from a bucket whose ref log lags the last push:
+  - `reindex_unplaced_persisted`: after deleting the database, reindex
+    from a bucket whose ref log lags the last push:
     - the rebuilt refs have complete closures
-    - unreached packs are `recovered`, get `created_at` from the bucket,
-      and survive GC
-    - unplaced commits are listed by `reindex` and `verify`
-    - the full repack is held until an operator restores or discards
-      them, and a restore makes the commit fetchable
+    - unreached packs are `recovered` and get `created_at` from the
+      bucket
+    - `commit`, `pack` and `edge` entries are written to
+      `reindex_unplaced`, survive a restart, and are listed by `verify`
+    - with the clock moved far past the grace period, nothing is
+      discarded and GC keeps the recovered packs
+    - the metric and the alert report count and age
+    - `discard --dry-run` changes nothing
+    - `restore` makes the commit fetchable and clears its entries.
+      `discard`, per repo and with `--all`, clears the rest and moves the
+      recovered packs to `lost`.
+  - `reindex_hold_never_blocks_repack`: with unresolved entries, full
+    repacks still run and publish. Afterwards, every unplaced commit in a
+    committed pack, and every `edge` object, is still present with its
+    closure, and no recovered pack was an input. A restore after several
+    full repacks yields a complete, fetchable closure.
   - `hydrated_pack_mtime_pinned`:
     - hydrated pack files carry the row's `created_at`
     - the leaseholder re-pins mtimes right before each repack

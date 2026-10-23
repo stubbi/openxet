@@ -545,9 +545,12 @@ binding.
    - The bucket stays the truth: `reindex` rebuilds refs, `ref_log` and
      the pack list by listing `repos/<id>/packs/`. A pack is `committed`
      if a rebuilt ref reaches its objects. Otherwise it is `recovered`:
-     never exposed, never collected, and listed with its unplaced commits
-     until an operator restores or discards them. The full repack is held
-     until then (§5.3, ADR 0004 item 4).
+     never exposed and never collected. Unplaced commits and recovered
+     packs are persisted in a `reindex_unplaced` table. Full repacks
+     still run, keeping those commits and the objects that recovered
+     packs build on as keep roots. Nothing is discarded until an
+     operator restores or discards it (ruling R24; §5.3, ADR 0004
+     item 4).
 4. **Two nodes accepting pushes at once.**
    - Both index and publish their pack. Only the database CAS chooses a
      winner (60 of 60 rounds above). The engine never decides.
@@ -633,14 +636,25 @@ through ADR 0004.
        off as well, for defence in depth.
    - **Writers and the Hub API.** R22 also binds writers: a push or Hub
      ref write may only make reachable what its snapshot's refs already
-     reach or what it sent itself. Hub reads by commit OID pass the same
+     reach or what the client itself sent.
+     - receive-pack always runs `index-pack --fix-thin` (source: git
+       v2.39.5 `builtin/receive-pack.c` line 2263), which appends missing
+       delta bases from the odb (`builtin/index-pack.c` line 1430).
+     - openxet counts the client's pack bytes and header, so appended
+       bases are not counted as sent. Each appended base must also lie
+       in a boundary commit's tree, which is where stock git takes thin
+       bases from (`builtin/pack-objects.c`, `show_edge` →
+       `add_preferred_base`). Otherwise a sent delta could copy the
+       content of an unreachable base. Hub reads by commit OID pass the same
      check. Hub reads and writes run on a request snapshot, never on the
      node cache (ADR 0004 items 3 and 6).
    - **Known residuals,** for the `git-reachability` follow-up:
-     - git ACKs a `have` for any object in the snapshot, which confirms
-       existence without sending content
-     - a thin push can delta against an unreachable base if the writer
-       knows its OID and exact size
+     - git ACKs a `have` for any object in the snapshot, and treats
+       `shallow` lines similarly. That confirms existence without
+       sending content. A blob OID is a content hash, so a guessed
+       low-entropy content can be confirmed this way.
+     - a refused push may reveal, by stage or timing, whether a named
+       object exists. This is existence only.
 2. **Pack states** (inferred). See "Bucket-backed packs", items 1–3.
    - `pending`, then `committed` in the CAS transaction, and only while
      the row is still `pending`
@@ -649,7 +663,7 @@ through ADR 0004.
    - `superseded`, a repack input, which leaves new snapshots at once
    - `recovered`, a pack that `reindex` found but no rebuilt ref reaches.
      Only an operator restore (to `committed`) or discard (to `lost`)
-     ends it.
+     ends it. It never blocks repacks.
    - Any failed commit transaction, the fence included, ends in `lost`.
      Repack publishes also check the lease epoch.
    - Only committed packs reach new snapshots.
@@ -751,7 +765,9 @@ Columns per the task brief. Each cell says how it is known.
     Hub reads by OID under R22
   - the v2 command allowlist
   - lease epochs at repack publish
-  - the `recovered` state and the reindex hold
+  - the `recovered` state, the `reindex_unplaced` table and its keep
+    roots
+  - excluding `--fix-thin` bases from the sent objects
 
   ADR 0004 requires all of this to be prototyped in M2, with
   property-based and fault-injection tests, before production use.

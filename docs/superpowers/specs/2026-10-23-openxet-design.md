@@ -259,10 +259,16 @@ Durability details *(builder-check calls)*:
     earlier commit, but no data or commit object is lost. Newer commits it
     cannot place on a branch are listed as recoverable, by `reindex` and
     by `verify`.
-  - Packs that hold only such unplaced commits go to a `recovered` state
-    (ADR 0004). GC never collects it, and the repo's full repack is held
-    while any remain. Only an operator, after review, restores an
-    unplaced commit as a ref or discards the rest.
+  - A pack that holds no object reachable from a rebuilt ref goes to a
+    `recovered` state (ADR 0004). It is never served and GC never
+    collects it.
+  - Unplaced commits and recovered packs are persisted in the database.
+    `verify` keeps listing them, and repacks keep everything they need,
+    so nothing restorable is dropped. Full repacks are never blocked.
+  - Nothing is discarded automatically. A metric and an alert flag
+    unresolved repos, and an operator, after review, runs `openxet
+    reindex restore` or `openxet reindex discard` (per repo or bulk,
+    with `--dry-run`). Until then the data stays stored.
 
 ### 5.4 Identity, authorization and tenancy
 
@@ -1009,9 +1015,10 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     commits. Any failure, the fence included, leaves the writer's pack
     `lost`.
   - A writer may only make reachable what was already reachable from its
-    snapshot's refs, or what it sent in its own pack. That also stops a
-    push or a Hub `create_branch` from resurrecting a force-pushed-away
-    object.
+    snapshot's refs, or what the client itself sent. Bases that git's
+    `--fix-thin` appends don't count as sent, and they must lie in a
+    boundary commit's tree. That stops a push or a Hub `create_branch`
+    from resurrecting, or copying out, a force-pushed-away object.
   - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
     serves `object-info` for any object, so openxet refuses it, along
     with `bundle-uri` and unknown commands.
@@ -1040,7 +1047,9 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
   - A repack publish checks the lease epoch, so a stale leaseholder
     can't publish.
   - Superseded, lost and expired pending packs go to GC (§5.6).
-    `recovered` packs never do.
+    `recovered` packs never do. Objects that reindex could not place
+    stay protected as keep roots, without blocking repacks, until an
+    operator restores or discards them.
 - **gitoxide stays in-process off the wire path,** for Hub API object
   reads, the reachability check and Hub commit writes. It only ever
   opens a request snapshot, never the node cache.
