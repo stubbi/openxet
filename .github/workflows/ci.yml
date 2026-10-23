@@ -4,26 +4,34 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly advisory check, so a new RustSec advisory surfaces without a PR.
+  schedule:
+    - cron: "0 5 * * 1"
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR runs are cancelled; runs on main always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   rust:
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Installs the exact channel and components from rust-toolchain.toml, so
       # the pin lives in one place.
       - run: rustup toolchain install
@@ -32,7 +40,7 @@ jobs:
         with:
           tool: nextest
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Reference files for the golden tests; the script verifies checksums
       # whether or not the cache hit.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -42,35 +50,59 @@ jobs:
             !testdata/xet-spec-reference/SHA256SUMS
           key: xet-spec-reference-${{ hashFiles('testdata/xet-spec-reference/SHA256SUMS') }}
       - run: scripts/fetch-reference-files.sh
-      - run: cargo nextest run --workspace
+      - run: cargo nextest run --locked --workspace
       # Release builds drop upstream's debug self-check of MerkleHashSubtree,
       # so the incremental file hash is also tested the way production runs it.
       - if: matrix.os == 'ubuntu-latest'
-        run: cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)'
-      - run: cargo doc --workspace --no-deps
+        run: cargo nextest run --locked --release -p openxet-protocol -E 'binary(file_hash_streaming)'
+      - run: cargo doc --locked --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
 
   deny:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+
+  advisories:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          command-arguments: advisories
 
   compat:
     name: compat (agent leg)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.9.8"
           cache-dependency-glob: compat/uv.lock
-      - name: Fixtures and research notes carry no secrets
+      - name: Tracked files carry no secrets
         run: uv run --frozen --directory compat pytest tests/test_fixture_redaction.py
-      - run: cargo build -p openxet
+      # Needs no network: checks the harness isolates client env and caches.
+      - name: Harness isolation
+        run: uv run --frozen --directory compat pytest tests/test_harness.py -m "not pinned"
+      - run: cargo build --locked -p openxet
       - run: uv run --frozen --directory compat pytest -m agent
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
