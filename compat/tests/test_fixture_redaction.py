@@ -64,10 +64,10 @@ _SECRET_PATTERNS = {
 }
 
 
-# A Basic credential can appear anywhere: in prose, escaped JSON, or a trace
-# line. huggingface.co even echoes the client's own one in the `verify`
-# action. Prose such as "Basic auth" also matches the shape, so a hit only
-# counts when the base64 decodes to printable `user:password` text.
+# A Basic credential can appear anywhere: in prose, escaped JSON, a trace
+# line or an action header. Prose such as "Basic auth" also matches the
+# shape, so a hit only counts when the base64 decodes to printable
+# `user:password` text.
 _BASIC = re.compile(r"\bBasic (?!REDACTED\b|realm=)([A-Za-z0-9+/]{8,}={0,2})")
 
 

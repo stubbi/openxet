@@ -57,15 +57,9 @@ a stub (`https://stub:8443/{owner}/{repo}.git/info/lfs`) shaped on ADR 0005:
 Per scenario there are two files:
 
 - `<scenario>.stub-log.jsonl`: one line per request the stub received.
-  `auth_class` classifies the Authorization header without storing it. The
-  classes are:
-  - `basic:user='…':openxet-token`
-  - `bearer:gitea-password`
-  - `bearer:hf-token-marker` (a fake `HF_TOKEN` value)
-  - `bearer:jwt(claims=…)`, for Gitea's LFS JWT; only the non-secret
-    claims are shown
-  - `bearer:cas-token`
-  - `null` for none
+  `auth_class` labels the Authorization header by the throwaway test value
+  it matched, without storing it; `null` means none was sent. JWT labels
+  show only non-secret claim names.
 - `<scenario>.stub-flows.json`: the same requests as seen by mitmproxy, with
   bodies, redacted. Chunk and xorb requests are left out.
 
@@ -100,8 +94,7 @@ Per scenario there are two files:
 ## Redaction
 
 - Every credential value is replaced by `REDACTED`; names stay. That covers:
-  - `Authorization` (including the `verify` action header, which echoes the
-    client's own credential)
+  - `Authorization`, including action headers
   - `X-Xet-Access-Token` and `accessToken`
   - JWTs
   - the stub's fake CAS tokens

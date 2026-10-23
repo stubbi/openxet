@@ -97,9 +97,9 @@ keeps them true, and a change that weakens one is a release blocker:
 - No silent no-op success; acknowledged writes survive a crash.
 - Git reads check reachability, and every ref writer is fenced.
 
-Public text (docs, commits, issues, PRs) describes our own requirements.
-It never names or hints at weaknesses in other projects; report those
-privately to their maintainers.
+Security issues found in any third party (including Hugging Face's
+clients) go privately to their maintainers; public text never describes an
+unfixed third-party security weakness or hints at one (R21/R26).
 
 ## How we work
 

@@ -65,8 +65,6 @@ Labels:
    - It only caches whole xorbs, so files that use part of a shared xorb
      are relayed and not cached.
    - Small non-Xet files are never cached.
-   - Its caches are keyed without the caller, so cached data and Xet
-     tokens are not re-authorised per user (source).
 4. **Legal.** No HF text we found addresses mirrors directly. The texts
    quoted below support different readings for (a) self-hosted use, (b) a
    hosted mirror on openxet.com and (c) gated or private content. (b) and
@@ -209,8 +207,7 @@ How it works:
   handler. That is how a proxy data directory becomes a plain `xetd`
   data directory for offline use.
 - **Tokens.** The real HF token is passed through unchanged. Only
-  `casUrl` is rewritten to the proxy. The upstream CAS URL is learned from
-  the last relayed token, as one global value. On a CAS `401`, it mints a
+  `casUrl` is rewritten to the proxy. On a CAS `401`, it mints a
   fresh token with the same caller credential and retries once (1.1.0).
 - **Xorbs.** It fetches `v1` reconstructions upstream. It caches a xorb
   only if the `fetch_info` ranges start at chunk 0 and hash to the xorb
@@ -219,33 +216,35 @@ How it works:
   it "*not* a dependable way to construct a complete offline library" and
   recommend download-then-upload seeding.
 - **Non-Xet files** are always relayed live, and never cached.
-- **Metadata** is always refreshed upstream first by default. On any
-  upstream failure it falls back to the last cached value, whatever its
-  age; stale tokens are excluded 60 s before `exp`.
+- **Metadata** is refreshed upstream first by default, and a cached value
+  is used when upstream is unavailable.
 - **Writes** (commit, preupload, repo create) are relayed to HF.
 
 What to reuse conceptually:
 - the mirror writes through the same storage and serving code as normal
   uploads, so mirrored data is native, dedups and survives without the
   upstream;
-- serve-stale-on-upstream-failure for metadata, with an expiry guard;
+- serve-stale-on-upstream-failure for metadata, limited for openxet to
+  public, ungated content (R19);
 - single-flight healing of an expired upstream token;
 - rate-limiting misses by caller, because a miss costs an upstream call;
 - the two-phase "download, then upload" seeding as the fallback when
   upstream is unreachable.
 
-What to avoid (source, with the impact inferred):
+What openxet avoids:
 - **Caching whole xorbs only.** Partial-xorb files are common (observed
   above). Re-packing verified chunks avoids the problem.
-- **Cache keys without the caller.** `cacheKey(repoType, repoID,
-  revision, kind)` keys the Xet-token cache (`token.go`), and the
-  fallback paths serve `Embedded` without re-asking upstream
-  (`resolve.go`). So one user's token for a private or gated repo can be
-  served to another proxy user, and access is not re-checked when
-  upstream fails (fail-open).
 - **Handing HF URLs to clients** on the relay path.
 - **Forwarding writes upstream.** That is outside a mirror's job, and it
   mixes the user's credentials with the operator's.
+
+## Design rules for openxet's mirror
+
+These are openxet's own requirements (design §5.9 requirement 3, §10.6):
+- Token and response caches are keyed by caller, repo and revision.
+- A fallback never serves authorized content without a fresh upstream
+  check. When the check can't run, the mirror fails closed.
+- A user's credential is never combined with the operator's.
 
 ## Legal risk for the user
 
@@ -566,8 +565,7 @@ Design §10.6 now states:
 > - Gated access is per user.
 >
 > `xet-proxyd` shows that caching whole xorbs leaves many files
-> uncacheable, and that caller-agnostic cache keys share one user's
-> access with everyone. The legal texts give a self-hosted mirror of
+> uncacheable. The legal texts give a self-hosted mirror of
 > public content the most support, and a hosted third-party mirror or
 > shared gated access the least.
 >

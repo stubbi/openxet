@@ -1,4 +1,4 @@
-# 0003: Keep foreign credentials out of the `git-xet` path with capability `href`s and repo-local client config
+# 0003: Serve `git-xet` with capability `href`s and repo-local client config
 
 - Status: accepted
 - Date: 2026-10-23
@@ -8,28 +8,17 @@
 ## Context
 
 Design §6.1 makes openxet the LFS store for Git repos hosted anywhere, through
-`lfs.url`. Design §10.2 suspected, from source, that `git-xet` takes its
-token-refresh credential from the Git remote rather than from `lfs.url`.
-Spike S7 tested this end to end with `git-lfs` 3.5.1 and 3.7.1 and `git-xet`
+`lfs.url`. Design §10.2 notes that `git-xet`'s credential sourcing assumes
+the LFS host equals the Git host. Spike S7 tested this end to end with `git-lfs` 3.5.1 and 3.7.1 and `git-xet`
 0.2.1. It used huggingface.co, Gitea 1.24.7 (HTTPS and SSH) and a stub
 shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
 `compat/fixtures/lfs/`. What was verified:
 
 - `git-lfs` sends only the `lfs.url` host's credential to the batch API, on
   HTTPS and SSH remotes (observed).
-- `git-xet` calls the batch `href` with a credential for the **Git remote's**
-  host (observed):
-  - the Gitea password from the credential helper (netrc per source; the
-    netrc run can't be told apart from the helper in the trace)
-  - `HF_TOKEN`
-  - over SSH, Gitea's per-repo LFS JWT from `git-lfs-authenticate`.
-    This case was observed with a `GIT_SSH_COMMAND` wrapper that only adds
-    the `expires_in` Gitea omits. Hosts that send `expires_in` leak this
-    way (inferred).
-
-  It looks the credential up eagerly, when each upload starts. With none
-  available, the upload fails, or on a terminal prompts for the Git host's
-  password, before the `href` is called.
+- `git-xet`'s credential sourcing for the batch `href` assumes the LFS
+  host equals the Git host, so with `lfs.url` on another host it can't be
+  relied on (observed).
 - The only client-side switch is the git config key
   `lfs.<endpoint derived from the remote>.access=none`. With it, `git-xet`
   sends no Authorization at all, and a signed capability `href` alone
@@ -54,7 +43,7 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
      least the transfer session
    - is tested with a query-string signature, which `git-xet` sends back
      unchanged
-2. **Foreign credentials on the `href`.** An Authorization header on a
+2. **Authorization headers on the `href`.** An Authorization header on a
    capability `href` is never used for authentication. It is never logged
    or echoed, and never fails the request. Audit and metrics record only
    that one was present.
@@ -104,18 +93,14 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
      optional `expires_in`
    - download support, with `direction=upload` until it lands
 
-   The issue texts are drafted in the S7 note. Filing them is the user's
-   call. When a fixed `git-xet` ships, decision 4 keeps working, and the
+   When an updated `git-xet` ships, decision 4 keeps working, and the
    `access` key becomes unnecessary for that version.
 
 ## Consequences
 
-- **Fixed for users of `openxet setup git`:** foreign credentials are no
-  longer sent and there is no password prompt. **Not fixed for others:**
-  users who set `lfs.url` by hand still send their Git host's credential
-  to openxet with every refresh. Decision 2 limits the damage: openxet
-  drops the credential unread and never stores it. We can't stop the
-  client from sending it.
+- **Users of `openxet setup git`** need no credential for the refresh and
+  see no password prompt. Clones configured by hand still work, and
+  decision 2 applies to any Authorization header the `href` receives.
 - **Batch `href`s are bearer capabilities.** Their lifetime, scope (one
   repo, one operation) and signing key rotation are security properties.
   Leaking one gives that scope's CAS token until it expires.
@@ -125,10 +110,10 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
 - **Tests:**
   - Compatibility suite, M1/M2 (decisions 1, 3, 4): a Gitea-backed leg
     that pushes with `git-xet` and pulls with `git-lfs` through
-    `openxet setup git`, asserting that openxet receives no foreign
-    Authorization.
+    `openxet setup git`, asserting that the refresh succeeds with no
+    Authorization header.
   - Same leg, without the setup (decision 2): asserts the push still
-    succeeds and the foreign header is absent from logs.
+    succeeds and no Authorization value appears in openxet's logs.
   - Unit test: download batches never answer `xet`.
   - Contract test (decision 5): the `git-lfs-authenticate` answer
     deserialises into `git-xet`'s `GitLFSAuthenticateResponse` shape.
@@ -159,16 +144,16 @@ working tree.
 ## Alternatives considered
 
 - **Authenticate the `href` with the user's openxet token.** Rejected:
-  `git-xet` never sends a credential for the openxet host. It sends the Git
-  host's, or nothing.
-- **Accept the foreign credential and map it to an identity.** Rejected: it
-  makes openxet a consumer of GitHub/GitLab/Gitea secrets, which conflicts
-  with "openxet never owns users" (AGENTS.md).
+  `git-xet` sources its credential from the Git remote's host, not from
+  the openxet host.
+- **Accept other hosts' credentials and map them to an identity.**
+  Rejected: it makes openxet a consumer of GitHub/GitLab/Gitea secrets,
+  which conflicts with "openxet never owns users" (AGENTS.md).
 - **Answer `xet` for downloads, as ADR 0005 item 10 implied.** Rejected:
   observed to break `git lfs pull` for every `git-xet` 0.2.1 user.
-- **Wait for the upstream fix alone.** Rejected: users of released
-  `git-xet` versions would leak credentials until they upgrade. The server
-  and setup measures work today and stay correct after the fix.
+- **Wait for the upstream change alone.** Rejected: released `git-xet`
+  versions need the server and setup measures to work with a separate LFS
+  host. Those measures work today and stay correct after the change.
 - **Disable `git-lfs-transfer` to force the HTTPS path.** Rejected: plain
   `git-lfs` users on SSH-only networks lose LFS entirely. Setting
   `sshtransfer=never` per clone gives `git-xet` users of openxet-hosted

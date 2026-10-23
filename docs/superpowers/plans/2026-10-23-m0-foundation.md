@@ -651,8 +651,8 @@ non-huggingface.co endpoint? If not, what is the clean HTTPS route?
   - Each server-side rule, its spec citation and the test enforcing it.
   - Gaps where the spec is silent, with the behaviour we chose.
   - The performance implication: verification needs stored per-xorb chunk
-    hashes, never a re-download of xorbs. That's the Shardline lesson; feed
-    it into M1's index design.
+    hashes, never a re-download of xorbs. Rule: never re-download xorbs to
+    verify a shard; feed it into M1's index design.
 - [ ] **Step 6: Commit via PR**
   Commit message: `feat(protocol): verify upload shard segments against xorb chunk hashes`
 
@@ -666,10 +666,9 @@ non-huggingface.co endpoint? If not, what is the clean HTTPS route?
 1. The exact LFS batch request and response for upload and download against
    huggingface.co, with `git-xet` 0.2.1 and without it.
 2. How `git-lfs` 3.5.1 and 3.7.x pick credentials when `lfs.url` is on
-   another host than the Git remote, over HTTPS and SSH. Confirm the design
-   §10.2 gap end to end against a local Gitea (`docker run gitea/gitea`) with
-   `lfs.url` pointing at the Task 6 stub. Does `git-xet` send the Gitea
-   credential to the stub?
+   another host than the Git remote, over HTTPS and SSH. Check design
+   §10.2's credential sourcing end to end against a local Gitea
+   (`docker run gitea/gitea`) with `lfs.url` pointing at the Task 6 stub.
 3. Does a signed capability `href` with no `Authorization` header satisfy
    `git-xet`'s token refresh?
 4. `git-lfs-authenticate` response format, and whether `git-lfs-transfer`
@@ -681,8 +680,8 @@ and mitmproxy. Use an isolated HOME and repo-local config only.
 **Output:**
 - `docs/research/S7-git-lfs-xet.md`, with redacted fixtures in
   `compat/fixtures/lfs/` (guarded by Task 7's test).
-- A draft upstream issue text for `huggingface/xet-core` about credential
-  sourcing (design §10.2). **Ask the user** before filing it.
+- Upstream contribution notes for `huggingface/xet-core` (design §10.2),
+  kept private. **Ask the user** before filing anything.
 - ADR `0003` for the credential strategy.
 
 **Done when:** all four questions are answered with evidence. Merge via PR:

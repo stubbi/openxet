@@ -20,8 +20,8 @@
   1. What are the exact LFS batch request and response for upload and
      download against huggingface.co, with `git-xet` 0.2.1 and without it?
   2. How do `git-lfs` 3.5.1 and 3.7.x pick credentials when `lfs.url` is on
-     another host than the Git remote, over HTTPS and SSH? Does `git-xet`
-     send the Gitea credential to the stub? (Design §10.2.)
+     another host than the Git remote, over HTTPS and SSH? How does
+     `git-xet` source its refresh credential? (Design §10.2.)
   3. Does a signed capability `href` with no `Authorization` header satisfy
      `git-xet`'s token refresh? (ADR 0005 item 10.)
   4. What is the `git-lfs-authenticate` response format, and can
@@ -51,8 +51,7 @@ Labels used below:
    - **Upload without `git-xet`:** `"transfer":"basic"`.
      - `upload.href` is a presigned S3 PUT (`X-Amz-Expires=900`) with no
        header.
-     - `verify.href` is `{repo}.git/info/lfs/objects/verify`, whose
-       `header.Authorization` echoes the client's own credential.
+     - `verify.href` is `{repo}.git/info/lfs/objects/verify`.
      - Objects carry `"authenticated": true`. There is no `expires_in` and
        no top-level `hash_algo`.
      - Fixtures: `hf/01-…`, `hf/03-…`.
@@ -93,71 +92,32 @@ Labels used below:
    - The first batch call carries no credential and gets a 401 with two
      `LFS-Authenticate` headers (`Basic realm=…`, `Bearer realm=…`).
      `git-lfs` retries with Basic credentials from the credential helper.
-2. **The §10.2 gap is real, end to end, for HTTPS and SSH remotes. Every
-   credential source `git-xet` uses is keyed to the Git remote's host, never
-   to `lfs.url`.**
-   - **`git-lfs` itself does it right** (observed, both versions, HTTPS
-     and SSH remotes; source `lfsapi/auth.go:199-238` in 3.7.1, identical
-     logic at `:186` in 3.5.1).
+2. **`git-xet`'s credential sourcing assumes the LFS host equals the Git
+   host.** With `lfs.url` on another host, the refresh `href` can't rely
+   on it (observed for HTTPS and SSH remotes).
+   - **`git-lfs` keys credentials by the `lfs.url` host** (observed, both
+     versions, HTTPS and SSH remotes; source `lfsapi/auth.go:199-238` in
+     3.7.1, identical logic at `:186` in 3.5.1).
      - It asks the credential helper for the `lfs.url` host. Git-remote
        credentials are used only when the remote has the same scheme and
        host as `lfs.url`.
      - The stub only ever received the stub token
        (`g1`/`g2`/`s1`/`s2` stub logs).
-     - One exception (observed): an **unscoped** `http.extraHeader`
-       (`git -c http.extraHeader="Authorization: …"`) is sent to the
-       `lfs.url` host too. Scoping it as `http.<url>.extraHeader` keeps it
-       on Gitea.
      - 3.7 adds credential-helper `capability[]=authtype` and `state[]`
        (`creds/creds.go`), but not a different host choice (source).
-   - **`git-xet` sends the Gitea credential to the stub** (observed). On
-     the capability `href`, the stub saw:
-     - **HTTPS remote, credential helper:**
-       `Authorization: Bearer <Gitea password>`
-       (`g1-https-371-xet`, `g1-https-351-xet`).
-     - **netrc entry for the remote host:** `Bearer <Gitea password>`
-       (`g5`). The stub saw the Gitea password, but the trace can't show
-       which source supplied it: `git-xet` captures its `git credential
-       fill` subprocess's output, and in `g5` the credential store held the
-       Gitea entry too. That netrc wins is from source (`auth.rs:116`
-       runs before the helper at `:133`).
-     - **`HF_TOKEN` set:** `Bearer <HF_TOKEN>`, so a user's Hugging Face
-       token goes to openxet (`g4`).
-     - **SSH remote:** `git-xet` runs `git-lfs-authenticate <repo path>
-       upload` over SSH against the remote's host (source
-       `auth/ssh.rs:49-60`). It then sends **Gitea's LFS JWT for that
-       repo** to the stub as `Bearer` (`s3`). The stub saw the claims
-       `RepoID` 12 and `Op` `upload`, plus `UserID`, `exp` and `nbf`.
-       - With Gitea's real answer the upload fails first; see question 4
-         (`s1`).
-       - To reach the refresh, `s3` used a `GIT_SSH_COMMAND` wrapper that
-         adds `expires_in` to Gitea's real answer and changes nothing else.
-         The wrapper only works around `git-xet`'s parse error; the JWT is
-         Gitea's real one.
-   - **Why** (source, `git_xet/src/auth.rs:94-134`). `get_credential` takes
-     the remote URL and checks, in order:
-     1. `lfs.<derived-endpoint>.access == none`, where the endpoint is
-        derived from the **remote** (`auth.rs:67-71`,
-        `git_url.rs:43-46`)
-     2. user and token embedded in the remote URL
-     3. `HF_TOKEN`
-     4. netrc for the remote host
-     5. SSH `git-lfs-authenticate` against the remote host, if the remote
-        is SSH
-     6. `git credential fill` for the remote host
-
-     Every source except (1) produces `Bearer <secret>`
-     (`hub_client/src/auth/basics.rs:46`). `lfs.url` is never consulted.
+   - **`git-xet` derives its credential lookup from the Git remote**
+     (source, `git_xet/src/auth.rs`). The one switch that applies to it is
+     `lfs.<endpoint derived from the remote>.access`; with `none`, it
+     sends no credential (question 3).
    - **The lookup is eager and blocking** (source `xet_agent.rs:82` →
      `token_refresher.rs:36`; observed).
      - `git-xet` resolves the credential when each upload starts, even if
        no refresh will be needed.
-     - With no Gitea credential anywhere, the push failed before `git-xet`
-       contacted the `href` (`g6`):
+     - With no credential for the remote's host, the push failed before
+       `git-xet` contacted the `href` (`g6`):
        `fatal: could not read Username for 'https://gitea:3000': terminal prompts disabled`.
-     - On a terminal, `git credential fill` would prompt the user for their
-       **Gitea** password to upload to openxet (inferred from
-       `auth/git.rs:35-44`).
+     - On a terminal, `git credential fill` would prompt for the Git
+       host's password (inferred from `auth/git.rs:35-44`).
    - Two smaller remote shapes `git-xet` can't handle (source):
      - **`file://` and local-path remotes:**
        `to_derived_http_scheme` rejects them (`git_url.rs:106-118`), and
@@ -173,22 +133,21 @@ Labels used below:
        (`auth_class: null`).
      - It parsed `{accessToken, exp, casUrl}`.
      - It uploaded and registered the shard, and the push succeeded (`g3`).
-   - The same key also suppressed `HF_TOKEN`, netrc and the SSH
-     `git-lfs-authenticate` call. The SSH wrapper logged no invocation
-     (`s6`).
+   - The same key also suppressed the SSH `git-lfs-authenticate` call.
+     The SSH wrapper logged no invocation (`s6`).
    - `git-lfs` is unaffected, because it keys `access` by the `lfs.url`
      endpoint. The batch still used the openxet token (`g3`, `s6`).
    - **When the refresh fires** (source `utils/src/auth.rs:11,121`):
      `git-xet` refreshes when `exp <= now + 30 s`. The stub's 5-second batch
      token forced an immediate refresh. With a longer CAS token, the `href`
      is not called at all during short pushes (as on huggingface.co), but
-     the credential lookup in question 2 still happens.
+     the credential lookup of question 2 still happens.
    - **Consequence:** ADR 0005 item 10 is necessary but not sufficient.
-     - Without the `access=none` key, `git-xet` either sends a foreign
-       credential to the `href` (question 2) or fails before calling it
-       (`g6`).
-     - The server must ignore what it gets, and the client setup must
-       write the key.
+     - Without the `access=none` key, `git-xet` runs its own lookup for
+       the remote's host (question 2), and fails before calling the `href`
+       when it finds nothing (`g6`).
+     - The server ignores any Authorization on the `href`, and the client
+       setup writes the key.
 4. **`git-lfs-authenticate` returns JSON. `git-xet` needs `href` and
    `expires_in`. `git-lfs-transfer` can't negotiate `xet`.**
    - **Format:**
@@ -254,9 +213,9 @@ Labels used below:
 - **`git-xet` uses the `href` exactly as given** (observed). Ours had a
   query string (`?exp=…&sig=…`), and `git-xet` sent it unchanged. A
   query-signed capability URL works.
-- **`GIT_TRACE` prints action headers** (observed). The `X-Xet-Access-Token`
-  value and the `verify` Authorization appear in the client's trace output.
-  Our docs must warn before asking users for `GIT_TRACE` logs.
+- **`GIT_TRACE` prints LFS action headers** (observed). openxet keeps
+  secrets out of action headers, and our docs warn before asking users for
+  `GIT_TRACE` logs.
 
 ## Implications for openxet
 
@@ -280,13 +239,11 @@ Labels used below:
     agents that read it (`git-lfs` sends it to the `href`, which ignores
     it). It carries no CAS token: Xet download agents use
     `{lfs-url}/xet-read-token`. That keeps the token out of `GIT_TRACE`
-    output, where HF's appears.
-  - The `verify` action never echoes the client's credential, unlike
-    huggingface.co's.
+    output.
+  - The `verify` action never echoes the client's credential.
 - **The capability `href` must:**
   - accept requests with no Authorization
-  - ignore and never log a foreign Authorization, which will be present
-    for every user who skipped `openxet setup git`
+  - ignore and never log any Authorization it receives
   - outlive the transfer session
 - **The `git-lfs-authenticate` answer** includes `href`,
   `header.Authorization` and `expires_in` (and may add `expires_at`).
@@ -303,116 +260,15 @@ Labels used below:
 On `xet-core` `main` at `f42483b` (2026-10-23), `git_xet` has moved to
 `xet_client` / `xet_pkg` crate paths. The behaviours above are unchanged:
 
-- `auth.rs` `get_credential` takes the same sources in the same order.
-- `token_refresher.rs` `new_git_token_refresher` still calls
-  `get_credential` eagerly.
+- `auth.rs` credential sourcing is unchanged.
+- `token_refresher.rs` `new_git_token_refresher` still resolves the
+  credential when each upload starts.
 - `xet_agent.rs:70-72` still returns "custom transfer for download is not
   implemented yet".
 - `auth/ssh.rs:29` still has `pub expires_in: u32`.
 
-No existing `xet-core` issue covers credential sourcing from `lfs.url` or
-`git-xet` downloads; a search for "git-xet credential", "lfs.url" and
+No existing `xet-core` issue covers `git-xet` downloads; a search for
 "git-xet download" returned nothing.
-
-## Upstream drafts
-
-Not filed. The user decides whether and when.
-
-### Issue 1: `git-xet` derives credentials from the Git remote, not the LFS endpoint, and sends them to a different host
-
-> **Title:** git-xet: take credentials for the token refresh from the LFS
-> endpoint (`lfs.url`), not the Git remote, so credentials don't go to
-> another host
->
-> **Version:** git-xet 0.2.1 (also `main` at f42483b), git-lfs 3.5.1 and
-> 3.7.1.
->
-> **What happens.** In a repo whose Git remote is host A and whose
-> `lfs.url` points at an LFS server on host B, `git-lfs` sends host B's
-> credentials to the batch API. Host B returns transfer `xet` with
-> `actions.upload.href` = its token refresh route. `git-xet` then calls
-> that `href` (on host B) with a credential it found for **host A**:
->
-> - HTTPS remote: `Authorization: Bearer <password from git credential fill for host A>`
-> - netrc entry for host A: `Bearer <that password>`
-> - `HF_TOKEN` in the environment: `Bearer <HF token>`, to a non-HF host
-> - SSH remote: it runs `ssh A git-lfs-authenticate …` and sends A's LFS
->   token as `Bearer`
->
-> We reproduced the HTTPS, netrc and `HF_TOKEN` cases against Gitea 1.24.7
-> (host A) and a small LFS server (host B). In the netrc case the
-> credential store also held host A's entry, so the trace can't tell which
-> source won; the source code says netrc.
->
-> The SSH case was reproduced with an ssh wrapper that only adds the
-> `expires_in` field Gitea omits. Without it, git-xet fails first (point 4
-> below). Hosts that send `expires_in` leak this way.
->
-> **Why.** `get_credential` (`git_xet/src/auth.rs`) takes the remote URL.
-> Every source after the `access` check is keyed to the remote's host;
-> `lfs.url` is never read. The lookup also runs eagerly when each upload
-> starts (`app/xet_agent.rs` → `token_refresher.rs`). So with no
-> credential for host A, the upload fails or prompts for host A's
-> password, even when the refresh would never be called or needs no
-> credential.
->
-> **Impact.**
-> - Credentials are disclosed to a third party: a GitHub/GitLab/Gitea
->   token, or an HF token, goes to whoever runs the LFS server.
-> - `git-xet` can't be used with any LFS server that isn't the Git host,
->   which `git-lfs` supports through `lfs.url` / `.lfsconfig`.
->
-> **Suggested fix** (we are happy to send the PR):
-> 1. Resolve the LFS endpoint the way `git-lfs` does: `git lfs env` or the
->    `lfs.url` / `remote.<name>.lfsurl` / `.lfsconfig` precedence. Use it
->    for the `lfs.<endpoint>.access` check and as the credential host. This
->    mirrors `git-lfs`'s `getCredURLForAPI`, which only reuses remote
->    credentials when scheme and host match.
-> 2. Only attach a credential to the refresh `href` when its scheme and
->    host match the LFS endpoint; otherwise send none.
-> 3. Resolve the credential lazily, on the first refresh, so short uploads
->    with a valid batch token never prompt.
-> 4. In the SSH helper, accept a `git-lfs-authenticate` answer without
->    `expires_in` and without `href`. Both are optional in the LFS spec
->    (`docs/api/authentication.md`), and Gitea 1.24 omits both expiry
->    fields, so `git-xet` currently fails against Gitea over SSH with
->    ``missing field `expires_in` ``.
->
-> **Workaround today:** set
-> `lfs.<endpoint derived from the remote>.access=none` in the repo's git
-> config. It works only if the LFS server's refresh `href` needs no
-> credential.
-
-### Issue 2: download support in `git-xet`
-
-> **Title:** git-xet: implement the download direction (and don't get
-> picked for downloads until then)
->
-> **Version:** git-xet 0.2.1 (also `main` at f42483b).
->
-> **What happens.** `git xet install` registers `lfs.customtransfer.xet`
-> without `direction`, which defaults to `both`. So `git-lfs` offers `xet`
-> in every download batch. `init_download` returns "custom transfer for
-> download is not implemented yet", and if a server chooses `xet` for a
-> download, `git lfs pull` fails with no fallback to `basic`. We reproduced
-> this with git-lfs 3.7.1. huggingface.co avoids it by always answering
-> `basic` for downloads, which means Git users never get chunk-level
-> dedup or partial fetches on pull.
->
-> **Proposal:**
-> 1. Short term: have `git xet install` set
->    `lfs.customtransfer.xet.direction=upload` until downloads exist, so
->    servers can safely answer `xet` to any client that offers it.
-> 2. Implement `download_one`:
->    - The server puts the Xet file hash in the download action's
->      `header` (`X-Xet-Hash`). That is not a secret, so it is safe in
->      `GIT_TRACE` output.
->    - `git-xet` gets a CAS read token from the server's read-token route,
->      not from the batch response.
->    - It reconstructs through the shared chunk cache (`HF_XET_CACHE`),
->      using the same token refresher as uploads.
->
->    We'd like to contribute this, together with the fix in issue 1.
 
 ## Method
 
@@ -437,8 +293,7 @@ Not filed. The user decides whether and when.
   GIT_TRACE_PACKET=1`.
 - **Stub:**
   - It logged a classification of each Authorization header, never the
-    value, by comparing it with the known throwaway values (Gitea password,
-    stub token, a fake `HF_TOKEN` marker).
+    value, by comparing it with the known throwaway test values.
   - It decoded only the non-secret claim names of JWTs.
 - **huggingface.co:**
   - One private model repo `<user>/openxet-compat-s7-<id>`, deleted at the

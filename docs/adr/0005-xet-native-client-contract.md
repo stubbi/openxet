@@ -83,7 +83,7 @@ captures.
     - The upload action's `href` is absolute: a signed capability URL for
       one scope and one operation. A GET on it returns the token-route
       response with no Authorization header, until its own expiry, which is
-      at least as long as the CAS token it returns. Foreign credentials sent
+      at least as long as the CAS token it returns. Authorization headers sent
       to it are ignored and never logged.
     - The download action's `href` is the HTTP read gateway URL for the
       object (absolute), not a token route.
