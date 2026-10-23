@@ -33,10 +33,11 @@ _SECRET_PATTERNS = {
     # A bare `xet_[A-Za-z0-9]` also hits code identifiers quoted in the notes
     # (`xet_get`, `assert_xet_download`); a token is one long unbroken run.
     "Xet token": re.compile(r"(?<![A-Za-z0-9_])xet_[A-Za-z0-9]{20,}"),
-    # `Bearer realm=` is the RFC 6750 challenge huggingface.co sends with a 401;
-    # `<token>`-style placeholders and the word "token" appear in prose.
+    # `Bearer realm=` and `Bearer error="` are RFC 6750 §3 challenges sent
+    # with a 401; `<token>`-style placeholders and the word "token" appear in
+    # prose.
     "bearer credential": re.compile(
-        rf"Bearer (?!{_R}|realm=|<[^>]+>|token(?![\w.-]))"
+        rf"Bearer (?!{_R}|realm=|error=\"|<[^>]+>|token(?![\w.-]))"
     ),
     "URL signature": re.compile(rf"Signature=(?!{_R})", re.IGNORECASE),
     "S3 signature header": re.compile(
@@ -216,6 +217,7 @@ def test_guard_catches_known_leak_shapes(leak):
         "Requests carry `Authorization: Bearer <token>`; a Bearer token is required.",
         '`{"casUrl":"…","exp":<epoch>,"accessToken":"<JWT>"}`',
         'WWW-Authenticate: Bearer realm="Authentication required", charset="UTF-8"',
+        'WWW-Authenticate: Bearer error="invalid_token"',
         "https://cdn/x?expires=1&signature=REDACTED&key-pair-id=REDACTED&policy=REDACTED",
         "https://s3/x?X-Amz-Security-Token=REDACTED&x-amz-credential=REDACTED",
         '"Proxy-Authorization": "REDACTED"',
