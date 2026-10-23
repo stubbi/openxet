@@ -144,7 +144,7 @@ test suite (§8) is the lasting source of truth.
   /v1/chunks/default-merkledb/{hash}` (global dedup, returns a shard),
   `POST /v1/xorbs/default/{hash}`, `HEAD /v1/xorbs/default/{hash}`,
   `POST /v1/shards`, `POST /v2/shards` (NDJSON progress stream; clients fall
-  back to v1 on 404), `HEAD /v1/files/{file_id}`, `GET
+  back to v1 on 404 or 501), `HEAD /v1/files/{file_id}`, `GET
   /v2/file-chunk-hashes/{file_id}` (delta uploads). Hash-to-hex conversion
   reverses bytes within each 8-byte group, which is a classic source of
   bugs.
@@ -153,12 +153,28 @@ test suite (§8) is the lasting source of truth.
     spec's `default-merkledb`. openxet serves both.
   - It sends `POST /v1/telemetry`. openxet accepts it and drops the body:
     nothing is stored or forwarded (no telemetry, §7).
-  - It tries `POST /v2/shards` first and falls back to `/v1/shards` on 404.
+  - It tries `POST /v2/shards` first and falls back to `/v1/shards` on 404
+    or 501.
   - An empty file is a file entry with 0 segments, an all-zero file hash
     and an all-zero sha256.
   - The wasm build uploads shards **with** lookup tables and a footer,
     although the spec says the footer must be omitted. openxet accepts a
     consistent footer and discards the tail (S6 rule 3).
+- **The CAS wire contract** (S10, `hf_xet` 1.7.0, source and observed):
+  - A storage-only upload and download uses seven routes: dedup query,
+    xorb upload, `/v2/shards` and `/v1/shards`, `/v2/` and `/v1/`
+    reconstruction, and telemetry. Nothing else is needed.
+  - Every write is retried as a whole on `5xx`, `408`, `429` and
+    timeouts, up to 6 attempts, so xorb and shard uploads must be
+    idempotent.
+  - `404` and `501` on a `/v2/` route make the client fall back to `/v1/`.
+    A content failure on `/v2/shards` is therefore an in-stream `error`
+    event, never a status.
+  - A reconstruction whose range starts at or past EOF answers `416`.
+  - Data URLs are fetched with a single `Range` and no credential.
+  - The client never reacts to `401`; it refreshes tokens only by clock.
+  - Stock clients cache shards for 21 days and dedup against them
+    without asking the server, which sets the GC grace floor (§5.6).
 - **Shard sha256** is stored in the hash layout: the raw bytes are the
   digest with each 8-byte group reversed. It is client-asserted; the
   server can't check it without the file's bytes, so the sha256 → Xet
@@ -402,9 +418,13 @@ Authorizers (v1):
 - **Webhook**: openxet asks the operator's backend "may subject X read/write
   repo Y?", with a short-TTL cache. This is how platforms like aqora plug in.
 
-CAS tokens are short-lived tokens openxet signs itself, scoped to
-(scope, revision, read|write, exp). Every node verifies them statelessly.
-Keys rotate through a key set.
+CAS tokens are short-lived EdDSA JWTs (ADR 0007), scoped to
+(scope, read|write, exp), with no revision, because Xet reads follow scope
+membership (R25) and a revision would enforce nothing. The Hub token route
+still accepts a revision in its URL for compatibility (M2). Every node
+verifies them statelessly against a key set of public keys, so keys rotate
+without downtime, and a platform can sign them itself. `exp` is honoured
+exactly.
 
 **Storage-only mode:** a platform with its own naming layer gets CAS tokens
 for its users either through an admin endpoint or by signing them itself
@@ -493,7 +513,12 @@ already stored writes nothing new. Test:
     range-bound URL per fetch entry (S1, ADR 0002); or
   - **(b)** via the transfer role, with openxet-signed range URLs (also one
     range per entry, so no `multipart/byteranges`), for local disk, caching
-    setups and any pool that fails the range-binding probe.
+    setups and any pool that fails the range-binding probe. The URL form is
+    `{public_url}/v1/transfer/xorbs/{xorb}?range={start}-{end}&exp={unix}&sig={b64url}`,
+    where `sig` is an HMAC-SHA256 over the xorb, range and expiry, keyed with
+    the transfer key. The request must carry exactly the signed `Range`: a
+    missing header is a `400`, and a different range, an expired URL or a bad
+    signature is a `403`.
 
   Mode (a) is gated per deployment and pool by a **range-binding
   enforcement probe**, not by a backend list (ADR 0002). It runs at
@@ -526,9 +551,12 @@ already stored writes nothing new. Test:
 - **References:** Hub-layer commits reference files; in storage-only mode the
   platform pins files through an admin API, optionally with a TTL. Files
   reference xorbs.
-- **Mark and sweep with a grace period:** default 7 days, configurable. This
-  covers in-flight uploads, because xorbs land before the shard that
-  references them.
+- **Mark and sweep with a grace period:** default 30 days, minimum 28
+  (21-day client shard cache + 7-day dedup key), and `gc` rejects anything
+  lower. Stock clients dedup against cached shards without asking the
+  server (§3), so a xorb collected earlier fails their next upload. The
+  grace also covers in-flight uploads, because xorbs land before the shard
+  that references them.
 - **Storage-only default is safe:** files are never collected unless the
   operator enables pin-based retention for that tenant. An integrator who
   never pins loses nothing. *(builder-check call)*
@@ -1269,7 +1297,8 @@ own UI and leave this role off.
 
 ## 11. Spikes (verify, don't assume)
 
-All nine M0 spikes are answered. Each note records versions, method and
+All ten spikes are answered: S1–S9 in M0, S10 for M1. Each note records
+versions, method and
 what was observed versus inferred.
 
 - **S1** *(answered: yes, on MinIO;
@@ -1339,11 +1368,19 @@ what was observed versus inferred.
   gitoxide server-side capabilities (upload-pack/receive-pack, protocol
   v2) against the `git` binary on a cached bare repo. Measure throughput
   and latency, and check that bucket-backed packs keep nodes stateless.
+- **S10** *(answered: stock `hf_xet` 1.7.0 uses seven CAS routes in a
+  storage-only upload and download; writes are retried whole, `404` on a
+  `/v2/` route means fall back, tokens refresh only by clock, data URLs
+  carry no credential, and client shard caches live 21 days;
+  [S10](../../research/S10-cas-wire-contract.md))*: the exact CAS wire
+  contract that stock clients rely on, and the `xet-data` API our own
+  client calls (ADR 0006).
 
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and
 current token flow. They are stated in the compatibility matrix and tested
-as the "oldest" leg of the suite. M0 did not pin them; the M1 plan does.
+as the "oldest" leg of the suite. M0 did not pin them. The M1 plan sets
+`hf_xet` 1.7.0 as the floor (S6, S10).
 
 ## 12. Milestones (v1 = all of them)
 
@@ -1387,6 +1424,7 @@ but sets no calendar dates.
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
   - Metrics, tracing, and the rest of the HTTP read gateway.
+  - Metering (§5.7) and the admin API that exposes it.
   - Server-side chunking for non-Xet clients.
   - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
   - The `git-xet` setup of §10.2: the server-side capability route, plus
@@ -1400,6 +1438,8 @@ but sets no calendar dates.
   - HF pull-through mirror.
   - Multiple storage pools, residency and KMS.
 - **M6:** our own client (§10.8).
+  - `GET /v2/file-chunk-hashes/{file_id}`, which `sync` needs (until then
+    it answers `404`; no stock client calls it).
   - `sync`, `mount`, storage-only mode, `login`, `setup git` (including the Git LFS download agent), `doctor`.
   - Python bindings.
   - The minimal self-service web UI (§10.10).
@@ -1417,11 +1457,12 @@ but sets no calendar dates.
 
 ## 13. Left to the builder
 
-- Exact crate layout and names, HTTP framework, DB access library, token
-  format (JWT/PASETO), signing algorithm.
+- Exact crate layout and names, HTTP framework, DB access library.
+  Decided in M1: axum, sqlx (M1-R1); EdDSA JWT tokens (ADR 0007).
 - Small-file threshold, cache design, partitioning scheme details.
-- How global-dedup response shards are assembled (reuse uploaded shards or
-  synthesize), within the spec.
+- Global-dedup response shards are decided (M1-R4): synthesized from the
+  newest visible xorb containing the queried chunk, with a fresh random HMAC
+  key and a `shard_key_expiry` of now + 7 days.
 - Docs site tooling.
 
 ## 14. Name
@@ -1530,3 +1571,13 @@ made. Public docs cite them by number; this is what each cited one decides.
 | R26 | Public text never describes or hints at an unfixed third-party security weakness. | `AGENTS.md` |
 | R29 | Upload validation composes upstream primitives with openxet's own policy checks; format logic is never reimplemented. | ADR 0001, S5 |
 | R30 | Shard verification takes a synchronous chunk-table lookup, caps distinct referenced xorbs, and ignores unreferenced CAS-info xorbs. | S6 |
+| M1-R1 | The CAS is axum on tokio, the index is sqlx (SQLite now, Postgres in M3), and the local-disk store is openxet's own fsynced module; `object_store` serves S3, GCS and Azure from M3. | M1 plan |
+| M1-R2 | CAS tokens are EdDSA JWTs verified against a public key set; static tokens are compared by SHA-256 in constant time. | §5.4, ADR 0007 |
+| M1-R3 | Signed transfer URLs bind xorb, range and expiry in an HMAC; a missing `Range` is `400`, any mismatch `403`. | §5.5, ADR 0002 |
+| M1-R4 | Dedup responses are synthesized from the newest visible xorb containing the chunk, keyed with a fresh random HMAC key and a 7-day `shard_key_expiry`. | §13, §5.6 |
+| M1-R5 | The GC grace defaults to 30 days and is never below 28 (21-day client shard cache + 7-day dedup key). | §5.6, S10 |
+| M1-R6 | `GET /v2/file-chunk-hashes` is built in M6 and answers `404` until then. | §12, ADR 0006 |
+| M1-R7 | Metering ships in M4 with the admin API. | §5.7, §12 |
+| M1-R8 | Xorb validation runs on blocking threads bounded by one permit per CPU; double decompression on accept is kept and benchmarked. | M1 plan |
+| M1-R9 | The client version floor is `hf_xet` 1.7.0. | §11, S10 |
+| M1-R10 | The default bind is `127.0.0.1:8080`, which is also `hf_xet`'s default CAS endpoint. | S10 |

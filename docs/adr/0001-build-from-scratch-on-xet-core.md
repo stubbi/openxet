@@ -49,6 +49,9 @@ one, Shardline, against stock clients. Full results are in
   quirk lists.
 - We depend on `xet-core`'s release cadence and API stability. The
   `protocol` crate isolates that.
+- The client and server use different parts of upstream. The client core
+  (`xet-data`, `xet-runtime`, `xet-client`) lives only in `openxet-client`
+  (ADR 0006); the server keeps to `xet-core-structures`.
 - License hygiene: the crates are Apache-2.0, and our NOTICE credits them.
 - The `protocol` crate may compose upstream's public primitives with
   openxet's own policy checks, for example validating each decompressed

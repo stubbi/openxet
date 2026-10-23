@@ -492,7 +492,7 @@ binding.
        list in the database in one transaction
    - Inputs become `superseded`, with a timestamp. They leave new
      snapshots at once, but their bucket objects are kept through the
-     grace period (§5.6, default 7 days), and GC deletes them after it.
+     grace period (§5.6, default 30 days), and GC deletes them after it.
    - Geometric repacks roll packs up with `pack-objects --stdin-packs`,
      which keeps every object of every input pack (source: git v2.39.5
      `builtin/repack.c` line 937, and the `git-pack-objects(1)`
