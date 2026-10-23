@@ -12,10 +12,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Dependabot cannot sign off, so it is the only exempt author.
-      - uses: KineticCafe/actions-dco@5f160e3ee086af8fc0fb567b8add0937d074123e # v3.2.0
+      # Dependabot cannot sign off, so PRs Dependabot opened are exempt. The
+      # exemption keys on who opened the PR, which a contributor can't spoof
+      # by setting a commit's author.
+      - if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: KineticCafe/actions-dco@5f160e3ee086af8fc0fb567b8add0937d074123e # v3.2.0
         with:
+          # Bot-authored commits in any other PR need a sign-off too (the
+          # action's default exempts every bot author).
           config: |
             [bot]
-            policy = "allowlist"
-            allow = ["dependabot[bot]"]
+            policy = "none"

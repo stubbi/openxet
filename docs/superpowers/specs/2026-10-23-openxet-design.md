@@ -453,6 +453,22 @@ Xorbs remain globally content-addressed and shared.
 - `per-scope` is for multi-tenant hosting, where revealing whether a chunk
   already exists across tenants is unacceptable.
 
+**Existence checks in `per-scope` mode** answer per scope too, or they
+would reveal what dedup answers hide. Every check that says whether
+something exists is filtered by the caller's scope:
+- `HEAD /v1/xorbs/…`, `HEAD /v1/files/…` and dedup lookups
+  (`GET /v1/chunks/…`)
+- the xorb lookups of shard verification (`verify_shard`'s
+  `XorbChunkLookup`)
+
+A xorb counts as registered to a scope once it was uploaded under that
+scope or a file registered to the scope references it. A xorb or file not
+registered to the caller's scope answers exactly as if it were absent
+(`404`, no dedup match, `UnknownXorb`), so the client uploads it, which
+registers it to its scope. Storage stays shared: the upload of a xorb
+already stored writes nothing new. Test:
+`per_scope_existence_checks_hide_other_tenants`.
+
 ### 5.5 Data paths
 
 - **Upload:** client → CAS (`POST xorbs` streamed and verified into the object
@@ -566,7 +582,7 @@ its test.
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
 | 2 | **Credentials are repo-scoped.** CAS tokens, signed URLs and capability `href`s are scoped to one repo; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
-| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants` |
+| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants`, `per_scope_existence_checks_hide_other_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped` |
 | 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
 | 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_write_is_visible`, `acked_write_survives_sigkill` |
@@ -928,29 +944,29 @@ says which spec version and client versions are supported.
 
 ### 10.2 `git-xet` with third-party Git hosts
 
-`git-xet`'s credential sourcing assumes the LFS host equals the Git host.
-When `lfs.url` points at openxet and the remote lives elsewhere, that
-doesn't hold, so openxet's refresh `href` needs no credential, and `openxet
-setup git` configures access explicitly
+When `lfs.url` points at openxet and the remote lives elsewhere, openxet's
+policy is: **capability routes never authenticate by header, and `openxet
+setup git` configures access explicitly**
 ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md), S7). All three
 parts are v1:
 - **Server side:**
   - The `href` refresh route openxet returns is a short-lived, signed,
     single-repo capability URL, so the refresh needs no credential.
   - CAS tokens issued through the LFS path last for the transfer session.
-  - openxet ignores and never logs `Authorization` headers on that route.
+  - openxet never authenticates by, logs or echoes an `Authorization`
+    header on that route.
 - **Client setup:** `openxet setup git` writes the clone's git config:
   - `lfs.url`
   - `lfs.<endpoint derived from the remote>.access=none`, so `git-xet`
-    skips its credential lookup (and never prompts); the capability
-    `href` alone completes the refresh (S7, observed)
+    calls the capability `href` without a credential; the `href` alone
+    completes the refresh (S7, observed)
   - the openxet token in the credential helper under the openxet host, for
     `git-lfs`'s batch
 
   The `access` key must be in git config, because `git-xet` doesn't read
   `.lfsconfig`.
-- **Upstream:** contribute credential sourcing from the LFS endpoint, the
-  way `git-lfs` does it, to `git-xet` in `huggingface/xet-core`,
+- **Upstream:** contribute a lazy credential lookup, an optional
+  `expires_in` and download support to `git-xet` in `huggingface/xet-core`,
   coordinated with Hugging Face.
 
 ### 10.3 Server-side chunking for non-Xet clients
@@ -1359,21 +1375,25 @@ but sets no calendar dates.
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
+  - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
+    `basic` download `href`s point at it (ADR 0003).
   - `openxet purge <file-hash>` (§5.4).
 - **M3:** production backends.
   - Postgres; S3, GCS and Azure; presigned downloads.
+  - The range-binding probe against real AWS S3, R2, Garage, GCS and
+    Azure, and the presigned-URL signing benchmarks (ADR 0002).
   - OIDC and webhook auth.
   - A multi-node scale test.
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
-  - Metrics, tracing and HTTP read gateway.
+  - Metrics, tracing, and the rest of the HTTP read gateway.
   - Server-side chunking for non-Xet clients.
   - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
   - The `git-xet` setup of §10.2: the server-side capability route, plus
-    the upstream credential-sourcing contribution to `xet-core`.
+    the upstream `git-xet` contributions listed there.
   - Upstream: Xet download support in `git-xet` (§6.1). This is contributed
-    alongside the credential-sourcing change and coordinated with Hugging
-    Face before any PR is filed.
+    alongside the other `git-xet` contributions and coordinated with
+    Hugging Face before any PR is filed.
 - **M5:** reach.
   - `bucket`, `space` and `kernel` repo types.
   - Cache tier.
@@ -1486,7 +1506,7 @@ guilt/xet-server.
 | Architecture | Every decision recorded and reversible | ADRs for every significant choice; crate boundaries enforced (no cyclic or upward deps, checked in CI); bucket-as-truth and stateless invariants have dedicated tests |
 | Security | Secure by default, with a verifiable supply chain | The §5.9 requirements, each with its test; `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
 | Documentation | Every user finds the answer in under a minute | Diátaxis structure (tutorials, how-tos, reference, explanation); every example runs in CI; reference generated from code (CLI, config, OpenAPI); `llms.txt`; a docs feedback link on every page |
-| Governance | Trustworthy beyond one person | `GOVERNANCE.md` (roles, decision process, path to maintainer); every change merged via PR with at least one independent review (human, or an agent reviewer plus human sign-off), enforced by branch protection; an RFC process for big changes; DCO; code of conduct; a public roadmap |
+| Governance | Trustworthy beyond one person | `GOVERNANCE.md` (roles, decision process, path to maintainer); every change merged via PR with at least one independent review (human, or an agent reviewer plus human sign-off), required by process; branch protection enforces the PR, the required checks and linear history, but not the review (0 required approvals, `enforce_admins: false`) until a second maintainer exists (`GOVERNANCE.md`); an RFC process for big changes; DCO; code of conduct; a public roadmap |
 | Community | Contributors feel welcome and succeed | Labelled good-first issues; contributor guide tested by newcomers; first response to issues and PRs within two business days; credit in every release's notes |
 | Release engineering | Boring, predictable releases | SemVer; changelog generated from Conventional Commits; release train cadence; upgrade tests between consecutive versions; a stated support window |
 | UX (humans and agents) | Best on both (§7.1) | Time-to-first-upload measured per release; the agent leg of the suite; accessibility (WCAG 2.2 AA) checked for the web UI |
@@ -1494,3 +1514,19 @@ guilt/xet-server.
 
 Bus factor is a real risk while one person leads the project. Governance work
 starts at M0, not after 1.0.
+
+## 17. Rulings register
+
+Rulings are decisions made while building, numbered in the order they were
+made. Public docs cite them by number; this is what each cited one decides.
+
+| Ruling | Decision | Where |
+|---|---|---|
+| R19 | The HF pull-through mirror ingests verified chunks only, never fetches or serves gated or private content with another caller's credential, and is disabled on openxet.com. | §10.6, S8 |
+| R21 | Security issues found in third-party software are reported privately to its maintainers. | `AGENTS.md` |
+| R22 | Git reads and Hub reads by revision serve only objects reachable from a current ref, on every path; ref writers obey the same rule. | §5.9 req 8, ADR 0004 |
+| R24 | Objects a reindex can't place are persisted and protected, never discarded automatically, and never block repacks. | ADR 0004, S9 |
+| R25 | Xet reads by hash follow scope membership, not Git reachability; removing data takes GC or `openxet purge`. | §5.4 |
+| R26 | Public text never describes or hints at an unfixed third-party security weakness. | `AGENTS.md` |
+| R29 | Upload validation composes upstream primitives with openxet's own policy checks; format logic is never reimplemented. | ADR 0001, S5 |
+| R30 | Shard verification takes a synchronous chunk-table lookup, caps distinct referenced xorbs, and ignores unreferenced CAS-info xorbs. | S6 |

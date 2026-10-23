@@ -92,9 +92,8 @@ Labels used below:
    - The first batch call carries no credential and gets a 401 with two
      `LFS-Authenticate` headers (`Basic realm=…`, `Bearer realm=…`).
      `git-lfs` retries with Basic credentials from the credential helper.
-2. **`git-xet`'s credential sourcing assumes the LFS host equals the Git
-   host.** With `lfs.url` on another host, the refresh `href` can't rely
-   on it (observed for HTTPS and SSH remotes).
+2. **`git-lfs` keys credentials by the `lfs.url` host; `git-xet` has its
+   own refresh-credential lookup, configured separately.**
    - **`git-lfs` keys credentials by the `lfs.url` host** (observed, both
      versions, HTTPS and SSH remotes; source `lfsapi/auth.go:199-238` in
      3.7.1, identical logic at `:186` in 3.5.1).
@@ -105,19 +104,15 @@ Labels used below:
        (`g2`/`s1`/`s2` stub logs).
      - 3.7 adds credential-helper `capability[]=authtype` and `state[]`
        (`creds/creds.go`), but not a different host choice (source).
-   - **`git-xet` derives its credential lookup from the Git remote**
-     (source, `git_xet/src/auth.rs`). The one switch that applies to it is
-     `lfs.<endpoint derived from the remote>.access`; with `none`, it
-     skips its credential lookup (and never prompts) (question 3).
-   - **The lookup is eager and blocking** (source `xet_agent.rs:82` →
-     `token_refresher.rs:36`; observed).
-     - `git-xet` resolves the credential when each upload starts, even if
-       no refresh will be needed.
-     - With no credential for the remote's host, the push failed before
-       `git-xet` contacted the `href` (`g6`):
-       `fatal: could not read Username for 'https://gitea:3000': terminal prompts disabled`.
-     - On a terminal, `git credential fill` would prompt for the Git
-       host's password (inferred from `auth/git.rs:35-44`).
+   - **`git-xet` resolves the credential for its refresh `href` with its
+     own lookup** (source, `git_xet/src/auth.rs`). The one switch that
+     applies to it is `lfs.<endpoint derived from the remote>.access`; with
+     `none`, it calls the `href` without a credential (question 3).
+   - **The lookup runs when each upload starts** (source
+     `xet_agent.rs:82` → `token_refresher.rs:36`; observed), even if no
+     refresh will be needed. Without the `access` key and with no stored
+     credential, the push stopped before `git-xet` contacted the `href`
+     (`g6`).
    - Two smaller remote shapes `git-xet` can't handle (source):
      - **`file://` and local-path remotes:**
        `to_derived_http_scheme` rejects them (`git_url.rs:106-118`), and
@@ -142,11 +137,11 @@ Labels used below:
      is not called at all during short pushes (as on huggingface.co), but
      the credential lookup of question 2 still happens.
    - **Consequence:** ADR 0005 item 10 is necessary but not sufficient.
-     - Without the `access=none` key, `git-xet` runs its own lookup for
-       the remote's host (question 2), and fails before calling the `href`
-       when it finds nothing (`g6`).
-     - The server ignores any Authorization on the `href`, and the client
-       setup writes the key.
+     - Without the `access=none` key, `git-xet` runs its own lookup
+       (question 2) before calling the `href` (`g6`).
+     - openxet's policy therefore has two parts: capability routes never
+       authenticate by header, and `openxet setup git` configures access
+       explicitly by writing the key.
 4. **`git-lfs-authenticate` returns JSON. `git-xet` needs `href` and
    `expires_in`. `git-lfs-transfer` can't negotiate `xet`.**
    - **Format:**
@@ -220,7 +215,7 @@ Labels used below:
   it.
   - `lfs.url`
   - `lfs.<endpoint-derived-from-the-remote>.access=none`, with which
-    `git-xet` skips its credential lookup (and never prompts)
+    `git-xet` calls the capability `href` without a credential
 
   It also stores the openxet token in the credential helper under the
   openxet host, for `git-lfs`'s batch. Repos hosted on openxet and reached

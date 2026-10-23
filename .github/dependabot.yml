@@ -6,6 +6,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    # xet-core crates are bumped deliberately, with the compatibility suite
+    # run on the bump (ADR 0001, Consequences).
+    ignore:
+      - dependency-name: "xet-*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -18,3 +22,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    # The pinned HF clients are bumped deliberately, with the compatibility
+    # suite run on the bump (ADR 0001, Consequences); the nightly "latest"
+    # leg already tracks new releases.
+    ignore:
+      - dependency-name: "huggingface_hub"
+      - dependency-name: "hf_xet"

@@ -35,8 +35,10 @@ Today there are no committers other than the maintainer.
    maintainer in a public issue. Existing maintainers decide by consensus
    and the discussion stays open for at least seven days.
 
-Maintainers who are inactive for six months may step down to committer by
-their own choice or by agreement of the other maintainers.
+A maintainer is **inactive** after six months with no merged PR, review or
+public governance comment in the project. An inactive maintainer may step
+down to committer by their own choice or by agreement of the other
+maintainers, and doesn't count toward the active maintainers below.
 
 ## How decisions are made
 
@@ -61,7 +63,9 @@ What branch protection enforces on `main` today:
 
 - A pull request is required; no direct pushes.
 - Required checks must pass: `rust (ubuntu-latest)`, `rust (macos-latest)`,
-  `deny` and `DCO`.
+  `deny`, `compat (agent leg)` and `DCO`.
+- History is linear (squash merges only), and every review conversation
+  must be resolved before merging.
 - **Zero required approving reviews**, and administrators are not bound by
   these rules (`enforce_admins: false`). With one human maintainer, a
   required approval would only block the project or be self-approval.
@@ -73,4 +77,7 @@ We say so plainly rather than overstate the guarantee.
 ## Changing this document
 
 By PR, under the same decision process. Changes to roles or the review rule
-need the approval of every maintainer.
+need the approval of every active maintainer while there are three or fewer.
+Above three, they need two-thirds of the active maintainers; a maintainer
+who hasn't answered 14 days after being asked in the PR counts as
+consenting.

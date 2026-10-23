@@ -173,7 +173,7 @@ def openxet_bin() -> str:
         pytest.fail(
             "OPENXET_BIN is not set. Build the CLI and point at it, e.g. "
             "`cargo build && OPENXET_BIN=$PWD/target/debug/openxet "
-            "uv run --directory compat pytest -m agent`.",
+            "uv run --frozen --directory compat pytest -m agent`.",
             pytrace=False,
         )
     path = Path(raw).resolve()

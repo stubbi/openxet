@@ -10,9 +10,9 @@ codes).
 
 ```bash
 cargo build
-OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest   # everything
-uv run --directory compat pytest -m "not agent"                           # HF baseline only
-OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m agent
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest   # everything
+uv run --frozen --directory compat pytest -m "not agent"                           # HF baseline only
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent
 ```
 
 - `OPENXET_COMPAT_TARGET`: endpoint under test (default

@@ -157,7 +157,10 @@ results below are **observed**.
    - **Why.** git's v2 `parse_want` only checks that the object exists in
      the odb. It does not check reachability, so
      `allowAnySHA1InWant=false` does not protect v2 (source: git v2.39.5
-     `upload-pack.c`, `parse_want`, lines 1413–1442).
+     `upload-pack.c`, `parse_want`, lines 1413–1442). This is git's
+     documented design, not a defect: its fetch protocol is not meant to
+     keep unshared objects from a peer (git `transfer-data-leaks.adoc`,
+     SECURITY), so access control on git reads is openxet's job.
    - **Which requests.** openxet interposes on the request stream. It
      checks wants before forwarding them to git, so git never sees an
      unchecked want. This covers:

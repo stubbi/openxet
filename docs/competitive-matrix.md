@@ -133,7 +133,7 @@ checks of 2, 6 and 9; "–" means not re-run.
 | Python API | FAIL | FAIL | `list_repo_tree` and branch upload pass; `paths-info`, refs, commits, tag, `model_info` and download at an older SHA 404. A new branch starts empty instead of from main; `create_commit` with a delete answers 200 but the file stays |
 | Git | FAIL | PARTIAL | Main: the LFS batch answers `{"transfer":"xet"}` with no actions even to plain `git-lfs`, so `git push` exits 0 having uploaded nothing (silent data loss); pull fails. Taytay: `git-xet` push of 300 MB and `git-lfs` pull, sha256 match, exactly `X-Xet-Cas-Url`, `X-Xet-Access-Token`, `X-Xet-Token-Expiration` (epoch), absolute `href`; plain `git-lfs` push gets a clear `422 … install git-xet` |
 | 1 GiB incompressible | PASS | – | Accepted, no 413 |
-| SIGKILL | FAIL | – | Mid-upload kill recovers on retry. But an acknowledged commit followed by SIGKILL within the 1-minute snapshot window is lost (`tree` is `[]`). A re-upload from the same machine then "succeeds" while download returns `500 reconstruction references unknown xorb` |
+| SIGKILL | FAIL | – | Mid-upload kill recovers on retry. Acknowledged commits are lost after SIGKILL within the 1-minute snapshot window (`tree` is `[]`) |
 | Integrity tool | N/A | N/A | None |
 | Storage overhead | PARTIAL | – | +7% over unique data (L13 allows ≤ 5%), all from the failed cross-machine dedup re-sending the file; ~0 on one machine; no per-chunk copies |
 | Throughput (1 GiB, local) | PASS | – | Upload ~50 MB/s, download ~182 MB/s, peak RSS 55 MiB |
@@ -177,7 +177,7 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 | 9 Python Hub API (L19) | FAIL | N/A | FAIL | FAIL | FAIL |
 | 10 Git: `git-xet`, `git-lfs` (L7, L8, L20) | FAIL | N/A | PARTIAL | FAIL | PARTIAL |
 | 11 1 GiB incompressible (L9, L24) | NOT RUN | PASS | FAIL | PASS | NOT RUN |
-| 12 SIGKILL (L10, L21, L22) | FAIL | PASS | PASS* | FAIL | NOT RUN |
+| 12 SIGKILL (L10, L21) | FAIL | PASS | PASS* | FAIL | NOT RUN |
 | 13 Integrity tool (L11) | FAIL | N/A | N/A | N/A | N/A |
 | 15 Storage overhead (L13) | FAIL | PASS | FAIL | PARTIAL | NOT RUN |
 | 16 Performance (1 GiB up / down) | PARTIAL (18 / 60 MB/s) | PASS (88 / 307 MB/s) | FAIL (1 GiB fails) | PASS (50 / 182 MB/s) | NOT RUN |
@@ -265,8 +265,8 @@ Taytay. Lesson 5 is reconfirmed: in two projects a 1 KB range fetched
     acknowledgement. (guilt loses commits within its 1-minute snapshot
     window.)
 22. A shard that references xorbs the server doesn't hold is rejected at
-    upload with a clear error, so a client with a warm cache re-sends them
-    instead of leaving a file that fails later with a 500.
+    upload with a clear error, so the client re-sends the xorbs and no file
+    is registered that can't be reconstructed.
 23. Compatibility tests drive the real, pinned client binaries, never a
     replay of their requests, across a version matrix (oldest supported,
     pinned, latest). A 404 or 405 seen by a newer client fails the suite.

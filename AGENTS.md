@@ -184,8 +184,7 @@ One logical change per commit. Every commit builds and passes tests.
 
 ## Current state
 
-M0 foundation in progress, following
-`docs/superpowers/plans/2026-10-23-m0-foundation.md`. The design is approved,
+M0 complete; M1 next per `docs/superpowers/plans/`. The design is approved,
 and ADR 0001 decides to build from scratch on `xet-core`'s crates (after
 evaluating existing Xet servers; see `docs/competitive-matrix.md`).
 
@@ -206,7 +205,8 @@ cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
-OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest # compatibility suite (needs uv; CI gate: -m agent)
+uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest # compatibility suite (needs uv; CI gate: -m agent)
 ```
 
 Exit codes and JSON output schemas are documented in `docs/reference/`.
