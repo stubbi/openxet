@@ -530,3 +530,19 @@ async fn next_ingested_seq_is_an_index_lookup() {
         "plan visits every xorb: {details:?}"
     );
 }
+
+/// A database error keeps SQLite's code and message as its `source()`, so
+/// logs that walk the chain say why the index failed, not only what to try.
+#[tokio::test]
+async fn database_errors_carry_the_sqlite_cause() {
+    let dir = ok(TempDir::new());
+    let missing_dir = dir.path().join("missing").join("index.sqlite");
+    let Err(err) = SqliteIndex::open(&missing_dir).await else {
+        panic!("opened an index in a directory that doesn't exist");
+    };
+    assert!(matches!(err, IndexError::Database(_)), "got {err:?}");
+    let cause = std::error::Error::source(&err)
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    assert!(cause.contains("(code: 14)"), "cause was {cause:?}");
+}
