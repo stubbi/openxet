@@ -644,6 +644,32 @@ fn distinct_xorb_cap_is_checked_before_any_lookup() {
 }
 
 #[test]
+fn limits_check_needs_no_lookup_and_agrees_with_verify_shard() {
+    // A server checks the limits before it loads any chunk table, which is
+    // what bounds the tables it holds (S6 "M1 index implication").
+    let chunks = reference_xorb_chunks();
+    let shard = reference_upload_shard();
+    let lookup = reference_lookup(&chunks);
+    for limits in [
+        limits(796, 1),
+        limits(795, 1),
+        limits(MAX_REFERENCED_CHUNKS, 0),
+    ] {
+        let checked = limits.check(&shard).map_err(|e| e.to_string());
+        let verified = verify_shard(&shard, &lookup, limits).map_err(|e| e.to_string());
+        assert_eq!(checked, verified, "{limits:?}");
+    }
+    assert!(matches!(
+        limits(795, 1).check(&shard),
+        Err(VerifyError::TooMuchWork { .. })
+    ));
+    assert!(matches!(
+        limits(796, 0).check(&shard),
+        Err(VerifyError::TooManyXorbs { .. })
+    ));
+}
+
+#[test]
 fn referenced_xorbs_are_distinct_in_first_reference_order() {
     let mut entry = reference_upload_shard().files.remove(0);
     let seg = entry.segments[0];
