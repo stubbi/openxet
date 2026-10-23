@@ -454,10 +454,11 @@ files through openxet with chunk-level dedup.
 How it works (verified in `xet-core/git_xet` source, 2026-10-23):
 - `git-lfs` sends the Git LFS Batch API request with its registered transfer
   agents.
-- openxet answers with transfer `xet`. Each object's `action` carries
-  `href` (the token refresh route) and headers `X-Xet-Cas-Url`,
+- openxet answers uploads with transfer `xet`. Each object's `action`
+  carries `href` (the token refresh route) and headers `X-Xet-Cas-Url`,
   `X-Xet-Access-Token`, `X-Xet-Token-Expiration` and optionally
-  `X-Xet-Session-Id`.
+  `X-Xet-Session-Id`. huggingface.co does exactly this, and its `href` is
+  the Hub token route `…/xet-write-token/{url-encoded ref}` (S7, observed).
 - `git-lfs` hands off to `git-xet`, which talks to the CAS directly.
 
 Server work is small because it reuses pieces v1 needs anyway:
@@ -470,17 +471,24 @@ Rules for this endpoint:
   HTTP password.
 - LFS repos are scopes like Hub repos. Creating one is an authorizer
   `create` decision, so the first push can create it.
-- **Downloads always need a `basic` transfer.** `git-xet` 0.2.1 implements
-  uploads only ("custom transfer for download is not implemented yet",
-  observed 2026-10-23), so `git-lfs` downloads through `basic`. openxet offers
-  `basic` (absolute `href`s, never relative) served by the HTTP read gateway
-  (§5.5), and also offers `xet` for downloads so Xet-capable agents use it.
+- **Downloads always answer `basic`.** `git-xet` 0.2.1 implements uploads
+  only ("custom transfer for download is not implemented yet"). But
+  `git xet install` registers it for both directions, so `git-lfs` offers
+  `xet` in download batches. A server that chooses `xet` there breaks
+  `git lfs pull` with no fallback (S7, observed). openxet therefore answers
+  every download with `basic`, as huggingface.co does:
+  - absolute `href`s, never relative, served by the HTTP read gateway
+    (§5.5)
+  - the Xet hash and CAS headers in the action's `header`, for agents that
+    read them
+  ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md))
 - **Closing the Git download gap** *(decided by the user, v1)*. With plain
   `basic`, `git clone` / `git pull` fetch whole files. Two complementary
   fixes:
   1. **Our client is a Git LFS transfer agent for downloads** (§10.8).
-     `openxet setup git` registers it, so Git fetches only the chunks missing
-     from the local Xet cache. The cache is shared with `hf` and `hf_xet`
+     `openxet setup git` registers it under its own transfer name (not
+     `xet`, which `git-xet` owns and can't download with), so Git fetches
+     only the chunks missing from the local Xet cache. The cache is shared with `hf` and `hf_xet`
      (same `HF_XET_CACHE`). Uploads keep going through `git-xet` when it is
      installed, or through our agent when it isn't.
   2. **Upstream:** contribute download support to `git-xet` in
@@ -492,8 +500,11 @@ Rules for this endpoint:
   - **Uploads work** via `basic`/`multipart`, with server-side chunking
     (§10.3), so the data is still deduplicated in storage. The response
     suggests installing `git-xet` for faster uploads.
-- The exact download handshake for `git-xet` (how it gets the Xet hash for a
-  pointer) is pinned by spike S7 and the compatibility suite.
+- There is no `git-xet` download handshake to match. `git-xet` 0.2.1
+  doesn't download, and huggingface.co's `basic` download actions carry no
+  `X-Xet-Hash` (S7, `docs/research/S7-git-lfs-xet.md`). The handshake for
+  our agent and an upstream `git-xet` is ours to define: the hash in the
+  `basic` action's `header`, per ADR 0003.
 
 **Xet-native clients** (chunk first, oids later) use the LFS-scoped token
 routes `GET {lfs-url}/xet-read-token` and `GET {lfs-url}/xet-write-token`.
@@ -677,11 +688,21 @@ says which spec version and client versions are supported.
   (§5.4). Keys are registered via `openxet login` or the admin API. No
   passwords and no users are stored.
 - **`git-lfs-authenticate`:** returns `{href, header.Authorization,
-  expires_in}`. This is what `git-lfs` and `git-xet` use when the LFS
-  endpoint is an `ssh://` URL.
+  expires_in}`, all three always. The LFS spec makes them optional, but
+  `git-xet` 0.2.1 fails without `href` or `expires_in` (S7: Gitea omits
+  `expires_in` and `git-xet` breaks against it). `git-lfs` uses it when the
+  LFS endpoint is SSH. `git-xet` uses it when the Git remote is SSH, on
+  every token refresh.
 - **`git-lfs-transfer`** (the pure-SSH LFS protocol, git-lfs ≥ 3.0): lets
   plain `git-lfs` upload and download over SSH with no HTTPS at all. Uploads
   go through server-side chunking (§10.3).
+  - It can't negotiate `xet`: the client always sends `transfer=ssh` and
+    uses its built-in `ssh` adapter (S7, source and observed).
+  - `git-lfs` prefers it whenever the LFS endpoint is SSH. So for
+    openxet-hosted repos over SSH, `openxet setup git` sets
+    `lfs.<url>.sshtransfer=never` when `git-xet` is installed, which sends
+    those users through `git-lfs-authenticate` plus the HTTPS batch, where
+    `xet` is offered (ADR 0003).
 - Git repos whose *remote* is on another host over SSH (e.g.
   `git@github.com:…`) work as long as `lfs.url` points at openxet.
 
@@ -690,16 +711,26 @@ says which spec version and client versions are supported.
 `git-xet` source (`git_xet/src/auth.rs`, 2026-10-23) finds credentials for
 the Xet token refresh from the **Git remote URL**, not from `lfs.url`. In
 order, it checks:
-1. URL-embedded credentials
-2. `HF_TOKEN`
-3. netrc for the remote's host
-4. SSH `git-lfs-authenticate` against the remote's host
-5. the git credential helper for the remote's host
+1. `lfs.<endpoint derived from the remote>.access`; if `none`, it sends
+   no credential
+2. URL-embedded credentials
+3. `HF_TOKEN`
+4. netrc for the remote's host
+5. SSH `git-lfs-authenticate` against the remote's host
+6. the git credential helper for the remote's host
 
-So for a repo hosted on GitHub with `lfs.url` pointing at openxet, the
-refresh would send GitHub credentials to openxet (or SSH to github.com) and
-fail. Leaking credentials to the wrong host is unacceptable. Three
-complementary fixes, all v1:
+Spike S7 confirmed this end to end against Gitea, with `lfs.url` on another
+host (`docs/research/S7-git-lfs-xet.md`). `git-xet` sent openxet's refresh
+`href` each of these, as `Bearer`:
+- the Gitea password, from the credential helper or netrc
+- `HF_TOKEN`
+- over SSH, Gitea's per-repo LFS JWT
+
+`git-lfs` itself sends only the `lfs.url` host's credential. `git-xet` looks
+the credential up when each upload starts. With none available it fails
+before calling the `href`, or prompts for the Git host's password.
+Leaking credentials to the wrong host is unacceptable. Three complementary
+fixes, all v1 ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md)):
 - **Upstream:** contribute a fix to `huggingface/xet-core` so `git-xet`
   derives credentials from the LFS endpoint, matching what `git-lfs` itself
   does. This is the right fix; we do the extra work for users instead of
@@ -710,11 +741,18 @@ complementary fixes, all v1:
   - CAS tokens issued through the LFS path last for the transfer session.
   - openxet ignores and never logs foreign `Authorization` headers on that
     route.
-- **Docs:** `openxet setup git` configures `lfs.url` (and, until the upstream
-  fix ships, the netrc or credential entry for the openxet host) in one
-  command.
+- **Client setup, works today:** `openxet setup git` writes the clone's
+  git config:
+  - `lfs.url`
+  - `lfs.<endpoint derived from the remote>.access=none`, so `git-xet`
+    sends no credential and never prompts; the capability `href` alone
+    completes the refresh (S7, observed)
+  - the openxet token in the credential helper under the openxet host, for
+    `git-lfs`'s batch
 
-Spike S7 confirms all of this against real `git-lfs` and `git-xet`.
+  The `access` key must be in git config, because `git-xet` doesn't read
+  `.lfsconfig`. Clones without it still send their Git host's credential,
+  and the server-side rule above makes sure openxet drops it unread.
 
 ### 10.3 Server-side chunking for non-Xet clients
 
@@ -879,11 +917,16 @@ own UI and leave this role off.
   pass; `docs/research/S6-shard-verification.md`)*: the shard upload
   verification rules (spec "shard" page) implemented against the reference
   files.
-- **S7:** the `git-xet` download handshake, plus `git-lfs` behaviour with a
-  separate `lfs.url` host (credentials, `basic` fallback), against a real
-  Gitea in CI. Includes the credential-source gap (§10.2) over both HTTPS
-  and SSH, and whether `git-lfs-transfer` (pure SSH) can negotiate the `xet`
-  custom transfer.
+- **S7** *(answered: `git-xet` 0.2.1 has no download handshake, and
+  downloads must answer `basic`; the §10.2 gap is real over HTTPS and SSH and
+  closed today by a signed `href` plus `access=none`; `git-lfs-authenticate`
+  must include `href` and `expires_in`; `git-lfs-transfer` can't carry
+  `xet`; `docs/research/S7-git-lfs-xet.md`, ADR 0003)*: the `git-xet`
+  download handshake, plus `git-lfs` behaviour with a separate `lfs.url`
+  host (credentials, `basic` fallback), against a real Gitea in CI (the CI
+  leg is specified in ADR 0003). Includes the
+  credential-source gap (§10.2) over both HTTPS and SSH, and whether
+  `git-lfs-transfer` (pure SSH) can negotiate the `xet` custom transfer.
 - **S9:** Git hosting engine: gitoxide server-side capabilities
   (upload-pack/receive-pack, protocol v2) against the `git` binary on a
   cached bare repo. Measure throughput and latency, and check that
