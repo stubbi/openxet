@@ -49,7 +49,9 @@ spec, "auth" page). The batch header names match xet-core
    Files without the sha256 extension register but can't be served to plain
    git-lfs by oid.
 8. **Downloads.** A read token allows `/v2/reconstructions/{xet-hash}` (and
-   v1) for any file registered to the scope. There is no per-object
+   v1) for any file registered to the scope. For Xet-native clients (token
+   route) there is no per-object handshake. git-lfs/git-xet clients get the
+   hash from the batch response (item 10); spike S7 pins the git-xet
    handshake.
 9. **Pointers.** Pointers are the canonical 3-key git-lfs pointer
    (`version` / `oid` / `size`). openxet tolerates and preserves unknown keys,
@@ -73,14 +75,14 @@ spec, "auth" page). The batch header names match xet-core
 
 ## Consequences
 
-- Chunk-first clients work without knowing oids, and need no per-object
-  round trips.
-- Token scope is coarse (scope + mode). Per-object restriction is not
-  available; the authorizer decision happens at token issue.
-- The registration in 7 makes shard upload a state-changing step the index
-  must apply atomically per scope.
-- Header-key casing and the pointer encoding are now compatibility
-  commitments; changing either needs a superseding ADR.
+- Chunk-first clients work without knowing oids. Implication: they need no
+  per-object round trips.
+- Token scope is coarse (scope + mode). Implication: per-object restriction
+  is not available, so the authorizer decision happens at token issue.
+- The registration in 7 makes shard upload a state-changing step for the
+  index.
+- Header-key casing and the pointer encoding are compatibility commitments.
+  Implication: changing either needs a superseding ADR.
 - Tests, built in M1/M2, enforce this:
   - A compatibility-suite "third-party Xet client" leg, whose expectations
     come from jj-xet's `tests/openxet.rs` mock.
