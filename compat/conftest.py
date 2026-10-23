@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import pytest
 DEFAULT_ENDPOINT = "https://huggingface.co"
 DEFAULT_NAME = "huggingface.co"
 NOT_INSTALLED = "not installed"
+DOWNLOAD_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -53,11 +55,40 @@ REFERENCE_FILE = HubFile(
     xet_hash="118a53328412787fee04011dcf82fdc4acf3a4a1eddec341c910d30a306aaf97",
 )
 
+# The hook wraps the call boundary huggingface_hub uses to hand a file to
+# hf_xet and records the Xet hash it was given, so a plain-HTTP fallback can
+# never be mistaken for a Xet download.
 _DOWNLOAD_SCRIPT = """
-import sys
+import json, os, sys
+import huggingface_hub.file_download as fd
 from huggingface_hub import hf_hub_download
+
+real_xet_get = fd.xet_get
+
+def xet_get(*args, **kwargs):
+    with open(os.environ["OPENXET_COMPAT_XET_CALLS"], "a") as f:
+        f.write(json.dumps({"file_hash": kwargs["xet_file_data"].file_hash}) + "\\n")
+    return real_xet_get(*args, **kwargs)
+
+fd.xet_get = xet_get
 print(hf_hub_download(sys.argv[1], sys.argv[2], repo_type=sys.argv[3], revision=sys.argv[4]))
 """
+
+_PASSTHROUGH_ENV = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    *(
+        name
+        for base in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY")
+        for name in (base, base.lower())
+    ),
+)
 
 
 def sha256(path) -> str:
@@ -108,17 +139,31 @@ def target() -> Target:
     return _target_from_env()
 
 
-@pytest.fixture
-def hf_env(tmp_path, target) -> dict[str, str]:
-    """Environment for a client subprocess: anonymous, isolated, aimed at the target."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("HF_", "XET_"))}
+def build_hf_env(target: Target, root: Path) -> dict[str, str]:
+    """Environment for a client subprocess: anonymous, isolated, aimed at the target.
+
+    Built from an allowlist, not by filtering os.environ: huggingface_hub also
+    honours legacy names (HUGGINGFACE_HUB_CACHE, HUGGING_FACE_HUB_TOKEN,
+    HUGGINGFACE_ASSETS_CACHE) and XDG_CACHE_HOME, and a denylist would miss the
+    next one.
+    """
+    env = {k: os.environ[k] for k in _PASSTHROUGH_ENV if k in os.environ}
     env.update(
-        HF_HOME=str(tmp_path / "hf"),
-        HF_XET_CACHE=str(tmp_path / "xet"),
+        HOME=str(root / "home"),
+        XDG_CACHE_HOME=str(root / "xdg-cache"),
+        HF_HOME=str(root / "hf"),
+        HF_HUB_CACHE=str(root / "hf" / "hub"),
+        HF_XET_CACHE=str(root / "xet"),
         HF_ENDPOINT=target.endpoint,
         HF_HUB_DISABLE_TELEMETRY="1",
+        OPENXET_COMPAT_XET_CALLS=str(root / "xet-calls.jsonl"),
     )
     return env
+
+
+@pytest.fixture
+def hf_env(tmp_path, target) -> dict[str, str]:
+    return build_hf_env(target, tmp_path)
 
 
 @pytest.fixture(scope="session")
@@ -153,49 +198,62 @@ def run_hub_download(target: Target, hf_env: dict[str, str], file: HubFile) -> P
     A subprocess is required: huggingface_hub reads HF_HOME at import time, so
     in-process use would hit the real cache.
     """
-    out = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            _DOWNLOAD_SCRIPT,
-            file.repo_id,
-            file.filename,
-            file.repo_type,
-            file.revision,
-        ],
-        env=hf_env,
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=300,
-    )
-    assert out.returncode == 0, f"download failed:\n{out.stderr}"
-    return Path(out.stdout.strip().splitlines()[-1])
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        out = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _DOWNLOAD_SCRIPT,
+                file.repo_id,
+                file.filename,
+                file.repo_type,
+                file.revision,
+            ],
+            env=hf_env,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=300,
+        )
+        if out.returncode == 0:
+            return Path(out.stdout.strip().splitlines()[-1])
+        if attempt < DOWNLOAD_ATTEMPTS:
+            time.sleep(5 * attempt)
+    pytest.fail(f"download failed after {DOWNLOAD_ATTEMPTS} attempts:\n{out.stderr}")
 
 
 def assert_xet_download(hf_env: dict[str, str], file: HubFile) -> None:
-    """Prove hf_xet reconstructed `file`, not the plain HTTP fallback.
+    """Prove hf_xet was handed `file`, not the plain HTTP fallback.
 
-    hf_xet 1.7.0 writes a structured log under $HF_XET_CACHE/logs; a
-    "Reconstructing file to disk" record carries the Xet hash it fetched. This
-    is stronger than checking the cache directory exists, which hf_xet creates
-    on session start even if no file is transferred.
+    Primary: the call-boundary hook in the download subprocess recorded the
+    Xet hash passed to huggingface_hub's xet_get. Secondary: hf_xet 1.7.0
+    logged reconstructing that hash under $HF_XET_CACHE/logs, which shows the
+    native code ran too.
     """
-    logs = sorted((Path(hf_env["HF_XET_CACHE"]) / "logs").glob("*.log"))
-    assert logs, (
-        f"hf_xet wrote no log under {hf_env['HF_XET_CACHE']}/logs: the download "
-        "did not use the Xet path (is HF_HUB_DISABLE_XET set, or hf_xet missing?)"
+    calls_path = Path(hf_env["OPENXET_COMPAT_XET_CALLS"])
+    calls = (
+        [json.loads(line)["file_hash"] for line in calls_path.read_text().splitlines()]
+        if calls_path.exists()
+        else []
     )
+    assert file.xet_hash in calls, (
+        f"huggingface_hub never handed {file.xet_hash} to hf_xet (saw {calls}): "
+        "the download did not use the Xet path. Is HF_HUB_DISABLE_XET set, or "
+        "hf_xet missing?"
+    )
+
+    logs = sorted((Path(hf_env["HF_XET_CACHE"]) / "logs").glob("*.log"))
     reconstructed = set()
     for log in logs:
         for line in log.read_text().splitlines():
             try:
-                record = json.loads(line)
+                fields = json.loads(line).get("fields", {})
             except json.JSONDecodeError:
                 continue
-            fields = record.get("fields", {})
             if fields.get("message") == "Reconstructing file to disk":
                 reconstructed.add(fields.get("file_hash"))
     assert file.xet_hash in reconstructed, (
-        f"hf_xet never reconstructed {file.xet_hash}; saw {sorted(reconstructed)}"
+        f"hf_xet logged no reconstruction of {file.xet_hash} under "
+        f"{hf_env['HF_XET_CACHE']}/logs (saw {sorted(reconstructed)}); if hf_xet "
+        "changed its log format, update this check"
     )

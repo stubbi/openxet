@@ -12,4 +12,7 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["agent: drives the openxet CLI as an agent would (needs OPENXET_BIN)"]
+markers = [
+    "agent: drives the openxet CLI as an agent would (needs OPENXET_BIN)",
+    "pinned: only valid when the locked client versions are installed",
+]

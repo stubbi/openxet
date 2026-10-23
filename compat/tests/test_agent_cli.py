@@ -26,6 +26,8 @@ def run(openxet_bin, *args):
 
 @pytest.mark.parametrize("args", JSON_COMMANDS, ids=" ".join)
 def test_command_json_is_parseable_with_schema(openxet_bin, args):
+    # run() closes stdin and has no tty: a command that prompts would hang
+    # until the timeout and fail here.
     out = run(openxet_bin, *args)
 
     assert out.returncode == 0, out.stderr.decode()
@@ -40,7 +42,3 @@ def test_usage_error_with_json_is_structured(openxet_bin):
     error = json.loads(out.stderr)
     assert error["schema"] == "openxet.error.v1"
     assert error["hint"]
-
-
-def test_never_prompts_without_tty(openxet_bin):
-    assert run(openxet_bin, "version").returncode == 0

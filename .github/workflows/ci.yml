@@ -62,6 +62,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: "0.9.8"
           cache-dependency-glob: compat/uv.lock
       - run: cargo build -p openxet
       - run: uv run --frozen --directory compat pytest -m agent
