@@ -5,7 +5,10 @@
 //! `docs/research/S6-shard-verification.md` lists each rule, its source and
 //! its test.
 
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::io::{self, Read};
+use std::sync::Arc;
 
 use xet_core_structures::CoreError;
 use xet_core_structures::metadata_shard::file_structs::MDBFileInfoView;
@@ -29,13 +32,22 @@ pub const MAX_UPLOAD_SHARD_BYTES: u64 = 64 * 1024 * 1024;
 /// The parse budget alone doesn't bound verification: a 64 MiB shard holds
 /// ~700k segments, and each may span a whole xorb, so the referenced count
 /// could reach billions. Verification hashes each referenced chunk hash once
-/// (range hash and file hash), so the cap bounds CPU. Memory doesn't grow
-/// with the cap: besides the parsed shard (at most about the 64 MiB body),
-/// verification holds one buffer of at most one xorb's chunk hashes and an
-/// O(log n) file-hash state per file (see [`verify_shard`]). Without
-/// incremental hashing the cap would allow 2^24 × 40 bytes = 640 MiB of
-/// collected `(hash, length)` pairs per shard.
+/// (range hash and file hash), so this cap bounds CPU. Memory is bounded by
+/// [`MAX_REFERENCED_XORBS`] instead.
 pub const MAX_REFERENCED_CHUNKS: u64 = 1 << 24;
+
+/// The default cap on distinct xorbs one shard may reference, for
+/// [`verify_shard`].
+///
+/// The caller holds the chunk table of every distinct referenced xorb while
+/// verifying: at most 8192 entries of 40 bytes (320 KiB) per xorb, so
+/// 4096 xorbs is at most 1.25 GiB, and about 160 MiB at the typical 1024
+/// chunks per xorb. Stock clients stay well below it: they flush a shard
+/// at 64 MiB, and each xorb they upload adds a CAS info entry of 48 bytes per
+/// chunk to it, at least 512 chunks for a full xorb, so a shard lists at most
+/// about 2,700 new xorbs; the rest of the cap covers references to xorbs
+/// already stored.
+pub const MAX_REFERENCED_XORBS: usize = 4096;
 
 /// SHA-256 of zero bytes, one of the values accepted for an empty file.
 const EMPTY_SHA256: [u8; 32] = [
@@ -51,7 +63,70 @@ pub struct UploadShard {
     /// The xorb hashes listed in the CAS info section, in shard order. The
     /// client's per-chunk listings are dropped: the server's own chunk hashes,
     /// recorded when it accepted each xorb, are the ones it trusts.
+    /// Verification uses only the xorbs segments reference
+    /// ([`UploadShard::referenced_xorbs`]); a listed xorb no segment
+    /// references is ignored and never registered.
     pub xorbs: Vec<MerkleHash>,
+}
+
+impl UploadShard {
+    /// The distinct xorbs the file segments reference, in order of first
+    /// reference: the chunk tables [`verify_shard`] will look up.
+    pub fn referenced_xorbs(&self) -> impl Iterator<Item = &MerkleHash> {
+        let mut seen = HashSet::new();
+        self.files
+            .iter()
+            .flat_map(|file| &file.segments)
+            .map(|seg| &seg.xorb)
+            .filter(move |xorb| seen.insert(*xorb))
+    }
+}
+
+/// Where [`verify_shard`] finds the chunk table the server stored for a
+/// xorb when it accepted it: `(chunk hash, uncompressed length)` per chunk,
+/// in xorb order, or `None` if the xorb isn't stored.
+///
+/// Lookups are synchronous. A caller whose index is async loads the tables
+/// of [`UploadShard::referenced_xorbs`] first, for example into a
+/// `HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>>`, which implements this
+/// trait, as does any `Fn(&MerkleHash) -> Option<Arc<..>>`.
+pub trait XorbChunkLookup {
+    /// The stored chunk table of `xorb`, if it is stored.
+    fn chunks(&self, xorb: &MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>>;
+}
+
+impl<S: BuildHasher> XorbChunkLookup for HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>, S> {
+    fn chunks(&self, xorb: &MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>> {
+        self.get(xorb).cloned()
+    }
+}
+
+impl<F> XorbChunkLookup for F
+where
+    F: Fn(&MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>>,
+{
+    fn chunks(&self, xorb: &MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>> {
+        self(xorb)
+    }
+}
+
+/// The work bounds [`verify_shard`] enforces before any lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyLimits {
+    /// Chunks referenced, summed over every segment; bounds CPU.
+    pub max_referenced_chunks: u64,
+    /// Distinct xorbs referenced; bounds the chunk tables the caller holds.
+    pub max_referenced_xorbs: usize,
+}
+
+impl Default for VerifyLimits {
+    /// [`MAX_REFERENCED_CHUNKS`] and [`MAX_REFERENCED_XORBS`].
+    fn default() -> Self {
+        Self {
+            max_referenced_chunks: MAX_REFERENCED_CHUNKS,
+            max_referenced_xorbs: MAX_REFERENCED_XORBS,
+        }
+    }
 }
 
 /// One file's reconstruction as uploaded in a shard.
@@ -193,6 +268,18 @@ pub enum VerifyError {
         referenced_chunks: u64,
         /// The limit applied.
         limit: u64,
+    },
+    /// The shard references more distinct xorbs than the server verifies per
+    /// shard.
+    #[error(
+        "shard references {referenced_xorbs} distinct xorbs, over the limit of {limit}; split \
+         the upload into smaller shards"
+    )]
+    TooManyXorbs {
+        /// The distinct xorbs referenced by the segments.
+        referenced_xorbs: usize,
+        /// The limit applied.
+        limit: usize,
     },
 }
 
@@ -413,10 +500,10 @@ fn verify_segment_with<'a>(
 }
 
 /// Verifies an upload shard: the only public entry point for verification,
-/// so the work bound can't be bypassed.
+/// so the work bounds can't be bypassed.
 ///
-/// First the shard must reference at most `max_referenced_chunks` chunks in
-/// total ([`MAX_REFERENCED_CHUNKS`] is the default). Then, for every file:
+/// First the shard must stay within `limits` ([`VerifyLimits::default`] is
+/// the default), before any lookup. Then, for every file:
 /// - every segment's xorb is stored and the segment passes
 ///   [`verify_segment`] against its stored chunks
 /// - the file hash recomputed from the referenced chunks, in order, equals
@@ -425,22 +512,25 @@ fn verify_segment_with<'a>(
 ///   (as upstream's `file_hash` of no chunks is), and its SHA-256 absent, all
 ///   zeros (what `hf_xet` 1.7.0 sends), or the digest of zero bytes
 ///
-/// The file hash is computed incrementally with upstream's
-/// `MerkleHashSubtree`, so memory stays O(log n) in the referenced chunks in
-/// release builds (debug builds keep every chunk to self-check upstream's
-/// merge). CPU is linear in the referenced chunks, which the cap bounds.
+/// The CAS info section ([`UploadShard::xorbs`]) isn't checked: only
+/// referenced xorbs must be stored.
 ///
-/// `xorb_chunks` returns the stored `(chunk hash, length)` list for a xorb,
-/// or `None` if the xorb isn't stored.
+/// Memory: the caller holds the chunk table of every distinct referenced
+/// xorb, which `max_referenced_xorbs` bounds (see [`MAX_REFERENCED_XORBS`]).
+/// Verification itself adds one buffer of at most one xorb's chunk hashes
+/// and, per file, an O(log n) file-hash state: the file hash is computed
+/// incrementally with upstream's `MerkleHashSubtree` in release builds
+/// (debug builds keep every chunk to self-check upstream's merge). CPU is
+/// linear in the referenced chunks, which `max_referenced_chunks` bounds.
 ///
 /// # Errors
 ///
-/// [`VerifyError::TooMuchWork`] if the shard is over the cap, else the first
-/// rule a file breaks.
-pub fn verify_shard<'a>(
+/// [`VerifyError::TooMuchWork`] or [`VerifyError::TooManyXorbs`] if the shard
+/// is over a limit, else the first rule a file breaks.
+pub fn verify_shard(
     shard: &UploadShard,
-    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
-    max_referenced_chunks: u64,
+    lookup: &impl XorbChunkLookup,
+    limits: VerifyLimits,
 ) -> Result<(), VerifyError> {
     // Each term is at most u32::MAX chunks and a 64 MiB shard holds well under
     // 2^32 terms, so the sum fits in u64; saturate anyway rather than trust it.
@@ -450,33 +540,37 @@ pub fn verify_shard<'a>(
         .flat_map(|file| &file.segments)
         .map(|seg| u64::from(seg.chunk_end.saturating_sub(seg.chunk_start)))
         .fold(0u64, u64::saturating_add);
-    if referenced_chunks > max_referenced_chunks {
+    if referenced_chunks > limits.max_referenced_chunks {
         return Err(VerifyError::TooMuchWork {
             referenced_chunks,
-            limit: max_referenced_chunks,
+            limit: limits.max_referenced_chunks,
+        });
+    }
+    let referenced_xorbs = shard.referenced_xorbs().count();
+    if referenced_xorbs > limits.max_referenced_xorbs {
+        return Err(VerifyError::TooManyXorbs {
+            referenced_xorbs,
+            limit: limits.max_referenced_xorbs,
         });
     }
     shard
         .files
         .iter()
-        .try_for_each(|file| verify_file(file, &xorb_chunks))
+        .try_for_each(|file| verify_file(file, lookup))
 }
 
 /// One file's rules, as listed on [`verify_shard`]; callers go through
-/// that function so the work bound applies.
-fn verify_file<'a>(
-    entry: &ShardFileEntry,
-    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
-) -> Result<(), VerifyError> {
+/// that function so the work bounds apply.
+fn verify_file(entry: &ShardFileEntry, lookup: &impl XorbChunkLookup) -> Result<(), VerifyError> {
     let mut hashes = Vec::new();
     let mut tree: Option<MerkleHashSubtree> = None;
     let last = entry.segments.len().saturating_sub(1);
     for (i, seg) in entry.segments.iter().enumerate() {
-        let xorb = xorb_chunks(&seg.xorb).ok_or(VerifyError::UnknownXorb {
+        let xorb = lookup.chunks(&seg.xorb).ok_or(VerifyError::UnknownXorb {
             file: entry.file_hash,
             xorb: seg.xorb,
         })?;
-        let chunks = verify_segment_with(seg, xorb, &mut hashes)?;
+        let chunks = verify_segment_with(seg, &xorb, &mut hashes)?;
         let part = MerkleHashSubtree::from_chunks(i == 0, chunks, i == last);
         match &mut tree {
             None => tree = Some(part),

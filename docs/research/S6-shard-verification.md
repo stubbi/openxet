@@ -49,6 +49,7 @@ demonstrate.
 | 8 | Every xorb a segment references is already stored. | [upload-protocol#ordering-and-concurrency](https://huggingface.co/docs/xet/upload-protocol#ordering-and-concurrency), [api#4-upload-shard](https://huggingface.co/docs/xet/api#4-upload-shard) | `file_referencing_an_unknown_xorb_is_rejected` |
 | 9 | The file hash recomputed from the referenced chunks, in segment order, equals the claimed one. | [hashing#file-hashes](https://huggingface.co/docs/xet/hashing#file-hashes) | `file_hash_recomputes_from_segments` |
 | 10 | The shard references at most `max_referenced_chunks` chunks in total, summed over all segments (default `MAX_REFERENCED_CHUNKS` = 2^24). Checked by `verify_shard` before any xorb lookup. | none (spec silent; see "Gaps") | `shard_work_at_the_cap_passes_and_over_it_is_rejected`, `shard_work_count_cannot_overflow` |
+| 10b | The segments reference at most `max_referenced_xorbs` distinct xorbs (default `MAX_REFERENCED_XORBS` = 4096). Checked by `verify_shard` after rule 10, before any xorb lookup. Xorbs listed in the CAS info section that no segment references are ignored, never looked up or registered. | none (spec silent; see "Gaps") | `distinct_xorb_count_at_the_cap_passes_and_over_it_is_rejected`, `distinct_xorb_cap_is_checked_before_any_lookup`, `xorbs_listed_but_not_referenced_are_ignored` |
 | 11 | A file with no segments (empty file) has file hash all zeros and SHA-256 absent, all zeros, or SHA-256 of zero bytes. | [hashing#file-hashes](https://huggingface.co/docs/xet/hashing#file-hashes); otherwise silent, see below | `empty_file_sha256_must_be_absent_zero_or_the_empty_digest` |
 | 12 | Stock clients' shards pass all of the above. | | `every_reference_segment_verifies_against_the_reference_xorb`, `hf_xet_upload_shard_verifies_against_its_xorb`, `hf_xet_upload_shard_names_its_files_and_xorb` |
 
@@ -56,9 +57,9 @@ Every `VerifyError` names the xorb and chunk range (or the file), and the
 expected and actual values, so a client author can see which term is wrong.
 `verify_segment` checks in this order: bounds, verification present, range
 hash, length. `verify_shard` is the entry point for untrusted shards: it
-applies rule 10, then rules 5 to 9 and 11 to each file. It is the only
-public verification entry point besides `verify_segment`, so the work bound
-can't be skipped by accident.
+applies rules 10 and 10b, then rules 5 to 9 and 11 to each file. It is the
+only public verification entry point besides `verify_segment`, so the work
+bounds can't be skipped by accident.
 
 Rule 9 matters beyond integrity. Rules 5 to 7 only prove the client knows
 each term's chunk hashes; without rule 9 a client could register any file
@@ -183,6 +184,16 @@ can't be reconstructed, or that claim content they don't have.
     `aggregated_node_hash`. The rest of the working memory is one reused
     buffer of at most one xorb's chunk hashes, plus the parsed shard (at most
     about the 64 MiB body).
+  - caps the distinct xorbs the segments reference (rule 10b), default 4096.
+    The caller holds each referenced xorb's chunk table while verifying, up
+    to 8192 entries of 40 bytes (320 KiB), so the cap bounds that memory at
+    1.25 GiB, about 160 MiB at the typical 1024 chunks per xorb. A stock
+    64 MiB shard lists at most about 2,700 newly uploaded full xorbs (48
+    bytes of CAS info per chunk, at least 512 chunks each), which leaves
+    room for references to xorbs already stored.
+- **Xorbs listed in the CAS info section.** Only xorbs that segments
+  reference must be stored; listed xorbs no segment references are ignored
+  and never registered (rule 10b).
   - `file_hash_streams_across_many_segments` pins the incremental hash
     to the reference file hash across 40 segments, and
     `incremental_file_hash_matches_one_shot_over_many_random_segments`
@@ -226,12 +237,15 @@ uncompressed length)`: exactly `XorbChunks::hashes`, which xorb ingest
   object-store reads. Rule: never re-download xorbs to verify a shard.
 - Global dedup's chunk-to-xorb entries come from the same ingest-time
   listing, never from a shard's CAS info section.
-- `verify_shard` takes a lookup closure, so M1 can batch the index reads per
-  shard and pass a map. M1 calls it with `MAX_REFERENCED_CHUNKS` or an
-  operator-set value.
+- `verify_shard` takes a `XorbChunkLookup`, which returns each table as an
+  `Arc<[(MerkleHash, u64)]>`. M1 batch-loads the tables of
+  `UploadShard::referenced_xorbs()` from its async index into a
+  `HashMap<MerkleHash, Arc<…>>` (which implements the trait), then calls
+  `verify_shard` with `VerifyLimits::default()` or operator-set limits.
 - Worst-case verify memory per request is the parsed shard (about the
-  64 MiB body), the index entries it looks up (40 bytes per chunk of each
-  distinct referenced xorb), and O(log n) per file. CPU is bounded by the
+  64 MiB body), the chunk tables the caller loaded (40 bytes per chunk of
+  each distinct referenced xorb, at most `max_referenced_xorbs` of them),
+  and O(log n) per file. CPU is bounded by the
   cap: at most 2^24 chunk hashes, each hashed once for its range hash and
   once for the file hash.
 - Ingest persists a re-serialized shard built from `UploadShard` and server

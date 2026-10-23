@@ -163,11 +163,14 @@ test suite (§8) is the lasting source of truth.
   digest with each 8-byte group reversed. It is client-asserted; the
   server can't check it without the file's bytes, so the sha256 → Xet
   hash mapping is scoped to the repo whose writer uploaded it (§5.4).
-- **Shard verification** (S6): eleven rules, all checkable from the chunk
+- **Shard verification** (S6): twelve rules, all checkable from the chunk
   hashes and lengths recorded at xorb ingest, never by reading a xorb
   back. `verify_shard` caps the referenced chunks per shard
   (`MAX_REFERENCED_CHUNKS`, default 2^24, about 1 TiB of logical data) and
-  rejects shards that reference missing xorbs. Reference and real
+  the distinct referenced xorbs (`MAX_REFERENCED_XORBS`, default 4096,
+  which bounds the chunk tables the caller loads), and rejects shards that
+  reference missing xorbs. Xorbs the CAS info section lists but no segment
+  references are ignored. Reference and real
   `hf_xet` shards pass.
 - **Auth:** clients obtain `{accessToken, exp, casUrl}` from
   `GET {HF_ENDPOINT}/api/{repo_type}s/{repo_id}/xet-{read|write}-token/{revision}`.
@@ -1280,8 +1283,8 @@ what was observed versus inferred.
   [S5](../../research/S5-xet-core-structures-server-side.md), ADR 0001)*:
   whether `xet-core-structures` is usable server-side, or which pieces to
   vendor or reimplement, and its versioning on crates.io.
-- **S6** *(answered: eleven rules, all checkable from per-xorb chunk hashes
-  and lengths stored at xorb ingest, with a work cap per shard; reference
+- **S6** *(answered: twelve rules, all checkable from per-xorb chunk hashes
+  and lengths stored at xorb ingest, with work caps per shard; reference
   and real `hf_xet` shards pass; what stock clients actually send is in
   §3; [S6](../../research/S6-shard-verification.md))*: the shard upload
   verification rules (spec "shard" page) implemented against the

@@ -9,11 +9,12 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use openxet_protocol::{
-    MAX_REFERENCED_CHUNKS, MerkleHash, ShardFileEntry, UploadShard, VerifyError, XorbChunks,
-    hash_to_hex, read_upload_shard, read_xorb_chunks, verify_segment, verify_shard, xorb_hash,
-    xorb_with_footer,
+    MerkleHash, ShardFileEntry, UploadShard, VerifyError, VerifyLimits, XorbChunkLookup,
+    XorbChunks, hash_to_hex, read_upload_shard, read_xorb_chunks, verify_segment, verify_shard,
+    xorb_hash, xorb_with_footer,
 };
 
 const XORB: &str = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
@@ -89,13 +90,13 @@ fn hf_xet_upload_shard_names_its_files_and_xorb() {
 fn hf_xet_upload_shard_verifies_against_its_xorb() {
     let xorb = xorb_chunks();
     assert_eq!(hash_to_hex(&xorb_hash(&xorb)), XORB);
-    let chunks = xorb.hashes;
-    let lookup = |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks.as_slice());
+    let chunks: Arc<[(MerkleHash, u64)]> = xorb.hashes.into();
+    let lookup = |x: &MerkleHash| (hash_to_hex(x) == XORB).then(|| Arc::clone(&chunks));
     for file in shard().files {
         for seg in &file.segments {
             verify_segment(seg, &chunks).unwrap();
         }
-        verify_one(&file, lookup).unwrap();
+        verify_one(&file, &lookup).unwrap();
     }
 }
 
@@ -108,30 +109,27 @@ fn empty_file_sha256_must_be_absent_zero_or_the_empty_digest() {
     assert!(empty.segments.is_empty());
     // hf_xet 1.7.0 sends all zeros.
     assert_eq!(empty.sha256, Some([0; 32]));
-    let no_xorbs = |_: &MerkleHash| None;
+    let no_xorbs = |_: &MerkleHash| -> Option<Arc<[(MerkleHash, u64)]>> { None };
     for sha256 in [None, Some([0; 32]), Some(digest_bytes(EMPTY_SHA256))] {
         let entry = ShardFileEntry {
             sha256,
             ..empty.clone()
         };
-        verify_one(&entry, no_xorbs).unwrap();
+        verify_one(&entry, &no_xorbs).unwrap();
     }
     let wrong = ShardFileEntry {
         sha256: Some(digest_bytes(FILES[1].1)),
         ..empty
     };
-    let err = verify_one(&wrong, no_xorbs).unwrap_err();
+    let err = verify_one(&wrong, &no_xorbs).unwrap_err();
     assert!(matches!(err, VerifyError::EmptyFileSha256 { .. }), "{err}");
 }
 
-/// Verifies one file through the public entry point, under the default cap.
-fn verify_one<'a>(
-    entry: &ShardFileEntry,
-    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
-) -> Result<(), VerifyError> {
+/// Verifies one file through the public entry point, under the default limits.
+fn verify_one(entry: &ShardFileEntry, lookup: &impl XorbChunkLookup) -> Result<(), VerifyError> {
     let shard = UploadShard {
         files: vec![entry.clone()],
         xorbs: Vec::new(),
     };
-    verify_shard(&shard, xorb_chunks, MAX_REFERENCED_CHUNKS)
+    verify_shard(&shard, lookup, VerifyLimits::default())
 }

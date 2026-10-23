@@ -6,13 +6,16 @@
 // helpers here are test code too, and a panic is the intended failure.
 #![allow(clippy::unwrap_used)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use openxet_protocol::{
-    MAX_REFERENCED_CHUNKS, MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError, Segment,
-    ShardFileEntry, UploadShard, VerifyError, file_hash, hash_from_hex, hash_to_hex, range_hash,
-    read_upload_shard, read_xorb_chunks, verify_segment, verify_shard, xorb_hash, xorb_with_footer,
+    MAX_REFERENCED_CHUNKS, MAX_REFERENCED_XORBS, MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError,
+    Segment, ShardFileEntry, UploadShard, VerifyError, VerifyLimits, XorbChunkLookup, file_hash,
+    hash_from_hex, hash_to_hex, range_hash, read_upload_shard, read_xorb_chunks, verify_segment,
+    verify_shard, xorb_hash, xorb_with_footer,
 };
 // Only to build client-serialized xorbs and shards as test input; production
 // code reaches upstream through openxet_protocol alone.
@@ -337,19 +340,19 @@ fn file_hash_recomputes_from_segments() {
         .collect();
     assert_eq!(file_hash(&referenced), entry.file_hash);
 
-    let lookup = |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks.as_slice());
-    verify_one(&entry, lookup).unwrap();
+    let lookup = reference_lookup(&chunks);
+    verify_one(&entry, &lookup).unwrap();
 
     let mut wrong = entry.clone();
     wrong.file_hash = flip_first_byte(wrong.file_hash);
-    let err = verify_one(&wrong, lookup).unwrap_err();
+    let err = verify_one(&wrong, &lookup).unwrap_err();
     assert!(matches!(err, VerifyError::FileHashMismatch { .. }), "{err}");
 }
 
 #[test]
 fn file_referencing_an_unknown_xorb_is_rejected() {
     let entry = reference_upload_shard().files.remove(0);
-    let err = verify_one(&entry, |_| None).unwrap_err();
+    let err = verify_one(&entry, &no_xorbs).unwrap_err();
     assert!(matches!(err, VerifyError::UnknownXorb { .. }), "{err}");
     assert!(err.to_string().contains(XORB), "{err}");
 }
@@ -458,10 +461,23 @@ fn oversized_section_claim_is_rejected_before_allocation() {
     assert_eq!(MAX_UPLOAD_SHARD_BYTES, 64 * 1024 * 1024);
 }
 
-fn reference_lookup<'a>(
-    chunks: &'a [(MerkleHash, u64)],
-) -> impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]> {
-    move |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks)
+/// The reference xorb's stored chunk table, behind the lookup trait.
+fn reference_lookup(chunks: &[(MerkleHash, u64)]) -> impl XorbChunkLookup + use<> {
+    let xorb = hash_from_hex(XORB).unwrap();
+    let chunks: Arc<[(MerkleHash, u64)]> = chunks.into();
+    move |x: &MerkleHash| (*x == xorb).then(|| Arc::clone(&chunks))
+}
+
+/// A lookup that knows no xorbs.
+fn no_xorbs(_: &MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>> {
+    None
+}
+
+fn limits(max_referenced_chunks: u64, max_referenced_xorbs: usize) -> VerifyLimits {
+    VerifyLimits {
+        max_referenced_chunks,
+        max_referenced_xorbs,
+    }
 }
 
 #[test]
@@ -469,8 +485,9 @@ fn shard_work_at_the_cap_passes_and_over_it_is_rejected() {
     // The reference shard references all 796 chunks once.
     let chunks = reference_xorb_chunks();
     let shard = reference_upload_shard();
-    verify_shard(&shard, reference_lookup(&chunks), 796).unwrap();
-    let err = verify_shard(&shard, reference_lookup(&chunks), 795).unwrap_err();
+    let lookup = reference_lookup(&chunks);
+    verify_shard(&shard, &lookup, limits(796, 1)).unwrap();
+    let err = verify_shard(&shard, &lookup, limits(795, 1)).unwrap_err();
     assert!(
         matches!(
             err,
@@ -505,7 +522,8 @@ fn shard_work_count_cannot_overflow() {
         files: vec![entry],
         xorbs: Vec::new(),
     };
-    let err = verify_shard(&shard, |_| unreachable!(), MAX_REFERENCED_CHUNKS).unwrap_err();
+    let unreachable = |_: &MerkleHash| -> Option<Arc<[(MerkleHash, u64)]>> { unreachable!() };
+    let err = verify_shard(&shard, &unreachable, VerifyLimits::default()).unwrap_err();
     assert!(
         matches!(
             err,
@@ -549,7 +567,7 @@ fn file_hash_streams_across_many_segments() {
         segments,
         sha256: None,
     };
-    verify_one(&entry, reference_lookup(&chunks)).unwrap();
+    verify_one(&entry, &reference_lookup(&chunks)).unwrap();
 }
 
 #[test]
@@ -565,14 +583,107 @@ fn reference_dedupe_shard_has_no_files() {
     );
 }
 
-/// Verifies one file through the public entry point, under the default cap.
-fn verify_one<'a>(
-    entry: &ShardFileEntry,
-    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
-) -> Result<(), VerifyError> {
+#[test]
+fn distinct_xorb_count_at_the_cap_passes_and_over_it_is_rejected() {
+    // The reference file twice: two segments, one distinct xorb.
+    let chunks = reference_xorb_chunks();
+    let mut shard = reference_upload_shard();
+    shard.files.push(shard.files[0].clone());
+    let lookup = reference_lookup(&chunks);
+    verify_shard(&shard, &lookup, limits(MAX_REFERENCED_CHUNKS, 1)).unwrap();
+    let err = verify_shard(&shard, &lookup, limits(MAX_REFERENCED_CHUNKS, 0)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::TooManyXorbs {
+                referenced_xorbs: 1,
+                limit: 0
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn distinct_xorb_cap_is_checked_before_any_lookup() {
+    // Two distinct xorbs, one referenced twice: two count against the cap.
+    let mut entry = reference_upload_shard().files.remove(0);
+    let seg = entry.segments[0];
+    let other = Segment {
+        xorb: flip_first_byte(seg.xorb),
+        ..seg
+    };
+    entry.segments = vec![seg, other, other];
+    let shard = UploadShard {
+        files: vec![entry],
+        xorbs: Vec::new(),
+    };
+    assert_eq!(shard.referenced_xorbs().count(), 2);
+    let unreachable = |_: &MerkleHash| -> Option<Arc<[(MerkleHash, u64)]>> { unreachable!() };
+    let err = verify_shard(&shard, &unreachable, limits(MAX_REFERENCED_CHUNKS, 1)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::TooManyXorbs {
+                referenced_xorbs: 2,
+                limit: 1
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(
+        VerifyLimits::default(),
+        limits(MAX_REFERENCED_CHUNKS, MAX_REFERENCED_XORBS)
+    );
+}
+
+#[test]
+fn referenced_xorbs_are_distinct_in_first_reference_order() {
+    let mut entry = reference_upload_shard().files.remove(0);
+    let seg = entry.segments[0];
+    let (first, other) = (seg.xorb, flip_first_byte(seg.xorb));
+    entry.segments = vec![seg, Segment { xorb: other, ..seg }];
+    let shard = UploadShard {
+        files: vec![entry.clone(), entry],
+        xorbs: Vec::new(),
+    };
+    assert_eq!(
+        shard.referenced_xorbs().copied().collect::<Vec<_>>(),
+        [first, other]
+    );
+}
+
+#[test]
+fn xorbs_listed_but_not_referenced_are_ignored() {
+    // The CAS info section may list xorbs no segment uses; verification
+    // neither looks them up nor requires them.
+    let chunks = reference_xorb_chunks();
+    let mut shard = reference_upload_shard();
+    shard.xorbs.push(flip_first_byte(shard.xorbs[0]));
+    assert_eq!(shard.referenced_xorbs().count(), 1);
+    verify_shard(&shard, &reference_lookup(&chunks), VerifyLimits::default()).unwrap();
+}
+
+#[test]
+fn a_map_of_shared_chunk_tables_is_a_lookup() {
+    // M1 loads every referenced xorb's table up front, then verifies.
+    let shard = reference_upload_shard();
+    let table: Arc<[(MerkleHash, u64)]> = reference_xorb_chunks().into();
+    let loaded: HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>> = shard
+        .referenced_xorbs()
+        .map(|x| (*x, Arc::clone(&table)))
+        .collect();
+    verify_shard(&shard, &loaded, VerifyLimits::default()).unwrap();
+    assert!(loaded.chunks(&flip_first_byte(shard.xorbs[0])).is_none());
+    // Verification borrows the tables; it keeps no reference of its own.
+    assert_eq!(Arc::strong_count(&table), 2);
+}
+
+/// Verifies one file through the public entry point, under the default limits.
+fn verify_one(entry: &ShardFileEntry, lookup: &impl XorbChunkLookup) -> Result<(), VerifyError> {
     let shard = UploadShard {
         files: vec![entry.clone()],
         xorbs: Vec::new(),
     };
-    verify_shard(&shard, xorb_chunks, MAX_REFERENCED_CHUNKS)
+    verify_shard(&shard, lookup, VerifyLimits::default())
 }
