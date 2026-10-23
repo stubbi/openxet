@@ -56,10 +56,10 @@ clear seams, no opinions forced on the operator.
 
 ### Non-goals (v1)
 
-- No web UI, model cards, discussions, likes, search, Spaces or inference.
+- No HF-style product features: model cards, discussions, likes, search,
+  running Spaces or inference. The only web UI is minimal self-service
+  (§10.10).
 - No user accounts, passwords or user database. openxet never owns users.
-- No Git hosting (`git clone` of repos from openxet). Git repos stay on the
-  user's existing Git host; openxet is their large-file store (§6.1).
 - No custom distributed object store (§5.3). This is a principle, not a
   deferral: durability is what object stores are for.
 
@@ -168,22 +168,22 @@ These were checked against primary sources on 2026-10-23
 ### 5.1 Shape
 
 ```
-           hf CLI / huggingface_hub / hf_xet / git-xet / huggingface.js
-                 │ Hub API                       │ CAS API            │ xorb ranges
-                 ▼                               ▼                    ▼
-        ┌────────────────────────── openxet (stateless nodes) ─────────────────┐
-        │  hub layer (optional)   │   cas core   │  transfer (optional role)   │
-        │  repos/refs/commits/    │ xorb/shard   │  signed-range reads,        │
-        │  tree/resolve/tokens    │ verify, index│  multipart, HTTP gateway,   │
-        │                         │ reconstruct  │  local-disk serving, cache  │
-        └────────────┬────────────┴──────┬───────┴──────────────┬─────────────┘
-                     │ auth adapters     │ metadata index        │ object store
-                     ▼                   ▼                       ▼
-           OIDC/JWT · webhook ·    Postgres | SQLite       S3 · GCS · Azure ·
-           static tokens                                    MinIO/R2/Garage · local disk
+   git · git-lfs · git-xet · hf CLI / huggingface_hub / hf_xet · huggingface.js · openxet client · browser
+        │ Git (HTTP/SSH)  │ Hub API · LFS batch   │ CAS API          │ xorb ranges        │ web
+        ▼                 ▼                       ▼                  ▼                    ▼
+ ┌──────────────────────────────── openxet (stateless nodes, one binary) ─────────────────────────┐
+ │ git + ssh │ hub layer          │ cas core           │ transfer               │ web (optional) │
+ │ upload/   │ repos/refs/commits │ xorb/shard verify, │ signed-range reads,    │ tokens, keys,  │
+ │ receive-  │ tree/resolve/      │ index, reconstruct,│ multipart, HTTP gateway│ browse, usage  │
+ │ pack, LFS │ tokens, LFS batch  │ server-side chunk  │ cache tier, HF mirror  │                │
+ └─────┬─────┴─────────┬──────────┴─────────┬──────────┴───────────┬────────────┴────────────────┘
+       │ auth adapters │ metadata index     │ object store pools   │
+       ▼               ▼                    ▼                      ▼
+  OIDC/JWT · webhook · Postgres | SQLite   S3 · GCS · Azure · MinIO/R2/Garage · local disk
+  static · access tokens · SSH keys
 ```
 
-- One binary, `openxet`. Roles (`hub`, `cas`, `transfer`) are enabled by config.
+- One binary, `openxet`. Roles (`git`, `ssh`, `hub`, `cas`, `transfer`, `web`) are enabled by config.
   Default is all-in-one; large deployments split and scale roles separately.
 - Nodes hold no state that matters. Any node can serve any request. Scale by
   adding nodes behind a load balancer.
@@ -398,11 +398,13 @@ fixtures, pinned by the compatibility suite.
 
 **Model:**
 - Repo types `model`, `dataset`, `space`, `kernel` and `bucket` (§10.4).
-- Commits are immutable objects with 40-hex ids, a tree of
-  path → (Xet file hash | small inline blob), and parent links.
+- Every commit is a **real Git commit**, just as on huggingface.co. Small
+  files are Git blobs. Large files are Git LFS pointer files whose sha256 maps
+  to a Xet file hash. Commits made through the Hub API (`hf upload`) and
+  through `git push` are the same objects, so either can be cloned, pulled
+  or downloaded by the other (§10.9).
 - Refs are branches and tags with compare-and-swap updates, so concurrent
   commits are safe.
-- No git wire protocol.
 
 **Small files:** `preupload` decides whether small "regular" files go inline
 in the commit (stored as content-addressed blobs) or through Xet. The
@@ -680,11 +682,58 @@ It is better to use than the stock tools and never incompatible with them.
 bindings), npm via WASM if the bindings allow it, `winget`, and Windows
 binaries. The client must run on Windows; the server need not.
 
-### 10.9 Still open
+### 10.9 Git hosting *(decided by the user: v1)*
 
-Two bigger product pieces are awaiting the user's decision:
-- Git hosting
-- a web UI
+`git clone https://openxet.example/org/model` (and `git@openxet.example:org/model`)
+works as it does on huggingface.co. This sits alongside §6.1, where the repo
+lives elsewhere and openxet is only its LFS store; both modes are supported.
+
+**Behaviour:**
+- **Protocols:** Git smart HTTP and SSH, both `upload-pack` and
+  `receive-pack`, protocol v2 where clients support it. The LFS endpoint is
+  implicit at `{repo}.git/info/lfs`, so `git-xet` and `git-lfs` work with no
+  configuration. The credential gap from §10.2 doesn't arise, because the Git
+  remote *is* openxet.
+- **Large files land in Xet automatically:**
+  - Pushes with `git-xet` take the Xet path.
+  - Plain `git-lfs` pushes go through server-side chunking (§10.3).
+  - Large blobs pushed **without** LFS are kept as ordinary Git objects. They
+    don't silently corrupt history. openxet reports them and offers
+    `openxet migrate-lfs`. Optionally, the operator can reject them above a
+    size limit, with a clear message.
+- **One history:** Hub API commits and Git pushes write into the same Git
+  history under the same ref compare-and-swap rules.
+- **Stateless nodes still hold:** Git objects live in the bucket (packfiles
+  plus index) and refs live in the database, with the §5.3 durability rules.
+  Nodes may keep a local read cache of packs.
+- **Hooks for integrators:** post-receive webhooks (repo, ref, old/new sha)
+  so platforms can react to pushes, e.g. to trigger CI.
+
+**Left to the builder:** in-process Git via gitoxide versus shelling out to
+`git` on a cached bare repo, and the pack layout and repacking strategy.
+Spike S9 decides this. This is the hardest new component; budget for it
+accordingly.
+
+### 10.10 Minimal self-service web UI *(decided by the user: v1)*
+
+An optional `web` role. Small, fast and accessible, served by the same
+binary.
+
+**What it does:**
+- Sign in through the operator's identity system (OIDC). No local accounts.
+- Create, list and revoke access tokens; add and remove SSH keys.
+- Browse repos, branches, commits and files; download files; copy clone,
+  `hf` and `openxet` commands.
+- See storage usage per repo and tenant: logical bytes, stored bytes, and the
+  dedup savings ratio.
+- Admin view (for operator-designated groups): health, GC status and dry-run
+  reports, pools, mirror status.
+
+**Explicitly not included:** model cards, README rendering beyond plain
+text, discussions, social features, previews of model or dataset contents.
+
+Easy to restyle and disable; platforms like aqora will typically run their
+own UI and leave this role off.
 
 ## 11. Spikes to run first (verify, don't assume)
 
@@ -705,6 +754,10 @@ Two bigger product pieces are awaiting the user's decision:
   Gitea in CI. Includes the credential-source gap (§10.2) over both HTTPS
   and SSH, and whether `git-lfs-transfer` (pure SSH) can negotiate the `xet`
   custom transfer.
+- **S9:** Git hosting engine: gitoxide server-side capabilities
+  (upload-pack/receive-pack, protocol v2) against the `git` binary on a
+  cached bare repo. Measure throughput and latency, and check that
+  bucket-backed packs keep nodes stateless.
 - **S8:** HF pull-through mirroring. Which HF endpoints, and what Xet
   read-token behaviour, a mirror depends on, and the terms-of-use
   constraints for caching HF content.
@@ -728,12 +781,14 @@ but sets no calendar dates.
 
 - **M0:**
   - repo, `AGENTS.md`, CI skeleton, ADR template
-  - spikes S1–S8
+  - spikes S1–S9
 - **M1:** CAS core on SQLite with local disk and static tokens.
   - Storage-only mode passes `hf_xet` upload and download, plus the golden
     vectors.
-- **M2:** Hub-compat layer.
+- **M2:** Hub-compat layer and Git hosting.
   - `hf auth login`, `hf upload`, `hf download` and listing work unmodified.
+  - `git clone` / `git push` over HTTPS against openxet-hosted repos, sharing
+    one history with Hub API commits (§10.9).
   - The Git LFS endpoint works: `git push` / `git clone` with `git-xet`
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
@@ -756,6 +811,7 @@ but sets no calendar dates.
 - **M6:** our own client (§10.8).
   - `sync`, `mount`, storage-only mode, `login`, `setup git`, `doctor`.
   - Python bindings.
+  - The minimal self-service web UI (§10.10).
   - The two-way compatibility suite, including nightly runs against
     huggingface.co.
 
