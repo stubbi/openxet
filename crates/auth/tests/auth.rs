@@ -408,6 +408,33 @@ fn kid_is_sha256_of_raw_public_key() {
 }
 
 #[test]
+fn small_order_public_keys_are_rejected_at_load() {
+    // SPKI for Ed25519 (RFC 8410) wrapping points of order 1, 2 and 4.
+    let spki_prefix = [
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let mut order_two = [0xffu8; 32];
+    order_two[0] = 0xec;
+    order_two[31] = 0x7f;
+    let order_four = [0u8; 32];
+    for point in [identity, order_two, order_four] {
+        let der: Vec<u8> = spki_prefix.iter().chain(point.iter()).copied().collect();
+        let pem = format!(
+            "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+            base64::engine::general_purpose::STANDARD.encode(der)
+        );
+        let error = PublicKey::from_pem(&pem).expect_err("small-order key must be refused");
+        assert!(
+            matches!(error, AuthError::InvalidKey { .. })
+                && error.to_string().contains("small order"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn malformed_keys_are_rejected() {
     assert!(matches!(
         PublicKey::from_pem("not a key"),

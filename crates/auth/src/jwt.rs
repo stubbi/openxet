@@ -366,4 +366,57 @@ mod tests {
         let token = format!("{A4_HEADER}.{A4_PAYLOAD}.{A4_SIGNATURE}");
         assert_eq!(verify(&[key], &token, 0), Err(AuthError::Invalid));
     }
+
+    /// A signature with `R` = the identity point and `S = k·a`, which only
+    /// the key holder can make. Cofactorless non-strict verification accepts
+    /// it, giving a second valid signature per message; `verify_strict`
+    /// rejects small-order `R` (RFC 8032 §5.1.7 leaves this to the verifier).
+    #[test]
+    fn verification_is_strict() {
+        use curve25519_dalek::scalar::{Scalar, clamp_integer};
+        use ed25519_dalek::Verifier as _;
+        use sha2::Sha512;
+
+        let seed = [42u8; 32];
+        let signing = SigningKey::from_bytes(&seed);
+        let public = PublicKey::from_verifying_key(&signing.verifying_key());
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": public.kid() }).to_string(),
+        );
+        let payload = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({
+                "sub": "alice", "scope": "org/model", "mode": "write", "exp": 100, "iat": 0,
+            })
+            .to_string(),
+        );
+        let input = format!("{header}.{payload}");
+
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let expanded: [u8; 64] = Sha512::digest(seed).into();
+        let mut lower = [0u8; 32];
+        lower.copy_from_slice(&expanded[..32]);
+        let a = Scalar::from_bytes_mod_order(clamp_integer(lower));
+        let k: [u8; 64] = Sha512::new()
+            .chain_update(identity)
+            .chain_update(signing.verifying_key().as_bytes())
+            .chain_update(input.as_bytes())
+            .finalize()
+            .into();
+        let s = Scalar::from_bytes_mod_order_wide(&k) * a;
+        let mut weak = [0u8; 64];
+        weak[..32].copy_from_slice(&identity);
+        weak[32..].copy_from_slice(s.as_bytes());
+
+        let signature = Signature::from_bytes(&weak);
+        assert!(
+            signing
+                .verifying_key()
+                .verify(input.as_bytes(), &signature)
+                .is_ok(),
+            "the probe must be accepted by non-strict verification"
+        );
+        let token = format!("{input}.{}", URL_SAFE_NO_PAD.encode(weak));
+        assert_eq!(verify(&[public], &token, 0), Err(AuthError::Invalid));
+    }
 }

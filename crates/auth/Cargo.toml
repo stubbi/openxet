@@ -22,6 +22,7 @@ url = "2.5.8"
 zeroize = "1.9.1"
 
 [dev-dependencies]
+curve25519-dalek = "5.0.0"
 serde_urlencoded = "0.7.1"
 
 [lints]
