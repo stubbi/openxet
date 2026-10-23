@@ -31,8 +31,8 @@ therefore has to honour `exp` exactly.
 4. **Expiry.** `exp` is honoured exactly: valid until `exp`, `401` after,
    with no leeway.
 5. **Static tokens** (dev, CI, small setups) are not JWTs. They are
-   compared by SHA-256 in constant time, and the comparison does not
-   depend on where the strings first differ.
+   compared by SHA-256 in constant time, so timing does not reveal
+   how much of a guess matched.
 6. **Platforms** sign tokens themselves with any standard JWT library
    against a public key set openxet is configured with. openxet never
    needs their private key.
@@ -45,8 +45,12 @@ therefore has to honour `exp` exactly.
   (non-negotiable 5).
 - Revoking a CAS token before `exp` is not possible. Lifetimes stay short,
   and revocation happens at the access token or authorizer (design §5.4).
-- Tests, added with the implementation: expired, wrong-`kid`, wrong-algorithm and wrong-mode tokens are
-  rejected; a rotation test accepts old and new keys together.
+- Tokens carry no revision: Xet reads follow scope membership (R25), so a
+  revision claim would enforce nothing. The Hub token route still accepts
+  a revision in its URL (M2) and ignores it when minting.
+- Tests, added with the implementation: expired, wrong-`kid`,
+  wrong-algorithm and wrong-mode tokens are rejected; a rotation test
+  accepts old and new keys together.
 
 ## Alternatives considered
 

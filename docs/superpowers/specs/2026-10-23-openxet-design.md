@@ -144,7 +144,7 @@ test suite (§8) is the lasting source of truth.
   /v1/chunks/default-merkledb/{hash}` (global dedup, returns a shard),
   `POST /v1/xorbs/default/{hash}`, `HEAD /v1/xorbs/default/{hash}`,
   `POST /v1/shards`, `POST /v2/shards` (NDJSON progress stream; clients fall
-  back to v1 on 404), `HEAD /v1/files/{file_id}`, `GET
+  back to v1 on 404 or 501), `HEAD /v1/files/{file_id}`, `GET
   /v2/file-chunk-hashes/{file_id}` (delta uploads). Hash-to-hex conversion
   reverses bytes within each 8-byte group, which is a classic source of
   bugs.
@@ -153,7 +153,8 @@ test suite (§8) is the lasting source of truth.
     spec's `default-merkledb`. openxet serves both.
   - It sends `POST /v1/telemetry`. openxet accepts it and drops the body:
     nothing is stored or forwarded (no telemetry, §7).
-  - It tries `POST /v2/shards` first and falls back to `/v1/shards` on 404.
+  - It tries `POST /v2/shards` first and falls back to `/v1/shards` on 404
+    or 501.
   - An empty file is a file entry with 0 segments, an all-zero file hash
     and an all-zero sha256.
   - The wasm build uploads shards **with** lookup tables and a footer,
@@ -418,9 +419,11 @@ Authorizers (v1):
   repo Y?", with a short-TTL cache. This is how platforms like aqora plug in.
 
 CAS tokens are short-lived EdDSA JWTs (ADR 0007), scoped to
-(scope, revision, read|write, exp). Every node verifies them statelessly
-against a key set of public keys, so keys rotate without downtime, and a
-platform can sign them itself. `exp` is honoured exactly.
+(scope, read|write, exp), with no revision, because Xet reads follow scope
+membership (R25) and a revision would enforce nothing. The Hub token route
+still accepts a revision in its URL for compatibility (M2). Every node
+verifies them statelessly against a key set of public keys, so keys rotate
+without downtime, and a platform can sign them itself. `exp` is honoured exactly.
 
 **Storage-only mode:** a platform with its own naming layer gets CAS tokens
 for its users either through an admin endpoint or by signing them itself
@@ -1451,11 +1454,12 @@ but sets no calendar dates.
 
 ## 13. Left to the builder
 
-- Exact crate layout and names, HTTP framework, DB access library, token
-  format (JWT/PASETO), signing algorithm.
+- Exact crate layout and names, HTTP framework, DB access library.
+  Decided in M1: axum, sqlx (M1-R1); EdDSA JWT tokens (ADR 0007).
 - Small-file threshold, cache design, partitioning scheme details.
-- How global-dedup response shards are assembled (reuse uploaded shards or
-  synthesize), within the spec.
+- Global-dedup response shards are decided (M1-R4): synthesized from the
+  newest visible xorb containing the queried chunk, with a fresh random HMAC
+  key and a `shard_key_expiry` of now + 7 days.
 - Docs site tooling.
 
 ## 14. Name
@@ -1567,7 +1571,7 @@ made. Public docs cite them by number; this is what each cited one decides.
 | M1-R1 | The CAS is axum on tokio, the index is sqlx (SQLite now, Postgres in M3), and the local-disk store is openxet's own fsynced module; `object_store` serves S3, GCS and Azure from M3. | M1 plan |
 | M1-R2 | CAS tokens are EdDSA JWTs verified against a public key set; static tokens are compared by SHA-256 in constant time. | §5.4, ADR 0007 |
 | M1-R3 | Signed transfer URLs bind xorb, range and expiry in an HMAC; a missing `Range` is `400`, any mismatch `403`. | §5.5, ADR 0002 |
-| M1-R4 | Dedup responses are synthesized from the newest visible xorb containing the chunk, keyed with a fresh random HMAC key and valid 7 days. | §3, §13 |
+| M1-R4 | Dedup responses are synthesized from the newest visible xorb containing the chunk, keyed with a fresh random HMAC key and a 7-day `shard_key_expiry`. | §13, §5.6 |
 | M1-R5 | The GC grace defaults to 30 days and is never below 28 (21-day client shard cache + 7-day dedup key). | §5.6, S10 |
 | M1-R6 | `GET /v2/file-chunk-hashes` is built in M6 and answers `404` until then. | §12, ADR 0006 |
 | M1-R7 | Metering ships in M4 with the admin API. | §5.7, §12 |
