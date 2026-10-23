@@ -1,0 +1,23 @@
+[package]
+name = "openxet-storage"
+version = "0.0.0"
+description = "openxet's bucket: durable, content-addressed object storage"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+bytes = "1.12.1"
+openxet-protocol = { path = "../protocol", version = "0.0.0" }
+thiserror = "2"
+tokio = { version = "1.54.1", features = ["rt"] }
+uuid = { version = "1.29.0", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
