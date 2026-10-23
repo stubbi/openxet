@@ -185,6 +185,7 @@ cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest # compatibility suite (needs uv; CI gate: -m agent)
 ```
 
 Exit codes and JSON output schemas are documented in `docs/reference/`.

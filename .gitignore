@@ -2,3 +2,6 @@
 /target
 /testdata/xet-spec-reference/*
 !/testdata/xet-spec-reference/SHA256SUMS
+.venv/
+__pycache__/
+.pytest_cache/

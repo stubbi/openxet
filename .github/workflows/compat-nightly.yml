@@ -1,0 +1,55 @@
+name: compat-nightly
+
+# Real HF clients against huggingface.co, anonymously. The "latest" leg runs
+# the newest client releases to catch upstream drift before it reaches users
+# (design section 8). The agent leg runs on every PR, so it is excluded here.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    name: compat (${{ matrix.clients }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        clients: [pinned, latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - name: Run suite with the locked client versions
+        if: matrix.clients == 'pinned'
+        run: uv run --frozen --directory compat pytest -m "not agent"
+      - name: Run suite with the latest client releases
+        if: matrix.clients == 'latest'
+        working-directory: compat
+        run: >
+          uv run --no-project --with huggingface_hub --with hf_xet
+          --with httpx --with pytest pytest -m "not agent"
+
+  report:
+    needs: compat
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Nightly compatibility suite failing"
+          body="The nightly run failed: ${RUN_URL}"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
