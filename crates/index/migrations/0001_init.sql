@@ -20,19 +20,17 @@ CREATE TABLE xorb_scopes (
     PRIMARY KEY (xorb, scope)
 );
 
--- Content-addressed file reconstructions. terms is (xorb 32 B, chunk start
--- u32 LE, chunk end u32 LE, unpacked bytes u32 LE) per term.
-CREATE TABLE files (
-    hash BLOB PRIMARY KEY,
-    size INTEGER NOT NULL,
-    terms BLOB NOT NULL
-);
-
--- Files registered to a scope, with the client-asserted SHA-256, which is
--- only ever trusted within the scope that registered it (design §5.4).
+-- Files registered to a scope, each with that scope's own reconstruction:
+-- one file hash can be stored over different xorbs in different scopes, and
+-- a scope must only ever be handed its own (ruling M1-R16). terms is (xorb
+-- 32 B, chunk start u32 LE, chunk end u32 LE, unpacked bytes u32 LE) per
+-- term. The client-asserted SHA-256 is only ever trusted within the scope
+-- that registered it (design §5.4).
 CREATE TABLE file_scopes (
-    file BLOB NOT NULL REFERENCES files (hash),
+    file BLOB NOT NULL,
     scope TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    terms BLOB NOT NULL,
     sha256 BLOB,
     shard BLOB NOT NULL,
     PRIMARY KEY (file, scope)

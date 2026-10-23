@@ -261,20 +261,14 @@ impl Index for SqliteIndex {
             > 0;
         for (i, (file, size)) in files.iter().zip(sizes).enumerate() {
             let record = &file.record;
-            sqlx::query(
-                "INSERT INTO files (hash, size, terms) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-            )
-            .bind(record.hash.as_bytes())
-            .bind(size)
-            .bind(encode_terms(&record.terms))
-            .execute(&mut *tx)
-            .await?;
             new_for_scope |= sqlx::query(
-                "INSERT INTO file_scopes (file, scope, sha256, shard) VALUES (?, ?, ?, ?) \
-                 ON CONFLICT DO NOTHING",
+                "INSERT INTO file_scopes (file, scope, size, terms, sha256, shard) \
+                 VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             )
             .bind(record.hash.as_bytes())
             .bind(scope)
+            .bind(size)
+            .bind(encode_terms(&record.terms))
             .bind(file.sha256.as_ref().map(<[u8; 32]>::as_slice))
             .bind(shard.as_bytes())
             .execute(&mut *tx)
@@ -291,14 +285,11 @@ impl Index for SqliteIndex {
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
-        let row = sqlx::query(
-            "SELECT f.size, f.terms FROM files f JOIN file_scopes s ON s.file = f.hash \
-             WHERE f.hash = ? AND s.scope = ?",
-        )
-        .bind(file.as_bytes())
-        .bind(scope)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query("SELECT size, terms FROM file_scopes WHERE file = ? AND scope = ?")
+            .bind(file.as_bytes())
+            .bind(scope)
+            .fetch_optional(&self.pool)
+            .await?;
         row.map(|row| {
             Ok(FileRecord {
                 hash: *file,

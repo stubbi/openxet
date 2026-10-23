@@ -160,6 +160,39 @@ async fn file_only_readable_in_registered_scope() {
 }
 
 #[tokio::test]
+async fn same_file_two_scopes_keeps_each_scopes_terms() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, _) = put(&index, "a", 2, A).await;
+    let (xb, _) = put(&index, "b", 2, B).await;
+    let fa = file("f", xa, 2);
+    let mut fb = file("f", xb, 2);
+    fb.first_chunk = Some(h("first/f-in-b"));
+    assert_eq!(fa.record.hash, fb.record.hash);
+    ok(index
+        .register_shard(&h("shard-a"), std::slice::from_ref(&fa), A)
+        .await);
+    ok(index
+        .register_shard(&h("shard-b"), std::slice::from_ref(&fb), B)
+        .await);
+
+    assert_eq!(
+        ok(index.file(&fa.record.hash, A).await),
+        Some(fa.record.clone())
+    );
+    assert_eq!(
+        ok(index.file(&fb.record.hash, B).await),
+        Some(fb.record.clone())
+    );
+
+    // A later shard in A with other terms keeps A's first registration.
+    ok(index
+        .register_shard(&h("shard-a2"), std::slice::from_ref(&fb), A)
+        .await);
+    assert_eq!(ok(index.file(&fa.record.hash, A).await), Some(fa.record));
+}
+
+#[tokio::test]
 async fn sha256_mapping_is_scope_local() {
     let dir = ok(TempDir::new());
     let path = dir.path().join("index.sqlite");

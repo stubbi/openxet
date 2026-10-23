@@ -83,10 +83,13 @@ pub trait Index: Send + Sync + 'static {
     /// Registers the files of a verified shard to `scope`, in one
     /// transaction: either everything is recorded or nothing is.
     ///
-    /// - A file absent from the index is inserted; one present is left as is,
-    ///   since the same hash means the same reconstruction.
-    /// - Each file is registered to `scope` with its SHA-256 and `shard`. A
-    ///   file already registered to `scope` keeps its first registration.
+    /// - Each file is registered to `scope` with its own reconstruction,
+    ///   SHA-256 and `shard`. Reconstructions are kept per scope (ruling
+    ///   M1-R16): the same file hash may be stored over different xorbs in
+    ///   different scopes, and each scope reads back only its own.
+    /// - A file already registered to `scope` keeps its first registration;
+    ///   a later shard's terms for it describe the same bytes and are
+    ///   ignored.
     /// - Each file's `first_chunk` becomes a dedup candidate for its first
     ///   term's xorb.
     ///
@@ -105,9 +108,9 @@ pub trait Index: Send + Sync + 'static {
         scope: &str,
     ) -> Result<bool, IndexError>;
 
-    /// The reconstruction of `file` if it is registered to `scope`. Files
-    /// registered only to other scopes answer `None` under every
-    /// [`Visibility`] (design §5.4).
+    /// The reconstruction `scope` registered for `file`, or `None` if it
+    /// isn't registered to `scope`. Another scope's registration is never
+    /// returned, under any [`Visibility`] (design §5.4, ruling M1-R16).
     ///
     /// # Errors
     ///
