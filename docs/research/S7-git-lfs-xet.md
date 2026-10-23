@@ -116,7 +116,11 @@ Labels used below:
        `Authorization: Bearer <Gitea password>`
        (`g1-https-371-xet`, `g1-https-351-xet`).
      - **netrc entry for the remote host:** `Bearer <Gitea password>`
-       (`g5`).
+       (`g5`). The stub saw the Gitea password, but the trace can't show
+       which source supplied it: `git-xet` captures its `git credential
+       fill` subprocess's output, and in `g5` the credential store held the
+       Gitea entry too. That netrc wins is from source (`auth.rs:116`
+       runs before the helper at `:133`).
      - **`HF_TOKEN` set:** `Bearer <HF_TOKEN>`, so a user's Hugging Face
        token goes to openxet (`g4`).
      - **SSH remote:** `git-xet` runs `git-lfs-authenticate <repo path>
@@ -227,8 +231,11 @@ Labels used below:
        `git-lfs-authenticate` plus the HTTPS batch only when that fails
        (`lfsapi/lfsapi.go:55-76`).
      - With `lfs.sshtransfer=never`, the push ran `git-lfs-authenticate`
-       and sent an HTTPS batch offering `xet` (observed, `s5`; Gitea then
-       chose `basic`).
+       and sent an HTTPS batch offering `xet` (observed, `s5`:
+       `ssh/sshtransfer-never-upload-lfs371.trace.txt` and
+       `…gitea-flows.json`). Gitea's answer has no `transfer` field, which
+       means `basic` per the LFS spec, and `git-lfs` started the `basic`
+       adapter.
 
 ## Further findings
 
@@ -269,9 +276,13 @@ Labels used below:
   - For uploads offering `xet`, answer `xet` with a signed capability
     `href`.
   - For every download, answer `basic`, with absolute `href`s.
-  - Never send `X-Xet-Hash` to `git-xet` as a download transfer. It may ride
-    in the `basic` action's `header` for agents that read it (`git-lfs`
-    sends it to the `href`, which ignores it).
+  - The `basic` download action's `header` carries only `X-Xet-Hash`, for
+    agents that read it (`git-lfs` sends it to the `href`, which ignores
+    it). It carries no CAS token: Xet download agents use
+    `{lfs-url}/xet-read-token`. That keeps the token out of `GIT_TRACE`
+    output, where HF's appears.
+  - The `verify` action never echoes the client's credential, unlike
+    huggingface.co's.
 - **The capability `href` must:**
   - accept requests with no Authorization
   - ignore and never log a foreign Authorization, which will be present
@@ -328,8 +339,14 @@ Not filed. The user decides whether and when.
 > - SSH remote: it runs `ssh A git-lfs-authenticate …` and sends A's LFS
 >   token as `Bearer`
 >
-> We reproduced each case against Gitea 1.24.7 (host A) and a small LFS
-> server (host B).
+> We reproduced the HTTPS, netrc and `HF_TOKEN` cases against Gitea 1.24.7
+> (host A) and a small LFS server (host B). In the netrc case the
+> credential store also held host A's entry, so the trace can't tell which
+> source won; the source code says netrc.
+>
+> The SSH case was reproduced with an ssh wrapper that only adds the
+> `expires_in` field Gitea omits. Without it, git-xet fails first (point 4
+> below). Hosts that send `expires_in` leak this way.
 >
 > **Why.** `get_credential` (`git_xet/src/auth.rs`) takes the remote URL.
 > Every source after the `access` check is keyed to the remote's host;
@@ -388,10 +405,12 @@ Not filed. The user decides whether and when.
 >    servers can safely answer `xet` to any client that offers it.
 > 2. Implement `download_one`:
 >    - The server puts the Xet file hash in the download action's
->      `header` (`X-Xet-Hash`), alongside `X-Xet-Cas-Url`,
->      `X-Xet-Access-Token` and `X-Xet-Token-Expiration`.
->    - `git-xet` reconstructs through the shared chunk cache
->      (`HF_XET_CACHE`), using the same token refresher as uploads.
+>      `header` (`X-Xet-Hash`). That is not a secret, so it is safe in
+>      `GIT_TRACE` output.
+>    - `git-xet` gets a CAS read token from the server's read-token route,
+>      not from the batch response.
+>    - It reconstructs through the shared chunk cache (`HF_XET_CACHE`),
+>      using the same token refresher as uploads.
 >
 >    We'd like to contribute this, together with the fix in issue 1.
 

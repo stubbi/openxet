@@ -91,6 +91,11 @@ Per scenario there are two files:
 - `puressh-upload-lfs371.trace.txt`: the `git-lfs-transfer` packet trace of
   a push with `git-xet` registered and no `lfs.url` (Gitea
   `LFS_ALLOW_PURE_SSH=true`).
+- `sshtransfer-never-upload-lfs371.trace.txt` and
+  `sshtransfer-never-upload-lfs371.gitea-flows.json`: the same push with
+  `lfs.sshtransfer=never` (scenario `s5`). `git-lfs-authenticate` runs, then
+  an HTTPS batch to Gitea offering `xet`, which Gitea answers with no
+  `transfer` field (meaning `basic`).
 
 ## Redaction
 
@@ -110,6 +115,7 @@ Per scenario there are two files:
   her password and the stub token were throwaway values in a local
   container.
 - `body.size` and `Content-Length` describe the original bodies.
-- `compat/tests/test_fixture_redaction.py` scans these files. A second scan
+- `compat/tests/test_fixture_redaction.py` scans these files, including
+  for base64 Basic credentials. A second scan
   for the exact token values (raw and as Basic base64) and the account name
   found nothing before commit.
