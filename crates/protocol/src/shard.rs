@@ -5,6 +5,7 @@
 //! `docs/research/S6-shard-verification.md` lists each rule, its source and
 //! its test.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::io::{self, Read};
@@ -264,6 +265,15 @@ pub enum VerifyError {
         /// The claimed SHA-256, as hex of the digest bytes.
         actual: String,
     },
+    /// Two entries for one file hash claim different SHA-256 values.
+    #[error(
+        "file {file} appears twice with different SHA-256 values; send one entry per file, or \
+         entries that agree"
+    )]
+    ConflictingFileSha256 {
+        /// The duplicated file hash.
+        file: MerkleHash,
+    },
     /// The shard references more chunks than the server verifies per shard.
     #[error(
         "shard references {referenced_chunks} chunks in total, over the limit of {limit}; split \
@@ -489,7 +499,8 @@ fn digest_hex(digest: &[u8; 32]) -> String {
 /// [`ProtocolError::ShardNotVerified`] if a segment has no verification entry
 /// or names a xorb `lookup` doesn't have; neither happens after
 /// [`verify_shard`] passed. [`ProtocolError::ShardFileSha256Conflict`] if
-/// two entries for one file hash carry different SHA-256 values.
+/// two entries for one file hash carry different SHA-256 values; a defensive
+/// check, as [`verify_shard`] rejects that case first.
 /// [`ProtocolError::XorbTableTooLarge`] if a chunk table doesn't fit the
 /// shard format's 32-bit counts.
 pub fn stored_shard(
@@ -690,6 +701,8 @@ fn verify_segment_with<'a>(
 ///   [`verify_segment`] against its stored chunks
 /// - the file hash recomputed from the referenced chunks, in order, equals
 ///   the claimed one (<https://huggingface.co/docs/xet/hashing#file-hashes>)
+/// - entries repeating a file hash don't disagree on its SHA-256, checked
+///   first, before any lookup
 /// - a file with no segments is the empty file: its hash must be all zeros
 ///   (as upstream's `file_hash` of no chunks is), and its SHA-256 absent, all
 ///   zeros (what `hf_xet` 1.7.0 sends), or the digest of zero bytes
@@ -735,10 +748,35 @@ pub fn verify_shard(
             limit: limits.max_referenced_xorbs,
         });
     }
+    check_duplicate_sha256(&shard.files)?;
     shard
         .files
         .iter()
         .try_for_each(|file| verify_file(file, lookup))
+}
+
+/// Duplicate entries for one file hash are allowed (the first is stored), but
+/// not with SHA-256 values that disagree. Checked before any lookup, so that
+/// [`stored_shard`] never meets the conflict after a successful verification.
+fn check_duplicate_sha256(files: &[ShardFileEntry]) -> Result<(), VerifyError> {
+    let mut first: HashMap<MerkleHash, Option<[u8; 32]>> = HashMap::new();
+    for file in files {
+        match first.entry(file.file_hash) {
+            Entry::Vacant(slot) => {
+                slot.insert(file.sha256);
+            }
+            Entry::Occupied(slot) => {
+                if let (Some(a), Some(b)) = (slot.get(), file.sha256)
+                    && *a != b
+                {
+                    return Err(VerifyError::ConflictingFileSha256 {
+                        file: file.file_hash,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One file's rules, as listed on [`verify_shard`]; callers go through

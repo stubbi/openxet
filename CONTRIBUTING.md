@@ -30,10 +30,21 @@ cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)'
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans
+fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
+cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser (targets: xorb_upload, xorb_chunks, upload_shard, verify_shard)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent # agent leg (CI gate)
 ```
+
+Fuzzing needs the nightly toolchain (`rustup toolchain install nightly`) and
+`cargo install cargo-fuzz --locked` once. `fuzz/` is its own workspace, and
+`fuzz/seed.sh` copies the seeds from `testdata/`; the corpus and any crash
+artifacts stay untracked. On macOS the default AddressSanitizer build fails to
+link, so add `-s none` (`cargo +nightly fuzz run -s none <target>`); Linux and
+CI use the default. A crash input becomes a regression test in
+`crates/protocol/tests/` together with its fix. CI's `fuzz-smoke` job runs
+each target for 60 s on PRs that touch `crates/protocol/` or `fuzz/`.
 
 The full compatibility suite (`pytest` without `-m agent`) talks to
 huggingface.co, and CI runs it nightly.

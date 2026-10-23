@@ -5,3 +5,6 @@
 .venv/
 __pycache__/
 .pytest_cache/
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
