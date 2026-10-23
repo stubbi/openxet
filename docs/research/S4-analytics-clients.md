@@ -178,9 +178,12 @@ the clients.
     works after `SET ca_cert_file='/path/ca.pem'` (observed).
   - polars failed both with and without `SSL_CERT_FILE` on macOS
     (`Generic HTTP error ... after 10 retries`), which is the S2 caveat for
-    the system trust store (observed). `curl --cacert` worked.
-  - So self-hosted deployments with a private CA need a publicly trusted
-    certificate for polars on macOS, or the fsspec route.
+    the system trust store (observed on macOS only; Linux and Windows are
+    unverified). `curl --cacert` worked.
+  - **Unverified guidance:** a self-hosted deployment with a private CA
+    probably needs a publicly trusted certificate for polars on macOS, or
+    a fsspec route with a custom CA. The fsspec private-CA route was not
+    run.
 
 ## Gateway conformance checklist for M1
 
@@ -190,24 +193,36 @@ item was run against the S4 stub (so the client behaviour is known and the
 stub is a reference); "M1 test" means it has not been run against openxet's
 real gateway, or not at all.
 
-| # | Check | Status |
-|---|---|---|
-| G1 | `HEAD` returns `200`, `Content-Length` = file size, `Accept-Ranges: bytes`, `ETag`; `Last-Modified` if the backend has one | client need observed (DuckDB sends `HEAD` first); M1 test on openxet |
-| G2 | `GET` without `Range` returns `200` with the full body | stub done; M1 test |
-| G3 | `Range: bytes=a-b` returns `206`, `Content-Range: bytes a-b/N`, `Content-Length` = b-a+1 | engines use it (DuckDB, polars); M1 test |
-| G4 | `Range: bytes=a-` returns `206` to end of file with correct `Content-Range` and `Content-Length` | `curl` against stub done; neither engine sent this form; M1 test |
-| G5 | `Range: bytes=-n` (suffix) returns `206` with the last n bytes | polars sends it for the footer (observed); M1 test |
-| G6 | A range with start >= N returns `416` and `Content-Range: bytes */N` | stub done by `curl`; engines not observed hitting it; M1 test |
-| G7 | End beyond EOF is clamped (`a-b` with b >= N returns `206` up to N-1) | M1 test (the stub clamps; engines were not observed relying on it) |
-| G8 | `ETag` is identical on `HEAD`, full `GET` and ranged `GET` | stub done; M1 test |
-| G9 | `If-Range` with the current `ETag` returns `206`; with another value `200` and the full body | stub done by `curl`; engines did not send it; M1 test |
-| G10 | `302` from `resolve` to a relative `Location` is followed with `Range` by DuckDB and polars | observed on the stub; M1 test against real storage redirects |
-| G11 | Same with an absolute `Location` (a presigned object-store URL) | observed on the stub with an absolute `http://localhost` URL; M1 test with presigned URLs and range-bound signatures (ADR 0002) |
-| G12 | Private repo: unauthenticated request returns `401` with `X-Error-Code`; DuckDB `http` secret (`bearer_token`, host-scoped) is accepted on `HEAD` and every ranged `GET` | observed on the stub; M1 test with openxet tokens |
-| G13 | `Authorization` is not forwarded to a different origin on redirect | **not tested**; M1 test (client behaviour unknown) |
-| G14 | polars on a private repo: documented route is an fsspec file object with `headers=`; native `scan_parquet(url)` cannot send `Authorization` | observed on the stub |
-| G15 | `https://` with the deployment's certificate: DuckDB (`ca_cert_file` for a private CA), polars (system trust store only on macOS) | observed on the stub; M1 test with the real certificate |
-| G16 | Performance floor: the read pattern of one Parquet scan (about 20 ranges, tail 8 to 256 KiB, then column chunks of 12 to 16 KiB) completes without per-request setup cost that scales with file size | **not tested**; M1 test |
+| # | Check | Result on the S4 stub | Status for openxet |
+|---|---|---|---|
+| G1 | `HEAD` returns `200`, `Content-Length` = file size, `Accept-Ranges: bytes`, `ETag`; `Last-Modified` if the backend has one | Pass (curl); DuckDB sends `HEAD` first (observed) | M1 test |
+| G2 | `GET` without `Range` returns `200` with the full body | Pass (curl: 200, 4,471,463 bytes) | M1 test |
+| G3 | `Range: bytes=a-b` returns `206`, `Content-Range: bytes a-b/N`, `Content-Length` = b-a+1 | Pass (curl `0-9`); both engines send this form (stub log) | M1 test |
+| G4 | `Range: bytes=a-` returns `206` to end of file with correct `Content-Range` and `Content-Length` | Pass (curl `4471460-`); neither engine sent this form | M1 test |
+| G5 | `Range: bytes=-n` (suffix) returns `206` with the last n bytes | Pass (curl `-8`); polars sent `bytes=-262144` for the footer in the first polars run (stub log, two requests) | M1 test |
+| G6 | A range with start >= N returns `416` and `Content-Range: bytes */N` | Pass (curl `4471463-`); no engine was seen hitting it | M1 test |
+| G7 | End beyond EOF is clamped (`a-b` with b >= N returns `206` up to N-1) | Pass (curl `4471460-9999999`: `206`, `Content-Range: bytes 4471460-4471462/4471463`, 3 bytes); no engine was seen relying on it | M1 test |
+| G8 | `ETag` is identical on `HEAD`, full `GET` and ranged `GET` | Pass (curl: HEAD and ranged GET equal) | M1 test |
+| G9 | `If-Range` with the current `ETag` returns `206`; with another value `200` and the full body | Pass (curl); no engine sent it | M1 test |
+| G10 | `302` from `resolve` to a relative `Location` is followed with `Range` by DuckDB and polars | Pass (DuckDB 2.0.0, polars 2.0.0) | M1 test against real storage redirects |
+| G11 | Same with an absolute `Location` (a presigned object-store URL) | Pass with an absolute `http://localhost` URL (both engines) | M1 test with presigned URLs and range-bound signatures (ADR 0002) |
+| G12 | Private repo: unauthenticated request returns `401` with `X-Error-Code`; DuckDB `http` secret (`bearer_token`, host-scoped) is accepted on `HEAD` and every ranged `GET` | Pass (DuckDB) | M1 test with openxet tokens |
+| G13 | `Authorization` is not forwarded to a different origin on redirect | Not run | M1 test (client behaviour unknown) |
+| G14 | polars on a private repo: native `scan_parquet(url)` cannot send `Authorization`; documented route is an fsspec file object with `headers=` | Pass (documents a polars limitation; fsspec route works) | M1 test: keep as documentation check |
+| G15 | `https://` with the deployment's certificate | DuckDB: Pass with `ca_cert_file` for a private CA. polars: Fail with a private CA on macOS (only macOS tested; Linux and Windows unverified) | M1 test with the real certificate |
+| G16 | Performance: a scan issues many small ranges (about 20 for a 4.5 MB file: footer, then 12 to 16 KiB column chunks), so each range must be cheap and cacheable, with per-request cost not scaling with file size | Not run (the stub reads the whole file per request) | M1 test |
+
+Result column: Pass / Fail / Not run on the S4 stub; "curl" means the stub
+itself was checked, not an engine.
+
+## Notes carried over for M1
+
+- `HfFileSystem` (and so pandas `hf://`) needs the Hub read shapes already
+  captured in `docs/research/S3-hub-api-shapes.md` (repo info, `tree`,
+  `paths-info` form or JSON, `resolve`); a Hub-compatible openxet serves
+  them for the other clients anyway.
+- Both engines issue many small ranges per scan (see G16), so the gateway
+  must be cheap per range and cacheable.
 
 ## Upstream draft
 
@@ -263,5 +278,6 @@ Not filed; per the standing ruling, the controller decides.
   ran with `python -I`.
 - Not tested: `models` repos through `HfFileSystem`, the real gateway's
   redirect to presigned object-store URLs, `Authorization` forwarding on
-  cross-origin redirects, and Windows/Linux trust-store behaviour (the
-  HTTPS run was on macOS). Everything else in the checklist is marked.
+  cross-origin redirects (G13), performance (G16), the fsspec private-CA
+  route, and Windows/Linux trust-store behaviour (the HTTPS run was on
+  macOS). Each is "Not run" or labelled unverified above.

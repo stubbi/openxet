@@ -348,7 +348,8 @@ and shared.
   must pass the conformance checklist in that note (HEAD, all three
   `Range` forms, `416`, `ETag`/`If-Range`, redirects, auth); private
   repos need a DuckDB `http` secret, and polars needs an fsspec file
-  object. It is served by the transfer role so
+  object. Private-CA https works in DuckDB but not in polars on macOS
+  (observed; `docs/research/S4-analytics-clients.md`). It is served by the transfer role so
   it scales and caches independently.
 
 ### 5.6 Garbage collection and retention
