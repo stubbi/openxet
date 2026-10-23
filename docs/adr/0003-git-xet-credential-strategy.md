@@ -8,21 +8,20 @@
 ## Context
 
 Design §6.1 makes openxet the LFS store for Git repos hosted anywhere, through
-`lfs.url`. Design §10.2 notes that `git-xet`'s credential sourcing assumes
-the LFS host equals the Git host. Spike S7 tested this end to end with `git-lfs` 3.5.1 and 3.7.1 and `git-xet`
+`lfs.url`. Design §10.2 asks how `git-xet`'s token refresh should work when
+the LFS endpoint is openxet and the Git remote is elsewhere. Spike S7 tested this end to end with `git-lfs` 3.5.1 and 3.7.1 and `git-xet`
 0.2.1. It used huggingface.co, Gitea 1.24.7 (HTTPS and SSH) and a stub
 shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
 `compat/fixtures/lfs/`. What was verified:
 
 - `git-lfs` sends only the `lfs.url` host's credential to the batch API, on
   HTTPS and SSH remotes (observed).
-- `git-xet`'s credential sourcing for the batch `href` assumes the LFS
-  host equals the Git host, so with `lfs.url` on another host it can't be
-  relied on (observed).
+- `git-xet` resolves the credential for the batch `href` with its own
+  lookup, separate from `git-lfs`'s (source and observed).
 - The only client-side switch is the git config key
   `lfs.<endpoint derived from the remote>.access=none`. With it, `git-xet`
-  skips its credential lookup (and never prompts), and a signed capability
-  `href` alone completes the refresh and the upload (observed). `git-xet` does not read
+  calls the `href` without a credential, and a signed capability `href`
+  alone completes the refresh and the upload (observed). `git-xet` does not read
   `.lfsconfig`, so the key must be in the clone's git config.
 - `git-xet` 0.2.1 registers for downloads but can't do them. A server that
   answers `xet` to a download batch breaks `git lfs pull` with no fallback
@@ -43,10 +42,11 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
      least the transfer session
    - is tested with a query-string signature, which `git-xet` sends back
      unchanged
-2. **Authorization headers on the `href`.** An Authorization header on a
-   capability `href` is never used for authentication. It is never logged
-   or echoed, and never fails the request. Audit and metrics record only
-   that one was present.
+2. **Capability routes never authenticate by header.** The signature in
+   the `href` is the whole authorization. An Authorization header on a
+   capability route is never used, logged or echoed, and never fails the
+   request; audit and metrics record only that one was present. Client
+   access is configured explicitly by `openxet setup git` (decision 4).
 3. **Downloads always answer `basic`.** This applies even when `xet` is
    offered, because the server can't tell `git-xet` 0.2.1 from a
    download-capable agent of the same name.
@@ -89,8 +89,7 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
    `xet`, so `git-xet` users of openxet-hosted repos over SSH reach `xet`
    through `git-lfs-authenticate` plus the HTTPS batch (decision 4).
 7. **Upstream.** We contribute to `huggingface/xet-core`:
-   - credential sourcing from the LFS endpoint, with a lazy lookup and an
-     optional `expires_in`
+   - a lazy credential lookup and an optional `expires_in`
    - download support, with `direction=upload` until it lands
 
    When an updated `git-xet` ships, decision 4 keeps working, and the
@@ -98,9 +97,9 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
 
 ## Consequences
 
-- **Users of `openxet setup git`** need no credential for the refresh and
-  see no password prompt. Clones configured by hand still work, and
-  decision 2 applies to any Authorization header the `href` receives.
+- **Users of `openxet setup git`** need no credential for the refresh.
+  Decision 2 holds for every request to a capability route, however the
+  clone was configured.
 - **Batch `href`s are bearer capabilities.** Their lifetime, scope (one
   repo, one operation) and signing key rotation are security properties.
   Leaking one gives that scope's CAS token until it expires.
@@ -112,9 +111,10 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
     that pushes with `git-xet` and pulls with `git-lfs` through
     `openxet setup git`, asserting that the refresh succeeds with no
     Authorization header.
-  - Same leg, without the setup (decision 2): asserts the push still
-    succeeds even if the `href` receives an Authorization header, and that no
-    Authorization value appears in openxet's logs.
+  - Integration test (decision 2): a capability `href` request with a
+    valid signature and an arbitrary Authorization header succeeds, one
+    with an Authorization header but a bad signature fails, and no
+    Authorization value appears in openxet's logs or responses.
   - Unit test: download batches never answer `xet`.
   - Contract test (decision 5): the `git-lfs-authenticate` answer
     deserialises into `git-xet`'s `GitLFSAuthenticateResponse` shape.
@@ -145,8 +145,9 @@ working tree.
 ## Alternatives considered
 
 - **Authenticate the `href` with the user's openxet token.** Rejected:
-  `git-xet` sources its credential from the Git remote's host, not from
-  the openxet host.
+  every agent that follows the `href` would need an openxet credential
+  configured for it. A signed capability works without that, and keeps
+  authorization in one place.
 - **Use the Git host's identity for the `href`.** Rejected: openxet would
   depend on every Git host's identity system, which conflicts with
   "openxet never owns users".

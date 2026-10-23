@@ -925,29 +925,29 @@ says which spec version and client versions are supported.
 
 ### 10.2 `git-xet` with third-party Git hosts
 
-`git-xet`'s credential sourcing assumes the LFS host equals the Git host.
-When `lfs.url` points at openxet and the remote lives elsewhere, that
-doesn't hold, so openxet's refresh `href` needs no credential, and `openxet
-setup git` configures access explicitly
+When `lfs.url` points at openxet and the remote lives elsewhere, openxet's
+policy is: **capability routes never authenticate by header, and `openxet
+setup git` configures access explicitly**
 ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md), S7). All three
 parts are v1:
 - **Server side:**
   - The `href` refresh route openxet returns is a short-lived, signed,
     single-repo capability URL, so the refresh needs no credential.
   - CAS tokens issued through the LFS path last for the transfer session.
-  - openxet ignores and never logs `Authorization` headers on that route.
+  - openxet never authenticates by, logs or echoes an `Authorization`
+    header on that route.
 - **Client setup:** `openxet setup git` writes the clone's git config:
   - `lfs.url`
   - `lfs.<endpoint derived from the remote>.access=none`, so `git-xet`
-    skips its credential lookup (and never prompts); the capability
-    `href` alone completes the refresh (S7, observed)
+    calls the capability `href` without a credential; the `href` alone
+    completes the refresh (S7, observed)
   - the openxet token in the credential helper under the openxet host, for
     `git-lfs`'s batch
 
   The `access` key must be in git config, because `git-xet` doesn't read
   `.lfsconfig`.
-- **Upstream:** contribute credential sourcing from the LFS endpoint, the
-  way `git-lfs` does it, to `git-xet` in `huggingface/xet-core`,
+- **Upstream:** contribute a lazy credential lookup, an optional
+  `expires_in` and download support to `git-xet` in `huggingface/xet-core`,
   coordinated with Hugging Face.
 
 ### 10.3 Server-side chunking for non-Xet clients

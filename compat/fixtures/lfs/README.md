@@ -66,7 +66,7 @@ Per scenario there are two files:
 |---|---|---|---|---|
 | `g2-https-{371,351}-plain` | HTTPS | 3.7.1 / 3.5.1 | no | credential store has Gitea and stub entries |
 | `g3-https-371-xet-accessnone` | HTTPS | 3.7.1 | yes | `lfs.https://gitea:3000/alice/r5.git/info/lfs.access=none` |
-| `g6-https-371-xet-nogiteacred` | HTTPS | 3.7.1 | yes | no Gitea credential anywhere `git-xet` looks |
+| `g6-https-371-xet-nogiteacred` | HTTPS | 3.7.1 | yes | no `access` key and no stored credential for `git-xet` |
 | `s1-ssh-{371,351}-xet-stuburl` | SSH | 3.7.1 / 3.5.1 | yes | Gitea's own `git-lfs-authenticate` |
 | `s2-ssh-371-plain-stuburl` | SSH | 3.7.1 | no | |
 | `d1-dl-371-xet` | HTTPS | 3.7.1 | yes | `git lfs pull`; stub answers `basic` |
