@@ -174,8 +174,8 @@ evaluating existing Xet servers; see `docs/competitive-matrix.md`).
 Run from the repository root. The toolchain is pinned in
 `rust-toolchain.toml`; `cargo nextest` needs `cargo install cargo-nextest
 --locked` once. CI runs these same commands (`.github/workflows/ci.yml`), so
-green locally means green there. Keep this list exact and current; the
-compatibility suite and benchmarks are added when they exist.
+green locally means green there. Keep this list exact and current; benchmarks
+are added when they exist.
 
 ```bash
 cargo build                                                # build the workspace
