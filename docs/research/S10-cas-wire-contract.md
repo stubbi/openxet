@@ -119,7 +119,7 @@ Behaviour that shapes the M1 server:
 | Hash in path | 64 lowercase hex characters in Xet byte order (`DataHash::hex`). | spec, source |
 | Prefix | `default` for xorbs and chunks (`HF_XET_DATA_DEFAULT_PREFIX`, `xet_runtime/src/config/groups/data.rs:109`). | source, observed |
 | Protocol | HTTP/1.1 only (`http1_only`, `common/http_client.rs:90`). | source |
-| `Authorization` | `Bearer {token}` on every CAS route when the client has a token (`common/http_client.rs:341`); absent when it has none. Never sent to data URLs. | source, observed |
+| `Authorization` | `Bearer <token>` on every CAS route when the client has a token (`common/http_client.rs:341`); absent when it has none. Never sent to data URLs. | source, observed |
 | `X-Xet-Session-Id` | A UUIDv7 per upload or download session, on every request including data URLs (`cas_types/mod.rs:17`, `http_client.rs:366`). | observed |
 | `User-Agent` | `hf_xet/1.7.0`, or `{caller UA}; hf_xet/1.7.0` when the caller passes one (`hf_xet/src/headers.rs:7-22`). Our probe sent only its own UA. | observed, source |
 | `Accept` | `*/*`. No `Accept-Encoding`: responses must not be compressed. | observed |
@@ -432,7 +432,7 @@ Not sent by `hf_xet` 1.7.0 (observed). Per spec
 
 ## Auth
 
-- **Format:** `Authorization: Bearer {token}`, where the token is opaque
+- **Format:** `Authorization: Bearer <token>`, where the token is opaque
   to the client (`http_client.rs:341`). The spec's tokens come from the
   Hub token routes ([auth](https://huggingface.co/docs/xet/auth),
   design §3).
