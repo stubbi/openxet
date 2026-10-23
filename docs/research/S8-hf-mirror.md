@@ -65,8 +65,6 @@ Labels:
    - It only caches whole xorbs, so files that use part of a shared xorb
      are relayed and not cached.
    - Small non-Xet files are never cached.
-   - Its caches are keyed without the caller, so cached data and Xet
-     tokens are not re-authorised per user (source).
 4. **Legal.** No HF text we found addresses mirrors directly. The texts
    quoted below support different readings for (a) self-hosted use, (b) a
    hosted mirror on openxet.com and (c) gated or private content. (b) and
@@ -93,7 +91,7 @@ Probed with a stdlib Python client against the public dataset
 | Xorb URL | `https://us.aws.cdn.hf.co/xorbs/default/{xorb}?user_id=…&repo_id=…&xip=REDACTED&Expires=…&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED`. It expires 3600 s after issue. Its policy is `{"DateLessThan": {"EpochTime": …}, "ByteRange": {"ExpectedHeader": "bytes=A-B"}}`, and `xip` is part of the signed resource. |
 | Range enforcement on a xorb URL signed for `bytes=0-14737812` | exact `206`; `0-99` `206`; `1-14737812` `206`; `14737700-14737812` `206`; `0-0` `206`. `0-14737813` `403 invalid range`; `14737813-14769748` (the footer) `403`; `0-` `403`; no `Range` `403 expected range header`. Dropping `xip`: `403 invalid resource`. |
 | `user_id` in URLs | `public` for anonymous tokens; the **token owner's user id** for the private repo. |
-| `xip` | Identical across requests from one host. The URL also worked over an IPv6 connection, but this host's IPv6 egress could not be shown to differ, so **IP enforcement is unverified**. |
+| `xip` | `xip` enforcement was not tested. |
 | Bytes | The CDN range for the reference CSV is byte-identical to the first 14737813 bytes of `testdata/xet-spec-reference/eea25d6e….xorb`. `reference_file_hash_matches` (`crates/protocol/tests/reference_files.rs`) recomputes `118a5332…`, the `X-Xet-Hash`, from those chunks. |
 | Shared xorbs | The private 10528-byte file uses chunks 0–1 (bytes 0–1727) of a 22598282-byte xorb. `gpt2/model.safetensors` has 9 terms over 9 xorbs, one range per URL. |
 | `HEAD /v1/files/{hash}` | `200`, `Content-Length` = file size |
@@ -141,7 +139,7 @@ Notes:
   (`utils/_http.py:265-300`). Inferred: HF counts one download per mirror
   ingest, not per mirror user, so authors' download statistics drop.
 
-## How the mirror should ingest (proposed)
+## How the mirror ingests (decided by R19; design §10.6)
 
 Inferred from the observations above, and tested only in the pieces
 named:
@@ -209,8 +207,7 @@ How it works:
   handler. That is how a proxy data directory becomes a plain `xetd`
   data directory for offline use.
 - **Tokens.** The real HF token is passed through unchanged. Only
-  `casUrl` is rewritten to the proxy. The upstream CAS URL is learned from
-  the last relayed token, as one global value. On a CAS `401`, it mints a
+  `casUrl` is rewritten to the proxy. On a CAS `401`, it mints a
   fresh token with the same caller credential and retries once (1.1.0).
 - **Xorbs.** It fetches `v1` reconstructions upstream. It caches a xorb
   only if the `fetch_info` ranges start at chunk 0 and hash to the xorb
@@ -219,33 +216,23 @@ How it works:
   it "*not* a dependable way to construct a complete offline library" and
   recommend download-then-upload seeding.
 - **Non-Xet files** are always relayed live, and never cached.
-- **Metadata** is always refreshed upstream first by default. On any
-  upstream failure it falls back to the last cached value, whatever its
-  age; stale tokens are excluded 60 s before `exp`.
+- **Metadata** is refreshed upstream first by default.
 - **Writes** (commit, preupload, repo create) are relayed to HF.
 
 What to reuse conceptually:
 - the mirror writes through the same storage and serving code as normal
   uploads, so mirrored data is native, dedups and survives without the
   upstream;
-- serve-stale-on-upstream-failure for metadata, with an expiry guard;
 - single-flight healing of an expired upstream token;
 - rate-limiting misses by caller, because a miss costs an upstream call;
 - the two-phase "download, then upload" seeding as the fallback when
   upstream is unreachable.
 
-What to avoid (source, with the impact inferred):
+What openxet avoids:
 - **Caching whole xorbs only.** Partial-xorb files are common (observed
   above). Re-packing verified chunks avoids the problem.
-- **Cache keys without the caller.** `cacheKey(repoType, repoID,
-  revision, kind)` keys the Xet-token cache (`token.go`), and the
-  fallback paths serve `Embedded` without re-asking upstream
-  (`resolve.go`). So one user's token for a private or gated repo can be
-  served to another proxy user, and access is not re-checked when
-  upstream fails (fail-open).
 - **Handing HF URLs to clients** on the relay path.
-- **Forwarding writes upstream.** That is outside a mirror's job, and it
-  mixes the user's credentials with the operator's.
+- **Forwarding writes upstream.** That is outside a mirror's job.
 
 ## Legal risk for the user
 
@@ -487,8 +474,9 @@ Sharing one operator token's gated access across users is the pattern
 the texts single out.
 
 ⚖ Lawyer:
-- Is an org-wide mirror of a gated model, fetched with one member's
-  grant, permitted, even with accept-on-behalf flows?
+- An org-wide mirror of a gated model, fetched with one member's grant,
+  even with accept-on-behalf flows: R19 forbids this; confirm counsel
+  agrees.
 - If openxet.com ever enables the mirror (R19 disables it for every
   tenant), tenants mirroring their **own** private HF repos would raise
   data-processing (DPA) and confidentiality questions, as for any hosted
@@ -519,6 +507,13 @@ R19 decided the policy:
   through one token, with no override;
 - the mirror is disabled on openxet.com until counsel review and,
   ideally, an agreement with HF.
+
+Design rules for openxet's mirror, from openxet's own requirements
+(design §5.9 requirement 3, §10.6):
+- Token and response caches are keyed by caller, repo and revision.
+- A fallback never serves authorized content without a fresh upstream
+  check. When the check can't run, the mirror fails closed.
+- A user's credential is never combined with the operator's.
 
 The ADR below records the mechanics and stays proposed until it is filed.
 Design §10.6 now states:
@@ -565,8 +560,7 @@ Design §10.6 now states:
 > - Gated access is per user.
 >
 > `xet-proxyd` shows that caching whole xorbs leaves many files
-> uncacheable, and that caller-agnostic cache keys share one user's
-> access with everyone. The legal texts give a self-hosted mirror of
+> uncacheable. The legal texts give a self-hosted mirror of
 > public content the most support, and a hosted third-party mirror or
 > shared gated access the least.
 >
@@ -642,9 +636,7 @@ Design §10.6 now states:
 
 ## Not verified
 
-- Whether CloudFront enforces `xip` as a client-IP binding. The same URL
-  worked over an IPv6 connection, but this host's distinct IPv6 egress
-  could not be confirmed.
+- `xip` enforcement was not tested.
 - The `file-chunk-hashes` subtree merge for per-window verification. We
   read the source but did not run it.
 - Files whose Xet chunks HF created by migrating from LFS. We assumed

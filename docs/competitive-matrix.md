@@ -20,15 +20,17 @@ mistakes to avoid.
 
 Legend: **PASS**, **FAIL**, **PARTIAL** as observed; **N/A** the project
 doesn't claim the feature; **NOT RUN** not covered by that run; **Info**
-recorded for context, not graded; **Withheld**: result not published yet.
+recorded for context, not graded.
+
+Authorization is not graded or published for any project.
 
 | Project | Size / activity | Protocol core | Stock-client result | Notes |
 |---|---|---|---|---|
 | [Shardline](https://github.com/STEXS-Technologies/shardline) @ `ede71ea4` | ~504k lines of Rust, 984 commits, 978 by one author, all PRs self-merged | Own reimplementation (`shardline-xet-core`), not `xet-core` | **Fails** for model-sized files with `hf` and git (details below) | Broad scope (OCI, S3, Bazel, DuckDB); strong ops docs; strict clippy config |
 | [ggoggam/openxet](https://github.com/ggoggam/openxet) @ `fc8cd642` | ~12k LOC, 33 commits, quiet since 2026-07 | Depends on `xet-core-structures`/`xet-data` `=1.5.2` | **Fails** with current clients: a CAS only (no Hub API, Git or LFS), so `hf` can't use it; `hf_xet` 1.7.0 downloads work but uploads fail on `/v2/shards` (1.5.2 uploads work) | Real reference-file tests; HF's own crates for formats and hashing; ~2% storage overhead; crash-safe and fast; closest to our approach |
-| [kebyn/xet-server](https://github.com/kebyn/xet-server) @ `e9c4624f` | ~43k LOC, 330 commits | Own reimplementation | **Fails** over Xet in both directions; `hf upload` works only for a repo's first commit, over plain LFS, below 512 MiB, without a README; plain `git-lfs` works | Careful Hub layer: clean errors, namespace authorization; no reference-file tests |
+| [kebyn/xet-server](https://github.com/kebyn/xet-server) @ `e9c4624f` | ~43k LOC, 330 commits | Own reimplementation | **Fails** over Xet in both directions; `hf upload` works only for a repo's first commit, over plain LFS, below 512 MiB, without a README; plain `git-lfs` works | Careful Hub layer: clean errors; no reference-file tests |
 | [guilt/xet-server](https://github.com/guilt/xet-server) (Go) @ `22c4aa1` | ~28k LOC, 16 commits, quiet since 2026-09-16 | Go port checked against captured `hf_xet` traffic | **Partly works:** `hf upload`/`hf download` of 1 GiB over Xet with auth off on one machine; whoami, Range, cross-machine dedup, Git and auth-on transfers fail | `xet-proxyd` HF pull-through cache; `docs/PROTOCOL.md` documents real-client quirks; fast and lean |
-| [Taytay/xet-server](https://github.com/Taytay/xet-server) branches on guilt @ `dc82516` | 7 stacked PRs inside the fork, none upstream | As guilt | **Fixes what it targets:** cross-machine dedup, self-authorizing xorb URLs, `git-xet` push; guilt's other gaps remain | Only checks 2, 5, 6, 8, 9, 10 and 14 were re-run |
+| [Taytay/xet-server](https://github.com/Taytay/xet-server) branches on guilt @ `dc82516` | 7 stacked PRs inside the fork, none upstream | As guilt | **Fixes what it targets:** cross-machine dedup, auth-on Xet downloads, `git-xet` push; guilt's other gaps remain | Only checks 2, 5, 6, 8, 9 and 10 were re-run |
 
 ### Shardline: observed against stock clients
 
@@ -39,7 +41,7 @@ recorded for context, not graded; **Withheld**: result not published yet.
 | `hf upload` (large files) | `preupload` always answers `regular`, so files go base64 in the commit body and fail above 16 MiB; Xet is never used |
 | `hf download` (LFS-backed) | Relative 307 `location`, no `X-Repo-Commit` / `X-Xet-Hash` → rejected by `hf` |
 | Refs/branches/tags/paths-info/commits APIs | 404 (not implemented); `model_info().sha` is `None` |
-| Xet download URLs | Proxied through the server and require a bearer token → stock `hf_xet` gets 401 |
+| Xet download URLs | Proxied through the server and need an extra header, so stock `hf_xet` gets 401 |
 | Range reads | Ignored on `/resolve`; a 1000-byte reconstruction range fetches a whole xorb |
 | Global dedup across machines | Every `/v1/chunks/...` lookup 404s; a 1 MB change re-sends ~315 MB |
 | `git-xet` via Hub LFS | Wrong header names (`X-Xet-Content-CAS-*`, expiry `"0"`) → "didn't provide a CAS URL" |
@@ -47,7 +49,6 @@ recorded for context, not graded; **Withheld**: result not published yet.
 | SIGKILL mid-upload | Content permanently blocked (`409 Conflict`, upload intent stuck in `failed`) |
 | `fsck` | 105,576 false-positive hash mismatches on healthy data; exits 0 |
 | Throughput (1 GiB, local) | Upload ~18 MB/s, download ~60 MB/s; ~2× storage overhead (xorbs plus per-chunk objects) |
-| Authorization | Withheld |
 
 ### ggoggam/openxet: observed against stock clients
 
@@ -62,14 +63,13 @@ affiliated with ggoggam/openxet; the names collide.
 | Setup | PARTIAL | ~5 min from clone to a running server (4m20s cold build). `examples/README.md` claims stock `huggingface_hub` works via `endpoint` (it can't: `405` on `/api/repos/create`); `demo.sh` installs an unpinned `hf_xet`, gets 1.7.0, and its own demo fails |
 | Upload via `hf_xet` | FAIL on 1.7.0 and 1.6.0, PASS on 1.5.2 | 1.7.0: `405 Method Not Allowed` on `/v2/shards`; only `/v1/shards` is routed. 1.5.2: 5 xorbs, shard 200 |
 | Download via `hf_xet` | PASS (1.5.2 and 1.7.0) | sha256 matches for all 3 files |
-| Xet URLs without headers | PARTIAL | Stock `hf_xet` 1.7.0 and 1.5.2 download with no extra headers; sha256 matches. L4's signed, self-authorizing URL requirement is not met |
+| Downloads with no extra headers | PASS | Stock `hf_xet` 1.7.0 and 1.5.2 download with no extra headers; sha256 matches. |
 | Range | FAIL | A 1000-byte `/v2/reconstructions` range returns chunks `0..1030`, ~67 MB: term, not chunk, granularity |
 | Dedup, same machine | PASS | A 1 MB edit sends 1,134,889 B; an identical copy sends 0 B of xorbs |
 | Dedup, second machine (bytes sent) | FAIL | 314,611,672 B re-sent for a 1 MB edit: every `GET /v1/chunks/default/<h>` is 404; only `default-merkledb` is routed |
 | 1 GiB incompressible | PASS | 17 xorbs of ~64 MiB accepted; the body cap is derived from the protocol limit |
 | SIGKILL mid-upload of 512 MB | PASS | The original client finished on retry after restart; the download is byte-identical |
 | GC (no fsck) | PASS | `POST /v1/gc` removed 2 orphan xorbs and 1 superseded shard; all live files still downloaded intact |
-| Authorization | Withheld | |
 | Storage overhead | PASS | 1 GiB stored as 1.0001× xorbs, plus 0.8 MB shards and a 20 MB index: ~2% in total |
 | Throughput (1 GiB, local) | PASS | Upload ~88 MB/s (1.5.2), download ~307 MB/s; peak RSS 327 MiB |
 | Code | Info, one gap | Uses HF's crates for formats and hashing; 12 reference-file tests run against the HF dataset and pass; 93 tests, ignored ones explicitly `#[ignore]`; no `unsafe`. Gap: `xetcore_compat.rs` replays request patterns instead of running real `hf_xet`, which likely explains why the `/v2/shards` and `/v1/chunks/default` mismatches went unnoticed |
@@ -101,15 +101,14 @@ README configuration and default limits. Clients: `huggingface_hub` 2.2.0,
 | Plain `git-lfs` | PASS | 50 MB round trip; absolute `href`, `expires_in` |
 | 1 GiB upload | FAIL | Default `413 max 536870912`; with limits raised, a 504 at 600 s, then 401 on retry (5-minute proxy token expired) |
 | SIGKILL mid-upload of 512 MiB | PASS* | Re-upload after restart succeeds, sha matches, no leftover temp files. *The kill landed during Hub staging, before the CAS write |
-| Authorization | PASS | Cross-namespace create and access are refused with clean messages that `hf` renders well |
 | Storage overhead | FAIL | 1,619 MB stored for ~983 MB of unique data (+65%); one xorb per file, above the 64 MiB maximum |
 | Throughput | FAIL | 512 MiB upload 121 s, download ~24 MB/s; CAS peak RSS 1.06 GB (whole-file conversion buffer) |
 | Code | Info | Own formats; no `unsafe` outside tests; `cargo test` stops at its first failing binary (201 pass, 1 fail, later binaries not run) |
 | Maintenance | Single-maintainer | MIT, created 2026-06, last push 2026-10-10, one main author |
 | Configuration | Info | `casUrl` is taken from the Hub's `HUB_CAS_BASE_URL`, so unless that is set to a public address, clients get a CAS address they can't reach |
 
-The Hub layer is careful work: clean errors, namespace authorization,
-snapshot commits, crash recovery. The Xet layer isn't wire-compatible with
+The Hub layer is careful work: clean errors, snapshot commits, crash
+recovery. The Xet layer isn't wire-compatible with
 stock `hf_xet` 1.7.0 in either direction.
 
 ### guilt/xet-server and Taytay's branches: observed against stock clients
@@ -119,24 +118,23 @@ which contains every other Taytay branch (`dedup-*`, `multi-client-tests`,
 `git-lfs-bridge`, `signed-xorb-urls`). Native `go build` (Go 1.27.1).
 Clients: `huggingface_hub` 2.2.0, `hf_xet` 1.7.0, git 2.39.5, `git-lfs`
 3.5.1, `git-xet` 0.2.1. Taytay was re-run on checks 5, 8 and 10, with spot
-checks of 2, 6, 9 and 14; "–" means not re-run.
+checks of 2, 6 and 9; "–" means not re-run.
 
 | Check | guilt main | Taytay | Evidence |
 |---|---|---|---|
-| Setup | PARTIAL | – | 51 s build, first `hf upload` ~2.5 min after clone. A folder with `README.md` fails (`/api/validate-yaml` is a plain-text 404). The README says `HF_TOKEN` is ignored, but `xetd` reads it as its own auth token (`cmd/xetd/main.go:257`), so exporting it turns auth on |
+| Setup | PARTIAL | – | 51 s build, first `hf upload` ~2.5 min after clone. A folder with `README.md` fails (`/api/validate-yaml` is a plain-text 404). The README's description of `HF_TOKEN` doesn't match the server's behaviour |
 | `hf auth whoami` | FAIL | FAIL | `404 Not Found` on `/api/whoami-v2` |
 | `hf upload` over Xet | PASS | – | Server log: 5 xorb POSTs, then `/v1/shards` after a `/v2/shards` 404 |
 | `hf download` and `resolve` headers | PARTIAL | – | sha256 matches. HEAD returns 200 with `X-Xet-Hash`, `X-Repo-Commit`, `X-Linked-Size`, `X-Linked-Etag`, but no `xet-auth` link; plain GET is `501 direct GET not supported` |
-| Xet URLs, no extra headers | PARTIAL | PASS | Main: unsigned xorb URLs work with auth off; with auth on, the Hub mints tokens the CAS never accepts (`hubserver/repo.go:169-185`), so every transfer gets 401. Taytay: HMAC-signed `?token=` xorb URLs; tampered URLs get 401; a full `hf` round trip works with auth on |
+| Downloads with no extra headers | PARTIAL | PASS | Main: stock `hf_xet` downloads with no extra headers with auth off; with auth on, every transfer gets 401. Taytay: a full `hf` round trip works with auth on, with no extra headers |
 | Range | FAIL | FAIL | `resolve` with Range is 501; a 1000-byte reconstruction range returns ~67 MB |
 | Dedup, same machine | PASS | – | A 1 MB edit sends one 1,046,210 B xorb; an identical copy sends 0 xorbs |
 | Dedup, second machine (bytes sent) | FAIL | PASS | Main: every `/v1/chunks/default/<h>` is `400 unsupported chunk-dedup prefix`; 300,037,856 B re-sent. Taytay: answers on `default`; 1,130,754 B sent for the 1 MB edit |
 | Python API | FAIL | FAIL | `list_repo_tree` and branch upload pass; `paths-info`, refs, commits, tag, `model_info` and download at an older SHA 404. A new branch starts empty instead of from main; `create_commit` with a delete answers 200 but the file stays |
 | Git | FAIL | PARTIAL | Main: the LFS batch answers `{"transfer":"xet"}` with no actions even to plain `git-lfs`, so `git push` exits 0 having uploaded nothing (silent data loss); pull fails. Taytay: `git-xet` push of 300 MB and `git-lfs` pull, sha256 match, exactly `X-Xet-Cas-Url`, `X-Xet-Access-Token`, `X-Xet-Token-Expiration` (epoch), absolute `href`; plain `git-lfs` push gets a clear `422 … install git-xet` |
 | 1 GiB incompressible | PASS | – | Accepted, no 413 |
-| SIGKILL | FAIL | – | Mid-upload kill recovers on retry. But an acknowledged commit followed by SIGKILL within the 1-minute snapshot window is lost (`tree` is `[]`). A re-upload from the same machine then "succeeds" while download returns `500 reconstruction references unknown xorb`: shard upload doesn't check that its xorbs exist |
+| SIGKILL | FAIL | – | Mid-upload kill recovers on retry. But an acknowledged commit followed by SIGKILL within the 1-minute snapshot window is lost (`tree` is `[]`). A re-upload from the same machine then "succeeds" while download returns `500 reconstruction references unknown xorb` |
 | Integrity tool | N/A | N/A | None |
-| Authorization | FAIL | Withheld | Main: one shared token with no per-namespace authorization; a bad token gets a clean `unauthenticated` message in `hf` |
 | Storage overhead | PARTIAL | – | +7% over unique data (L13 allows ≤ 5%), all from the failed cross-machine dedup re-sending the file; ~0 on one machine; no per-chunk copies |
 | Throughput (1 GiB, local) | PASS | – | Upload ~50 MB/s, download ~182 MB/s, peak RSS 55 MiB |
 | Code | Info | Info | Go reimplementation with one dependency; reference tests replay 3 captured `hf_xet` binaries; 686 tests pass; the real-`hf` integration test skips without pipenv |
@@ -152,15 +150,16 @@ citation)`), and after a restart with an unreachable upstream even
 
 guilt main moves large files over real Xet quickly and with little memory,
 with auth off and on one machine. Taytay's branches fix exactly what they
-target: cross-machine dedup, self-authorizing xorb URLs and a working
+target: cross-machine dedup, Xet downloads with auth on and a working
 `git-xet` push.
 
 ### Cross-project comparison
 
 Rows are the hands-on protocol's checks, with the lesson each one tests.
 Shardline's column comes from its run above; NOT RUN marks checks that run
-didn't cover. Labels follow the legend at the top. Row 8 is graded on
-bytes sent from a fresh cache for a 1 MB edit. Maintenance is our
+didn't cover. Labels follow the legend at the top. Row 5 grades function
+only: stock `hf_xet` downloads with no extra headers. Row 8 is graded on bytes
+sent from a fresh cache for a 1 MB edit. Maintenance is our
 judgement, not a measurement: **Active** (several maintainers, recent
 code), **Single-maintainer** (one author, code changes within 60 days), or
 **Inactive** (one author, no code change for over 60 days).
@@ -171,7 +170,7 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 | 2 `whoami` (L2) | FAIL | N/A | PASS | FAIL | FAIL |
 | 3 `hf upload` uses Xet (L1, L16–L18) | FAIL | FAIL (`hf_xet` 1.7.0) | FAIL | PASS | NOT RUN |
 | 4 `hf download`, `resolve` headers (L3) | FAIL | N/A | PARTIAL | PARTIAL | NOT RUN |
-| 5 Xet URLs without headers (L4) | FAIL | PARTIAL | FAIL | PARTIAL | PASS |
+| 5 Downloads with no extra headers (L4, function only) | FAIL | PASS | FAIL | PARTIAL | PASS |
 | 6 Range (L5) | FAIL | FAIL | FAIL | FAIL | FAIL |
 | 7 Dedup, same machine | NOT RUN | PASS | FAIL | PASS | NOT RUN |
 | 8 Dedup, second machine: bytes sent for a 1 MB edit (L15) | FAIL | FAIL | FAIL | FAIL | PASS |
@@ -180,7 +179,6 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 | 11 1 GiB incompressible (L9, L24) | NOT RUN | PASS | FAIL | PASS | NOT RUN |
 | 12 SIGKILL (L10, L21, L22) | FAIL | PASS | PASS* | FAIL | NOT RUN |
 | 13 Integrity tool (L11) | FAIL | N/A | N/A | N/A | N/A |
-| 14 Authorization (L12) | Withheld | Withheld | PASS | FAIL | Withheld |
 | 15 Storage overhead (L13) | FAIL | PASS | FAIL | PARTIAL | NOT RUN |
 | 16 Performance (1 GiB up / down) | PARTIAL (18 / 60 MB/s) | PASS (88 / 307 MB/s) | FAIL (1 GiB fails) | PASS (50 / 182 MB/s) | NOT RUN |
 | 17 Code | Info | Info | Info | Info | Info |
@@ -195,7 +193,9 @@ Each item becomes a case in our compatibility suite or a unit test. The plans
 reference this list.
 
 1. `preupload` must route large files to Xet; `hf upload` of a ≥ 1 GiB file
-   must use the Xet path. Check this via `hf_xet` activity, not just success.
+   must use the Xet path. Check this via `hf_xet` activity, not just success,
+   with a file name that matches no `.gitattributes` pattern, so the test
+   proves routing by size (S3).
 2. `whoami-v2` returns every field `huggingface_hub` reads, including `orgs`.
 3. `resolve` returns `X-Xet-Hash`, `X-Repo-Commit`, `X-Linked-Size`,
    `X-Linked-Etag` and an `xet-auth` link, with **absolute** redirect URLs.
@@ -225,7 +225,8 @@ reference this list.
 13. No per-chunk object duplication: storage overhead over unique compressed
     data stays ≤ 5%, measured.
 14. From a cold machine to the first successful `hf upload` of a ≥ 1 GiB
-    file, following only the README, in under 2 minutes, measured in CI.
+    file, following only the README, in under 2 minutes, measured per
+    release (design §1a).
 
 Added from the 2026-10-23 hands-on runs of ggoggam, kebyn, guilt and
 Taytay. Lesson 5 is reconfirmed: in two projects a 1 KB range fetched

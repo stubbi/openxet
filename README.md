@@ -1,8 +1,9 @@
 # openxet
 
 Open-source server and client for the [Xet protocol](https://huggingface.co/docs/xet),
-Hugging Face's chunk-deduplicated storage for large, versioned files such as
-models, datasets and checkpoints.
+Hugging Face's chunk-deduplicated storage for large, versioned files.
+Models and datasets are common examples; any large file that changes over
+time benefits.
 
 The goal: the official tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`,
 `git-lfs`) work against your own infrastructure unmodified. Data stays in your
