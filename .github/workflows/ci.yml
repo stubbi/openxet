@@ -64,6 +64,8 @@ jobs:
         with:
           version: "0.9.8"
           cache-dependency-glob: compat/uv.lock
+      - name: Fixtures carry no secrets
+        run: uv run --frozen --directory compat pytest tests/test_fixture_redaction.py
       - run: cargo build -p openxet
       - run: uv run --frozen --directory compat pytest -m agent
         env:
