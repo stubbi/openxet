@@ -1,32 +1,46 @@
-//! CAS tokens: compact JWS with `alg: EdDSA` over Ed25519 (RFC 8037), ADR
-//! 0007.
+//! CAS tokens: compact JWS (RFC 7515 §7.1) with `alg: EdDSA` over Ed25519
+//! (RFC 8037), ADR 0007, ruling M1-R18.
 //!
-//! Tokens are verified with `jsonwebtoken`, restricted to `EdDSA`. Signing
-//! builds the compact form directly from `ed25519-dalek`, which cannot fail
-//! once the key is loaded, so [`TokenSigner::sign`] needs no error path.
+//! Signing and verification both sit directly on `ed25519-dalek`; this
+//! module only adds base64url and JSON around it. Verification accepts one
+//! shape and nothing else:
+//!
+//! - at most [`MAX_TOKEN_BYTES`], checked before any decoding;
+//! - exactly three segments, each canonical unpadded base64url;
+//! - a header that is exactly `{"alg":"EdDSA","typ":"JWT","kid":"…"}`, so
+//!   key-carrying or critical parameters (`jku`, `jwk`, `x5u`, `crit`, ...)
+//!   can never take effect;
+//! - an Ed25519 signature over `header_b64.payload_b64` as received,
+//!   checked with `verify_strict` against the key named by `kid`;
+//! - claims `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and `iat`,
+//!   with `exp` exclusive and no leeway. Other claims are ignored.
 
 use std::fmt::{self, Write as _};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::Signature;
 use ed25519_dalek::pkcs8::{
     DecodePrivateKey as _, DecodePublicKey as _, EncodePrivateKey as _, EncodePublicKey as _,
     spki::der::pem::LineEnding,
 };
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{AuthError, Mode, Principal};
 
+/// The longest accepted CAS token, in bytes. Real tokens are a few hundred
+/// bytes; the cap bounds decoding work for hostile input.
+pub const MAX_TOKEN_BYTES: usize = 8 * 1024;
+
 /// An Ed25519 public key trusted to sign CAS tokens.
 #[derive(Clone)]
 pub struct PublicKey {
     kid: String,
-    decoding: DecodingKey,
+    key: VerifyingKey,
 }
 
 impl PublicKey {
@@ -60,7 +74,7 @@ impl PublicKey {
     fn from_verifying_key(key: &VerifyingKey) -> Self {
         Self {
             kid: kid_of(key),
-            decoding: DecodingKey::from_ed_der(key.as_bytes()),
+            key: *key,
         }
     }
 }
@@ -202,35 +216,51 @@ pub fn generate_keypair() -> Result<GeneratedKeypair, AuthError> {
     })
 }
 
-/// The claims openxet reads; others (`iat`, `nbf`, `aud`, ...) are ignored.
+/// The only header openxet accepts.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Header {
+    alg: String,
+    typ: String,
+    kid: String,
+}
+
+/// The claims openxet requires; others (`nbf`, `aud`, ...) are ignored.
 #[derive(Deserialize)]
 struct Claims {
     sub: String,
     scope: String,
     mode: Mode,
     exp: u64,
+    #[allow(dead_code, reason = "required by ADR 0007 but carries no policy")]
+    iat: u64,
 }
 
 pub(crate) fn verify(keys: &[PublicKey], token: &str, now: u64) -> Result<Principal, AuthError> {
-    let header = jsonwebtoken::decode_header(token).map_err(|_| AuthError::Invalid)?;
-    if header.alg != Algorithm::EdDSA {
+    if token.len() > MAX_TOKEN_BYTES {
         return Err(AuthError::Invalid);
     }
-    let kid = header.kid.ok_or(AuthError::Invalid)?;
+    let mut segments = token.split('.');
+    let (Some(header_b64), Some(payload_b64), Some(signature_b64), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return Err(AuthError::Invalid);
+    };
+
+    let header: Header = decode_json(header_b64)?;
+    if header.alg != "EdDSA" || header.typ != "JWT" {
+        return Err(AuthError::Invalid);
+    }
     let key = keys
         .iter()
-        .find(|k| k.kid == kid)
+        .find(|k| k.kid == header.kid)
         .ok_or(AuthError::Invalid)?;
+    verify_signature(&key.key, header_b64, payload_b64, signature_b64)?;
 
-    // `exp` is checked below against the caller's clock, with no leeway.
-    let mut validation = Validation::new(Algorithm::EdDSA);
-    validation.validate_exp = false;
-    validation.leeway = 0;
-    validation.validate_aud = false;
-    let claims = jsonwebtoken::decode::<Claims>(token, &key.decoding, &validation)
-        .map_err(|_| AuthError::Invalid)?
-        .claims;
-
+    let claims: Claims = decode_json(payload_b64)?;
     if now >= claims.exp {
         return Err(AuthError::Expired);
     }
@@ -241,6 +271,37 @@ pub(crate) fn verify(keys: &[PublicKey], token: &str, now: u64) -> Result<Princi
     })
 }
 
+/// Checks the Ed25519 signature of a compact JWS, independent of header
+/// policy (RFC 8037 §3.1).
+fn verify_signature(
+    key: &VerifyingKey,
+    header_b64: &str,
+    payload_b64: &str,
+    signature_b64: &str,
+) -> Result<(), AuthError> {
+    let signature: [u8; 64] = decode_b64(signature_b64)?
+        .try_into()
+        .map_err(|_| AuthError::Invalid)?;
+    let mut input = Vec::with_capacity(header_b64.len() + 1 + payload_b64.len());
+    input.extend_from_slice(header_b64.as_bytes());
+    input.push(b'.');
+    input.extend_from_slice(payload_b64.as_bytes());
+    key.verify_strict(&input, &Signature::from_bytes(&signature))
+        .map_err(|_| AuthError::Invalid)
+}
+
+/// Decodes canonical unpadded base64url: the engine rejects padding, other
+/// alphabets and non-zero trailing bits.
+fn decode_b64(segment: &str) -> Result<Vec<u8>, AuthError> {
+    URL_SAFE_NO_PAD
+        .decode(segment)
+        .map_err(|_| AuthError::Invalid)
+}
+
+fn decode_json<T: serde::de::DeserializeOwned>(segment: &str) -> Result<T, AuthError> {
+    serde_json::from_slice(&decode_b64(segment)?).map_err(|_| AuthError::Invalid)
+}
+
 fn kid_of(key: &VerifyingKey) -> String {
     let digest = Sha256::digest(key.as_bytes());
     let mut kid = String::with_capacity(16);
@@ -248,4 +309,61 @@ fn kid_of(key: &VerifyingKey) -> String {
         let _ = write!(kid, "{byte:02x}");
     }
     kid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // RFC 8037 Appendix A: the A.1 key pair and the A.4 example JWS, whose
+    // header `{"alg":"EdDSA"}` deliberately lacks openxet's `typ`/`kid`, so
+    // this exercises the signature path alone.
+    const A1_PRIVATE_D: &str = "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A";
+    const A1_PUBLIC_X: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
+    const A4_HEADER: &str = "eyJhbGciOiJFZERTQSJ9";
+    const A4_PAYLOAD: &str = "RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc";
+    const A4_SIGNATURE: &str =
+        "hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg";
+
+    fn a1_public() -> VerifyingKey {
+        let x: [u8; 32] = decode_b64(A1_PUBLIC_X)
+            .expect("base64url")
+            .try_into()
+            .expect("32 bytes");
+        VerifyingKey::from_bytes(&x).expect("valid point")
+    }
+
+    #[test]
+    fn rfc8037_a4_vector_verifies() {
+        assert_eq!(decode_b64(A4_HEADER).expect("b64"), br#"{"alg":"EdDSA"}"#);
+        assert_eq!(
+            decode_b64(A4_PAYLOAD).expect("b64"),
+            b"Example of Ed25519 signing"
+        );
+        assert_eq!(
+            verify_signature(&a1_public(), A4_HEADER, A4_PAYLOAD, A4_SIGNATURE),
+            Ok(())
+        );
+
+        // Ed25519 is deterministic: the A.1 private key reproduces A.4.
+        let d: [u8; 32] = decode_b64(A1_PRIVATE_D)
+            .expect("base64url")
+            .try_into()
+            .expect("32 bytes");
+        let signing = SigningKey::from_bytes(&d);
+        assert_eq!(signing.verifying_key(), a1_public());
+        let signature = signing.sign(format!("{A4_HEADER}.{A4_PAYLOAD}").as_bytes());
+        assert_eq!(URL_SAFE_NO_PAD.encode(signature.to_bytes()), A4_SIGNATURE);
+
+        let other_payload = URL_SAFE_NO_PAD.encode("Example of Ed25519 signing!");
+        assert_eq!(
+            verify_signature(&a1_public(), A4_HEADER, &other_payload, A4_SIGNATURE),
+            Err(AuthError::Invalid)
+        );
+
+        // The full token fails only on openxet's header policy.
+        let key = PublicKey::from_verifying_key(&a1_public());
+        let token = format!("{A4_HEADER}.{A4_PAYLOAD}.{A4_SIGNATURE}");
+        assert_eq!(verify(&[key], &token, 0), Err(AuthError::Invalid));
+    }
 }

@@ -26,7 +26,7 @@ mod static_tokens;
 use serde::{Deserialize, Serialize};
 
 pub use error::{AuthError, ForbiddenReason};
-pub use jwt::{GeneratedKeypair, PublicKey, TokenSigner, generate_keypair};
+pub use jwt::{GeneratedKeypair, MAX_TOKEN_BYTES, PublicKey, TokenSigner, generate_keypair};
 pub use signed_url::{TransferQuery, UrlSigner};
 pub use static_tokens::StaticToken;
 
