@@ -11,13 +11,19 @@ use std::io::{self, Read};
 use std::sync::Arc;
 
 use xet_core_structures::CoreError;
-use xet_core_structures::metadata_shard::file_structs::MDBFileInfoView;
+use xet_core_structures::merklehash::{MerkleHashSubtree, compute_data_hash};
+use xet_core_structures::metadata_shard::file_structs::{
+    FileDataSequenceEntry, FileDataSequenceHeader, FileMetadataExt, FileVerificationEntry,
+    MDBFileInfo, MDBFileInfoView,
+};
+use xet_core_structures::metadata_shard::shard_in_memory::MDBInMemoryShard;
 use xet_core_structures::metadata_shard::streaming_shard::{
     process_shard_file_info_section, process_shard_xorb_info_section,
 };
-use xet_core_structures::metadata_shard::{MDBShardFileFooter, MDBShardFileHeader};
-
-use xet_core_structures::merklehash::MerkleHashSubtree;
+use xet_core_structures::metadata_shard::xorb_structs::{
+    MDBXorbInfo, XorbChunkSequenceEntry, XorbChunkSequenceHeader,
+};
+use xet_core_structures::metadata_shard::{MDBShardFileFooter, MDBShardFileHeader, MDBShardInfo};
 
 use crate::{MerkleHash, ProtocolError, range_hash};
 
@@ -433,6 +439,182 @@ fn sha256_digest(stored: &MerkleHash) -> [u8; 32] {
     })
 }
 
+/// The stored layout of a SHA-256 digest; the inverse of [`sha256_digest`].
+fn sha256_stored(digest: &[u8; 32]) -> MerkleHash {
+    MerkleHash::from_hex(&digest_hex(digest)).unwrap_or_else(|_| unreachable!("64 hex digits"))
+}
+
+/// A SHA-256 digest as the usual 64 lowercase hex digits.
+fn digest_hex(digest: &[u8; 32]) -> String {
+    digest.iter().fold(String::with_capacity(64), |mut hex, b| {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+        hex
+    })
+}
+
+/// The stored form of a verified upload shard, the bytes the bucket keeps
+/// (`docs/research/S6-shard-verification.md`, "What gets stored").
+///
+/// Built only from what the server trusts: the file info the client uploaded,
+/// which [`verify_shard`] has checked, and, for the CAS info, the chunk tables
+/// `lookup` returns for the xorbs the segments reference. The client's CAS
+/// info listing is never copied, and listed xorbs no segment references are
+/// left out.
+///
+/// The bytes are upstream's serializer output (`MDBShardInfo::serialize_from`
+/// of an `MDBInMemoryShard`) cut to the upload form
+/// (<https://huggingface.co/docs/xet/shard#shard-upload>): header with
+/// `footer_size` 0, file info, CAS info, no lookup tables or footer. Stock
+/// clients cut their uploads the same way (`xet-data` 1.7.0,
+/// `read_shard_to_bytes_remove_footer`); the `hf_xet` 1.7.0 upload capture is
+/// stored byte for byte as sent. In that form:
+/// - files are in file-hash order and xorbs in xorb-hash order, the order
+///   upstream's serializer writes
+/// - a file hash listed more than once keeps its first entry; the others, and
+///   xorbs only they reference, are left out. Entries for one file hash
+///   reconstruct the same content, so any one of them serves; conflicting
+///   SHA-256 values are rejected instead, since keeping one would pick a
+///   client's claim at random
+/// - every file carries its segments, one verification entry per segment and,
+///   when the client sent one, its SHA-256 metadata extension
+///
+/// The output is a pure function of `shard` and the looked-up tables: the
+/// footer, where upstream records a creation timestamp and an expiry, is not
+/// part of the stored form, so equal input always gives equal bytes and an
+/// equal [`shard_hash`].
+///
+/// # Errors
+///
+/// [`ProtocolError::ShardNotVerified`] if a segment has no verification entry
+/// or names a xorb `lookup` doesn't have; neither happens after
+/// [`verify_shard`] passed. [`ProtocolError::ShardFileSha256Conflict`] if
+/// two entries for one file hash carry different SHA-256 values.
+/// [`ProtocolError::XorbTableTooLarge`] if a chunk table doesn't fit the
+/// shard format's 32-bit counts.
+pub fn stored_shard(
+    shard: &UploadShard,
+    lookup: &impl XorbChunkLookup,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut mdb = MDBInMemoryShard::default();
+    let mut kept: HashMap<MerkleHash, &ShardFileEntry> = HashMap::new();
+    for file in &shard.files {
+        if let Some(first) = kept.get(&file.file_hash) {
+            if let (Some(a), Some(b)) = (first.sha256, file.sha256)
+                && a != b
+            {
+                return Err(ProtocolError::ShardFileSha256Conflict {
+                    file: file.file_hash,
+                });
+            }
+            continue;
+        }
+        kept.insert(file.file_hash, file);
+        mdb.add_file_reconstruction_info(file_info(file)?)
+            .map_err(ProtocolError::ShardSerialization)?;
+        for seg in &file.segments {
+            if mdb.xorb_content.contains_key(&seg.xorb) {
+                continue;
+            }
+            let chunks = lookup
+                .chunks(&seg.xorb)
+                .ok_or(ProtocolError::ShardNotVerified(VerifyError::UnknownXorb {
+                    file: file.file_hash,
+                    xorb: seg.xorb,
+                }))?;
+            mdb.add_xorb_block(xorb_info(&seg.xorb, &chunks)?)
+                .map_err(ProtocolError::ShardSerialization)?;
+        }
+    }
+    let mut bytes = Vec::new();
+    let info = MDBShardInfo::serialize_from(&mut bytes, &mdb, None)
+        .map_err(ProtocolError::ShardSerialization)?;
+    let sections_end = usize::try_from(info.metadata.file_lookup_offset)
+        .unwrap_or_else(|_| unreachable!("offset into an in-memory buffer"));
+    bytes.truncate(sections_end);
+    let header = MDBShardFileHeader {
+        footer_size: 0,
+        ..info.header
+    };
+    header
+        .serialize(&mut &mut bytes[..])
+        .map_err(ProtocolError::ShardSerialization)?;
+    Ok(bytes)
+}
+
+/// The hash a stored shard is known by: upstream's data hash
+/// (`compute_data_hash`) of its bytes, the hash `xet-core` names its own shard
+/// files by.
+#[must_use]
+pub fn shard_hash(bytes: &[u8]) -> MerkleHash {
+    compute_data_hash(bytes)
+}
+
+fn file_info(file: &ShardFileEntry) -> Result<MDBFileInfo, ProtocolError> {
+    let verification =
+        file.segments
+            .iter()
+            .map(|seg| {
+                seg.verification.map(FileVerificationEntry::new).ok_or(
+                    ProtocolError::ShardNotVerified(VerifyError::MissingVerification {
+                        xorb: seg.xorb,
+                        start: seg.chunk_start,
+                        end: seg.chunk_end,
+                    }),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    let segments = file
+        .segments
+        .iter()
+        .map(|seg| {
+            FileDataSequenceEntry::new(seg.xorb, seg.unpacked_bytes, seg.chunk_start, seg.chunk_end)
+        })
+        .collect::<Vec<_>>();
+    // A parsed shard is at most MAX_UPLOAD_SHARD_BYTES with 96 bytes per
+    // verified segment, so under 2^20 segments; a hand-built UploadShard would
+    // need over 4 billion Segment values in memory to get here.
+    let num_entries = u32::try_from(segments.len())
+        .unwrap_or_else(|_| unreachable!("a 64 MiB shard holds under 2^20 segments"));
+    Ok(MDBFileInfo {
+        metadata: FileDataSequenceHeader::new(
+            file.file_hash,
+            num_entries,
+            true,
+            file.sha256.is_some(),
+        ),
+        segments,
+        verification,
+        metadata_ext: file
+            .sha256
+            .as_ref()
+            .map(|digest| FileMetadataExt::new(sha256_stored(digest))),
+    })
+}
+
+/// A xorb's CAS info entry from the chunk table the server stored for it,
+/// built as upstream's `RawXorbData::from_chunks` builds a client's: each
+/// chunk's byte range start is its offset in the uncompressed xorb, and
+/// `num_bytes_on_disk` is left 0, as clients leave it.
+pub(crate) fn xorb_info(
+    xorb: &MerkleHash,
+    chunks: &[(MerkleHash, u64)],
+) -> Result<MDBXorbInfo, ProtocolError> {
+    let too_large = || ProtocolError::XorbTableTooLarge { xorb: *xorb };
+    let mut entries = Vec::with_capacity(chunks.len());
+    let mut start = 0u32;
+    for (hash, len) in chunks {
+        let len = u32::try_from(*len).map_err(|_| too_large())?;
+        entries.push(XorbChunkSequenceEntry::new(*hash, len, start));
+        start = start.checked_add(len).ok_or_else(too_large)?;
+    }
+    let num_entries = u32::try_from(chunks.len()).map_err(|_| too_large())?;
+    Ok(MDBXorbInfo {
+        metadata: XorbChunkSequenceHeader::new(*xorb, num_entries, start),
+        chunks: entries,
+    })
+}
+
 /// Verifies one segment against the chunk hashes and lengths the server
 /// stored for its xorb when it accepted the xorb. Never re-reads the xorb.
 ///
@@ -605,11 +787,7 @@ fn check_empty_file_sha256(entry: &ShardFileEntry) -> Result<(), VerifyError> {
         Some(sha) if sha == [0; 32] || sha == EMPTY_SHA256 => Ok(()),
         Some(sha) => Err(VerifyError::EmptyFileSha256 {
             file: entry.file_hash,
-            actual: sha.iter().fold(String::with_capacity(64), |mut hex, b| {
-                use std::fmt::Write as _;
-                let _ = write!(hex, "{b:02x}");
-                hex
-            }),
+            actual: digest_hex(&sha),
         }),
     }
 }
