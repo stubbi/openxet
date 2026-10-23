@@ -33,10 +33,11 @@ _SECRET_PATTERNS = {
     # A bare `xet_[A-Za-z0-9]` also hits code identifiers quoted in the notes
     # (`xet_get`, `assert_xet_download`); a token is one long unbroken run.
     "Xet token": re.compile(r"(?<![A-Za-z0-9_])xet_[A-Za-z0-9]{20,}"),
-    # `Bearer realm=` is the RFC 6750 challenge huggingface.co sends with a 401;
-    # `<token>`-style placeholders and the word "token" appear in prose.
+    # `Bearer realm=` and `Bearer error="<code>"` are RFC 6750 §3 challenges
+    # sent with a 401; only the three §3.1 error codes are exempt, as a whole
+    # value. `<token>`-style placeholders and the word "token" appear in prose.
     "bearer credential": re.compile(
-        rf"Bearer (?!{_R}|realm=|<[^>]+>|token(?![\w.-]))"
+        rf"Bearer (?!{_R}|realm=|error=\"(?:invalid_request|invalid_token|insufficient_scope)\"(?!\s*[\w.~+/-])|<[^>]+>|token(?![\w.-]))"
     ),
     "URL signature": re.compile(rf"Signature=(?!{_R})", re.IGNORECASE),
     "S3 signature header": re.compile(
@@ -190,6 +191,9 @@ def test_file_has_no_secrets(path):
         # The word "token" glued to a real value.
         "Authorization: Bearer token.abc123",
         "Bearer token-abc",
+        'Bearer error="oxt_abcdef0123456789"',
+        'Bearer error="x" oxt_abcdef0123456789',
+        'Bearer error="invalid_token" oxt_abcdef0123456789',
         # Scheme names are case-insensitive (RFC 9110 §11.1).
         "authorization: basic dXNlcjpwYXNz",
         "BASIC dXNlcjpwYXNz",
@@ -216,6 +220,7 @@ def test_guard_catches_known_leak_shapes(leak):
         "Requests carry `Authorization: Bearer <token>`; a Bearer token is required.",
         '`{"casUrl":"…","exp":<epoch>,"accessToken":"<JWT>"}`',
         'WWW-Authenticate: Bearer realm="Authentication required", charset="UTF-8"',
+        'WWW-Authenticate: Bearer error="invalid_token"',
         "https://cdn/x?expires=1&signature=REDACTED&key-pair-id=REDACTED&policy=REDACTED",
         "https://s3/x?X-Amz-Security-Token=REDACTED&x-amz-credential=REDACTED",
         '"Proxy-Authorization": "REDACTED"',

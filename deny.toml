@@ -23,6 +23,11 @@ exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+skip = [
+    # The CAS server uses tower-http 0.7; 0.6 is pulled by reqwest via
+    # xet-runtime on the client side (openxet-protocol's xet-core-structures).
+    { crate = "tower-http@0.6", reason = "pulled by reqwest via xet-runtime on the client side" },
+]
 
 [sources]
 unknown-registry = "deny"
