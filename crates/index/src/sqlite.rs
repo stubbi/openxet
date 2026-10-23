@@ -122,6 +122,51 @@ fn fault_point(_file_index: usize, _scope: &str) -> Result<(), IndexError> {
     Ok(())
 }
 
+/// The first of `xorbs`, in order, that isn't visible to `scope` under `vis`,
+/// read inside `tx` so the answer holds until it commits.
+async fn first_invisible(
+    tx: &mut Transaction<'_, Sqlite>,
+    xorbs: &[MerkleHash],
+    scope: &str,
+    vis: Visibility,
+) -> Result<Option<MerkleHash>, IndexError> {
+    let mut seen = HashSet::with_capacity(xorbs.len());
+    let ordered: Vec<MerkleHash> = xorbs.iter().copied().filter(|x| seen.insert(*x)).collect();
+    let mut visible = HashSet::with_capacity(ordered.len());
+    for batch in ordered.chunks(HASHES_PER_QUERY) {
+        let mut query = sqlx::query_scalar::<_, Vec<u8>>(with_placeholders(
+            "SELECT x.hash FROM xorbs x WHERE x.hash IN (",
+            "?",
+            batch.len(),
+            concat!(") AND ", visible!()),
+        ));
+        for hash in batch {
+            query = query.bind(hash.as_bytes());
+        }
+        let rows = query
+            .bind(vis == Visibility::Global)
+            .bind(scope)
+            .fetch_all(&mut **tx)
+            .await?;
+        for row in rows {
+            visible.insert(hash_from(&row)?);
+        }
+    }
+    Ok(ordered.into_iter().find(|x| !visible.contains(x)))
+}
+
+/// Maps a foreign-key violation from writing a row that names `xorb` to
+/// [`IndexError::UnknownXorb`]: the xorb isn't stored, which retrying won't
+/// fix, so the generic database error would mislead.
+fn unknown_xorb_on_fk_violation(e: IndexError, xorb: MerkleHash) -> IndexError {
+    match e {
+        IndexError::Database(sqlx::Error::Database(db)) if db.is_foreign_key_violation() => {
+            IndexError::UnknownXorb { xorb }
+        }
+        other => other,
+    }
+}
+
 /// Inserts `(chunk, xorb)` dedup candidates, skipping ones already present.
 async fn insert_dedup(
     tx: &mut Transaction<'_, Sqlite>,
@@ -244,12 +289,20 @@ impl Index for SqliteIndex {
         shard: &MerkleHash,
         files: &[NewFile],
         scope: &str,
+        vis: Visibility,
     ) -> Result<bool, IndexError> {
         let sizes = files
             .iter()
             .map(|f| to_i64(f.record.size, "file size"))
             .collect::<Result<Vec<_>, _>>()?;
         let mut tx = self.begin_write().await?;
+        let referenced: Vec<MerkleHash> = files
+            .iter()
+            .flat_map(|f| f.record.terms.iter().map(|t| t.xorb))
+            .collect();
+        if let Some(xorb) = first_invisible(&mut tx, &referenced, scope, vis).await? {
+            return Err(IndexError::UnknownXorb { xorb });
+        }
         let mut new_for_scope = sqlx::query(
             "INSERT INTO shard_scopes (shard, scope) VALUES (?, ?) ON CONFLICT DO NOTHING",
         )
@@ -276,7 +329,9 @@ impl Index for SqliteIndex {
             .rows_affected()
                 > 0;
             if let (Some(first), Some(term)) = (file.first_chunk, record.terms.first()) {
-                insert_dedup(&mut tx, &[first], &term.xorb).await?;
+                insert_dedup(&mut tx, &[first], &term.xorb)
+                    .await
+                    .map_err(|e| unknown_xorb_on_fk_violation(e, term.xorb))?;
             }
             fault_point(i, scope)?;
         }

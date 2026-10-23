@@ -83,6 +83,12 @@ pub trait Index: Send + Sync + 'static {
     /// Registers the files of a verified shard to `scope`, in one
     /// transaction: either everything is recorded or nothing is.
     ///
+    /// - Every xorb named by a file's terms must be visible to `scope` under
+    ///   `vis` (ruling M1-R17): stored, and under [`Visibility::PerScope`]
+    ///   also registered to `scope`. Otherwise the call fails with
+    ///   [`IndexError::UnknownXorb`], and the answer is the same whether the
+    ///   xorb is stored elsewhere or not at all, so it reveals nothing about
+    ///   other scopes.
     /// - Each file is registered to `scope` with its own reconstruction,
     ///   SHA-256 and `shard`. Reconstructions are kept per scope (ruling
     ///   M1-R16): the same file hash may be stored over different xorbs in
@@ -98,14 +104,16 @@ pub trait Index: Send + Sync + 'static {
     ///
     /// # Errors
     ///
+    /// [`IndexError::UnknownXorb`] for a term xorb that isn't visible,
     /// [`IndexError::InvalidInput`] if a size doesn't fit the store, and
-    /// [`IndexError::Database`] if the write fails, including when a file
-    /// references a xorb that isn't stored. Nothing is recorded on error.
+    /// [`IndexError::Database`] if the write fails. Nothing is recorded on
+    /// error.
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
         scope: &str,
+        vis: Visibility,
     ) -> Result<bool, IndexError>;
 
     /// The reconstruction `scope` registered for `file`, or `None` if it
@@ -155,6 +163,17 @@ pub enum IndexError {
          from it, and please report this as a bug"
     )]
     Corrupt(String),
+    /// A shard's file names a xorb that isn't visible to the caller's scope:
+    /// not stored, or under [`Visibility::PerScope`] stored only for other
+    /// scopes. Both cases read the same, so the error can't probe them.
+    #[error(
+        "a file in the shard references xorb {xorb}, which is not stored on this server; upload \
+         the xorb before the shard that references it"
+    )]
+    UnknownXorb {
+        /// The first xorb found that isn't visible.
+        xorb: MerkleHash,
+    },
     /// The caller passed data the index can't store, which is a bug in the
     /// caller.
     #[error("invalid index input: {0}; this is a bug in openxet, please report it")]

@@ -7,10 +7,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openxet_index::{
-    ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, NewFile, SqliteIndex, Term,
-    Visibility,
+    ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, IndexError, NewFile, SqliteIndex,
+    Term, Visibility,
 };
-use openxet_protocol::{MerkleHash, chunk_hash};
+use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use tempfile::TempDir;
 
 const A: &str = "model/org-a/repo";
@@ -132,13 +132,23 @@ async fn register_shard_is_idempotent_per_scope() {
     let shard = h("shard");
     let files = [file("f1", xorb, 2), file("f2", xorb, 4)];
 
-    assert!(ok(index.register_shard(&shard, &files, A).await));
-    assert!(!ok(index.register_shard(&shard, &files, A).await));
-    assert!(ok(index.register_shard(&shard, &files, B).await));
-    assert!(!ok(index.register_shard(&shard, &files, B).await));
+    assert!(ok(index
+        .register_shard(&shard, &files, A, Visibility::Global)
+        .await));
+    assert!(!ok(index
+        .register_shard(&shard, &files, A, Visibility::Global)
+        .await));
+    assert!(ok(index
+        .register_shard(&shard, &files, B, Visibility::Global)
+        .await));
+    assert!(!ok(index
+        .register_shard(&shard, &files, B, Visibility::Global)
+        .await));
 
     // A new shard naming already-registered files is still new for the scope.
-    assert!(ok(index.register_shard(&h("shard2"), &files, A).await));
+    assert!(ok(index
+        .register_shard(&h("shard2"), &files, A, Visibility::Global)
+        .await));
 }
 
 #[tokio::test]
@@ -148,7 +158,12 @@ async fn file_only_readable_in_registered_scope() {
     let (xorb, _) = put(&index, "x", 3, A).await;
     let f = file("f", xorb, 3);
     ok(index
-        .register_shard(&h("shard"), std::slice::from_ref(&f), A)
+        .register_shard(
+            &h("shard"),
+            std::slice::from_ref(&f),
+            A,
+            Visibility::PerScope,
+        )
         .await);
 
     assert_eq!(
@@ -170,10 +185,20 @@ async fn same_file_two_scopes_keeps_each_scopes_terms() {
     fb.first_chunk = Some(h("first/f-in-b"));
     assert_eq!(fa.record.hash, fb.record.hash);
     ok(index
-        .register_shard(&h("shard-a"), std::slice::from_ref(&fa), A)
+        .register_shard(
+            &h("shard-a"),
+            std::slice::from_ref(&fa),
+            A,
+            Visibility::PerScope,
+        )
         .await);
     ok(index
-        .register_shard(&h("shard-b"), std::slice::from_ref(&fb), B)
+        .register_shard(
+            &h("shard-b"),
+            std::slice::from_ref(&fb),
+            B,
+            Visibility::PerScope,
+        )
         .await);
 
     assert_eq!(
@@ -187,9 +212,71 @@ async fn same_file_two_scopes_keeps_each_scopes_terms() {
 
     // A later shard in A with other terms keeps A's first registration.
     ok(index
-        .register_shard(&h("shard-a2"), std::slice::from_ref(&fb), A)
+        .register_shard(
+            &h("shard-a2"),
+            std::slice::from_ref(&fb),
+            A,
+            Visibility::Global,
+        )
         .await);
     assert_eq!(ok(index.file(&fa.record.hash, A).await), Some(fa.record));
+}
+
+#[tokio::test]
+async fn register_shard_rejects_invisible_xorb_without_revealing_existence() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (foreign, _) = put(&index, "foreign", 2, A).await;
+    let (own, _) = put(&index, "own", 2, B).await;
+    let missing = h("xorb/missing");
+
+    let unknown = |r: Result<bool, IndexError>| match r {
+        Err(IndexError::UnknownXorb { xorb }) => xorb,
+        other => panic!("expected UnknownXorb, got {other:?}"),
+    };
+    // Under PerScope a stored-but-invisible xorb answers exactly like one
+    // that isn't stored, so registration can't probe other scopes.
+    let mut answers = Vec::new();
+    for xorb in [foreign, missing] {
+        let mut f = file("f", own, 2);
+        f.record.terms.push(Term {
+            xorb,
+            chunk_start: 0,
+            chunk_end: 1,
+            unpacked_bytes: 1000,
+        });
+        let err = index
+            .register_shard(
+                &h("shard"),
+                std::slice::from_ref(&f),
+                B,
+                Visibility::PerScope,
+            )
+            .await;
+        let message = match &err {
+            Err(e) => e.to_string().replace(&hash_to_hex(&xorb), "<xorb>"),
+            Ok(_) => String::new(),
+        };
+        assert_eq!(unknown(err), xorb);
+        answers.push(message);
+        assert_eq!(ok(index.file(&f.record.hash, B).await), None);
+    }
+    assert_eq!(answers[0], answers[1]);
+
+    // Under Global, another scope's xorb is usable and only a missing one fails.
+    let over_foreign = file("g", foreign, 2);
+    assert!(ok(index
+        .register_shard(&h("shard"), &[over_foreign], B, Visibility::Global)
+        .await));
+    let over_missing = file("m", missing, 1);
+    assert_eq!(
+        unknown(
+            index
+                .register_shard(&h("shard-m"), &[over_missing], B, Visibility::Global)
+                .await
+        ),
+        missing
+    );
 }
 
 #[tokio::test]
@@ -203,9 +290,16 @@ async fn sha256_mapping_is_scope_local() {
     let mut fb = fa.clone();
     fb.sha256 = Some([2; 32]);
     ok(index
-        .register_shard(&h("shard-a"), std::slice::from_ref(&fa), A)
+        .register_shard(
+            &h("shard-a"),
+            std::slice::from_ref(&fa),
+            A,
+            Visibility::Global,
+        )
         .await);
-    ok(index.register_shard(&h("shard-b"), &[fb], B).await);
+    ok(index
+        .register_shard(&h("shard-b"), &[fb], B, Visibility::Global)
+        .await);
     drop(index);
 
     // The lookup API arrives in M2; until then the column is checked directly.
@@ -269,7 +363,9 @@ async fn dedup_xorb_prefers_newest_and_respects_visibility() {
     // A registered file's first chunk is answered with its first xorb.
     let f = file("f", old, 1);
     let first = f.first_chunk;
-    ok(index.register_shard(&h("shard"), &[f], A).await);
+    ok(index
+        .register_shard(&h("shard"), &[f], A, Visibility::PerScope)
+        .await);
     assert_eq!(
         ok(index
             .dedup_xorb(&first.unwrap_or_default(), A, Visibility::PerScope)
@@ -318,7 +414,12 @@ async fn register_shard_is_atomic() {
 
     assert!(
         index
-            .register_shard(&shard, &files, FAULT_AFTER_FIRST_FILE_SCOPE)
+            .register_shard(
+                &shard,
+                &files,
+                FAULT_AFTER_FIRST_FILE_SCOPE,
+                Visibility::Global
+            )
             .await
             .is_err()
     );
@@ -336,7 +437,9 @@ async fn register_shard_is_atomic() {
         );
     }
     // Nothing of the failed attempt counts: the shard is new for the scope.
-    assert!(ok(index.register_shard(&shard, &files, A).await));
+    assert!(ok(index
+        .register_shard(&shard, &files, A, Visibility::Global)
+        .await));
 }
 
 #[tokio::test]
@@ -347,7 +450,12 @@ async fn reopen_keeps_everything() {
     let (xorb, t) = put(&index, "x", 3, A).await;
     let f = file("f", xorb, 3);
     ok(index
-        .register_shard(&h("shard"), std::slice::from_ref(&f), A)
+        .register_shard(
+            &h("shard"),
+            std::slice::from_ref(&f),
+            A,
+            Visibility::PerScope,
+        )
         .await);
     let first = t.hashes[0].0;
     drop(index);
@@ -369,7 +477,9 @@ async fn reopen_keeps_everything() {
         ok(index.dedup_xorb(&first, A, Visibility::PerScope).await),
         Some(xorb)
     );
-    assert!(!ok(index.register_shard(&h("shard"), &[f], A).await));
+    assert!(!ok(index
+        .register_shard(&h("shard"), &[f], A, Visibility::PerScope)
+        .await));
 }
 
 #[tokio::test]
