@@ -1,0 +1,15 @@
+[package]
+name = "openxet-protocol"
+version = "0.0.0"
+description = "Xet protocol formats and hashing for openxet, backed by Hugging Face's xet-core crates"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = "2"
+xet-core-structures = "=1.7.0"
+
+[lints]
+workspace = true

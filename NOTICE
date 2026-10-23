@@ -2,3 +2,6 @@ openxet
 Copyright openxet contributors
 
 This work is licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product depends on xet-core (https://github.com/huggingface/xet-core),
+Copyright 2024 The HuggingFace Team, licensed under the Apache License, Version 2.0.
