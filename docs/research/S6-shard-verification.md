@@ -209,7 +209,13 @@ can't be reconstructed, or that claim content they don't have.
 - **Empty chunk ranges** (`chunk_index_start == chunk_index_end`). Rejected
   as out of bounds: a term must cover data, and no stock client writes one.
 - **Duplicate file entries.** Kept and each verified. Registering the same
-  file hash twice is idempotent in M1.
+  file hash twice is idempotent in M1. The stored shard (`stored_shard`)
+  keeps the first entry per file hash and leaves out the others, along with
+  xorbs only they reference; entries for one file hash reconstruct the same
+  content. Entries that both carry a SHA-256 and disagree are rejected
+  (`ShardFileSha256Conflict`), so the stored digest is never an arbitrary
+  pick (`stored_shard_keeps_the_first_of_duplicate_file_entries`,
+  `stored_shard_rejects_duplicate_files_with_conflicting_sha256`).
 - **The client's CAS info chunk listings.** Dropped by the parser. They feed
   global dedup, so trusting them would let one client poison dedup for
   everyone. M1 takes chunk hashes from xorb ingest instead.

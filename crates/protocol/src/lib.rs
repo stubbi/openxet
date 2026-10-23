@@ -133,6 +133,15 @@ pub enum ProtocolError {
     /// A shard handed to [`stored_shard`] has not passed [`verify_shard`].
     #[error("shard is not verified, so it can't be stored; run verify_shard on it first")]
     ShardNotVerified(#[source] VerifyError),
+    /// A shard lists one file hash twice with different SHA-256 digests.
+    #[error(
+        "shard lists file {file} more than once with different SHA-256 values; send one entry \
+         per file, with the SHA-256 of its contents"
+    )]
+    ShardFileSha256Conflict {
+        /// The file listed with conflicting digests.
+        file: MerkleHash,
+    },
     /// A chunk table doesn't fit the shard format's 32-bit counts and
     /// lengths, which no accepted xorb produces.
     #[error(

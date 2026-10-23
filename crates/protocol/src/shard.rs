@@ -469,8 +469,13 @@ fn digest_hex(digest: &[u8; 32]) -> String {
 /// clients cut their uploads the same way (`xet-data` 1.7.0,
 /// `read_shard_to_bytes_remove_footer`); the `hf_xet` 1.7.0 upload capture is
 /// stored byte for byte as sent. In that form:
-/// - files are in file-hash order, one entry per file hash, and xorbs in
-///   xorb-hash order, the order upstream's serializer writes
+/// - files are in file-hash order and xorbs in xorb-hash order, the order
+///   upstream's serializer writes
+/// - a file hash listed more than once keeps its first entry; the others, and
+///   xorbs only they reference, are left out. Entries for one file hash
+///   reconstruct the same content, so any one of them serves; conflicting
+///   SHA-256 values are rejected instead, since keeping one would pick a
+///   client's claim at random
 /// - every file carries its segments, one verification entry per segment and,
 ///   when the client sent one, its SHA-256 metadata extension
 ///
@@ -483,14 +488,28 @@ fn digest_hex(digest: &[u8; 32]) -> String {
 ///
 /// [`ProtocolError::ShardNotVerified`] if a segment has no verification entry
 /// or names a xorb `lookup` doesn't have; neither happens after
-/// [`verify_shard`] passed. [`ProtocolError::XorbTableTooLarge`] if a chunk
-/// table doesn't fit the shard format's 32-bit counts.
+/// [`verify_shard`] passed. [`ProtocolError::ShardFileSha256Conflict`] if
+/// two entries for one file hash carry different SHA-256 values.
+/// [`ProtocolError::XorbTableTooLarge`] if a chunk table doesn't fit the
+/// shard format's 32-bit counts.
 pub fn stored_shard(
     shard: &UploadShard,
     lookup: &impl XorbChunkLookup,
 ) -> Result<Vec<u8>, ProtocolError> {
     let mut mdb = MDBInMemoryShard::default();
+    let mut kept: HashMap<MerkleHash, &ShardFileEntry> = HashMap::new();
     for file in &shard.files {
+        if let Some(first) = kept.get(&file.file_hash) {
+            if let (Some(a), Some(b)) = (first.sha256, file.sha256)
+                && a != b
+            {
+                return Err(ProtocolError::ShardFileSha256Conflict {
+                    file: file.file_hash,
+                });
+            }
+            continue;
+        }
+        kept.insert(file.file_hash, file);
         mdb.add_file_reconstruction_info(file_info(file)?)
             .map_err(ProtocolError::ShardSerialization)?;
         for seg in &file.segments {

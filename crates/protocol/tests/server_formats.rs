@@ -293,3 +293,54 @@ fn stored_shard_keeps_an_empty_file() {
         verify_shard(&back, &none, VerifyLimits::default()).unwrap();
     }
 }
+
+/// The capture shard plus a second entry for `a.bin` that references another
+/// xorb, with the given SHA-256.
+fn capture_with_duplicate(sha256: Option<[u8; 32]>) -> (UploadShard, MerkleHash) {
+    let mut shard = capture_shard();
+    let other = MerkleHash::random_from_seed(13);
+    let original = &shard.files[1];
+    assert!(!original.segments.is_empty());
+    shard.files.push(ShardFileEntry {
+        file_hash: original.file_hash,
+        segments: vec![Segment {
+            xorb: other,
+            chunk_start: 0,
+            chunk_end: 1,
+            unpacked_bytes: 1,
+            verification: Some(MerkleHash::random_from_seed(14)),
+        }],
+        sha256,
+    });
+    (shard, other)
+}
+
+/// The capture's lookup, which also knows the duplicate's xorb.
+fn lookup_with(other: MerkleHash) -> impl Fn(&MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>> {
+    let capture = capture_lookup();
+    let extra = one_chunk_lookup(other, 1);
+    move |x: &MerkleHash| capture(x).or_else(|| extra(x))
+}
+
+#[test]
+fn stored_shard_keeps_the_first_of_duplicate_file_entries() {
+    let a_sha256 = capture_shard().files[1].sha256;
+    assert!(a_sha256.is_some());
+    for sha256 in [None, a_sha256] {
+        let (shard, other) = capture_with_duplicate(sha256);
+        let stored = stored_shard(&shard, &lookup_with(other)).unwrap();
+        // The second entry and the xorb only it references are left out.
+        assert_eq!(stored, capture_shard_bytes());
+    }
+}
+
+#[test]
+fn stored_shard_rejects_duplicate_files_with_conflicting_sha256() {
+    let (shard, other) = capture_with_duplicate(Some([7; 32]));
+    let file = shard.files[1].file_hash;
+    let err = stored_shard(&shard, &lookup_with(other)).unwrap_err();
+    assert!(
+        matches!(&err, ProtocolError::ShardFileSha256Conflict { file: f } if *f == file),
+        "{err}"
+    );
+}
