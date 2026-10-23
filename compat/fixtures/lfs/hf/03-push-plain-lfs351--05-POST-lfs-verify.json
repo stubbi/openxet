@@ -1,0 +1,134 @@
+{
+  "step": "03-push-plain-lfs351",
+  "seq": 5,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "user-agent",
+        "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+      ],
+      [
+        "content-type",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "accept",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "content-length",
+        "88"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 88,
+      "json": {
+        "oid": "226c0b7854864ebb3238f5e672d79f96479d4eb0734040b7cbf1fe4bf5e59f64",
+        "size": 300000
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "2"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:28:15 GMT"
+      ],
+      [
+        "etag",
+        "W/\"2-nOO9QiTIwXgNtWtBJezz8kv3SLc\""
+      ],
+      [
+        "x-powered-by",
+        "huggingface-moon"
+      ],
+      [
+        "x-request-id",
+        "Root=1-6adafe7f-065a451b503be85923656993"
+      ],
+      [
+        "ratelimit",
+        "\"api\";r=992;t=151"
+      ],
+      [
+        "ratelimit-policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-max-age",
+        "86400"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://huggingface.co"
+      ],
+      [
+        "vary",
+        "Origin"
+      ],
+      [
+        "access-control-expose-headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "x-cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "x-amz-cf-pop",
+        "CDG52-P7"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "x-amz-cf-id",
+        "2usBzLwk2lj46WKrI78Eten3DjNApyu1ZL6139dsrIdvXeY9ZjzYTg=="
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 2,
+      "text": "OK"
+    }
+  }
+}

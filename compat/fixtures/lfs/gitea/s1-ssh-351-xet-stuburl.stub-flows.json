@@ -1,0 +1,275 @@
+[
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/r10.git/info/lfs/locks/verify",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "34"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 34,
+        "json": {
+          "ref": {
+            "name": "refs/heads/main"
+          }
+        }
+      }
+    },
+    "response": {
+      "status": 404,
+      "reason": "Not Found",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:24:59 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ],
+        [
+          "Content-Length",
+          "22"
+        ]
+      ],
+      "body": {
+        "size": 22,
+        "json": {
+          "error": "not found"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/r10.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "233"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 233,
+        "json": {
+          "operation": "upload",
+          "objects": [
+            {
+              "oid": "48834d1e7caf20cfbdf1171082fadb3b3fa572b6fd2da37a4f0e628004ff936b",
+              "size": 200000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "xet",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 401,
+      "reason": "Unauthorized",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:24:59 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "LFS-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "WWW-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "Content-Length",
+          "156"
+        ]
+      ],
+      "body": {
+        "size": 156,
+        "json": {
+          "schema": "openxet.error.v1",
+          "code": "unauthenticated",
+          "message": "missing or invalid credential",
+          "hint": "use an openxet access token as the password"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/r10.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "233"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Authorization",
+          "REDACTED"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 233,
+        "json": {
+          "operation": "upload",
+          "objects": [
+            {
+              "oid": "48834d1e7caf20cfbdf1171082fadb3b3fa572b6fd2da37a4f0e628004ff936b",
+              "size": 200000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "xet",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 200,
+      "reason": "OK",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:24:59 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Length",
+          "572"
+        ]
+      ],
+      "body": {
+        "size": 572,
+        "json": {
+          "transfer": "xet",
+          "objects": [
+            {
+              "oid": "48834d1e7caf20cfbdf1171082fadb3b3fa572b6fd2da37a4f0e628004ff936b",
+              "size": 200000,
+              "authenticated": true,
+              "actions": {
+                "upload": {
+                  "href": "https://stub:8443/cap/alice_r10/upload?exp=1792740299&sig=REDACTED",
+                  "expires_in": 3600,
+                  "header": {
+                    "X-Xet-Cas-Url": "https://stub:8443/cas",
+                    "X-Xet-Access-Token": "REDACTED",
+                    "X-Xet-Token-Expiration": "1792736704",
+                    "X-Xet-Session-Id": "cb12ce77-c008-4c61-b695-1ef12c8ce8a8"
+                  }
+                }
+              }
+            }
+          ],
+          "hash_algo": "sha256"
+        }
+      }
+    }
+  }
+]

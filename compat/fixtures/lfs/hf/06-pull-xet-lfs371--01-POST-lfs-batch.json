@@ -1,0 +1,172 @@
+{
+  "step": "06-pull-xet-lfs371",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "accept",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "user-agent",
+        "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+      ],
+      [
+        "content-length",
+        "502"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 502,
+      "json": {
+        "operation": "download",
+        "objects": [
+          {
+            "oid": "7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6",
+            "size": 300000
+          },
+          {
+            "oid": "474f85995709fe1d8895e50599a7252daaa0cbb2dfc4078d19416656245015d3",
+            "size": 300000
+          },
+          {
+            "oid": "226c0b7854864ebb3238f5e672d79f96479d4eb0734040b7cbf1fe4bf5e59f64",
+            "size": 300000
+          },
+          {
+            "oid": "2e77a08575c2d84f0c038069729805e951840e939a51511ccefc7292c025a5ba",
+            "size": 300000
+          }
+        ],
+        "transfers": [
+          "xet",
+          "basic",
+          "ssh",
+          "lfs-standalone-file"
+        ],
+        "ref": {
+          "name": "refs/heads/main"
+        },
+        "hash_algo": "sha256"
+      }
+    }
+  },
+  "response": {
+    "status": 401,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "99"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:28:54 GMT"
+      ],
+      [
+        "etag",
+        "W/\"63-dPZqpm0es6Ekf/0wfaAmZaUJX+A\""
+      ],
+      [
+        "x-powered-by",
+        "huggingface-moon"
+      ],
+      [
+        "x-request-id",
+        "Root=1-6adafea6-6d5974397469a39320578a60"
+      ],
+      [
+        "ratelimit",
+        "\"api\";r=485;t=34"
+      ],
+      [
+        "ratelimit-policy",
+        "\"fixed window\";\"api\";q=500;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-max-age",
+        "86400"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://huggingface.co"
+      ],
+      [
+        "vary",
+        "Origin"
+      ],
+      [
+        "access-control-expose-headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "x-error-message",
+        "Invalid username or password."
+      ],
+      [
+        "lfs-authenticate",
+        "Basic realm=\"Authentication required\", charset=\"UTF-8\""
+      ],
+      [
+        "lfs-authenticate",
+        "Bearer realm=\"Authentication required\", charset=\"UTF-8\""
+      ],
+      [
+        "x-cache",
+        "Error from cloudfront"
+      ],
+      [
+        "via",
+        "1.1 39cf1e10ef73e27a5a78fd66f3d53d3c.cloudfront.net (CloudFront)"
+      ],
+      [
+        "x-amz-cf-pop",
+        "CDG52-P7"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "x-amz-cf-id",
+        "IE7ZO9D3R_E0SsgZ0ExPvbWRV3JbVeEJyytEZ9oFrSPhZQy3tYNaeQ=="
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 99,
+      "json": {
+        "message": "Invalid username or password.",
+        "request_id": "Root=1-6adafea6-6d5974397469a39320578a60"
+      }
+    }
+  }
+}

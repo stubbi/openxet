@@ -1,0 +1,6 @@
+{
+  "header": {
+    "Authorization": "Bearer REDACTED"
+  },
+  "href": "https://gitea:3000/alice/r1.git/info/lfs"
+}

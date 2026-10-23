@@ -1,0 +1,327 @@
+[
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/r4.git/info/lfs/locks/verify",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "34"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 34,
+        "json": {
+          "ref": {
+            "name": "refs/heads/main"
+          }
+        }
+      }
+    },
+    "response": {
+      "status": 404,
+      "reason": "Not Found",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:23:58 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ],
+        [
+          "Content-Length",
+          "22"
+        ]
+      ],
+      "body": {
+        "size": 22,
+        "json": {
+          "error": "not found"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/r4.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "227"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 227,
+        "json": {
+          "operation": "upload",
+          "objects": [
+            {
+              "oid": "3b1dd6e5e478883a1e63a8a74e0c161e59486bc1bddfbcef05b4563180290b61",
+              "size": 200000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 401,
+      "reason": "Unauthorized",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:23:58 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "LFS-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "WWW-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "Content-Length",
+          "156"
+        ]
+      ],
+      "body": {
+        "size": 156,
+        "json": {
+          "schema": "openxet.error.v1",
+          "code": "unauthenticated",
+          "message": "missing or invalid credential",
+          "hint": "use an openxet access token as the password"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/r4.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "227"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Authorization",
+          "REDACTED"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 227,
+        "json": {
+          "operation": "upload",
+          "objects": [
+            {
+              "oid": "3b1dd6e5e478883a1e63a8a74e0c161e59486bc1bddfbcef05b4563180290b61",
+              "size": 200000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 200,
+      "reason": "OK",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:23:58 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Length",
+          "411"
+        ]
+      ],
+      "body": {
+        "size": 411,
+        "json": {
+          "transfer": "basic",
+          "objects": [
+            {
+              "oid": "3b1dd6e5e478883a1e63a8a74e0c161e59486bc1bddfbcef05b4563180290b61",
+              "size": 200000,
+              "authenticated": true,
+              "actions": {
+                "upload": {
+                  "href": "https://stub:8443/basic/alice_r4/3b1dd6e5e478883a1e63a8a74e0c161e59486bc1bddfbcef05b4563180290b61?exp=1792740238&sig=REDACTED",
+                  "expires_in": 3600
+                }
+              }
+            }
+          ],
+          "hash_algo": "sha256"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "PUT",
+      "url": "https://stub:8443/basic/alice_r4/3b1dd6e5e478883a1e63a8a74e0c161e59486bc1bddfbcef05b4563180290b61?exp=1792740238&sig=REDACTED",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+        ],
+        [
+          "Content-Length",
+          "200000"
+        ],
+        [
+          "Content-Type",
+          "application/octet-stream"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 200000,
+        "omitted": "binary"
+      }
+    },
+    "response": {
+      "status": 200,
+      "reason": "OK",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:23:58 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ],
+        [
+          "Content-Length",
+          "2"
+        ]
+      ],
+      "body": {
+        "size": 2,
+        "json": {}
+      }
+    }
+  }
+]

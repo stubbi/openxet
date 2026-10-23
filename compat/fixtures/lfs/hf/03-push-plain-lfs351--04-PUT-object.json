@@ -1,0 +1,111 @@
+{
+  "step": "03-push-plain-lfs351",
+  "seq": 4,
+  "role": "s3",
+  "request": {
+    "method": "PUT",
+    "url": "https://hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com/repos/71/69/71693cda04f45a9dcd84e7930367c362a8a6cf6e9c5991ad549ca82d5e0751a6/226c0b7854864ebb3238f5e672d79f96479d4eb0734040b7cbf1fe4bf5e59f64?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=REDACTED&X-Amz-Date=20261023T062815Z&X-Amz-Expires=900&X-Amz-Security-Token=REDACTED&X-Amz-Signature=REDACTED&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-amz-storage-class=INTELLIGENT_TIERING&x-id=PutObject",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com"
+      ],
+      [
+        "User-Agent",
+        "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+      ],
+      [
+        "Content-Length",
+        "300000"
+      ],
+      [
+        "Content-Type",
+        "application/octet-stream"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 300000,
+      "omitted": "large"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Length",
+        "0"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-amz-id-2",
+        "XRfhBM28e5N+fDbUZt9flKpDp/b2YYwpxxxmxz7hfUc+8/2juDNDynRVRVMywHP4z7gEuKhfmubig9saoFoZcfWjktjhOTpF"
+      ],
+      [
+        "x-amz-request-id",
+        "P834FQW0P1JWPPXP"
+      ],
+      [
+        "Server",
+        "AmazonS3"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 06:28:16 GMT"
+      ],
+      [
+        "x-amz-version-id",
+        "ZHQt191J6i2uzHlcT3W4D_s5ZiYJQvwq"
+      ],
+      [
+        "x-amz-server-side-encryption",
+        "AES256"
+      ],
+      [
+        "ETag",
+        "\"172b38dce8610d071bbb2d8ebe1bc37d\""
+      ],
+      [
+        "x-amz-checksum-crc64nvme",
+        "vhq3xJ4DHJA="
+      ],
+      [
+        "x-amz-checksum-type",
+        "FULL_OBJECT"
+      ],
+      [
+        "x-amz-storage-class",
+        "INTELLIGENT_TIERING"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 c1392059c2cdd3077f224e161055cfae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG50-P6"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "BOHZR0nlj21u2qlEqTQqOXRlzrVWop9VeKgKTzCUCe0RPABqiztkWA=="
+      ]
+    ],
+    "body": {
+      "size": 0,
+      "text": ""
+    }
+  }
+}

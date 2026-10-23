@@ -1,0 +1,87 @@
+{
+  "step": "06-pull-xet-lfs371",
+  "seq": 4,
+  "role": "cdn",
+  "request": {
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/29fc796be917800197e0d7302c1ec0f0d8c8029a1b6f070082c10e91b2d70e18?X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27d.bin%3B+filename%3D%22d.bin%22%3B&user_id=REDACTED&xip=REDACTED&response-content-type=application%2Foctet-stream&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "user-agent",
+        "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 0,
+      "text": ""
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "application/octet-stream"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "content-disposition",
+        "inline; filename*=UTF-8''d.bin; filename=\"d.bin\";"
+      ],
+      [
+        "etag",
+        "\"29fc796be917800197e0d7302c1ec0f0d8c8029a1b6f070082c10e91b2d70e18\""
+      ],
+      [
+        "content-security-policy",
+        "default-src 'none'; media-src 'self'; sandbox allow-same-origin"
+      ],
+      [
+        "access-control-allow-headers",
+        "Content-Range, Content-Type, Content-Disposition, ETag"
+      ],
+      [
+        "access-control-expose-headers",
+        "*"
+      ],
+      [
+        "content-length",
+        "300000"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "x-request-id",
+        "01M5KQ5EKEAQATEESB94780W6W"
+      ],
+      [
+        "x-hf-cdn-pop",
+        "aws-eu-west-3"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:28:54 GMT"
+      ]
+    ],
+    "body": {
+      "size": 300000,
+      "omitted": "large"
+    }
+  }
+}

@@ -1,0 +1,530 @@
+[
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/rxetdl.git/info/lfs/locks/verify",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+        ],
+        [
+          "Content-Length",
+          "34"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 34,
+        "json": {
+          "ref": {
+            "name": "refs/heads/main"
+          }
+        }
+      }
+    },
+    "response": {
+      "status": 404,
+      "reason": "Not Found",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:26:51 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ],
+        [
+          "Content-Length",
+          "22"
+        ]
+      ],
+      "body": {
+        "size": 22,
+        "json": {
+          "error": "not found"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/rxetdl.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+        ],
+        [
+          "Content-Length",
+          "227"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 227,
+        "json": {
+          "operation": "upload",
+          "objects": [
+            {
+              "oid": "2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971",
+              "size": 150000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 401,
+      "reason": "Unauthorized",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:26:51 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "LFS-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "WWW-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "Content-Length",
+          "156"
+        ]
+      ],
+      "body": {
+        "size": 156,
+        "json": {
+          "schema": "openxet.error.v1",
+          "code": "unauthenticated",
+          "message": "missing or invalid credential",
+          "hint": "use an openxet access token as the password"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/rxetdl.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+        ],
+        [
+          "Content-Length",
+          "227"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Authorization",
+          "REDACTED"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 227,
+        "json": {
+          "operation": "upload",
+          "objects": [
+            {
+              "oid": "2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971",
+              "size": 150000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 200,
+      "reason": "OK",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:26:51 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Length",
+          "415"
+        ]
+      ],
+      "body": {
+        "size": 415,
+        "json": {
+          "transfer": "basic",
+          "objects": [
+            {
+              "oid": "2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971",
+              "size": 150000,
+              "authenticated": true,
+              "actions": {
+                "upload": {
+                  "href": "https://stub:8443/basic/alice_rxetdl/2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971?exp=1792740411&sig=REDACTED",
+                  "expires_in": 3600
+                }
+              }
+            }
+          ],
+          "hash_algo": "sha256"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "PUT",
+      "url": "https://stub:8443/basic/alice_rxetdl/2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971?exp=1792740411&sig=REDACTED",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+        ],
+        [
+          "Content-Length",
+          "150000"
+        ],
+        [
+          "Content-Type",
+          "application/octet-stream"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 150000,
+        "omitted": "binary"
+      }
+    },
+    "response": {
+      "status": 200,
+      "reason": "OK",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:26:51 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/json"
+        ],
+        [
+          "Content-Length",
+          "2"
+        ]
+      ],
+      "body": {
+        "size": 2,
+        "json": {}
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/rxetdl.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+        ],
+        [
+          "Content-Length",
+          "235"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 235,
+        "json": {
+          "operation": "download",
+          "objects": [
+            {
+              "oid": "2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971",
+              "size": 150000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "xet",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 401,
+      "reason": "Unauthorized",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:26:51 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "LFS-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "WWW-Authenticate",
+          "Basic realm=\"openxet\""
+        ],
+        [
+          "Content-Length",
+          "156"
+        ]
+      ],
+      "body": {
+        "size": 156,
+        "json": {
+          "schema": "openxet.error.v1",
+          "code": "unauthenticated",
+          "message": "missing or invalid credential",
+          "hint": "use an openxet access token as the password"
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "method": "POST",
+      "url": "https://stub:8443/alice/rxetdl.git/info/lfs/objects/batch",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Host",
+          "stub:8443"
+        ],
+        [
+          "User-Agent",
+          "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+        ],
+        [
+          "Content-Length",
+          "235"
+        ],
+        [
+          "Accept",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Authorization",
+          "REDACTED"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json; charset=utf-8"
+        ],
+        [
+          "Accept-Encoding",
+          "gzip"
+        ]
+      ],
+      "body": {
+        "size": 235,
+        "json": {
+          "operation": "download",
+          "objects": [
+            {
+              "oid": "2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971",
+              "size": 150000
+            }
+          ],
+          "transfers": [
+            "lfs-standalone-file",
+            "xet",
+            "basic",
+            "ssh"
+          ],
+          "ref": {
+            "name": "refs/heads/main"
+          },
+          "hash_algo": "sha256"
+        }
+      }
+    },
+    "response": {
+      "status": 200,
+      "reason": "OK",
+      "http_version": "HTTP/1.1",
+      "headers": [
+        [
+          "Server",
+          "BaseHTTP/0.6 Python/3.13.17"
+        ],
+        [
+          "Date",
+          "Fri, 23 Oct 2026 06:26:51 GMT"
+        ],
+        [
+          "Content-Type",
+          "application/vnd.git-lfs+json"
+        ],
+        [
+          "Content-Length",
+          "600"
+        ]
+      ],
+      "body": {
+        "size": 600,
+        "json": {
+          "transfer": "xet",
+          "objects": [
+            {
+              "oid": "2cc6c8dc34fb24fdcb1b854ec5c11eb2ad305bc3cc51dc119f3c3f3fce2e6971",
+              "size": 150000,
+              "authenticated": true,
+              "actions": {
+                "download": {
+                  "href": "https://stub:8443/cap/alice_rxetdl/download?exp=1792740411&sig=REDACTED",
+                  "expires_in": 3600,
+                  "header": {
+                    "X-Xet-Cas-Url": "https://stub:8443/cas",
+                    "X-Xet-Access-Token": "REDACTED",
+                    "X-Xet-Token-Expiration": "1792740411",
+                    "X-Xet-Hash": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                }
+              }
+            }
+          ],
+          "hash_algo": "sha256"
+        }
+      }
+    }
+  }
+]

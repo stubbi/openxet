@@ -3,6 +3,8 @@
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `hub`, `git`, `auth`, `client`
+- Amended by: ADR 0003 (item 10: downloads answer `basic`; capability
+  `href` details), from spike S7
 
 ## Context
 
@@ -51,24 +53,34 @@ spec, "auth" page). The batch header names match xet-core
 8. **Downloads.** A read token allows `/v2/reconstructions/{xet-hash}` (and
    v1) for any file registered to the scope. For Xet-native clients (token
    route) there is no per-object handshake. git-lfs/git-xet clients get the
-   hash from the batch response (item 10); spike S7 pins the git-xet
-   handshake.
+   hash from the batch response (item 10). Spike S7 found that `git-xet`
+   0.2.1 does not download at all, and huggingface.co sends no `X-Xet-Hash`
+   (ADR 0003).
 9. **Pointers.** Pointers are the canonical 3-key git-lfs pointer
    (`version` / `oid` / `size`). openxet tolerates and preserves unknown keys,
    per the LFS spec, but never writes them. The LFS spec requires exactly one
    valid encoding; extra keys change Git blob ids and break mixed-tool repos.
    openxet's own client uses the same format.
 10. **Batch details** (`POST {lfs-url}/objects/batch`, transfers
-    `["xet","basic"]`).
+    `["xet","basic"]`; amended by ADR 0003: uploads answer `xet`,
+    downloads always answer `basic`).
     - JSON keys in `actions.*.header` use exactly this casing:
       `X-Xet-Hash`, `X-Xet-Cas-Url`, `X-Xet-Access-Token`,
       `X-Xet-Token-Expiration`, `X-Xet-Session-Id`.
-    - `X-Xet-Hash` is returned for each object in `actions.download.header`.
-    - `href` is absolute: a signed capability URL for one scope and one
-      operation. A GET on it returns the token-route response with no
-      Authorization header, until its own expiry, which is at least as long
-      as the CAS token it returns.
-    - Foreign credentials sent to it are ignored and never logged.
+    - The `basic` download action's `header` carries only `X-Xet-Hash`,
+      which is not a secret. It has no CAS access token, CAS URL or
+      expiration. Download agents get those from `GET {lfs-url}/xet-read-token`
+      (item 1). This keeps the token out of `GIT_TRACE` output and out of
+      reach of an off-host redirect of the download `href`.
+    - The upload action's `href` is absolute: a signed capability URL for
+      one scope and one operation. A GET on it returns the token-route
+      response with no Authorization header, until its own expiry, which is
+      at least as long as the CAS token it returns. Foreign credentials sent
+      to it are ignored and never logged.
+    - The download action's `href` is the HTTP read gateway URL for the
+      object (absolute), not a token route.
+    - openxet's `verify` action never echoes the client's credential
+      (huggingface.co's does; S7).
 11. **Dev mode.** `openxet serve` with no config runs SQLite plus local disk,
     prints a static access token and the env/URL lines, and supports `--json`
     startup info. Port and flags are not final.

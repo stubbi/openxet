@@ -1,0 +1,4 @@
+skipping pure SSH protocol connection by request (upload, origin)
+exec: ssh 'git@gitea' 'git-lfs-authenticate alice/r15.git upload'
+ssh cache: git@gitea git-lfs-authenticate alice/r15.git upload
+tq: starting transfer adapter "basic"

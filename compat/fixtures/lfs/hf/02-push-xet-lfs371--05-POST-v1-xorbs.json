@@ -1,0 +1,85 @@
+{
+  "step": "02-push-xet-lfs371",
+  "seq": 5,
+  "role": "cas",
+  "request": {
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/cf1d78288c537a6bd4323d25f55353effc43eac720a40f5e3dc6f770253f477e",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "content-length",
+        "300040"
+      ],
+      [
+        "authorization",
+        "Bearer REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01M5KQ3A1GHYQWHPPT73MFW8VK"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "git_xet/0.2.1"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 300040,
+      "omitted": "large"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 06:27:45 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "21"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-request-id",
+        "01M5KQ3AH9QMQG6AH29VFGAN1V"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 21,
+      "json": {
+        "was_inserted": true
+      }
+    }
+  }
+}

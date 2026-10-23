@@ -1,0 +1,119 @@
+{
+  "step": "04-push-xet-lfs351",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/locks/verify",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "accept",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "user-agent",
+        "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+      ],
+      [
+        "content-length",
+        "34"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 34,
+      "json": {
+        "ref": {
+          "name": "refs/heads/main"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 404,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "text/html; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "197"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:28:21 GMT"
+      ],
+      [
+        "x-content-type-options",
+        "nosniff"
+      ],
+      [
+        "x-powered-by",
+        "huggingface-moon"
+      ],
+      [
+        "x-request-id",
+        "Root=1-6adafe85-3f4cf593326efa073b83c30d"
+      ],
+      [
+        "ratelimit",
+        "\"pages\";r=996;t=67"
+      ],
+      [
+        "ratelimit-policy",
+        "\"fixed window\";\"pages\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "content-security-policy",
+        "default-src 'none'"
+      ],
+      [
+        "x-cache",
+        "Error from cloudfront"
+      ],
+      [
+        "via",
+        "1.1 549a238270dd3ff3193423c6e0f65308.cloudfront.net (CloudFront)"
+      ],
+      [
+        "x-amz-cf-pop",
+        "CDG52-P7"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "x-amz-cf-id",
+        "Y4yBCD15NEdPfV_lX2qpkqsucYFtCpvB25e80fh80R2FGPUXDjSSlg=="
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 197,
+      "text": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot POST /openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/locks/verify</pre>\n</body>\n</html>\n"
+    }
+  }
+}
