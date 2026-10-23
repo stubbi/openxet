@@ -44,8 +44,8 @@ Labels:
    cached and handed out** (observed):
    - The read token lives **900 s**. Anonymous tokens work for public
      repos.
-   - Tokens are file-scoped per repo: a token for repo A gets `404` for a
-     file of repo B.
+   - Tokens are file-scoped per repo: a token for repo A got `404` for a
+     file of repo B (one probe).
    - Reconstruction responses carry no `Cache-Control`.
    - Xorb URLs live **3600 s**. Their CloudFront policy binds the expiry,
      a byte range and an `xip` parameter. The range is enforced as
@@ -156,11 +156,22 @@ named:
    - Fetch the reconstruction. Fetch each term's byte range from HF's URL
      straight away: URLs live 3600 s, and sub-ranges are allowed.
    - Decompress and hash every chunk.
-   - Verify the file hash against `X-Xet-Hash`. Large files can verify
-     per 256 MB block through `file-chunk-hashes` windows instead.
+   - Verify the file hash against `X-Xet-Hash`. Large files could later
+     verify per 256 MB block through `file-chunk-hashes` windows. Until
+     the window-merge proof test passes, a file's shard is registered
+     only after the whole-file `X-Xet-Hash` check. Chunks fetched earlier
+     stay staged and unreferenced.
    - Check sha256 against `X-Linked-ETag` while streaming.
    - Write the verified chunks into **local xorbs**, keeping each chunk's
      compressed bytes, and register a shard to the mirrored repo's scope.
+   - Re-packed xorbs and the generated shard go through the normal upload
+     acceptance:
+     - xorb hash recomputation;
+     - the `verify_shard` S6 rules, including verification entries;
+     - the 64 MiB body limit;
+     - the `MAX_REFERENCED_CHUNKS` cap, splitting shards as needed.
+
+     Ingest has no trusted bypass.
    - Then serve it through the normal paths.
    - Unverified bytes are never stored or served.
 3. **Non-Xet files.**
@@ -358,9 +369,18 @@ active users.
 
 > You must include the use restrictions referenced in Section 3.2 as an
 > enforceable provision in any agreement (e.g., license agreement, terms of
-> use, etc.) governing the use and/or distribution of Gemma … You must
-> provide all third party recipients of Gemma or Model Derivatives a copy
-> of this Agreement.
+> use, etc.) governing the use and/or distribution of Gemma or Model
+> Derivatives and you must provide notice to subsequent users you
+> Distribute to that Gemma or Model Derivatives are subject to the use
+> restrictions in Section 3.2.
+> You must provide all third party recipients of Gemma or Model
+> Derivatives a copy of this Agreement.
+> You must cause any modified files to carry prominent notices stating
+> that you modified the files.
+> All Distributions (other than through a Hosted Service) must be
+> accompanied by a "Notice" text file that contains the following notice:
+> "Gemma is provided under and subject to the Gemma Terms of Use found at
+> ai.google.dev/gemma/terms".
 
 **Apache-2.0 §4** (a common repo licence): redistribution requires giving
 recipients "a copy of this License" and keeping a `NOTICE` file's
@@ -469,9 +489,10 @@ the texts single out.
 ⚖ Lawyer:
 - Is an org-wide mirror of a gated model, fetched with one member's
   grant, permitted, even with accept-on-behalf flows?
-- For openxet.com tenants who mirror their **own** private HF repos with
-  their own token, data-processing terms (DPA) and confidentiality apply,
-  as for any hosted data.
+- If openxet.com ever enables the mirror (R19 disables it for every
+  tenant), tenants mirroring their **own** private HF repos would raise
+  data-processing (DPA) and confidentiality questions, as for any hosted
+  data.
 
 ### Headline for the user
 
@@ -489,34 +510,53 @@ the texts single out.
 - Gated and private content must never be shared across users through one
   token.
 
-## Proposed design changes
+## Design changes (R19)
 
-Design §10.6 is updated in this PR as a proposal. The decision is the
-controller's, through the ADR below. The changes:
+R19 decided the policy:
+- the mirror ships for self-hosted deployments: public, ungated repos,
+  with licence files kept;
+- gated and private content is served only per caller, never shared
+  through one token, with no override;
+- the mirror is disabled on openxet.com until counsel review and,
+  ideally, an agreement with HF.
+
+The ADR below records the mechanics and stays proposed until it is filed.
+Design §10.6 now states:
 - **Native ingest by verified chunks.** Never cache whole HF xorbs, and
   never hand out HF URLs.
+- **Normal upload acceptance.** Ingest has no trusted bypass.
+- **No unverified chunks.**
+- **Licence files kept.**
 - **Per-caller upstream authorisation** for gated and private content,
-  failing closed.
+  failing closed, with no shared-credential override.
 - **Upstream-removal propagation.** Repos HF removes are hidden, and their
   data is reclaimed only by GC (non-negotiable 3).
 - **Read-only mirrored namespaces.**
 - **Pre-seeding and transfer** through the same ingest path, plus a
   bucket export.
-- **openxet.com does not enable third-party mirroring** until the legal
-  items above are cleared.
+- **The mirror is disabled on openxet.com**, for every tenant, including
+  their own private repos, until counsel review and ideally a written
+  agreement with HF.
 
 §11 marks S8 answered.
 
-## Proposed ADR (for the controller; not filed)
+## Proposed ADR (records R19's mechanics; not yet filed)
 
-> **ADR 00NN (proposed): HF mirror ingests verified chunks and authorises
-> per caller.** Suggested number: the next free one after the reserved
-> 0004; 0005 is taken.
+> **ADR 0006 (proposed): HF mirror ingests verified chunks and authorises
+> per caller.**
 >
 > - Status: proposed
 > - Scope: `hub`, `cas`, `auth`, `transfer`, `hosted`
 >
-> **Context.** Design §10.6 promises a pull-through mirror. S8 observed
+> **Context.** Controller ruling R19 is the governing decision. It
+> covers:
+> - self-hosted mirroring of public, ungated repos, with licence files
+>   kept;
+> - per-caller access to gated and private content, with no override;
+> - no mirror on openxet.com until counsel review.
+>
+> This ADR records the mechanics. Design §10.6 promises a pull-through
+> mirror. S8 observed
 > how huggingface.co behaves:
 > - Read tokens live 900 s and are scoped per repo.
 > - Xorb URLs live 3600 s, are range-contained, and carry `xip` and the
@@ -546,21 +586,39 @@ controller's, through the ADR below. The changes:
 >    - Non-Xet files are verified by Git blob SHA-1 or sha256.
 >    - Mirrored commit metadata is written to the bucket.
 >    - Clients only ever see openxet URLs and tokens.
+>    - Until the window-merge proof test passes, a file's shard is
+>      registered only after the whole-file `X-Xet-Hash` check. Chunks
+>      fetched earlier stay staged and unreferenced.
+>    - Re-packed xorbs and the generated shard go through the normal
+>      upload acceptance:
+>      - xorb hash recomputation;
+>      - the `verify_shard` S6 rules, including verification entries;
+>      - the 64 MiB body limit;
+>      - the `MAX_REFERENCED_CHUNKS` cap, splitting shards as needed.
+>
+>      Ingest has no trusted bypass.
+>    - The mirror serves every file of a mirrored revision, including
+>      `LICENSE`, `NOTICE` and the README, and never filters them out of
+>      `tree` or `resolve`.
 > 3. **Authorisation.**
->    - Public, non-gated repos: the openxet authorizer alone.
+>    - Public, ungated repos: the openxet authorizer alone.
 >    - Gated and private repos: the openxet authorizer **and** an
->      upstream check with the caller's own HF credential (passed through
->      as `X-HF-Upstream-Token` or set up through `openxet login`, a
->      builder-check call). The check is cached briefly per caller and
->      fails closed.
->    - A shared operator token for gated or private repos needs an
->      explicit `acknowledge_shared_upstream_access` setting, and is off
->      by default.
+>      upstream check with the caller's own HF credential, failing
+>      closed. The credential is passed as `X-HF-Upstream-Token` or set up
+>      through `openxet login` (a builder-check call). It is never
+>      persisted or logged, and is used only for that caller's check.
+>    - The check cache is keyed by (caller, repo, revision) and holds only
+>      yes or no, with a TTL.
+>    - Gated and private content is never fetched for or served to one
+>      caller using another caller's or the operator's HF credential;
+>      there is no override (R19).
 > 4. **Freshness.**
 >    - Refs are re-resolved upstream with a TTL (default 60 s).
 >    - Data keyed by commit is immutable.
->    - While upstream is unreachable, public content is served stale,
->      with a warning header. Gated and private content is not.
+>    - While upstream is unreachable, stale serving, with a warning
+>      header, covers only content whose last successful upstream check
+>      was public and ungated. A later gated, private or `404` answer
+>      hides it.
 > 5. **Upstream removal.** Upstream `404`, a disabled repo or `451` hides
 >    the mirrored repo. Its data is reclaimed only by GC.
 > 6. **Air gap.**
@@ -568,10 +626,9 @@ controller's, through the ADR below. The changes:
 >      ingest.
 >    - `openxet mirror export|import` moves the bucket objects of the
 >      chosen scopes. The receiving side runs `reindex`.
-> 7. **Hosted.** openxet.com runs the same build with third-party
->    mirroring disabled until counsel clears §"Legal risk" (b). Tenants
->    mirroring their own private repos with their own token is a separate
->    sign-off.
+> 7. **Hosted.** **The mirror is disabled on openxet.com**, for every
+>    tenant, including their own private repos, until counsel review and
+>    ideally a written agreement with HF.
 >
 > **Consequences.**
 > - Mirrored data dedups with local data at chunk level and is fully
