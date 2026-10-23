@@ -78,6 +78,11 @@ pub enum CasError {
         xorb: MerkleHash,
     },
 
+    /// The request body ended before its declared length, or its transfer
+    /// was malformed. `400 bad_request`.
+    #[error("the request body could not be read in full")]
+    UnreadableBody,
+
     /// The request body exceeds the route's limit. `413 payload_too_large`.
     #[error("the request body is larger than this route accepts ({limit} bytes)")]
     PayloadTooLarge {
@@ -244,6 +249,11 @@ impl CasError {
                 "Send `Range: bytes={start}-{end}` equal to the URL's `range` query parameter.",
             ),
             Self::UnknownXorb { .. } => (StatusCode::BAD_REQUEST, "unknown_xorb", STALE_CACHE_HINT),
+            Self::UnreadableBody => (
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "Resend the request with a body exactly as long as its `Content-Length`.",
+            ),
             Self::PayloadTooLarge { .. } => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",

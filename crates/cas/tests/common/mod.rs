@@ -24,6 +24,7 @@ use openxet_protocol::VerifyLimits;
 use openxet_storage::LocalBucket;
 use reqwest::Method;
 use tempfile::TempDir;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::oneshot;
 use tracing::Dispatch;
 use tracing::dispatcher::{self, DefaultGuard};
@@ -66,15 +67,18 @@ pub const ROUTES: &[Route] = &[Route {
 /// fall back (S10 "Status codes and retries"; ruling M1-R6).
 pub const UNSERVED: &[(Method, &str)] = &[
     (Method::GET, "/no/such/route"),
-    (
-        Method::POST,
-        "/v1/xorb-grants/default/0000000000000000000000000000000000000000000000000000000000000000",
-    ),
-    (
-        Method::GET,
-        "/v2/file-chunk-hashes/0000000000000000000000000000000000000000000000000000000000000000",
-    ),
+    (Method::POST, XORB_GRANT_PATH),
+    (Method::GET, FILE_CHUNK_HASHES_PATH),
 ];
+
+/// The xorb-grant route of `hf_xet` 1.8 pre-releases. Its `404` makes the
+/// client fall back to `POST /v1/xorbs` (S10 "Status codes and retries").
+pub const XORB_GRANT_PATH: &str =
+    "/v1/xorb-grants/default/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// `GET /v2/file-chunk-hashes/{h}`, which comes in M6 (ruling M1-R6).
+pub const FILE_CHUNK_HASHES_PATH: &str =
+    "/v2/file-chunk-hashes/0000000000000000000000000000000000000000000000000000000000000000";
 
 /// A clock tests set by hand. Starts at the system time.
 #[derive(Debug, Clone)]
@@ -265,6 +269,28 @@ impl TestServer {
     /// A request to `path` on this server.
     pub fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
         self.http.request(method, self.url(path))
+    }
+
+    /// Sends `head` (a request line and headers, without the blank line)
+    /// and then `body` over a fresh connection, half-closing it after the
+    /// body when `close_write`, and returns everything the server answers.
+    /// For requests no HTTP client will send, such as a body shorter than
+    /// its `Content-Length`.
+    pub async fn raw(&self, head: &str, body: &[u8], close_write: bool) -> String {
+        let addr = self.base_url.trim_start_matches("http://");
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = format!("{head}\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+        if close_write {
+            stream.shutdown().await.unwrap();
+        }
+        let mut answer = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut answer))
+            .await
+            .expect("the server did not answer within 10 s")
+            .unwrap();
+        String::from_utf8_lossy(&answer).into_owned()
     }
 
     /// Everything the server has logged so far.

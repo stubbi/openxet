@@ -8,13 +8,13 @@ mod common;
 
 use std::collections::HashSet;
 
-use common::{Access, ROUTES, Reply, SCOPE_A, TestServer, UNSERVED};
+use common::{
+    Access, FILE_CHUNK_HASHES_PATH, ROUTES, Reply, SCOPE_A, TestServer, UNSERVED, XORB_GRANT_PATH,
+};
 use openxet_auth::Mode;
+use openxet_cas::TELEMETRY_BODY_LIMIT;
 use reqwest::Method;
 use reqwest::header::{AUTHORIZATION, WWW_AUTHENTICATE};
-
-/// The telemetry body limit: 64 KiB.
-const TELEMETRY_BODY_LIMIT: usize = 64 * 1024;
 
 /// The `Authorization` value for `token`. The scheme is a constant so the
 /// repository's secret scanner, which flags any literal bearer value, can
@@ -71,10 +71,39 @@ async fn telemetry_over_the_body_limit_is_413() {
 }
 
 #[tokio::test]
+async fn telemetry_with_an_oversized_content_length_is_413_before_reading() {
+    let server = TestServer::start_default().await;
+    let head = format!(
+        "POST /v1/telemetry HTTP/1.1\r\nAuthorization: {}\r\nContent-Length: {}",
+        bearer(&server.read_token),
+        TELEMETRY_BODY_LIMIT + 1
+    );
+
+    // No body is sent: answering proves the server didn't wait to read it.
+    let answer = server.raw(&head, b"", false).await;
+
+    assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+    assert!(answer.contains("\"payload_too_large\""), "{answer}");
+}
+
+#[tokio::test]
+async fn telemetry_with_a_truncated_body_is_400() {
+    let server = TestServer::start_default().await;
+    let head = format!(
+        "POST /v1/telemetry HTTP/1.1\r\nAuthorization: {}\r\nContent-Length: 100",
+        bearer(&server.read_token)
+    );
+
+    let answer = server.raw(&head, b"{\"time\":", true).await;
+
+    assert!(answer.starts_with("HTTP/1.1 400"), "{answer}");
+    assert!(answer.contains("\"bad_request\""), "{answer}");
+}
+
+#[tokio::test]
 async fn xorb_grants_answer_404() {
     let server = TestServer::start_default().await;
-    let path =
-        "/v1/xorb-grants/default/0000000000000000000000000000000000000000000000000000000000000000";
+    let path = XORB_GRANT_PATH;
 
     for token in [&server.write_token, &server.read_token] {
         Reply::of(
@@ -115,10 +144,7 @@ async fn file_chunk_hashes_answer_404() {
 
     Reply::of(
         server
-            .request(
-                Method::GET,
-                "/v2/file-chunk-hashes/0000000000000000000000000000000000000000000000000000000000000000",
-            )
+            .request(Method::GET, FILE_CHUNK_HASHES_PATH)
             .header(AUTHORIZATION, bearer(&server.read_token)),
     )
     .await
