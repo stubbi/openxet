@@ -164,17 +164,18 @@ One logical change per commit. Every commit builds and passes tests.
 
 ## Current state
 
-Pre-code. The design is approved, and ADR 0001 decides to build from
-scratch on `xet-core`'s crates (after evaluating existing Xet servers; see
-`docs/competitive-matrix.md`). Next is the M0 foundation plan in
-`docs/superpowers/plans/`.
+M0 foundation in progress, following
+`docs/superpowers/plans/2026-10-23-m0-foundation.md`. The design is approved,
+and ADR 0001 decides to build from scratch on `xet-core`'s crates (after
+evaluating existing Xet servers; see `docs/competitive-matrix.md`).
 
 ## Commands
 
 Run from the repository root. The toolchain is pinned in
 `rust-toolchain.toml`; `cargo nextest` needs `cargo install cargo-nextest
---locked` once. Keep this list exact and current; the compatibility suite and
-benchmarks are added when they exist.
+--locked` once. CI runs these same commands (`.github/workflows/ci.yml`), so
+green locally means green there. Keep this list exact and current; the
+compatibility suite and benchmarks are added when they exist.
 
 ```bash
 cargo build                                                # build the workspace
@@ -182,6 +183,7 @@ cargo nextest run --workspace                              # run all tests
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
 ```
 
 Exit codes and JSON output schemas are documented in `docs/reference/`.
