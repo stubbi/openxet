@@ -1,0 +1,28 @@
+[package]
+name = "openxet-index"
+version = "0.0.0"
+description = "openxet's rebuildable index of xorbs, files, scopes and dedup entries"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Test-only: a scope name that makes register_shard fail midway, so the
+# atomicity test can observe a rolled-back transaction. Never enable it in a
+# shipped build.
+fault-injection = []
+
+[dependencies]
+async-trait = "0.1"
+openxet-protocol = { path = "../protocol", version = "0.0.0" }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio", "migrate", "macros"] }
+thiserror = "2"
+
+[dev-dependencies]
+openxet-index = { path = ".", features = ["fault-injection"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
