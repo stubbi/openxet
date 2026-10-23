@@ -1,0 +1,338 @@
+[
+  {
+    "file": "01-push-plain-lfs371--01-POST-lfs-locks-verify.json",
+    "step": "01-push-plain-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/locks/verify",
+    "status": 404
+  },
+  {
+    "file": "01-push-plain-lfs371--02-POST-lfs-batch.json",
+    "step": "01-push-plain-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "01-push-plain-lfs371--03-POST-lfs-batch.json",
+    "step": "01-push-plain-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "01-push-plain-lfs371--04-PUT-object.json",
+    "step": "01-push-plain-lfs371",
+    "role": "s3",
+    "method": "PUT",
+    "url": "https://hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com/repos/71/69/71693cda04f45a9dcd84e7930367c362a8a6cf6e9c5991ad549ca82d5e0751a6/7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=REDACTED&X-Amz-Date=20261023T062738Z&X-Amz-Expires=900&X-Amz-Security-Token=REDACTED&X-Amz-Signature=REDACTED&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-amz-storage-class=INTELLIGENT_TIERING&x-id=PutObject",
+    "status": 200
+  },
+  {
+    "file": "01-push-plain-lfs371--05-POST-lfs-verify.json",
+    "step": "01-push-plain-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+    "status": 200
+  },
+  {
+    "file": "02-push-xet-lfs371--01-POST-lfs-locks-verify.json",
+    "step": "02-push-xet-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/locks/verify",
+    "status": 404
+  },
+  {
+    "file": "02-push-xet-lfs371--02-POST-lfs-batch.json",
+    "step": "02-push-xet-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "02-push-xet-lfs371--03-POST-lfs-batch.json",
+    "step": "02-push-xet-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "02-push-xet-lfs371--04-GET-v1-chunks.json",
+    "step": "02-push-xet-lfs371",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/4c32ee79d2871cb2e54b29978b456f94a0de6e41613e3e86570435ab606eb6a6",
+    "status": 404
+  },
+  {
+    "file": "02-push-xet-lfs371--05-POST-v1-xorbs.json",
+    "step": "02-push-xet-lfs371",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/cf1d78288c537a6bd4323d25f55353effc43eac720a40f5e3dc6f770253f477e",
+    "status": 200
+  },
+  {
+    "file": "02-push-xet-lfs371--06-POST-shards.json",
+    "step": "02-push-xet-lfs371",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/shards",
+    "status": 200
+  },
+  {
+    "file": "02-push-xet-lfs371--07-POST-lfs-verify.json",
+    "step": "02-push-xet-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+    "status": 200
+  },
+  {
+    "file": "03-push-plain-lfs351--01-POST-lfs-locks-verify.json",
+    "step": "03-push-plain-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/locks/verify",
+    "status": 404
+  },
+  {
+    "file": "03-push-plain-lfs351--02-POST-lfs-batch.json",
+    "step": "03-push-plain-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "03-push-plain-lfs351--03-POST-lfs-batch.json",
+    "step": "03-push-plain-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "03-push-plain-lfs351--04-PUT-object.json",
+    "step": "03-push-plain-lfs351",
+    "role": "s3",
+    "method": "PUT",
+    "url": "https://hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com/repos/71/69/71693cda04f45a9dcd84e7930367c362a8a6cf6e9c5991ad549ca82d5e0751a6/226c0b7854864ebb3238f5e672d79f96479d4eb0734040b7cbf1fe4bf5e59f64?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=REDACTED&X-Amz-Date=20261023T062815Z&X-Amz-Expires=900&X-Amz-Security-Token=REDACTED&X-Amz-Signature=REDACTED&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-amz-storage-class=INTELLIGENT_TIERING&x-id=PutObject",
+    "status": 200
+  },
+  {
+    "file": "03-push-plain-lfs351--05-POST-lfs-verify.json",
+    "step": "03-push-plain-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+    "status": 200
+  },
+  {
+    "file": "04-push-xet-lfs351--01-POST-lfs-locks-verify.json",
+    "step": "04-push-xet-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/locks/verify",
+    "status": 404
+  },
+  {
+    "file": "04-push-xet-lfs351--02-POST-lfs-batch.json",
+    "step": "04-push-xet-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "04-push-xet-lfs351--03-POST-lfs-batch.json",
+    "step": "04-push-xet-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "04-push-xet-lfs351--04-GET-v1-chunks.json",
+    "step": "04-push-xet-lfs351",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/186ec0aec9ad6430ac1d061c2c631e7207e9d72ca8cee4dd9e3f2603c6437e98",
+    "status": 404
+  },
+  {
+    "file": "04-push-xet-lfs351--05-POST-v1-xorbs.json",
+    "step": "04-push-xet-lfs351",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/786333c9513cfeadee9b68efc260acae3f05819c92262ac27a366b607148b137",
+    "status": 200
+  },
+  {
+    "file": "04-push-xet-lfs351--06-POST-shards.json",
+    "step": "04-push-xet-lfs351",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/shards",
+    "status": 200
+  },
+  {
+    "file": "04-push-xet-lfs351--07-POST-lfs-verify.json",
+    "step": "04-push-xet-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+    "status": 200
+  },
+  {
+    "file": "05-pull-plain-lfs371--01-POST-lfs-batch.json",
+    "step": "05-pull-plain-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "05-pull-plain-lfs371--02-POST-lfs-batch.json",
+    "step": "05-pull-plain-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "05-pull-plain-lfs371--03-GET-object.json",
+    "step": "05-pull-plain-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/544d5424c91a613d25cb522d9796b6a8b414391a520474926b30ad3f37c37591?X-Xet-Cas-Uid=REDACTED&user_id=REDACTED&xip=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27a.bin%3B+filename%3D%22a.bin%22%3B&response-content-type=application%2Foctet-stream&Expires=1792740528&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "05-pull-plain-lfs371--04-GET-object.json",
+    "step": "05-pull-plain-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/d9a884e4b77a8580e5976eb55b9431be93ddc7a4fc5a6da865cfb2c5f9c8d20a?user_id=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27b.bin%3B+filename%3D%22b.bin%22%3B&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=REDACTED&xip=REDACTED&Expires=1792740528&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "05-pull-plain-lfs371--05-GET-object.json",
+    "step": "05-pull-plain-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/c7fb3fed3e6598a672efd2680c098b77810c913fdb016a889655dc7f073dad2f?response-content-type=application%2Foctet-stream&xip=REDACTED&user_id=REDACTED&X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27c.bin%3B+filename%3D%22c.bin%22%3B&Expires=1792740528&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "05-pull-plain-lfs371--06-GET-object.json",
+    "step": "05-pull-plain-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/29fc796be917800197e0d7302c1ec0f0d8c8029a1b6f070082c10e91b2d70e18?user_id=REDACTED&xip=REDACTED&X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27d.bin%3B+filename%3D%22d.bin%22%3B&response-content-type=application%2Foctet-stream&Expires=1792740528&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "06-pull-xet-lfs371--01-POST-lfs-batch.json",
+    "step": "06-pull-xet-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "06-pull-xet-lfs371--02-POST-lfs-batch.json",
+    "step": "06-pull-xet-lfs371",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "06-pull-xet-lfs371--03-GET-object.json",
+    "step": "06-pull-xet-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/544d5424c91a613d25cb522d9796b6a8b414391a520474926b30ad3f37c37591?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27a.bin%3B+filename%3D%22a.bin%22%3B&X-Xet-Cas-Uid=REDACTED&user_id=REDACTED&xip=REDACTED&response-content-type=application%2Foctet-stream&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "06-pull-xet-lfs371--04-GET-object.json",
+    "step": "06-pull-xet-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/29fc796be917800197e0d7302c1ec0f0d8c8029a1b6f070082c10e91b2d70e18?X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27d.bin%3B+filename%3D%22d.bin%22%3B&user_id=REDACTED&xip=REDACTED&response-content-type=application%2Foctet-stream&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "06-pull-xet-lfs371--05-GET-object.json",
+    "step": "06-pull-xet-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/c7fb3fed3e6598a672efd2680c098b77810c913fdb016a889655dc7f073dad2f?xip=REDACTED&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=REDACTED&user_id=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27c.bin%3B+filename%3D%22c.bin%22%3B&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "06-pull-xet-lfs371--06-GET-object.json",
+    "step": "06-pull-xet-lfs371",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/d9a884e4b77a8580e5976eb55b9431be93ddc7a4fc5a6da865cfb2c5f9c8d20a?xip=REDACTED&user_id=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27b.bin%3B+filename%3D%22b.bin%22%3B&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=REDACTED&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "07-pull-xet-lfs351--01-POST-lfs-batch.json",
+    "step": "07-pull-xet-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 401
+  },
+  {
+    "file": "07-pull-xet-lfs351--02-POST-lfs-batch.json",
+    "step": "07-pull-xet-lfs351",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "status": 200
+  },
+  {
+    "file": "07-pull-xet-lfs351--03-GET-object.json",
+    "step": "07-pull-xet-lfs351",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/544d5424c91a613d25cb522d9796b6a8b414391a520474926b30ad3f37c37591?X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27a.bin%3B+filename%3D%22a.bin%22%3B&response-content-type=application%2Foctet-stream&user_id=REDACTED&xip=REDACTED&Expires=1792740539&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "07-pull-xet-lfs351--04-GET-object.json",
+    "step": "07-pull-xet-lfs351",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/d9a884e4b77a8580e5976eb55b9431be93ddc7a4fc5a6da865cfb2c5f9c8d20a?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27b.bin%3B+filename%3D%22b.bin%22%3B&response-content-type=application%2Foctet-stream&user_id=REDACTED&xip=REDACTED&X-Xet-Cas-Uid=REDACTED&Expires=1792740539&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "07-pull-xet-lfs351--05-GET-object.json",
+    "step": "07-pull-xet-lfs351",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/29fc796be917800197e0d7302c1ec0f0d8c8029a1b6f070082c10e91b2d70e18?user_id=REDACTED&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27d.bin%3B+filename%3D%22d.bin%22%3B&xip=REDACTED&Expires=1792740539&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  },
+  {
+    "file": "07-pull-xet-lfs351--06-GET-object.json",
+    "step": "07-pull-xet-lfs351",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/c7fb3fed3e6598a672efd2680c098b77810c913fdb016a889655dc7f073dad2f?X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27c.bin%3B+filename%3D%22c.bin%22%3B&response-content-type=application%2Foctet-stream&user_id=REDACTED&xip=REDACTED&Expires=1792740539&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 200
+  }
+]

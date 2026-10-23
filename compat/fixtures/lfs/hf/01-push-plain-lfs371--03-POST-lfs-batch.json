@@ -1,0 +1,168 @@
+{
+  "step": "01-push-plain-lfs371",
+  "seq": 3,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "accept",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "user-agent",
+        "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "content-length",
+        "227"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 227,
+      "json": {
+        "operation": "upload",
+        "objects": [
+          {
+            "oid": "7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6",
+            "size": 300000
+          }
+        ],
+        "transfers": [
+          "lfs-standalone-file",
+          "basic",
+          "ssh"
+        ],
+        "ref": {
+          "name": "refs/heads/main"
+        },
+        "hash_algo": "sha256"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "2360"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:27:38 GMT"
+      ],
+      [
+        "etag",
+        "W/\"938-IT5a4P3v9oFc0Ptt+q5sKaM5mjU\""
+      ],
+      [
+        "x-powered-by",
+        "huggingface-moon"
+      ],
+      [
+        "x-request-id",
+        "Root=1-6adafe5a-7a975c5817e725c03c52dfe7"
+      ],
+      [
+        "ratelimit",
+        "\"api\";r=997;t=188"
+      ],
+      [
+        "ratelimit-policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-max-age",
+        "86400"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://huggingface.co"
+      ],
+      [
+        "vary",
+        "Origin"
+      ],
+      [
+        "access-control-expose-headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "x-cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "via",
+        "1.1 6278278413e5088f65850d7465d5d6dc.cloudfront.net (CloudFront)"
+      ],
+      [
+        "x-amz-cf-pop",
+        "CDG52-P7"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "x-amz-cf-id",
+        "1n24Zcb6dAb0xzFNVByXHY7IQz88Et9YXlKvgfg_voFB14z4kfP_LQ=="
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 2360,
+      "json": {
+        "transfer": "basic",
+        "objects": [
+          {
+            "oid": "7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6",
+            "size": 300000,
+            "authenticated": true,
+            "actions": {
+              "upload": {
+                "href": "https://hf-hub-lfs-us-east-1.s3-accelerate.amazonaws.com/repos/71/69/71693cda04f45a9dcd84e7930367c362a8a6cf6e9c5991ad549ca82d5e0751a6/7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=REDACTED&X-Amz-Date=20261023T062738Z&X-Amz-Expires=900&X-Amz-Security-Token=REDACTED&X-Amz-Signature=REDACTED&X-Amz-SignedHeaders=host&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-amz-storage-class=INTELLIGENT_TIERING&x-id=PutObject"
+              },
+              "verify": {
+                "href": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+                "header": {
+                  "Authorization": "REDACTED"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

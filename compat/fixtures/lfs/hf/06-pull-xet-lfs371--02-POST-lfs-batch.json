@@ -1,0 +1,205 @@
+{
+  "step": "06-pull-xet-lfs371",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "accept",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "user-agent",
+        "git-lfs/3.7.1 (GitHub; linux arm64; go 1.25.3; git b84b3384)"
+      ],
+      [
+        "content-length",
+        "502"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 502,
+      "json": {
+        "operation": "download",
+        "objects": [
+          {
+            "oid": "7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6",
+            "size": 300000
+          },
+          {
+            "oid": "474f85995709fe1d8895e50599a7252daaa0cbb2dfc4078d19416656245015d3",
+            "size": 300000
+          },
+          {
+            "oid": "226c0b7854864ebb3238f5e672d79f96479d4eb0734040b7cbf1fe4bf5e59f64",
+            "size": 300000
+          },
+          {
+            "oid": "2e77a08575c2d84f0c038069729805e951840e939a51511ccefc7292c025a5ba",
+            "size": 300000
+          }
+        ],
+        "transfers": [
+          "xet",
+          "basic",
+          "ssh",
+          "lfs-standalone-file"
+        ],
+        "ref": {
+          "name": "refs/heads/main"
+        },
+        "hash_algo": "sha256"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "5268"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:28:54 GMT"
+      ],
+      [
+        "etag",
+        "W/\"1494-80LtphyDUP8+FSH8kmEHOyzW0Jo\""
+      ],
+      [
+        "x-powered-by",
+        "huggingface-moon"
+      ],
+      [
+        "x-request-id",
+        "Root=1-6adafea6-4c5605220b99471147a63345"
+      ],
+      [
+        "ratelimit",
+        "\"api\";r=988;t=112"
+      ],
+      [
+        "ratelimit-policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-max-age",
+        "86400"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://huggingface.co"
+      ],
+      [
+        "vary",
+        "Origin"
+      ],
+      [
+        "access-control-expose-headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "x-cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "via",
+        "1.1 44fe34468300fc670b7120af76b935e6.cloudfront.net (CloudFront)"
+      ],
+      [
+        "x-amz-cf-pop",
+        "CDG52-P7"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "x-amz-cf-id",
+        "uFeNbROhcjPm9S6iA-yBQz9qZWfdEgOsY_mSRsF-NWjb0JVZ_0mhlg=="
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 5268,
+      "json": {
+        "transfer": "basic",
+        "objects": [
+          {
+            "oid": "7dd641fbd2fe395f777ffeb525854522e6803b1007269eff5dcd8ce73973acb6",
+            "size": 300000,
+            "authenticated": true,
+            "actions": {
+              "download": {
+                "href": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/544d5424c91a613d25cb522d9796b6a8b414391a520474926b30ad3f37c37591?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27a.bin%3B+filename%3D%22a.bin%22%3B&X-Xet-Cas-Uid=REDACTED&user_id=REDACTED&xip=REDACTED&response-content-type=application%2Foctet-stream&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256"
+              }
+            }
+          },
+          {
+            "oid": "474f85995709fe1d8895e50599a7252daaa0cbb2dfc4078d19416656245015d3",
+            "size": 300000,
+            "authenticated": true,
+            "actions": {
+              "download": {
+                "href": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/d9a884e4b77a8580e5976eb55b9431be93ddc7a4fc5a6da865cfb2c5f9c8d20a?xip=REDACTED&user_id=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27b.bin%3B+filename%3D%22b.bin%22%3B&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=REDACTED&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256"
+              }
+            }
+          },
+          {
+            "oid": "226c0b7854864ebb3238f5e672d79f96479d4eb0734040b7cbf1fe4bf5e59f64",
+            "size": 300000,
+            "authenticated": true,
+            "actions": {
+              "download": {
+                "href": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/c7fb3fed3e6598a672efd2680c098b77810c913fdb016a889655dc7f073dad2f?xip=REDACTED&response-content-type=application%2Foctet-stream&X-Xet-Cas-Uid=REDACTED&user_id=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27c.bin%3B+filename%3D%22c.bin%22%3B&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256"
+              }
+            }
+          },
+          {
+            "oid": "2e77a08575c2d84f0c038069729805e951840e939a51511ccefc7292c025a5ba",
+            "size": 300000,
+            "authenticated": true,
+            "actions": {
+              "download": {
+                "href": "https://us.aws.cdn.hf.co/xet-bridge-us/6adafe4afac67e93d6dd117e/29fc796be917800197e0d7302c1ec0f0d8c8029a1b6f070082c10e91b2d70e18?X-Xet-Cas-Uid=REDACTED&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27d.bin%3B+filename%3D%22d.bin%22%3B&user_id=REDACTED&xip=REDACTED&response-content-type=application%2Foctet-stream&Expires=1792740534&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

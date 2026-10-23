@@ -1,0 +1,86 @@
+{
+  "step": "02-push-xet-lfs371",
+  "seq": 6,
+  "role": "cas",
+  "request": {
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/shards",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "authorization",
+        "Bearer REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01M5KQ3A1GHYQWHPPT73MFW8VK"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "git_xet/0.2.1"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ],
+      [
+        "content-length",
+        "624"
+      ]
+    ],
+    "body": {
+      "size": 624,
+      "omitted": "binary"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 06:27:45 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "92"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-request-id",
+        "01M5KQ3AY623R6VR8M5C03Z982"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 92,
+      "json": {
+        "result": 1,
+        "shard_hash": "e320d54c59d3ff6817ec605771fcee69d1003504c57a273643b672e10d12daa6"
+      }
+    }
+  }
+}

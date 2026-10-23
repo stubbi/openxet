@@ -1,0 +1,175 @@
+{
+  "step": "04-push-xet-lfs351",
+  "seq": 3,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/batch",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "user-agent",
+        "git-lfs/3.5.1 (GitHub; linux arm64; go 1.21.7; git e237bb3a)"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "accept",
+        "application/vnd.git-lfs+json"
+      ],
+      [
+        "content-length",
+        "233"
+      ],
+      [
+        "accept-encoding",
+        "gzip"
+      ]
+    ],
+    "body": {
+      "size": 233,
+      "json": {
+        "operation": "upload",
+        "objects": [
+          {
+            "oid": "2e77a08575c2d84f0c038069729805e951840e939a51511ccefc7292c025a5ba",
+            "size": 300000
+          }
+        ],
+        "transfers": [
+          "xet",
+          "basic",
+          "ssh",
+          "lfs-standalone-file"
+        ],
+        "ref": {
+          "name": "refs/heads/main"
+        },
+        "hash_algo": "sha256"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "",
+    "http_version": "HTTP/2.0",
+    "headers": [
+      [
+        "content-type",
+        "application/vnd.git-lfs+json; charset=utf-8"
+      ],
+      [
+        "content-length",
+        "1075"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 06:28:21 GMT"
+      ],
+      [
+        "etag",
+        "W/\"433-6gUs6w6Cy9bw7wF48J23LuadZjI\""
+      ],
+      [
+        "x-powered-by",
+        "huggingface-moon"
+      ],
+      [
+        "x-request-id",
+        "Root=1-6adafe85-35cfcae676cc1a436d340351"
+      ],
+      [
+        "ratelimit",
+        "\"api\";r=991;t=145"
+      ],
+      [
+        "ratelimit-policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "referrer-policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "access-control-max-age",
+        "86400"
+      ],
+      [
+        "access-control-allow-origin",
+        "https://huggingface.co"
+      ],
+      [
+        "vary",
+        "Origin"
+      ],
+      [
+        "access-control-expose-headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "x-cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "via",
+        "1.1 a9b4641f7a38f2a58dc821ec435bb510.cloudfront.net (CloudFront)"
+      ],
+      [
+        "x-amz-cf-pop",
+        "CDG52-P7"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "x-amz-cf-id",
+        "ObAjswxatC7k_djC-FeBGWknnnGrRD-f_LaiaS3cRfxR5NhKGOZBdw=="
+      ],
+      [
+        "strict-transport-security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 1075,
+      "json": {
+        "transfer": "xet",
+        "objects": [
+          {
+            "oid": "2e77a08575c2d84f0c038069729805e951840e939a51511ccefc7292c025a5ba",
+            "size": 300000,
+            "authenticated": true,
+            "actions": {
+              "upload": {
+                "href": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s7-b46c7b/xet-write-token/refs%2Fheads%2Fmain",
+                "header": {
+                  "X-Xet-Cas-Url": "https://cas-server.xethub.hf.co",
+                  "X-Xet-Token-Expiration": "1792737801",
+                  "X-Xet-Access-Token": "REDACTED",
+                  "X-Xet-Session-Id": "01M5KQ4E7VY41QSHY41XAEJY2Q"
+                }
+              },
+              "verify": {
+                "href": "https://huggingface.co/openxet-compat/openxet-compat-s7-b46c7b.git/info/lfs/objects/verify",
+                "header": {
+                  "Authorization": "REDACTED"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

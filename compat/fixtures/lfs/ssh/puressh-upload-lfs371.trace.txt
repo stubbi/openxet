@@ -1,0 +1,57 @@
+attempting pure SSH protocol connection (upload, origin)
+packet 00 < version=1
+packet 00 < locking
+packet 00 < 0000
+packet 00 > version 1
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0001
+packet 00 < 0000
+pure SSH connection successful (#0)
+attempting pure SSH protocol connection (upload, origin)
+packet 00 < version=1
+packet 00 < locking
+packet 00 < 0000
+packet 00 > version 1
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0001
+packet 00 < 0000
+pure SSH connection successful (#0)
+packet 00 > list-lock
+packet 00 > refname=refs/heads/main
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0001
+packet 00 < 0000
+packet 00 > batch
+packet 00 > transfer=ssh
+packet 00 > hash-algo=sha256
+packet 00 > refname=refs/heads/main
+packet 00 > 0001
+packet 00 > a979290414b6e85962f992eca3eb68e214f6ba4f4a24eb2e9823264d5161f001 200000
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0001
+packet 00 < a979290414b6e85962f992eca3eb68e214f6ba4f4a24eb2e9823264d5161f001 200000 upload id=REDACTED token=REDACTED
+packet 00 < 0000
+tq: starting transfer adapter "ssh"
+packet 00 > put-object a979290414b6e85962f992eca3eb68e214f6ba4f4a24eb2e9823264d5161f001
+packet 00 > size=200000
+packet 00 > id=REDACTED
+packet 00 > token=REDACTED
+packet 00 > 0001
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0000
+packet 00 > verify-object a979290414b6e85962f992eca3eb68e214f6ba4f4a24eb2e9823264d5161f001
+packet 00 > size=200000
+packet 00 > id=REDACTED
+packet 00 > token=REDACTED
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0000
+packet 00 > quit
+packet 00 > 0000
+packet 00 < status 200
+packet 00 < 0000
