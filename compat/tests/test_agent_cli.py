@@ -1,6 +1,7 @@
 """Agent leg: the openxet CLI must be usable by an agent (AGENTS.md, design 7.1).
 
-Every new CLI command adds its non-interactive invocation to JSON_COMMANDS.
+Every new CLI command adds its non-interactive invocation to JSON_COMMANDS;
+the Rust test `every_subcommand_is_in_the_agent_leg` fails until it does.
 """
 
 import json
