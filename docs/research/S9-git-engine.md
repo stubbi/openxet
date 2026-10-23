@@ -423,10 +423,16 @@ binding.
      pack row as `pending`.
    - The ref CAS and the update
      `packs.state = 'committed' WHERE state = 'pending'` commit in one
-     transaction. A failed CAS sets the row to `lost`, and a pending pack
-     already expired by GC can't be committed. Then the ref log is
-     appended, and only then does the client get `ok` (inferred; the
-     prototype had no states).
+     transaction, together with:
+     - a `full_repack_gen` check against the value read in the push's
+       snapshot (the repack fence, item 3)
+     - the insert of the database `ref_log` rows
+   - The client gets `ok` only after that commit.
+   - A failed CAS sets the row to `lost` (`WHERE state = 'pending'`), and
+     a pending pack already expired by GC can't be committed.
+   - The bucket ref log (§5.3) is derived from the `ref_log` rows, for
+     every ref writer, Hub API included (inferred; the prototype had no
+     states and wrote the bucket ref log directly).
    - A crash before the CAS leaves a `pending` pack and no ref change. GC
      expires it after the grace period. A crash after the CAS loses
      nothing, because the pack is already durable (§5.3).
@@ -434,17 +440,22 @@ binding.
    - **Observed (prototype).** The node read the ref snapshot, then
      downloaded every registered pack it lacked. For `tf10k` that is
      80 MB in under 0.6 s on an unloaded path.
-   - **Post-review (inferred).** Only `committed` packs, plus
-     `superseded` packs inside their grace period, are hydrated or
-     exposed. `pending` and `lost` packs never are, and a cached pack is
-     evicted once it becomes `lost`.
+   - **Post-review (inferred).** New snapshots expose only `committed`
+     packs. `pending`, `lost`, `expired` and `superseded` packs never
+     reach a new snapshot, receive-pack's included. In-flight requests
+     keep the hard links they took.
      - Otherwise a push could pass the connectivity check using objects
-       that exist only in another in-flight or lost pack. GC of that pack
-       would then leave a committed ref dangling.
+       that exist only in another in-flight or lost pack, or only in a
+       superseded input whose expired objects a full repack has dropped.
+       GC of that pack would then leave a committed ref dangling.
+     - Evicting `lost` packs is defensive only, since they are never
+       hydrated.
    - Refs and the pack set are read in one database snapshot, from the
      primary or a single consistent snapshot, never from replicas with
      different lag (§5.8).
-   - Hydrated pack files get their mtime pinned to the pack row's
+   - Hydrated files are `.pack`, `.idx`, `.rev`, `.bitmap` and
+     `.mtimes`, plus the generation's `multi-pack-index` with its
+     `.bitmap` and `.rev`. Pack mtimes are pinned to the row's
      `created_at`, so cruft expiry measures age from creation, not
      download.
    - Git can't serve from a partial pack, so hydration is per pack, not
@@ -452,12 +463,20 @@ binding.
      (consistent hashing) to keep caches warm. Any node can still serve
      any repo, just slower when cold.
    - **Snapshot exposure (inferred).** Each request snapshot's
-     `objects/pack` holds hard links to exactly its pack set, with no
-     alternates to the whole cache dir.
+     `objects/pack` holds hard links to exactly its committed pack set,
+     with no alternates to the whole cache dir.
      - The prototype used alternates. That served the same bitmap at the
        same cost (observed), but exposed every cached pack.
      - A push's own new pack is visible only to its own receive-pack,
        through quarantine.
+     - Hard links need the snapshot root on the cache's filesystem
+       (`EXDEV` otherwise). Start-up checks this and fails fast, and also
+       sweeps leaked snapshot directories.
+     - Eviction counts space as freed only when the link count shows no
+       snapshot holds a file.
+     - A superseded pack's stale `.bitmap` could slow serving, but new
+       snapshots never include superseded packs, so only requests
+       already in flight see it.
 3. **Repacking strategy** (measured above, design inferred).
    - The cost is geometric:
      - every push adds one small pack
@@ -468,8 +487,14 @@ binding.
        `builtin/repack.c` line 355)
      - it uploads the new pack, MIDX and bitmap, and commits a new pack
        list in the database in one transaction
-   - Inputs become `superseded`, with a timestamp. GC deletes them after
-     the grace period (§5.6, default 7 days).
+   - Inputs become `superseded`, with a timestamp. They leave new
+     snapshots at once, but their bucket objects are kept through the
+     grace period (§5.6, default 7 days), and GC deletes them after it.
+   - Geometric repacks roll packs up with `pack-objects --stdin-packs`,
+     which keeps every object of every input pack (source: git v2.39.5
+     `builtin/repack.c` line 937, and the `git-pack-objects(1)`
+     description of `--stdin-packs`). They drop nothing and need no
+     fence.
    - A periodic full `repack -adb --cruft --cruft-expiration=<grace>`
      (git ≥ 2.37) folds the history into one pack.
    - **Cruft expiry is by object mtime, not by when an object became
@@ -487,6 +512,24 @@ binding.
        (source: RelNotes 2.42.0), so keep refs keep the floor at 2.37.
    - Each cruft pack's `.mtimes` is a pack artifact, uploaded and
      hydrated with the pack.
+   - **mtimes on the leaseholder.** Right before each repack, the
+     leaseholder re-pins input mtimes from the database `created_at`.
+     - Hard links share inodes, and git may freshen pack mtimes while
+       serving, so the leaseholder's view would otherwise drift.
+     - Re-pinning costs one `utime` per pack. The alternatives are
+       copying multi-GB packs, or running git under a uid that does not
+       own the cache, which complicates deployment.
+   - **Repack fence, in both directions** (found in review, inferred).
+     A full repack can drop a long-unreachable object that an in-flight
+     push builds on.
+     - A full-repack publish increments `repos.full_repack_gen`. A push
+       whose snapshot read the old generation fails its CAS, retryably.
+     - The full-repack publish aborts and retries if `ref_log` advanced
+       past the high-water mark recorded with its working copy.
+     - The keep refs come from the database `ref_log`. Its rows are
+       written in the CAS transaction and retained for at least the
+       grace period plus the maximum pending age, so they are durable
+       together with the ref they describe.
    - **Why only committed packs.** A plain `repack -adb` over all packs
      could drop a pending push's own pack contents, and the CAS would
      then succeed onto missing objects (inferred).
@@ -535,7 +578,9 @@ through ADR 0004.
 
    **Ruling R22, fully specified in ADR 0004 item 2.**
    - **Scope.** openxet parses the wants of every upload-pack request
-     before spawning git: v2 `fetch`, and the v0/v1 want lines.
+     before forwarding them to git. openxet interposes on the request
+     stream, so this covers v2 `fetch` (including several commands in
+     one SSH session) and the v0/v1 want lines over HTTP and SSH.
      - Checking v0/v1 too removes the cost asymmetry of git spawning
        `rev-list` for non-advertised v0/v1 wants.
    - **Walk.** One walk per request, starting from the same ref snapshot
@@ -555,7 +600,9 @@ through ADR 0004.
    - **Fail closed.** Anything not found within the budget is refused.
      - This can refuse a legitimate deep `fetch <sha>` or submodule pin
        in a huge repo.
-     - The mitigation, bitmap-backed reachability, is a follow-up issue
+     - The mitigation is bitmap-backed reachability, with the bitmap
+       built from the current ref tips only. The repack's bitmaps include
+       keep refs and must never be used for it. It is a follow-up issue
        labelled `git-reachability`.
    - Only non-tip wants pay for the walk, and stock clients send them
      rarely.
@@ -572,11 +619,11 @@ through ADR 0004.
      the row is still `pending`
    - `lost`, on a failed CAS
    - `expired`, a stale pending pack marked by GC
-   - `superseded`, a repack input
-   - Only committed packs, and superseded packs in their grace period,
-     are hydrated and exposed.
-   - Repack runs over committed packs, with keep refs from the ref-log
-     grace window. Pack mtimes are pinned to `created_at`, and `.mtimes`
+   - `superseded`, a repack input, which leaves new snapshots at once
+   - Only committed packs reach new snapshots.
+   - Repack runs over committed packs, with keep refs from the database
+     `ref_log` grace window and the `full_repack_gen` fence in both
+     directions. Pack mtimes are pinned to `created_at`, and `.mtimes`
      files are carried through the bucket.
 3. **Hook route and git process** (inferred hardening).
    - **Hook channel:** an inherited `socketpair` fd with no path, over
@@ -608,7 +655,7 @@ Columns per the task brief. Each cell says how it is known.
 | | Server-side capabilities | Clone, fetch, push performance | CPU / RSS | CAS correctness | Fit with bucket packs and stateless nodes | Licence and distribution | Fit with a Rust single binary | Maturity, maintenance, bus factor |
 |---|---|---|---|---|---|---|---|---|
 | **1. gix 0.90 in-process** | No upload-pack, receive-pack, server transport or push. Pack indexing yes; pack generation without delta compression or bitmaps (source, table above). | Full clone 16x and fetch 6x git's server CPU; server wall ratios were similar but are indicative only. Push faster (observed). | 16x CPU and 2x RSS on clone; 9x less CPU on small pushes (observed). | Correct: 60/60 rounds (observed), because CAS is in the database. | Good: in-process odb over the node cache. Repack would need delta compression we would write (source, inferred). | MIT/Apache-2.0: none. | Best: pure Rust, in-process. | Active, about 1 human maintainer. Server work is explicitly kept out of upstream (source). |
-| **2. git binary** (`upload-pack` / `receive-pack --stateless-rpc` on a snapshot repo) | Everything: v0/v1/v2, shallow, partial clone, bitmaps, MIDX, `fsckObjects`, `proc-receive`, quarantine (source: git docs). | Fastest reads; push about 0.2 s server wall (observed). | Lowest on reads: 178 ms / 89 MB for a full clone (observed). About 120 ms CPU per small push, all spawns (observed). | Correct: 60/60 rounds through `proc-receive` (observed). | Good: alternates to the node cache, packs published by openxet (observed). | GPL-2.0-only, run as a separate program. Images ship git unmodified from a distro package with its source available (source, inferred). | A runtime dependency: openxet spawns `git`. Needs git ≥ 2.37: 2.29 for `proc-receive`, 2.34 for MIDX bitmaps and 2.37 for cruft packs (source: RelNotes). | The reference implementation, with a broad maintainer base. Gitea, Soft Serve and Gitaly all spawn it (source, rows 6 and 9). |
+| **2. git binary** (`upload-pack` / `receive-pack --stateless-rpc` on a snapshot repo) | Everything: v0/v1/v2, shallow, partial clone, bitmaps, MIDX, `fsckObjects`, `proc-receive`, quarantine (source: git docs). | Fastest reads; push about 0.2 s server wall (observed). | Lowest on reads: 178 ms / 89 MB for a full clone (observed). About 120 ms CPU per small push, all spawns (observed). | Correct: 60/60 rounds through `proc-receive` (observed). | Good: the prototype used alternates to the node cache, with packs published by openxet (observed). Production links committed pack sets (ADR 0004). | GPL-2.0-only, run as a separate program. Images ship git unmodified from a distro package with its source available (source, inferred). | A runtime dependency: openxet spawns `git`. Needs git ≥ 2.37: 2.29 for `proc-receive`, 2.34 for MIDX bitmaps and 2.37 for cruft packs (source: RelNotes). | The reference implementation, with a broad maintainer base. Gitea, Soft Serve and Gitaly all spawn it (source, rows 6 and 9). |
 | **3. libgit2 / `git2` 0.21** | No server transports. Every `upload-pack` hit in libgit2 is a client transport (`src/libgit2/transports/*`). Has `git_packbuilder` (delta), `git_indexer`, custom `odb_backend.h` and `refdb_backend.h` (source, libgit2 1.9.7). | Not measured: a server would have to be written on top, as with gix. | Not measured. | Would depend on our code. | Custom odb/refdb backends map onto a bucket and DB, but pack-level object access through a custom odb is slow (inferred). | GPL-2.0 with linking exception: static linking allowed (source: `COPYING`). | C dependency through `git2`; no protocol layer. | Mature; effectively one core maintainer (ethomson 276 commits in the last year, next contributor 26; source). |
 | **4. JGit with DFS** | Complete server: `UploadPack` (v2), `ReceivePack`, bitmaps, reftable. `internal.storage.dfs` (`DfsObjDatabase`, `DfsReftableDatabase`, `DfsGarbageCollector`, `DfsPackCompactor`, `DfsMidxWriter`) is built for packs on a distributed store (source, JGit 7.8). Google's hosted Gerrit is widely reported to run on it (inferred; not re-verified here). | See the stdio table. JVM start-up alone is 1.6–2.0 s CPU and about 77 MB (observed). | As above. | `DfsReftableDatabase` gives atomic batch ref updates; we would plug our DB in (source, inferred). | Best design fit: DFS **is** bucket-backed packs with a block cache and stateless servers. The package is `internal`, with no API stability promise (source). | EDL-1.0 (BSD-3-style): none. | A JVM sidecar: second runtime, process, memory floor and deployable. Breaks "one binary" (design §5.1). | Mature (Eclipse, Gerrit, Google); a small core (msohn 289, ifradeo 125, davido 47 commits in a year, source). |
 | **5. go-git v6** | `v6.0.0-beta.1` (2026-10-04) has server-side `UploadPack` (v0/v1/v2) and `ReceivePack` and a smart-HTTP `backend`. TODOs on `main` in `plumbing/transport/upload_pack.go`: thin-pack and shallow-file unsupported. No bitmaps (no `bitmap` file in the tree). Storage via the `storage.Storer` interface (source). | See the stdio table. | As above. | Would depend on our code. | `Storer` could be backed by bucket and DB, but per-object access through it is slow (inferred). | Apache-2.0: none. | A Go sidecar. | v5 stable; v6 is beta. pjbgf 558, hiddeco 237 commits in a year (source). |
@@ -667,6 +714,10 @@ Columns per the task brief. Each cell says how it is known.
   - per-snapshot pack sets
   - keep refs and pinned mtimes, and carrying `.mtimes` through the
     bucket
+  - the database `ref_log` and the `full_repack_gen` fence
+
+  ADR 0004 requires all of this to be prototyped in M2, with
+  property-based and fault-injection tests, before production use.
 - The JGit and go-git rows use their stdio upload-pack, not a DFS or
   bucket-backed `Storer`. They compare protocol and pack-generation cost
   on identical input, not their storage layers.

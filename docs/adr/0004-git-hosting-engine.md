@@ -83,11 +83,12 @@ results below are **observed**.
 ## Decision
 
 1. **The wire protocol is served by the `git` binary.**
-   - For each request, openxet builds a snapshot repo in a node-local
-     temp dir, from **one database snapshot**:
+   - For each request, openxet builds a snapshot repo in a temp dir on
+     the cache's filesystem, from **one database snapshot**:
      - `packed-refs`, with the repo's refs
      - `objects/pack`, holding hard links to exactly the cached pack
-       files of that snapshot's pack set (item 4), and no others
+       files of that snapshot's `committed` pack set (item 4), and no
+       others
    - The snapshot has no `objects/info/alternates`, so git can't see any
      pack outside that set. A generation's `multi-pack-index` and its
      bitmap are linked only when every pack they cover is in the set.
@@ -114,11 +115,16 @@ results below are **observed**.
      the odb. It does not check reachability, so
      `allowAnySHA1InWant=false` does not protect v2 (source: git v2.39.5
      `upload-pack.c`, `parse_want`, lines 1413–1442).
-   - **Which requests.** openxet parses the wants of every upload-pack
-     request before spawning git: v2 `command=fetch`, and the v0/v1
-     want lines. Checking v0/v1 too means openxet does not depend on
-     git's per-request `rev-list` for non-advertised wants, whose cost
-     would be uneven across protocol versions.
+   - **Which requests.** openxet interposes on the request stream. It
+     checks wants before forwarding them to git, so git never sees an
+     unchecked want. This covers:
+     - every v2 `command=fetch`, including several commands in one
+       stateful SSH session
+     - the v0/v1 want lines over HTTP and SSH
+
+     Checking v0/v1 too means openxet does not depend on git's
+     per-request `rev-list` for non-advertised wants, whose cost would
+     be uneven across protocol versions.
    - **One walk per request.**
      - The walk starts from the same ref snapshot that is written to the
        request's `packed-refs`.
@@ -147,77 +153,131 @@ results below are **observed**.
      `git fetch <sha>` and submodule pins.
    - **Known limitation.** In very large repos, fail-closed can refuse a
      legitimate deep `fetch <sha>` or submodule pin that the budget can't
-     reach. The mitigation is bitmap-backed reachability (test membership
-     in the repack's reachability bitmaps). It is a follow-up, tracked as
-     an issue labelled `git-reachability`, with no code until then.
-3. **Ref updates go through a `proc-receive` hook.**
+     reach. The mitigation is bitmap-backed reachability: membership in a
+     reachability bitmap built from the **current ref tips only**. The
+     repack's own bitmaps include the keep refs (item 5) and must never
+     be used for this. It is a follow-up, tracked as an issue labelled
+     `git-reachability`, with no code until then.
+3. **Ref updates go through a `proc-receive` hook, and commit in one
+   transaction.**
    - Before the hook runs, git has already done three things:
      - indexed the pack into the request's quarantine
      - checked connectivity against the snapshot's pack set only
+       (`committed` packs, item 4)
      - validated every object (`receive.fsckObjects`)
-   - A push's own new pack is visible only to its own receive-pack. Other
-     requests can't see it until it is `committed`.
+   - A push's own new pack is visible only to its own receive-pack,
+     through quarantine. Other requests can't see it until it is
+     `committed`.
    - The hook hands the commands and the new pack path to the parent
      openxet process. openxet then:
      1. validates the request (item 7)
      2. re-checks fast-forward and branch policy itself
      3. uploads `.pack` and `.idx` to the bucket and inserts the pack row
         as `pending`
-     4. runs the ref CAS and the update
-        `packs.state = 'committed' WHERE id = $pack AND state = 'pending'`,
-        in one transaction that commits only if both match
-     5. appends the ref log (§5.3)
-   - Step 4 means a pending pack that GC has already expired can never
-     be committed; the push then fails with a retryable error.
-   - If the CAS fails, the pack row is set to `lost` in its own
-     transaction. Pack rows nobody resolves stay `pending`.
+     4. runs **one database transaction** that commits only if all of
+        these hold:
+        - the ref CAS for every command matches
+        - `packs.state = 'committed' WHERE id = $pack AND state =
+          'pending'` matches one row
+        - `repos.full_repack_gen` still equals the value read in the
+          request's snapshot (item 5's fence)
+        - one `ref_log` row per command is inserted, with repo, ref, old,
+          new, actor, request and time
+     5. answers the client only after that commit
+   - **If the CAS fails,** the pack becomes `lost` through
+     `UPDATE … SET state = 'lost' WHERE id = $pack AND state = 'pending'`,
+     in its own transaction. Pack rows nobody resolves stay `pending`.
+   - **If the fence fails,** the push is refused with a retryable reason.
+     A pending pack that GC has already expired can never be committed.
    - It answers `ok` or `ng <ref> <reason>`, and the reason reaches the
      client verbatim.
    - A pack is durable in the bucket before any ref points to it.
+   - **The database ref log** is the `ref_log` table, and this item
+     defines it.
+     - Every ref writer inserts its rows in the same transaction as the
+       ref change: pushes, and Hub API ref creates, updates and deletes
+       alike.
+     - Rows are retained for at least the grace period plus the maximum
+       pending-pack age.
+     - The bucket ref log of §5.3 is derived from these rows within the
+       documented RPO (60 s). It is never written independently.
 4. **Pack sets, hydration and eviction.**
-   - **Visible packs.** A request's pack set is the `committed` packs,
-     plus `superseded` packs still inside their grace period. `pending`
-     and `lost` packs are never hydrated or exposed.
-   - **Why.** The connectivity check of item 3 then only accepts objects
-     reachable through committed data. A push that references an object
-     present only in another in-flight or lost pack is rejected, so GC of
-     that pack can't leave a committed ref dangling.
-   - **Consistent reads.** Refs and the pack set are read in one database
-     snapshot, from the primary or a single consistent snapshot. Never
-     from two replicas with different lag (§5.8).
-   - **Hydration.** A node downloads the pack set's files it lacks:
-     `.pack`, `.idx`, `.bitmap`, `.mtimes`, and the generation's MIDX
-     files.
-     - It pins each pack's mtime to the pack row's `created_at`, so
-       cruft expiry (item 5) measures age from creation, not download.
-   - **Eviction.** A node evicts a cached pack once it becomes `lost`, or
-     once its `superseded` grace period ends.
+   - **Visible packs.** A new request's pack set is exactly the
+     `committed` packs, read in the same database snapshot as its refs
+     and `full_repack_gen`.
+     - The read is from the primary or a single consistent snapshot,
+       never from two replicas with different lag (§5.8).
+     - `pending`, `lost`, `expired` and `superseded` packs are never
+       exposed to new snapshots, receive-pack's included.
+     - A request already in flight keeps the hard links it took.
+   - **Why exclude superseded packs.** A full repack drops expired
+     objects, but they would still sit in the superseded inputs. A push
+     could then pass connectivity against them, and its ref would dangle
+     once GC deleted those inputs. The same reasoning excludes pending
+     and lost packs: a push must never lean on another in-flight or lost
+     pack.
+   - **Hydration.** A node downloads the committed files it lacks:
+     `.pack`, `.idx`, `.rev`, `.bitmap`, `.mtimes`, and the generation's
+     `multi-pack-index` with its `.bitmap` and `.rev`.
+     - It pins each pack's mtime to the row's `created_at`.
+   - **Snapshot filesystem.** Snapshot directories live on the cache's
+     filesystem, because hard links can't cross filesystems (`EXDEV`).
+     - At start-up, openxet checks this with `st_dev`, and with a probe
+       link, and fails fast with an actionable error.
+     - Also at start-up it sweeps leaked snapshot directories.
+   - **Eviction.**
+     - It counts a cached file's space as freed only when the link
+       count shows no snapshot holds it, and prefers files with
+       `st_nlink == 1`.
+     - Superseded packs leave the cache once no snapshot links them.
+       Before that they cost no correctness, only disk.
+     - Evicting `lost` packs is defensive only, since they are never
+       hydrated.
+   - **Stale bitmaps.** A superseded pack's `.bitmap` can make git slower
+     to serve, but new snapshots never contain superseded packs, so only
+     requests already in flight see it.
    - Pushed packs are never exploded (`receive.unpackLimit=1`).
-   - **Rebuilding:** the pack list is rebuildable from the bucket
+   - **Rebuilding.** The pack list can be rebuilt from the bucket
      (`reindex`, §5.3).
      - Every pack under `repos/<id>/packs/` is listed.
-     - A pack is `committed` if the ref-log tips reach objects in it.
+     - A pack is `committed` if the bucket ref-log tips reach objects in
+       it.
      - Otherwise it is `pending` and ages out under item 5.
-5. **Repacking and orphan reclaim.** These run on one leaseholder per repo.
-   - **Inputs.** The working copy is built from `committed` packs only,
-     with pinned mtimes. Pending and lost packs are never inputs.
+5. **Repacking, the repack fence and orphan reclaim.** These run on one
+   leaseholder per repo.
+   - **Inputs.** The working copy is built from `committed` packs only.
+     Pending and lost packs are never inputs.
+   - **Snapshot.** The leaseholder records the `ref_log` high-water mark
+     and `full_repack_gen` when it takes the working-copy snapshot.
+   - **mtimes.** Right before each repack, the leaseholder re-pins every
+     input pack's mtime from the database `created_at`.
+     - Why: hard links share an inode, and git may freshen a pack's mtime
+       while serving. Re-pinning makes the leaseholder's view
+       deterministic.
+     - It costs one `utime` per pack, and needs neither copies of
+       multi-GB packs nor a separate uid that would complicate
+       deployment.
    - **Extra roots.** Before every repack, the leaseholder writes
      temporary refs `refs/openxet/keep/<n>` into the working copy. They
-     hold every old and new OID from the database ref log within the
+     hold every old and new OID in the database `ref_log` within the
      grace window.
      - Objects that became unreachable less than a grace period ago
        (force-pushed or deleted refs) therefore stay reachable for the
        repack, whatever their mtime.
      - Example: a commit on branch A is force-pushed away while a pending
-       push on branch B builds on it. The commit survives, and that
-       push's CAS stays safe.
+       push on branch B builds on it. The commit survives.
      - These keep refs exist only in the working copy. They never
        become database refs.
      - This avoids `pack.recentObjectsHook`, which would raise the floor
        to git 2.42.
    - **Geometric repack:** `git repack --geometric=2 -d --write-midx
-     --write-bitmap-index`. It leaves cruft packs alone (source: git
-     v2.39.5 `builtin/repack.c` line 355, `if (p->is_cruft) continue`).
+     --write-bitmap-index`.
+     - It rolls packs up with `pack-objects --stdin-packs`, which keeps
+       every object of every input pack (source: git v2.39.5
+       `builtin/repack.c` line 937; `git-pack-objects(1)`
+       `--stdin-packs`). It drops nothing, so it needs no fence.
+     - It leaves cruft packs alone (source: `builtin/repack.c` line 355,
+       `if (p->is_cruft) continue`).
    - **Full repack:** a periodic
      `git repack -adb --cruft --cruft-expiration=<grace>`.
      - Objects that are unreachable even from the keep refs go into a
@@ -226,19 +286,33 @@ results below are **observed**.
        creation time recorded per object in the cruft pack's `.mtimes`.
        That is not the time an object became unreachable; the keep refs
        cover that gap.
-     - Each cruft pack's `.mtimes` is a pack artifact. It is uploaded and
+     - Each cruft pack's `.mtimes` is a pack artifact, uploaded and
        hydrated with the pack.
+   - **The repack fence, in both directions.** A full repack can drop a
+     long-unreachable object that an in-flight push builds on. Two
+     checks prevent that:
+     - **Push after repack.** A full-repack publish increments
+       `repos.full_repack_gen`. The push CAS requires the generation that
+       was read in the push's snapshot (item 3). So a push whose
+       connectivity check used the old generation's packs can't commit.
+     - **Repack after push.** The full-repack publish transaction aborts,
+       and retries later, if `ref_log` has advanced past the high-water
+       mark recorded with the working copy. So a repack never publishes
+       a pack set computed without a committed push's refs.
+     - Geometric publishes take neither fence, since they drop nothing.
    - **Publishing.** The leaseholder publishes the new packs and swaps the
      pack list in one database transaction: new packs are `committed`,
      inputs are `superseded` with a timestamp.
+     - Superseded bucket objects are kept for the full grace period, so
+       in-flight requests and `reindex` can still read them.
    - **GC** (§5.6, default grace 7 days) deletes:
      - `superseded` packs past their grace
      - `lost` packs past their grace
      - `pending` packs older than the grace period, first marked
-       `expired` in the database so that no CAS can commit them
+       `expired` with `WHERE state = 'pending'` so no CAS can commit them
    - **Orphan reclaim.**
-     - Lost pushes' objects are reclaimed with their pack, since those
-       objects were never exposed and no ref reaches them.
+     - Lost pushes' objects are reclaimed with their pack. They were
+       never exposed, and no ref reaches them.
      - Unreachable objects in committed packs leave through cruft expiry,
        once they are older than the grace period by mtime and outside
        the keep-ref window.
@@ -315,14 +389,49 @@ results below are **observed**.
     reachability check in step with git's protocol. Fail-closed budgets
     can refuse rare deep wants in huge repos until the bitmap follow-up
     (`git-reachability`) lands.
-  - Snapshots link a pack set instead of pointing at the whole cache.
-    Repack writes temporary keep refs, and mtimes and `.mtimes` must be
+  - Snapshots link a committed pack set instead of pointing at the whole
+    cache, and they must share the cache's filesystem. Repack writes
+    temporary keep refs and re-pins mtimes, and `.mtimes` files must be
     carried through the bucket.
+  - The repack fence can refuse a push that races a full repack. The
+    refusal is retryable, and full repacks are rare.
   - Hook plumbing: an inherited socketpair and tokens.
   - Large repos need repo-affinity routing to keep caches warm.
+- **Not yet proven: the pack lifecycle must be prototyped first, in M2.**
+  - The pack lifecycle above is intricate, and it came out of review, not
+    the spike. None of it is prototyped.
+  - Before any production use, M2 builds it as a prototype with
+    property-based tests (random interleavings of push, Hub ref update,
+    geometric repack, full repack, GC and node hydration across nodes)
+    and the fault-injection tests above.
+  - Each rule below must be covered by at least one test:
+    - [ ] pack state machine: `pending` → `committed` | `lost` | `expired`;
+      `committed` → `superseded`. Every transition is guarded by its
+      `WHERE state =` clause.
+    - [ ] the CAS transaction holds ref CAS, pack commit, the
+      `full_repack_gen` check and the `ref_log` insert, atomically
+    - [ ] `ref_log` has the retention of item 3, and the bucket ref log is
+      derived from it, for every ref writer
+    - [ ] new snapshots expose exactly the `committed` packs of one
+      database snapshot, refs included. In-flight requests keep their
+      links.
+    - [ ] a push's own pack is visible only through its quarantine
+    - [ ] hydration pins mtimes, and the leaseholder re-pins before a
+      repack
+    - [ ] keep refs cover the `ref_log` grace window during every repack
+    - [ ] geometric repacks drop nothing and take no fence
+    - [ ] full-repack fence in both directions: the `full_repack_gen` bump,
+      and the publish abort on `ref_log` advance
+    - [ ] `.mtimes`, `.rev` and MIDX files travel through the bucket
+    - [ ] GC deletes only superseded, lost and expired packs past the
+      grace period. Superseded bucket objects survive their grace period.
+    - [ ] snapshot root on the cache filesystem, a sweep at start-up, and
+      link-count-aware eviction
+    - [ ] R22 reachability within its budget
+    - [ ] `reindex` rebuilds refs and the pack list from the bucket
 - **Must stay true, with the tests that enforce it:**
   - `publish_then_cas_survives_faults`, a fault-injection test. It kills
-    the node at three points:
+    the node, or interleaves operations, at these points:
     - between publish and CAS
     - between CAS and ack
     - during a full repack that runs while a push sits between publish
@@ -331,6 +440,13 @@ results below are **observed**.
       away, a push to branch B building on A's old commit is held between
       publish and CAS, and a full cruft repack and GC run with a short
       grace
+    - a full repack that publishes while a push, whose snapshot read the
+      previous `full_repack_gen` and builds on a long-unreachable object,
+      sits between publish and CAS. The push's CAS must fail on the
+      fence.
+    - a push that commits while a full repack computes from an older
+      `ref_log` high-water mark. The repack's publish must abort and
+      retry.
 
     It asserts that no ref points at a missing object, that no
     acknowledged push is lost, and that the pending pack is neither a
@@ -370,19 +486,38 @@ results below are **observed**.
     - global, system and `HOME` config cannot change git's behaviour
   - `repo_paths_from_ids`: repo names with `..`, `/` or absolute paths
     never reach a filesystem path.
-  - `lost_packs_not_hydrated`, `lost_packs_evicted` and
-    `pending_packs_aged_out_by_gc`.
+  - `lost_packs_not_hydrated` and `pending_packs_aged_out_by_gc`. The
+    lost-pack update and the expiry update both match only
+    `state = 'pending'`.
   - `push_cannot_use_foreign_pending_objects`. A push whose commits
     reference an object that exists only in another `pending` or `lost`
     pack is rejected by receive-pack's connectivity check.
-  - `snapshot_exposes_only_its_pack_set`. A snapshot's `objects/pack`
-    holds exactly the pack set read with its refs. The test checks there
-    are no alternates, and that a superseded pack is linked only within
-    its grace.
+  - `snapshot_exposes_only_its_pack_set`. A new snapshot's
+    `objects/pack` holds exactly the `committed` pack set read with its
+    refs. The test checks that:
+    - there are no alternates
+    - no `superseded`, `pending` or `lost` pack is linked, for upload-pack
+      and receive-pack alike
+    - an in-flight request keeps its links across a repack publish
+  - `push_cannot_use_superseded_objects`: after a full repack drops an
+    expired object, a push that references it is rejected by the
+    connectivity check.
+  - `ref_log_in_cas_transaction`:
+    - pushes, and Hub API ref updates and deletes, write their `ref_log`
+      rows in the CAS transaction
+    - the bucket ref log is derived from those rows
+    - rows are kept for at least the grace period plus the maximum
+      pending age
+  - `snapshot_dir_same_filesystem` and `stale_snapshots_swept`: start-up
+    fails fast when the snapshot root and the cache are on different
+    filesystems, and leaked snapshot directories are removed.
   - `cas_requires_pending_pack`: a pack marked `expired` by GC can't be
     committed by a late CAS.
-  - `hydrated_pack_mtime_pinned`: hydrated pack files carry the row's
-    `created_at`, and a cruft pack's `.mtimes` is uploaded and hydrated.
+  - `hydrated_pack_mtime_pinned`:
+    - hydrated pack files carry the row's `created_at`
+    - the leaseholder re-pins mtimes right before each repack
+    - a cruft pack's `.mtimes` is uploaded and hydrated, and so are the
+      `.rev` and MIDX `.rev` files
   - `reachability_budget_enforced`:
     - one walk per request across all wants
     - the commit and time limits and the per-repo and per-principal
