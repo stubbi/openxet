@@ -843,6 +843,13 @@ mechanics to be recorded in ADR 0006:*
   Gated and private content is never fetched for or served to one caller
   using another caller's or the operator's HF credential. There is no
   override (R19).
+- **Caches never serve a response to a caller who couldn't have obtained
+  it from upstream.** Every cached entry whose content depends on
+  authorization (upstream tokens, gated or private metadata and data, check
+  results) is keyed by the caller's credential and never shared between
+  callers. When upstream can't be reached or rejects the caller, requests
+  for authorization-dependent content fail closed. Public, ungated content
+  may still be served stale, as described under freshness below.
 - **Freshness and removal.**
   - Refs are re-resolved upstream on a short TTL; data keyed by commit is
     immutable.
