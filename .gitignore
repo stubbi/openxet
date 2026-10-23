@@ -1,2 +1,4 @@
 .superpowers/
 /target
+/testdata/xet-spec-reference/*
+!/testdata/xet-spec-reference/SHA256SUMS

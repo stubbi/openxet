@@ -179,6 +179,7 @@ compatibility suite and benchmarks are added when they exist.
 
 ```bash
 cargo build                                                # build the workspace
+scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
