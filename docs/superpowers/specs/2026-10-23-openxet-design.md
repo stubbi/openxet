@@ -668,9 +668,13 @@ says which spec version and client versions are supported.
       compose-internal service name
   - Terraform examples for AWS, GCP and Azure
   - library crates on crates.io for embedding the storage core
-  - **The `git` role needs `git` ≥ 2.34 on `PATH`** (ADR 0004).
+  - **The `git` role needs `git` ≥ 2.37 on `PATH`** (ADR 0004).
+    - openxet runs git as a separate program. That is aggregation, so
+      openxet stays Apache-2.0 (inferred, not legal advice).
     - Container images ship the distro's unmodified git package, which is
       GPL-2.0, and list it in their licence notice.
+    - Each image release publishes the exact git source package next to
+      the image, or includes a written offer for it (GPL-2.0 §3).
     - The static binaries don't bundle git. They check for it at start-up
       when the `git` or `ssh` role is enabled, and fail with an actionable
       error.
@@ -950,16 +954,34 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     `objects/info/alternates` into the node's pack cache.
   - openxet answers the protocol v2 capability advertisement and `ls-refs`
     in-process.
-  - Ref updates go through a `proc-receive` hook back into openxet, which
-    publishes the pushed pack to the bucket, then runs the ref CAS, then
+  - openxet enforces reachability for every v2 `fetch` want (R22), because
+    git's v2 `upload-pack` serves any object in the odb.
+    - A current ref tip passes.
+    - Any other want needs a bounded gix reachability walk to find it.
+    - Anything else is refused.
+  - Alternates point only at the repo's own cache. Objects are never shared
+    across repos.
+  - Ref updates go through a hardened `proc-receive` hook back into
+    openxet:
+    - an inherited socketpair and a single-use token bound to repo,
+      principal and request
+    - pack paths confined to the request's snapshot
+    - policy re-checked in openxet
+    - a sanitised git environment
+  - openxet then publishes the pushed pack to the bucket as `pending`, and
+    runs the ref CAS, which marks the pack `committed` in the same
+    transaction. Losing pushes mark their pack `lost`. Then it
     acknowledges.
-  - Nodes read the ref snapshot before syncing the pack list.
-- **Repacking** is geometric with a multi-pack-index bitmap, on one
-  leaseholder per repo. Superseded and orphaned packs go to GC (§5.6).
+  - Nodes read the ref snapshot and then the pack list, from the primary
+    or one consistent snapshot, and skip `lost` packs.
+- **Repacking** takes committed packs only, on one leaseholder per repo:
+  - geometric, with a multi-pack-index bitmap
+  - plus a periodic full `repack --cruft --cruft-expiration=<grace>`
+  - Superseded, lost and stale pending packs go to GC (§5.6).
 - **gitoxide stays in-process off the wire path,** for Hub API object
-  reads and Hub commit writes.
-- **git ≥ 2.34 is a runtime dependency.** Container images ship it from
-  the distro (GPL-2.0, run as a separate program).
+  reads, the reachability check and Hub commit writes.
+- **git ≥ 2.37 is a runtime dependency** (§9). Container images ship it
+  from the distro (GPL-2.0, run as a separate program).
 - **Measured** (`docs/research/S9-git-engine.md`):
   - A full clone of a 10k-commit repo cost git 0.18 s CPU, against 2.86 s
     for an in-process gix server. gix 0.90 has no server side, no delta

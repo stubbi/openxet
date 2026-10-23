@@ -60,7 +60,8 @@ decision.
 - **Reads decide it (observed).** Serving a full clone of the 10k-commit
   repo cost git 0.18 s CPU and 89 MB peak RSS. The prototype in-process gix
   server cost 2.86 s CPU and 178 MB, and sent 6% more bytes. The gap is
-  16x in CPU, 13x in server wall time and 2x in memory.
+  16x in CPU and 2x in memory. Server wall time differed by about 13x,
+  which is indicative only, given the host load.
   - An incremental fetch of 100 commits cost git 45 ms CPU and 33 MB.
     gix cost 284 ms and 216 MB.
   - Most of git's lead comes from reachability bitmaps: without them git
@@ -71,10 +72,12 @@ decision.
   - A one-commit push cost gix 13 ms CPU and git 120 ms. The git cost is
     process spawns: `receive-pack`, `index-pack`, the connectivity
     `rev-list`, the hook and `merge-base`.
-  - That gix number does not include the object checks a server must make:
-    gix has no fsck of object contents, and git's `receive.fsckObjects`
-    does. It also uses a simplified connectivity check that was written for
-    this spike.
+  - Neither number includes object validation:
+    - `receive.fsckObjects` was off in the git engine. The production
+      config turns it on, so the ~100 ms rises with the number of pushed
+      objects.
+    - gix has no fsck of object contents, and its connectivity check was
+      written for this spike.
   - Pushing the whole 218k-object history cost about the same in both: git
     6.3 s CPU, gix 7.4 s.
 - **The hybrid gets the cheap parts of gix (observed).** In protocol v2 the
@@ -92,6 +95,9 @@ decision.
     `git fsck --strict`
   - CAS lives in the database, not in the engine, so the engine choice
     does not affect it.
+  - The database was SQLite (`BEGIN IMMEDIATE`). The integration test
+    required by ADR 0004 also runs on PostgreSQL's conditional-update
+    CAS, which S9 did not test.
 - **Bucket-backed packs keep nodes stateless (observed, with one invariant
   inferred).**
   - A push publishes its pack and index to the bucket and registers it in
@@ -99,12 +105,22 @@ decision.
     packs: 80 MB took 0.4–0.6 s.
   - Each request runs on a throwaway snapshot repo: `packed-refs` from the
     database, objects through `objects/info/alternates` to the node cache.
-  - The invariant: **read the ref snapshot before syncing the pack list**.
-    The prototype first did it the other way round, which leaves a race
-    window.
-- **Licences (source).** git is GPL-2.0-only. openxet runs it as a separate
-  program, so openxet stays Apache-2.0. Container images that include git
-  must meet GPL-2.0 for that binary, which a distro package does.
+  - The invariant: **read the ref snapshot before syncing the pack list**,
+    both from the primary or one consistent snapshot. The prototype first
+    did it the other way round, which leaves a race window.
+- **Safety rules found in review (source and inferred, see "Safety
+  rules").**
+  - git's v2 `fetch` serves any object in the odb, alternates included.
+    openxet therefore enforces want reachability itself (R22).
+  - Pack rows need states, so a repack can't drop a push that sits between
+    publish and CAS.
+  - The hook route and git's environment must be locked down.
+- **Licences.** git is GPL-2.0-only (source).
+  - openxet runs it as a separate program. That is aggregation, so openxet
+    stays Apache-2.0 (inferred, not legal advice).
+  - Container images that include git must meet GPL-2.0 for that binary:
+    each release publishes the exact git source package or includes a
+    written offer (§3).
   JGit (EDL-1.0), go-git (Apache-2.0) and gix (MIT/Apache-2.0) are
   permissive. libgit2 is GPL-2.0 with a linking exception. Mononoke is
   GPL-2.0-or-later.
@@ -397,15 +413,20 @@ What the prototype showed (observed), and what follows from it (inferred):
    - receive-pack (or gix) indexes the incoming pack into the snapshot's
      object directory. `unpackLimit=1` means a pushed pack is never
      exploded into loose objects.
-   - openxet then uploads `.pack` and `.idx` to the bucket, then
-     registers the pack in the database, then runs the ref CAS, then
-     appends the ref log. Only then does the client get `ok`.
-   - A crash before the CAS leaves an orphan pack and no ref change. A
-     crash after the CAS loses nothing, because the pack is already
-     durable (§5.3).
+   - openxet then uploads `.pack` and `.idx` to the bucket and inserts
+     the pack row as `pending`.
+   - The ref CAS sets that row to `committed` in the same transaction. A
+     failed CAS sets it to `lost`. Then the ref log is appended, and only
+     then does the client get `ok`. (The prototype had no states; this is
+     the post-review design, inferred.)
+   - A crash before the CAS leaves a `pending` pack and no ref change. GC
+     deletes it after the grace period. A crash after the CAS loses
+     nothing, because the pack is already durable (§5.3).
 2. **How a cold node hydrates.**
-   - It reads the ref snapshot, then downloads every pack registered for
-     the repo that it does not have. For `tf10k` that is 80 MB in under
+   - It reads the ref snapshot, then downloads every `pending` or
+     `committed` pack registered for the repo that it does not have, and
+     skips `lost` ones. Both reads come from the primary or one consistent
+     snapshot, never from replicas with different lag (§5.8). For `tf10k` that is 80 MB in under
      0.6 s on an unloaded path.
    - Git can't serve from a partial pack, so hydration is per pack, not
      per object (inferred). Large fleets want repo-affinity routing
@@ -423,18 +444,32 @@ What the prototype showed (observed), and what follows from it (inferred):
      - every push adds one small pack
      - a background job (one leaseholder per repo, via a database lease)
        runs `git repack --geometric=2 -d --write-midx --write-bitmap-index`
-       on a hydrated copy
+       on a copy built from `committed` packs only
      - it uploads the new pack, MIDX and bitmap, and commits a new pack
        list in the database in one transaction
-   - Superseded packs are tombstoned with a timestamp, and deleted by GC
-     after a grace period longer than the longest request. A node that
-     still serves from an old pack is unaffected until the grace period
-     ends.
-   - A periodic full `repack -adb` folds the history into one pack and
-     drops unreachable objects, including losers' orphan packs.
-   - The bucket stays the truth: `reindex` can rebuild the pack list by
-     listing `repos/<repo>/packs/` and keeping the newest generation that
-     covers the ref-log tips.
+   - Inputs become `superseded`, with a timestamp. GC deletes them after
+     the grace period (§5.6, default 7 days). A node that still serves
+     from an old pack is unaffected until then.
+   - A periodic full `repack -adb --cruft --cruft-expiration=<grace>`
+     (git ≥ 2.37) folds the history into one pack. Unreachable objects
+     younger than the grace period go to a cruft pack instead of being
+     dropped.
+   - **Why only committed packs, and why cruft.** A plain `repack -adb`
+     can drop objects that a push between publish and CAS still needs:
+     - its own pack, if that pack were an input
+     - objects on another branch that a concurrent force-push just made
+       unreachable, and which the pending push builds on
+
+     Either way, the CAS then succeeds onto missing objects (found in
+     review, inferred).
+   - **Orphan reclaim.** Losers' packs are `lost`, and their objects are
+     reachable from no ref, so GC deletes the whole pack after the grace
+     period. `pending` packs older than the grace period go the same way.
+     Unreachable objects inside committed packs leave through cruft expiry
+     at the next full repack.
+   - The bucket stays the truth: `reindex` rebuilds the pack list by
+     listing `repos/<id>/packs/`. A pack is `committed` if the ref-log tips
+     reach its objects; otherwise it is `pending` and ages out.
 4. **Two nodes accepting pushes at once.**
    - Both index and publish their pack. Only the database CAS chooses a
      winner (60 of 60 rounds above). The engine never decides.
@@ -449,9 +484,65 @@ What the prototype showed (observed), and what follows from it (inferred):
    - Per-request snapshot repos in a temp dir. Creating one is a handful of
      small files.
    - The pack cache, which can be evicted freely.
-   - Nothing else. The `proc-receive` hook talks to the server over
-     loopback HTTP in the prototype. In production that must be a Unix
-     socket with a per-request token, never a public route.
+   - Nothing else.
+   - The `proc-receive` hook talked to the server over loopback HTTP in
+     the prototype. In production it is hardened as in "Safety rules".
+
+## Safety rules
+
+These came out of review after the spike. They are binding through
+ADR 0004.
+
+1. **v2 `fetch` serves any object in the odb (source).**
+   - git v2.39.5 `upload-pack.c`, `parse_want` (lines 1413–1442), only
+     checks that the wanted object parses. Objects from alternates
+     count.
+   - The v0/v1 `allowAnySHA1InWant` and `allowReachableSHA1InWant`
+     checks are not applied in v2.
+   - So any client that knows an OID could fetch:
+     - force-pushed-away content
+     - losers' orphan packs
+     - with shared alternates, another repo's objects
+
+   **Ruling R22:** openxet checks every v2 `want` before spawning git:
+   - A current database ref tip passes. That covers every normal clone
+     and fetch.
+   - Otherwise a bounded gix reachability walk from the current refs
+     must find the object.
+   - Anything else is refused.
+   - Only non-tip wants pay for the walk, and stock clients send them
+     rarely (submodule pins, `git fetch <sha>`).
+   - **Pinned config:**
+     - `uploadpack.allowAnySHA1InWant=false`
+     - `uploadpack.allowReachableSHA1InWant=true`
+     - `uploadpack.allowFilter=false` until partial clone is designed
+     - `core.alternateRefsCommand=true`
+   - **Alternates** point only at that repo's own cache, derived from its
+     internal ID. There is no cross-repo object sharing (fork pools)
+     without a layer that enforces reachability.
+2. **Pack states** (inferred). The states are `pending`, `committed` (set
+   in the CAS transaction), `lost` and `superseded`. Repack inputs are
+   committed packs only. GC deletes lost, superseded and stale pending
+   packs after the grace period. Hydration skips lost packs. See
+   "Bucket-backed packs", item 3.
+3. **Hook route and git process** (inferred hardening).
+   - The hook channel is an inherited `socketpair` fd with no path. Where
+     that is impossible, it is a `0600` Unix socket in an openxet-private
+     `0700` directory.
+   - Each request gets a single-use token bound to repo ID, principal and
+     request, which expires at request end.
+   - openxet takes the repo and authorization from the token's context,
+     never from hook-supplied data.
+   - It accepts a pack path only if the path resolves inside that
+     request's snapshot or quarantine directory.
+   - It re-checks fast-forward and branch policy itself.
+   - git runs with an empty environment, plus three things:
+     - a validated `GIT_PROTOCOL` (`version=0|1|2`)
+     - `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` and a
+       private `HOME`
+     - only openxet's hooks (`core.hooksPath`)
+   - Snapshot and cache paths derive from internal repo IDs, never from
+     user-supplied names.
 
 ## Candidate matrix
 
@@ -459,8 +550,8 @@ Columns per the task brief. Each cell says how it is known.
 
 | | Server-side capabilities | Clone, fetch, push performance | CPU / RSS | CAS correctness | Fit with bucket packs and stateless nodes | Licence and distribution | Fit with a Rust single binary | Maturity, maintenance, bus factor |
 |---|---|---|---|---|---|---|---|---|
-| **1. gix 0.90 in-process** | No upload-pack, receive-pack, server transport or push. Pack indexing yes; pack generation without delta compression or bitmaps (source, table above). | Full clone 13x slower and fetch 5x slower server-side than git; push faster (observed). | 16x CPU and 2x RSS on clone; 9x less CPU on small pushes (observed). | Correct: 60/60 rounds (observed), because CAS is in the database. | Good: in-process odb over the node cache. Repack would need delta compression we would write (source, inferred). | MIT/Apache-2.0: none. | Best: pure Rust, in-process. | Active, about 1 human maintainer. Server work is explicitly kept out of upstream (source). |
-| **2. git binary** (`upload-pack` / `receive-pack --stateless-rpc` on a snapshot repo) | Everything: v0/v1/v2, shallow, partial clone, bitmaps, MIDX, `fsckObjects`, `proc-receive`, quarantine (source: git docs). | Fastest reads; push about 0.2 s server wall (observed). | Lowest on reads: 178 ms / 89 MB for a full clone (observed). About 120 ms CPU per small push, all spawns (observed). | Correct: 60/60 rounds through `proc-receive` (observed). | Good: alternates to the node cache, packs published by openxet (observed). | GPL-2.0-only, run as a separate program. Images ship git unmodified from a distro package with its source available (source, inferred). | A runtime dependency: openxet spawns `git`. Needs git ≥ 2.29 (`proc-receive`) and ≥ 2.34 (MIDX bitmaps), source: RelNotes. | The reference implementation, with a broad maintainer base. Gitea, Soft Serve and Gitaly all spawn it (source, rows 6 and 9). |
+| **1. gix 0.90 in-process** | No upload-pack, receive-pack, server transport or push. Pack indexing yes; pack generation without delta compression or bitmaps (source, table above). | Full clone 16x and fetch 6x git's server CPU; server wall ratios were similar but are indicative only. Push faster (observed). | 16x CPU and 2x RSS on clone; 9x less CPU on small pushes (observed). | Correct: 60/60 rounds (observed), because CAS is in the database. | Good: in-process odb over the node cache. Repack would need delta compression we would write (source, inferred). | MIT/Apache-2.0: none. | Best: pure Rust, in-process. | Active, about 1 human maintainer. Server work is explicitly kept out of upstream (source). |
+| **2. git binary** (`upload-pack` / `receive-pack --stateless-rpc` on a snapshot repo) | Everything: v0/v1/v2, shallow, partial clone, bitmaps, MIDX, `fsckObjects`, `proc-receive`, quarantine (source: git docs). | Fastest reads; push about 0.2 s server wall (observed). | Lowest on reads: 178 ms / 89 MB for a full clone (observed). About 120 ms CPU per small push, all spawns (observed). | Correct: 60/60 rounds through `proc-receive` (observed). | Good: alternates to the node cache, packs published by openxet (observed). | GPL-2.0-only, run as a separate program. Images ship git unmodified from a distro package with its source available (source, inferred). | A runtime dependency: openxet spawns `git`. Needs git ≥ 2.37: 2.29 for `proc-receive`, 2.34 for MIDX bitmaps and 2.37 for cruft packs (source: RelNotes). | The reference implementation, with a broad maintainer base. Gitea, Soft Serve and Gitaly all spawn it (source, rows 6 and 9). |
 | **3. libgit2 / `git2` 0.21** | No server transports. Every `upload-pack` hit in libgit2 is a client transport (`src/libgit2/transports/*`). Has `git_packbuilder` (delta), `git_indexer`, custom `odb_backend.h` and `refdb_backend.h` (source, libgit2 1.9.7). | Not measured: a server would have to be written on top, as with gix. | Not measured. | Would depend on our code. | Custom odb/refdb backends map onto a bucket and DB, but pack-level object access through a custom odb is slow (inferred). | GPL-2.0 with linking exception: static linking allowed (source: `COPYING`). | C dependency through `git2`; no protocol layer. | Mature; effectively one core maintainer (ethomson 276 commits in the last year, next contributor 26; source). |
 | **4. JGit with DFS** | Complete server: `UploadPack` (v2), `ReceivePack`, bitmaps, reftable. `internal.storage.dfs` (`DfsObjDatabase`, `DfsReftableDatabase`, `DfsGarbageCollector`, `DfsPackCompactor`, `DfsMidxWriter`) is built for packs on a distributed store (source, JGit 7.8). Google's hosted Gerrit is widely reported to run on it (inferred; not re-verified here). | See the stdio table. JVM start-up alone is 1.6–2.0 s CPU and about 77 MB (observed). | As above. | `DfsReftableDatabase` gives atomic batch ref updates; we would plug our DB in (source, inferred). | Best design fit: DFS **is** bucket-backed packs with a block cache and stateless servers. The package is `internal`, with no API stability promise (source). | EDL-1.0 (BSD-3-style): none. | A JVM sidecar: second runtime, process, memory floor and deployable. Breaks "one binary" (design §5.1). | Mature (Eclipse, Gerrit, Google); a small core (msohn 289, ifradeo 125, davido 47 commits in a year, source). |
 | **5. go-git v6** | `v6.0.0-beta.1` (2026-10-04) has server-side `UploadPack` (v0/v1/v2) and `ReceivePack` and a smart-HTTP `backend`. TODOs on `main` in `plumbing/transport/upload_pack.go`: thin-pack and shallow-file unsupported. No bitmaps (no `bitmap` file in the tree). Storage via the `storage.Storer` interface (source). | See the stdio table. | As above. | Would depend on our code. | `Storer` could be backed by bucket and DB, but per-object access through it is slow (inferred). | Apache-2.0: none. | A Go sidecar. | v5 stable; v6 is beta. pjbgf 558, hiddeco 237 commits in a year (source). |
@@ -469,7 +560,7 @@ Columns per the task brief. Each cell says how it is known.
 | **8a. H1+: git for protocol, openxet for storage, gix for non-protocol reads (chosen)** | git's, all of them (observed). | git's reads and pushes; no-op and `ls-refs` at in-process cost (see the hybrid rows). | git's on the fetch path; about 1 ms for `ls-refs`. | 60/60 (observed, the `git` engine's path). | Good (observed). | As 2. | One Rust binary plus a git runtime dependency. | As 2, plus our glue. |
 | **8b. H2: git upload-pack for reads, gix receive-pack** | Reads git's; push needs our receive-pack: report-status, side-band, push options, atomic, fsck (source, inferred). | Reads as git. Push measured as gix: 13 ms vs 120 ms CPU (observed). | Saves about 100 ms CPU per push. | 60/60 (observed, the gix path). | Good. | As 2. | As 8a. | We would own receive-pack security (object validation) alone. |
 | **8c. gix serving reads, git receive-pack** | Reads as candidate 1. | Worst of both: gix's 16x clone CPU (observed). | | | | | | Rejected by the numbers. |
-| **9. Gitea, Forgejo, Soft Serve** | Spawn `git upload-pack` / `receive-pack --stateless-rpc` (Gitea `routers/web/repo/githttp.go`; Soft Serve `pkg/git/service.go` uses `exec.CommandContext(ctx, "git")`), source. | n/a | n/a | Local refs only. | Local disks. | MIT. | Go. | **Use as a reference:** the common pattern for self-hosted forges is candidate 2. |
+| **9. Gitea, Forgejo, Soft Serve** | Spawn `git upload-pack` / `receive-pack --stateless-rpc` (Gitea `routers/web/repo/githttp.go`; Soft Serve `pkg/git/service.go` uses `exec.CommandContext(ctx, "git")`), source. | n/a | n/a | Local refs only. | Local disks. | Gitea and Soft Serve: MIT. Forgejo: copyleft since v9.0; files move to GPL-3.0-or-later over time, and most code is still MIT (source: Forgejo v9.0 release post). | Go. | **Use as a reference:** the common pattern for self-hosted forges is candidate 2. |
 
 ## Licences and distribution
 
@@ -479,8 +570,9 @@ Columns per the task brief. Each cell says how it is known.
     (inferred from GPL-2.0 §2's "mere aggregation" clause; not legal
     advice).
   - Shipping git in openxet's container image is distribution of git.
-    The image must carry git's licence and offer its corresponding
-    source.
+    The image must carry git's licence.
+  - Each image release publishes the exact git source package next to
+    the image, or includes a written offer for it (GPL-2.0 §3).
   - The simplest compliant route is the distro's unmodified package
     (Debian, Wolfi or Alpine), whose source the distro publishes. The
     image's licence notice lists it.
@@ -506,6 +598,13 @@ Columns per the task brief. Each cell says how it is known.
   enable it.
 - **Shallow, partial clone and `include-tag`** were not exercised.
 - **Very large repos** (millions of objects) and many repos per node.
+- **MIDX bitmaps through alternates.** The test served a single-pack
+  bitmap through `objects/info/alternates` (observed). Serving a
+  multi-pack-index bitmap from the alternate after a geometric repack was
+  not tested.
+- **PostgreSQL CAS.** The concurrency evidence comes from SQLite only.
+- **Reachability enforcement (R22) and pack states.** These were specified
+  after the spike and are not prototyped.
 - The JGit and go-git rows use their stdio upload-pack, not a DFS or
   bucket-backed `Storer`. They compare protocol and pack-generation cost
   on identical input, not their storage layers.
