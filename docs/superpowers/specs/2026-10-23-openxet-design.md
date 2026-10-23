@@ -60,15 +60,11 @@ clear seams, no opinions forced on the operator.
 - No user accounts, passwords or user database. openxet never owns users.
 - No Git hosting (`git clone` of repos from openxet). Git repos stay on the
   user's existing Git host; openxet is their large-file store (§6.1).
-- No custom distributed object store (§5.3).
-- No openxet-specific client in v1. The design keeps room for one (§10).
-- No legacy (non-Xet) Git LFS upload path. Clients without `hf_xet` get a
-  clear error telling them to install it; the server never chunks on ingest.
-  *(builder-check call)*
-- No per-tenant buckets or data residency inside one deployment. v1 uses one
-  storage pool per deployment, and residency is handled by running separate
-  deployments. Xorb records carry a pool id so multiple pools can be added
-  later; dedup is per pool. *(builder-check call)*
+- No custom distributed object store (§5.3). This is a principle, not a
+  deferral: durability is what object stores are for.
+
+Scope rule *(decided by the user)*: be ambitious. Nothing in this design is
+deferred for convenience. Everything below the principles above ships in 1.0.
 
 ### Anti-goals (failure even if it technically works)
 
@@ -155,7 +151,17 @@ These were checked against primary sources on 2026-10-23
 - Quality bar: excellent `AGENTS.md`, best practices, useful tests kept
   current, current docs, check git history before changes to avoid regressing
   past decisions, deliberate distribution, no AI slop, user-obsessed.
-- Our own client: not in v1, keep the door open.
+- Our own client is in v1, and must stay 100% compatible with the official
+  tools and huggingface.co (§10.8).
+- `git-xet` and Git over SSH are core, v1 (§6.1, §10.1).
+- Build straight to 1.0 with no alpha pause (§12).
+- Be ambitious: nothing is deferred for convenience. That brings in
+  server-side chunking, all repo types including `bucket`, the cache tier, the
+  HF pull-through mirror, multiple storage pools and residency, and the full
+  distribution list (§9, §10).
+- openxet issues revocable access tokens (and SSH keys) bound to external
+  identities (§5.4).
+- The name is openxet.
 
 ## 5. Architecture
 
@@ -391,7 +397,7 @@ fixtures, pinned by the compatibility suite.
 - `HEAD|GET /{[datasets/]}{id}/resolve/{rev}/{path}`
 
 **Model:**
-- Repo types `model` and `dataset` in v1.
+- Repo types `model`, `dataset`, `space`, `kernel` and `bucket` (§10.4).
 - Commits are immutable objects with 40-hex ids, a tree of
   path → (Xet file hash | small inline blob), and parent links.
 - Refs are branches and tags with compare-and-swap updates, so concurrent
@@ -436,8 +442,9 @@ Rules for this endpoint:
 - Clients **without** `git-xet`:
   - **Downloads work** via the `basic` transfer, served by the HTTP read
     gateway (§5.5). Collaborators who only clone don't need anything extra.
-  - **Uploads are refused** with a message that says to install `git-xet`.
-    This is consistent with no server-side chunking.
+  - **Uploads work** via `basic`/`multipart`, with server-side chunking
+    (§10.3), so the data is still deduplicated in storage. The response
+    suggests installing `git-xet` for faster uploads.
 - The exact download handshake (how `git-xet` gets the Xet hash for a
   pointer) is pinned by spike S7 and the compatibility suite.
 
@@ -528,25 +535,156 @@ says which spec version and client versions are supported.
   - `docker compose` quickstart with MinIO
   - Terraform examples for AWS, GCP and Azure
   - library crates on crates.io for embedding the storage core
-- **After v1:** one-click templates (Railway, Fly, Render), cloud marketplace
-  listings, a Nix package, an operator for Kubernetes if users ask.
+- Also v1:
+  - one-click templates (Railway, Fly, Render)
+  - a Nix package
+  - cloud marketplace listings (AWS, GCP, Azure). These need publisher
+    accounts, which is a non-code task for the user.
+  - A Kubernetes operator, for multi-role deployments, key rotation and GC
+    scheduling. It is built only if Helm proves insufficient for these; the
+    plan states which way it went and why.
 - **Discoverability:**
   - listing in awesome-selfhosted
   - a "self-host Xet" guide that ranks for the obvious queries
   - published benchmarks
   - a clear "works with the official HF tools" message
 
-## 10. After v1 (designed for, not built)
+## 10. Further v1 scope *(decided by the user: ambitious, nothing deferred)*
 
-- **SSH-based LFS auth** (`git-lfs-authenticate`) for Git remotes reached
-  over SSH; v1 uses the HTTPS `lfs.url`.
-- **`bucket` repo type** (mutable, non-versioned), mirroring HF Storage Buckets.
-- **Our own client/CLI:** sync, mount (FUSE), works without the Hub layer,
-  speaks storage-only mode natively. The CAS API and protocol crates are the
-  contract that makes this possible.
-- **Cache tier:** a regional read-through cache node.
-- **Pull-through mirror of huggingface.co:** cache public HF repos inside the
-  operator's network.
+### 10.1 Git over SSH
+
+- openxet runs an SSH endpoint, enabled by the `ssh` role. Identities are SSH
+  public keys bound to an external identity, the same way access tokens are
+  (§5.4). Keys are registered via `openxet login` or the admin API. No
+  passwords and no users are stored.
+- **`git-lfs-authenticate`:** returns `{href, header.Authorization,
+  expires_in}`. This is what `git-lfs` and `git-xet` use when the LFS
+  endpoint is an `ssh://` URL.
+- **`git-lfs-transfer`** (the pure-SSH LFS protocol, git-lfs ≥ 3.0): lets
+  plain `git-lfs` upload and download over SSH with no HTTPS at all. Uploads
+  go through server-side chunking (§10.3).
+- Git repos whose *remote* is on another host over SSH (e.g.
+  `git@github.com:…`) work as long as `lfs.url` points at openxet.
+
+### 10.2 `git-xet` with third-party Git hosts: a verified gap and its fix
+
+`git-xet` source (`git_xet/src/auth.rs`, 2026-10-23) finds credentials for
+the Xet token refresh from the **Git remote URL**, not from `lfs.url`. In
+order, it checks:
+1. URL-embedded credentials
+2. `HF_TOKEN`
+3. netrc for the remote's host
+4. SSH `git-lfs-authenticate` against the remote's host
+5. the git credential helper for the remote's host
+
+So for a repo hosted on GitHub with `lfs.url` pointing at openxet, the
+refresh would send GitHub credentials to openxet (or SSH to github.com) and
+fail. Leaking credentials to the wrong host is unacceptable. Three
+complementary fixes, all v1:
+- **Upstream:** contribute a fix to `huggingface/xet-core` so `git-xet`
+  derives credentials from the LFS endpoint, matching what `git-lfs` itself
+  does. This is the right fix; we do the extra work for users instead of
+  working around it forever.
+- **Server side, works today:**
+  - The `href` refresh route openxet returns is a short-lived, signed,
+    single-repo capability URL, so the refresh needs no credential.
+  - CAS tokens issued through the LFS path last for the transfer session.
+  - openxet ignores and never logs foreign `Authorization` headers on that
+    route.
+- **Docs:** `openxet setup git` configures `lfs.url` (and, until the upstream
+  fix ships, the netrc or credential entry for the openxet host) in one
+  command.
+
+Spike S7 confirms all of this against real `git-lfs` and `git-xet`.
+
+### 10.3 Server-side chunking for non-Xet clients
+
+Plain `git-lfs` (basic transfer, HTTPS or SSH), older `huggingface_hub`
+without `hf_xet`, and any LFS client can **upload**. openxet chunks,
+deduplicates and writes xorbs and shards on ingest, using the same `xet-core`
+chunking, so the hashes are identical to client-side uploads.
+- Users get dedup in storage even if their client never heard of Xet. They
+  don't get the bandwidth savings; the docs say so.
+- Ingest scales with the `cas` role. CPU cost is benchmarked.
+- `preupload` and the LFS batch endpoint offer `basic` and `multipart`
+  alongside `xet`.
+
+### 10.4 More repo types
+
+`model`, `dataset`, `space` (files only; nothing is run) and `kernel`
+behave the same as Hub repos.
+
+**`bucket`** (mutable, non-versioned, mirroring HF Storage Buckets): paths map
+to Xet files with last-writer-wins and optional object versioning. Bucket
+tokens are not revision-scoped, matching `huggingface_hub`.
+
+### 10.5 Cache tier
+
+- The `transfer` role can run as a **regional read-through cache**: local
+  NVMe, LRU over xorb ranges, and signed-URL compatible.
+- Reconstruction responses point clients at the nearest cache, configured by
+  region or header.
+
+### 10.6 Pull-through mirror of huggingface.co
+
+- openxet can proxy public (and, with a configured token, private) HF repos.
+  The first download fetches from HF; later ones are served locally.
+- Xet data is stored natively, so mirrored content dedups with local data.
+- Air-gapped teams can pre-seed a mirror and carry it across.
+
+### 10.7 Multiple storage pools and data residency
+
+- One deployment can hold several storage pools (buckets or regions). Pools
+  are assigned per tenant or per repo by policy.
+- Dedup is per pool; data never crosses pools.
+- Optional per-pool encryption keys via the cloud KMS (SSE-KMS or
+  equivalent).
+- GC, `reindex` and metering are pool-aware.
+
+### 10.8 Our own client *(decided by the user: v1, 100% compatible)*
+
+`openxet` ships a client: a CLI and a Rust library, with Python bindings.
+It is better to use than the stock tools and never incompatible with them.
+
+**The compatibility contract is non-negotiable:**
+- Byte-identical chunking, hashes, xorbs and shards. The client builds on
+  `xet-core`'s `xet-data` / `xet-core-structures` rather than reimplementing
+  them. Any divergence is a release-blocking bug.
+- It works against **huggingface.co itself** as well as openxet, via the same
+  Hub and CAS APIs. Data uploaded by our client is readable by `hf`,
+  `hf_xet`, `git-xet` and `huggingface.js`, and vice versa.
+- It reads and writes the standard HF cache layout (`HF_HOME`, `HF_XET_CACHE`)
+  and honours `HF_ENDPOINT` / `HF_TOKEN`, so it coexists with `hf` on the
+  same machine.
+- CI proves it in both directions: our client against openxet and against
+  huggingface.co (nightly, using a dedicated test org), plus cross-tool round
+  trips (upload with ours, download with `hf`, and the reverse).
+
+**What makes it worth installing** (the extra mile for users):
+- **`sync`:** rsync-style, two-way sync of a directory with a repo or
+  bucket. Only changed chunks move.
+- **`mount`:** read-only FUSE (Linux) / FSKit or macFUSE (macOS) mount of any
+  repo revision, with lazy chunk fetch. Train directly off a mounted dataset.
+- **Storage-only mode:** upload and download by Xet file hash with no Hub
+  layer, for platforms.
+- **Resumable everything:** interrupted uploads and downloads resume, and
+  progress output is human and `--json`.
+- **`login`:** the OIDC device/browser flow that issues openxet access tokens
+  and SSH key registration (§5.4, §10.1).
+- **`setup git`:** one command configures `lfs.url`, credentials and
+  `git-xet` for a repo (§10.2).
+- **Diagnostics:** `doctor` checks connectivity, auth, clock skew and
+  versions, then says what to fix.
+
+**Distribution:** the same channels as the server (§9), plus PyPI (Python
+bindings), npm via WASM if the bindings allow it, `winget`, and Windows
+binaries. The client must run on Windows; the server need not.
+
+### 10.9 Still open
+
+Two bigger product pieces are awaiting the user's decision:
+- Git hosting
+- a web UI
 
 ## 11. Spikes to run first (verify, don't assume)
 
@@ -564,7 +702,12 @@ says which spec version and client versions are supported.
   against the reference files.
 - **S7:** the `git-xet` download handshake, plus `git-lfs` behaviour with a
   separate `lfs.url` host (credentials, `basic` fallback), against a real
-  Gitea in CI.
+  Gitea in CI. Includes the credential-source gap (§10.2) over both HTTPS
+  and SSH, and whether `git-lfs-transfer` (pure SSH) can negotiate the `xet`
+  custom transfer.
+- **S8:** HF pull-through mirroring. Which HF endpoints, and what Xet
+  read-token behaviour, a mirror depends on, and the terms-of-use
+  constraints for caching HF content.
 
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and
@@ -573,7 +716,7 @@ compatibility matrix, and tested as the "oldest" leg of the suite.
 
 ## 12. Milestones (v1 = all of them)
 
-Release cut *(decided by the user)*: build straight through M0–M5 to `1.0`,
+Release cut *(decided by the user)*: build straight through M0–M7 to `1.0`,
 with no pause between milestones to wait for outside feedback. Real-world
 feedback takes time to arrive, so waiting on it would only stall the work.
 Until `1.0`, the compatibility suite, benchmarks and the measured
@@ -585,7 +728,7 @@ but sets no calendar dates.
 
 - **M0:**
   - repo, `AGENTS.md`, CI skeleton, ADR template
-  - spikes S1–S6
+  - spikes S1–S8
 - **M1:** CAS core on SQLite with local disk and static tokens.
   - Storage-only mode passes `hf_xet` upload and download, plus the golden
     vectors.
@@ -601,8 +744,28 @@ but sets no calendar dates.
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
   - Metrics, tracing and HTTP read gateway.
-- **M5:** distribution and docs.
-  - Release pipeline, images, Helm, compose, docs site, benchmarks.
+  - Server-side chunking for non-Xet clients.
+  - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
+  - The `git-xet` credential fix: the server-side capability route, plus the
+    upstream PR to `xet-core`.
+- **M5:** reach.
+  - `bucket`, `space` and `kernel` repo types.
+  - Cache tier.
+  - HF pull-through mirror.
+  - Multiple storage pools, residency and KMS.
+- **M6:** our own client (§10.8).
+  - `sync`, `mount`, storage-only mode, `login`, `setup git`, `doctor`.
+  - Python bindings.
+  - The two-way compatibility suite, including nightly runs against
+    huggingface.co.
+
+  The client's core (upload/download on `xet-data`) starts as early as M1,
+  because it doubles as our own test driver.
+- **M7:** distribution and docs.
+  - Release pipeline, images, Helm (operator only if needed), compose,
+    one-click templates, Nix, Homebrew, winget, PyPI, marketplace listings.
+  - Docs site.
+  - Published benchmarks.
   - Time-to-first-upload check.
 
 ## 13. Left to the builder
