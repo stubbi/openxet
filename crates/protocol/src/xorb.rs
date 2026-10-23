@@ -67,7 +67,9 @@ pub fn read_xorb_chunks(r: impl Read) -> Result<XorbChunks, ProtocolError> {
             limit: MAX_XORB_BODY_BYTES,
         });
     }
-    let (hashes, chunks_end) = validate_chunks(&body)?;
+    let ValidChunks {
+        hashes, chunks_end, ..
+    } = validate_chunks(&body)?;
     if chunks_end < body.len() {
         return Err(ProtocolError::XorbTrailingBytes {
             offset: chunks_end as u64,
@@ -89,6 +91,12 @@ pub struct StoredXorb {
     pub chunks: XorbChunks,
     /// The serialized chunks followed by a footer computed from them.
     pub bytes: Vec<u8>,
+    /// Where each chunk starts in [`StoredXorb::bytes`]: `n + 1` entries for
+    /// `n` chunks, entry `i` the offset of chunk `i`'s header and the last the
+    /// end of the chunk section, where the footer starts. Chunks `[a, b)` are
+    /// `bytes[chunk_offsets[a]..chunk_offsets[b]]`, the end-inclusive HTTP
+    /// range `chunk_offsets[a]..=chunk_offsets[b] - 1`.
+    pub chunk_offsets: Vec<u32>,
 }
 
 /// Validates an uploaded xorb body (`POST /v1/xorbs`) and builds its stored
@@ -124,7 +132,11 @@ pub fn xorb_with_footer(body: &[u8]) -> Result<StoredXorb, ProtocolError> {
             limit: MAX_XORB_BODY_BYTES,
         });
     }
-    let (hashes, chunks_end) = validate_chunks(body)?;
+    let ValidChunks {
+        hashes,
+        offsets: chunk_offsets,
+        chunks_end,
+    } = validate_chunks(body)?;
     if hashes.is_empty() {
         return Err(ProtocolError::XorbEmpty);
     }
@@ -138,13 +150,24 @@ pub fn xorb_with_footer(body: &[u8]) -> Result<StoredXorb, ProtocolError> {
         hash,
         chunks: XorbChunks { hashes },
         bytes,
+        chunk_offsets,
     })
 }
 
-/// Walks the chunks of `body`, returning their table and where the chunk
-/// section ends; a footer, if any, starts there.
-fn validate_chunks(body: &[u8]) -> Result<(Vec<(MerkleHash, u64)>, usize), ProtocolError> {
+/// The result of walking a xorb body's chunk section.
+struct ValidChunks {
+    /// `(chunk hash, uncompressed length)` per chunk.
+    hashes: Vec<(MerkleHash, u64)>,
+    /// The offset of each chunk's header, then `chunks_end`.
+    offsets: Vec<u32>,
+    /// Where the chunk section ends; a footer, if any, starts there.
+    chunks_end: usize,
+}
+
+/// Walks and validates the chunks of `body`.
+fn validate_chunks(body: &[u8]) -> Result<ValidChunks, ProtocolError> {
     let mut hashes = Vec::new();
+    let mut offsets = Vec::new();
     let mut pos = 0;
     while pos < body.len() {
         let mut rest = &body[pos..];
@@ -179,9 +202,23 @@ fn validate_chunks(body: &[u8]) -> Result<(Vec<(MerkleHash, u64)>, usize), Proto
             header.get_uncompressed_length(),
         )?;
         hashes.push((chunk_hash(&data), data.len() as u64));
+        offsets.push(offset(pos));
         pos += XORB_CHUNK_HEADER_LENGTH + compressed_len;
     }
-    Ok((hashes, pos))
+    offsets.push(offset(pos));
+    Ok(ValidChunks {
+        hashes,
+        offsets,
+        chunks_end: pos,
+    })
+}
+
+const _: () = assert!(MAX_XORB_BODY_BYTES <= u32::MAX as u64);
+
+/// A position inside a body of at most [`MAX_XORB_BODY_BYTES`], which fits
+/// in `u32`.
+fn offset(pos: usize) -> u32 {
+    u32::try_from(pos).unwrap_or_else(|_| unreachable!("xorb bodies are under 4 GiB"))
 }
 
 /// Decompresses one chunk into a buffer bounded by its declared length (and

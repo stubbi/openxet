@@ -223,6 +223,10 @@ can't be reconstructed, or that claim content they don't have.
 - **What gets stored.** The footer tail (lookup tables) is discarded
   unvalidated, so ingest must persist a shard re-serialized from
   `UploadShard` and server-side data, never the raw request body.
+  `openxet_protocol::stored_shard` builds it: file info from the verified
+  `UploadShard`, CAS info from the server's chunk tables for referenced
+  xorbs only (`stored_shard_round_trips`,
+  `stored_shard_is_the_form_stock_clients_upload`).
 
 ## M1 index implication
 

@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod dedup;
 mod hash;
 mod shard;
 mod xorb;
@@ -17,11 +18,12 @@ mod xorb;
 /// The Xet protocol spec version openxet implements (design section 1).
 pub const PROTOCOL_SPEC: &str = "1.1.0";
 
+pub use dedup::{dedup_shard, is_dedup_eligible};
 pub use hash::{MerkleHash, chunk_hash, file_hash, hash_from_hex, hash_to_hex, range_hash};
 pub use shard::{
     MAX_REFERENCED_CHUNKS, MAX_REFERENCED_XORBS, MAX_UPLOAD_SHARD_BYTES, Segment, ShardFileEntry,
-    UploadShard, VerifyError, VerifyLimits, XorbChunkLookup, read_upload_shard, verify_segment,
-    verify_shard,
+    UploadShard, VerifyError, VerifyLimits, XorbChunkLookup, read_upload_shard, shard_hash,
+    stored_shard, verify_segment, verify_shard,
 };
 pub use xorb::{
     MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS, StoredXorb, XorbChunks,
@@ -128,4 +130,24 @@ pub enum ProtocolError {
          https://huggingface.co/docs/xet/shard#shard-upload"
     )]
     MalformedShard(#[source] xet_core_structures::CoreError),
+    /// A shard handed to [`stored_shard`] has not passed [`verify_shard`].
+    #[error("shard is not verified, so it can't be stored; run verify_shard on it first")]
+    ShardNotVerified(#[source] VerifyError),
+    /// A chunk table doesn't fit the shard format's 32-bit counts and
+    /// lengths, which no accepted xorb produces.
+    #[error(
+        "the chunk table stored for xorb {xorb} exceeds the shard format's 32-bit counts; the \
+         index entry is corrupt, rebuild the index from the bucket"
+    )]
+    XorbTableTooLarge {
+        /// The xorb whose table is too large.
+        xorb: MerkleHash,
+    },
+    /// Upstream's shard serializer rejected data openxet built.
+    #[error("could not serialize a shard; this is a bug in openxet, please report it")]
+    ShardSerialization(#[source] xet_core_structures::CoreError),
+    /// A dedup response was requested with the all-zero key, which upstream
+    /// treats as "no key" and would leave chunk hashes unkeyed.
+    #[error("the dedup key is all zeros; key each response with a random 32-byte key")]
+    DedupKeyZero,
 }
