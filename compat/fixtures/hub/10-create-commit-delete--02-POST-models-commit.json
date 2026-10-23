@@ -1,0 +1,175 @@
+{
+  "step": "10-create-commit-delete",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/commit/main",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Content-Type",
+        "application/x-ndjson"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "230"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "3db9c2dc-57d9-4eac-bd2a-3cbaf30f161e"
+      ]
+    ],
+    "body": {
+      "size": 230,
+      "text": "{\"key\": \"header\", \"value\": {\"summary\": \"S3 delete + add\", \"description\": \"\"}}\n{\"key\": \"deletedFile\", \"value\": {\"path\": \"sub/small.txt\"}}\n{\"key\": \"file\", \"value\": {\"content\": \"ZXh0cmEK\", \"path\": \"extra.txt\", \"encoding\": \"base64\"}}\n",
+      "ndjson": [
+        {
+          "key": "header",
+          "value": {
+            "summary": "S3 delete + add",
+            "description": ""
+          }
+        },
+        {
+          "key": "deletedFile",
+          "value": {
+            "path": "sub/small.txt"
+          }
+        },
+        {
+          "key": "file",
+          "value": {
+            "content": "ZXh0cmEK",
+            "path": "extra.txt",
+            "encoding": "base64"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "204"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:15 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"cc-vA8VmtBkMbfCyLO7ryap3yYsuFQ\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea57-540c71e136ff71ed0d4dce04;3db9c2dc-57d9-4eac-bd2a-3cbaf30f161e"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=987;t=211"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "oa1zUGayfhB5zJxev9hPK2RsaexTQ0T5-Q_2n_eCnNqzaZJ0ksHqsw=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 204,
+      "json": {
+        "success": true,
+        "commitOid": "9afcd3ea6f3fe303354546da38b78dd1cffb1e07",
+        "commitUrl": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/commit/9afcd3ea6f3fe303354546da38b78dd1cffb1e07",
+        "hookOutput": ""
+      }
+    }
+  }
+}

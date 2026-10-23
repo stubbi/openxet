@@ -1,0 +1,158 @@
+{
+  "step": "09-upload-folder",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/validate-yaml",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "54"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "ddac5e24-5794-4fd0-895d-dbbc1fd305cb"
+      ]
+    ],
+    "body": {
+      "size": 54,
+      "json": {
+        "content": "# openxet compat S3\n",
+        "repoType": "model"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "157"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:00:49 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"9d-lFJmHExrHypPFknUL3bTCjfO4hI\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea01-357cf17f754c0e4b207616df;ddac5e24-5794-4fd0-895d-dbbc1fd305cb"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=9994;t=219"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=10000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 5392c9fe38187e1fd5fc54183671ae90.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "CNyL0rYCRcpXCm1mK-xewAJ6iOf4cYs9fHFyAf7RQKW-yAPDjDoiLA=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 157,
+      "json": {
+        "errors": [],
+        "warnings": [
+          {
+            "message": "empty or missing yaml metadata in repo card",
+            "help": "https://huggingface.co/docs/hub/model-cards#model-card-metadata"
+          }
+        ]
+      }
+    }
+  }
+}

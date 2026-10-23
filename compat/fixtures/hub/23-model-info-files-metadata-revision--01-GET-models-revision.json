@@ -1,0 +1,189 @@
+{
+  "step": "23-model-info-files-metadata-revision",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/revision/v0-s3?blobs=true",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "d3ca1b26-4394-4272-ab42-6b4f566b19ac"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "981"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:17 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"3d5-wMNJLbyyCuiCCwYcmk8sKohaNoQ\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea59-3dd223964255100558b058d8;d3ca1b26-4394-4272-ab42-6b4f566b19ac"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=974;t=209"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "bJ5sHH81umlAcT3sHnfGNqQuF35WM_9Q6xoqTPaRwcbnCLuIj_YPiw=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 981,
+      "json": {
+        "_id": "6adaea00d1462de6734ee881",
+        "id": "openxet-compat/openxet-compat-s3-682b4d",
+        "private": true,
+        "tags": [
+          "region:us"
+        ],
+        "downloads": 0,
+        "likes": 0,
+        "modelId": "openxet-compat/openxet-compat-s3-682b4d",
+        "author": "openxet-compat",
+        "sha": "9afcd3ea6f3fe303354546da38b78dd1cffb1e07",
+        "lastModified": "2026-10-23T05:02:15.000Z",
+        "gated": false,
+        "disabled": false,
+        "config": {},
+        "siblings": [
+          {
+            "rfilename": ".gitattributes",
+            "blobId": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+            "size": 1519
+          },
+          {
+            "rfilename": "README.md",
+            "blobId": "91a33bd4b20b4a3f677205c785b849956b246c6f",
+            "size": 20
+          },
+          {
+            "rfilename": "big.bin",
+            "blobId": "17b64f87bb29e51e3b430eada023d33a3b90a5f4",
+            "size": 209715200,
+            "lfs": {
+              "sha256": "0041f94a86dd643c7c0da1da750081f871464c6fd9beff4569b387d778aee7eb",
+              "size": 209715200,
+              "pointerSize": 134
+            }
+          },
+          {
+            "rfilename": "config.json",
+            "blobId": "a3879d4133010159f14943fe8058616b35bf58a4",
+            "size": 21
+          },
+          {
+            "rfilename": "extra.txt",
+            "blobId": "0f2287157f7cb0dd40498c7a92f74b6975fa2d57",
+            "size": 6
+          }
+        ],
+        "spaces": [],
+        "createdAt": "2026-10-23T05:00:48.000Z",
+        "usedStorage": 0
+      }
+    }
+  }
+}

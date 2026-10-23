@@ -1,0 +1,179 @@
+{
+  "step": "29-snapshot-download",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/9afcd3ea6f3fe303354546da38b78dd1cffb1e07?recursive=true&expand=false",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-HF-Download-Counter",
+        "1"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "354099f7-22e0-4d53-8d18-47ca68f95153"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "677"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:57 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"2a5-nciwLOrJ1qsmFne8Kzs1PojvaxI\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea81-6ee481156ae5a95d5ec879c0;354099f7-22e0-4d53-8d18-47ca68f95153"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=969;t=169"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 327007f1c5fb72f9f4e936cb0d6d11ae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "o_rX75JVlgMFXdSNpxUFNUlEzWscv_jGZoWg5kCY4OG6NOdWoGTscg=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 677,
+      "json": [
+        {
+          "type": "file",
+          "oid": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+          "size": 1519,
+          "path": ".gitattributes"
+        },
+        {
+          "type": "file",
+          "oid": "91a33bd4b20b4a3f677205c785b849956b246c6f",
+          "size": 20,
+          "path": "README.md"
+        },
+        {
+          "type": "file",
+          "oid": "17b64f87bb29e51e3b430eada023d33a3b90a5f4",
+          "size": 209715200,
+          "lfs": {
+            "oid": "0041f94a86dd643c7c0da1da750081f871464c6fd9beff4569b387d778aee7eb",
+            "size": 209715200,
+            "pointerSize": 134
+          },
+          "xetHash": "6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+          "path": "big.bin"
+        },
+        {
+          "type": "file",
+          "oid": "a3879d4133010159f14943fe8058616b35bf58a4",
+          "size": 21,
+          "path": "config.json"
+        },
+        {
+          "type": "file",
+          "oid": "0f2287157f7cb0dd40498c7a92f74b6975fa2d57",
+          "size": 6,
+          "path": "extra.txt"
+        }
+      ]
+    }
+  }
+}

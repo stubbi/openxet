@@ -1,0 +1,158 @@
+{
+  "step": "32-hf-upload-cli",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "huggingface-cli/2.2.0; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "74"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "cc915670-075a-4324-a3f6-0cbee06d403c"
+      ]
+    ],
+    "body": {
+      "size": 74,
+      "json": {
+        "name": "openxet-compat-s3-682b4d",
+        "organization": "openxet-compat",
+        "type": "model"
+      }
+    }
+  },
+  "response": {
+    "status": 409,
+    "reason": "Conflict",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "143"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:58 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"8f-vuMDxPXuufcYGzFzW7vGctgl8NU\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea82-302e92d673dc288c486d9ea3;cc915670-075a-4324-a3f6-0cbee06d403c"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=966;t=168"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Error-Message",
+        "You already created this model repo: openxet-compat/openxet-compat-s3-682b4d"
+      ],
+      [
+        "X-Cache",
+        "Error from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 6278278413e5088f65850d7465d5d6dc.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "ElUBMxDw3O8CNr2uxrSknQB4WMhrkkNCnhnDBSd7x_7BjseXoXRIpQ=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 143,
+      "json": {
+        "error": "You already created this model repo: openxet-compat/openxet-compat-s3-682b4d",
+        "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d"
+      }
+    }
+  }
+}

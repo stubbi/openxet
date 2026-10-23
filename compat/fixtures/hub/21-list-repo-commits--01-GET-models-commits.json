@@ -1,0 +1,179 @@
+{
+  "step": "21-list-repo-commits",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/commits/main",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "09ab6560-d1ef-4d2d-bb41-70cf74614ae6"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "820"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:17 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"334-bZRTRhthVLRJ83S7MFog18a7Ldc\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea59-51a496c939e1af7b165ca511;09ab6560-d1ef-4d2d-bb41-70cf74614ae6"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=976;t=209"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Total-Count",
+        "3"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "-mPHkdywiE1KpxqHW8dx5uM2TxRmyNdWMndqRR1AUQ7HzCZu46KCog=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 820,
+      "json": [
+        {
+          "id": "9afcd3ea6f3fe303354546da38b78dd1cffb1e07",
+          "title": "S3 delete + add",
+          "message": "",
+          "authors": [
+            {
+              "user": "openxet-compat",
+              "avatar": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000001/openxet-compat-avatar.jpeg"
+            }
+          ],
+          "date": "2026-10-23T05:02:15.000Z"
+        },
+        {
+          "id": "def4b2e4b59865b5e38a3b833de130ae668b4b88",
+          "title": "S3 upload_folder",
+          "message": "",
+          "authors": [
+            {
+              "user": "openxet-compat",
+              "avatar": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000001/openxet-compat-avatar.jpeg"
+            }
+          ],
+          "date": "2026-10-23T05:02:14.000Z"
+        },
+        {
+          "id": "1c89ba5e5b6721c738aca2b40bc39343da1d508e",
+          "title": "initial commit",
+          "message": "",
+          "authors": [
+            {
+              "user": "openxet-compat",
+              "avatar": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000001/openxet-compat-avatar.jpeg"
+            }
+          ],
+          "date": "2026-10-23T05:00:48.000Z"
+        }
+      ]
+    }
+  }
+}

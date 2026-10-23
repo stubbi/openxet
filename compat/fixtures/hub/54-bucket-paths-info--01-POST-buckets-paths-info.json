@@ -1,0 +1,163 @@
+{
+  "step": "54-bucket-paths-info",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/paths-info",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "37"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "232dc9b9-ba20-4597-a4ad-1552701d690e"
+      ]
+    ],
+    "body": {
+      "size": 37,
+      "json": {
+        "paths": [
+          "hello.txt",
+          "missing.txt"
+        ]
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "240"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:03:02 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"f0-Gaz0LJxwcadeWnrM7vUkr5dMcnI\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea86-0b8ab08c08769f3c628a9e76;232dc9b9-ba20-4597-a4ad-1552701d690e"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=954;t=164"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 327007f1c5fb72f9f4e936cb0d6d11ae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "G-k2ohoiRhL4zHX4QDrjYKFbp9g7_NHBb-FHVfbZmOtVM0Nyn5P6Zw=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 240,
+      "json": [
+        {
+          "type": "file",
+          "path": "hello.txt",
+          "size": 13,
+          "xetHash": "7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644",
+          "mtime": "2026-10-23T05:03:01.007Z",
+          "mtimeNanos": 0,
+          "uploadedAt": "2026-10-23T05:03:02.169Z",
+          "contentType": "text/plain"
+        }
+      ]
+    }
+  }
+}

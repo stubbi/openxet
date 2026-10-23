@@ -1,0 +1,121 @@
+{
+  "step": "55-bucket-download",
+  "seq": 6,
+  "role": "cas",
+  "request": {
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "range",
+        "bytes=0-255999999"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:03:03 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "1266"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-xet-file-size",
+        "13"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ87WRRF6W3H318TFF6PQ1"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 1266,
+      "json": {
+        "offset_into_first_range": 0,
+        "terms": [
+          {
+            "hash": "edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196",
+            "unpacked_length": 13,
+            "range": {
+              "start": 1,
+              "end": 2
+            }
+          }
+        ],
+        "xorbs": {
+          "edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196": [
+            {
+              "url": "https://us.aws.cdn.hf.co/xorbs/default/edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196?xip=REDACTED&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&repo_id=6adaea84c9e6fb018f48591d&Expires=1792735383&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+              "ranges": [
+                {
+                  "chunks": {
+                    "start": 1,
+                    "end": 2
+                  },
+                  "bytes": {
+                    "start": 29,
+                    "end": 49
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

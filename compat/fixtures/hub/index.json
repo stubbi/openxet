@@ -1,0 +1,794 @@
+[
+  {
+    "file": "01-login--01-GET-whoami-v2.json",
+    "step": "01-login",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/whoami-v2",
+    "status": 200
+  },
+  {
+    "file": "02-whoami-api--01-GET-whoami-v2.json",
+    "step": "02-whoami-api",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/whoami-v2",
+    "status": 200
+  },
+  {
+    "file": "03-whoami-cli--01-GET-agent-harnesses.json",
+    "step": "03-whoami-cli",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/agent-harnesses",
+    "status": 200
+  },
+  {
+    "file": "03-whoami-cli--02-GET-whoami-v2.json",
+    "step": "03-whoami-cli",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/whoami-v2",
+    "status": 200
+  },
+  {
+    "file": "04-create-model--01-POST-repos-create.json",
+    "step": "04-create-model",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 200
+  },
+  {
+    "file": "05-create-model-exists-conflict--01-POST-repos-create.json",
+    "step": "05-create-model-exists-conflict",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 409
+  },
+  {
+    "file": "06-create-model-exist-ok--01-POST-repos-create.json",
+    "step": "06-create-model-exist-ok",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 409
+  },
+  {
+    "file": "07-create-foreign-namespace--01-POST-repos-create.json",
+    "step": "07-create-foreign-namespace",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 403
+  },
+  {
+    "file": "08-create-foreign-namespace-cli--01-POST-repos-create.json",
+    "step": "08-create-foreign-namespace-cli",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 403
+  },
+  {
+    "file": "09-upload-folder--01-POST-validate-yaml.json",
+    "step": "09-upload-folder",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/validate-yaml",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--02-POST-models-preupload.json",
+    "step": "09-upload-folder",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/preupload/main",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--03-GET-models-xet-write-token.json",
+    "step": "09-upload-folder",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/xet-write-token/main",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--04-GET-v1-chunks.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/ee97efada1142e0027a597442d9a2bceefde13c78f5d9dacb37888e4cc0e9a94",
+    "status": 404
+  },
+  {
+    "file": "09-upload-folder--05-GET-v1-chunks.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/ea791c287e9a7ad565b117e9a9b8c4c47133b95ad33a404b80729d4ee1e15400",
+    "status": 404
+  },
+  {
+    "file": "09-upload-folder--06-GET-v1-chunks.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/9fc53c9734150aae7750f77bd0d252bd84732c92661004de78060b6c68f93000",
+    "status": 404
+  },
+  {
+    "file": "09-upload-folder--07-GET-v1-chunks.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/b8b7567d5dbfb0cc77368d801fb5ebe488fac82d98dd1e44a2ba77fc423e1000",
+    "status": 404
+  },
+  {
+    "file": "09-upload-folder--08-POST-v1-xorbs.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--09-GET-v1-chunks.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/7d3010039e4cf8fc09db9b35bd1d7b5a9a7f5ad413339ebb90d4112350c37400",
+    "status": 404
+  },
+  {
+    "file": "09-upload-folder--10-POST-v1-xorbs.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/d190782dfb46007688ce55c6437fd5eacdad34c93dae6a153d2e3650a670f9f5",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--11-POST-v1-xorbs.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/06c6aad7d7b42cd5a154d67e5e7492c0fc7fcc2b79a884a8ffe0bd1ca924315f",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--12-POST-v1-xorbs.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/a6257e8dc572cf6a7e3933fc56d3c7f5c605a60d13cb1e31ac29703f4a053d84",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--13-POST-v2-shards.json",
+    "step": "09-upload-folder",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v2/shards",
+    "status": 200
+  },
+  {
+    "file": "09-upload-folder--14-POST-models-commit.json",
+    "step": "09-upload-folder",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/commit/main",
+    "status": 200
+  },
+  {
+    "file": "10-create-commit-delete--01-POST-models-preupload.json",
+    "step": "10-create-commit-delete",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/preupload/main",
+    "status": 200
+  },
+  {
+    "file": "10-create-commit-delete--02-POST-models-commit.json",
+    "step": "10-create-commit-delete",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/commit/main",
+    "status": 200
+  },
+  {
+    "file": "11-create-branch--01-POST-models-branch.json",
+    "step": "11-create-branch",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/branch/s3-branch",
+    "status": 200
+  },
+  {
+    "file": "12-create-branch-conflict--01-POST-models-branch.json",
+    "step": "12-create-branch-conflict",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/branch/s3-branch",
+    "status": 409
+  },
+  {
+    "file": "13-create-tag--01-POST-models-tag.json",
+    "step": "13-create-tag",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tag/main",
+    "status": 200
+  },
+  {
+    "file": "14-list-repo-refs--01-GET-models-refs.json",
+    "step": "14-list-repo-refs",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/refs",
+    "status": 200
+  },
+  {
+    "file": "15-list-repo-refs-include-prs--01-GET-models-refs.json",
+    "step": "15-list-repo-refs-include-prs",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/refs?include_prs=1",
+    "status": 200
+  },
+  {
+    "file": "16-list-repo-tree--01-GET-models-tree.json",
+    "step": "16-list-repo-tree",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/main?recursive=false&expand=false",
+    "status": 200
+  },
+  {
+    "file": "17-list-repo-tree-recursive-expand--01-GET-models-tree.json",
+    "step": "17-list-repo-tree-recursive-expand",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/main?recursive=true&expand=true",
+    "status": 200
+  },
+  {
+    "file": "18-list-repo-tree-subpath--01-GET-models-tree-sub.json",
+    "step": "18-list-repo-tree-subpath",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/s3-branch/sub?recursive=false&expand=false",
+    "status": 404
+  },
+  {
+    "file": "19-list-repo-files--01-GET-models-tree.json",
+    "step": "19-list-repo-files",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/main?recursive=true&expand=false",
+    "status": 200
+  },
+  {
+    "file": "20-get-paths-info--01-POST-models-paths-info.json",
+    "step": "20-get-paths-info",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/paths-info/main",
+    "status": 200
+  },
+  {
+    "file": "21-list-repo-commits--01-GET-models-commits.json",
+    "step": "21-list-repo-commits",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/commits/main",
+    "status": 200
+  },
+  {
+    "file": "22-model-info--01-GET-models.json",
+    "step": "22-model-info",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d",
+    "status": 200
+  },
+  {
+    "file": "23-model-info-files-metadata-revision--01-GET-models-revision.json",
+    "step": "23-model-info-files-metadata-revision",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/revision/v0-s3?blobs=true",
+    "status": 200
+  },
+  {
+    "file": "24-repo-info-not-found--01-GET-models.json",
+    "step": "24-repo-info-not-found",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d-missing",
+    "status": 404
+  },
+  {
+    "file": "25-revision-not-found--01-GET-models-revision.json",
+    "step": "25-revision-not-found",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/revision/no-such-rev",
+    "status": 404
+  },
+  {
+    "file": "26-hf-hub-download-small--01-HEAD-models-resolve.json",
+    "step": "26-hf-hub-download-small",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/config.json",
+    "status": 200
+  },
+  {
+    "file": "26-hf-hub-download-small--02-GET-models-resolve.json",
+    "step": "26-hf-hub-download-small",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/config.json",
+    "status": 200
+  },
+  {
+    "file": "27-hf-hub-download-big--01-HEAD-models-resolve.json",
+    "step": "27-hf-hub-download-big",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/big.bin",
+    "status": 302
+  },
+  {
+    "file": "27-hf-hub-download-big--02-GET-models-xet-read-token.json",
+    "step": "27-hf-hub-download-big",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/xet-read-token/9afcd3ea6f3fe303354546da38b78dd1cffb1e07",
+    "status": 200
+  },
+  {
+    "file": "27-hf-hub-download-big--03-GET-v2-reconstructions.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+    "status": 416
+  },
+  {
+    "file": "27-hf-hub-download-big--04-GET-v2-reconstructions.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+    "status": 416
+  },
+  {
+    "file": "27-hf-hub-download-big--05-GET-v2-reconstructions.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+    "status": 200
+  },
+  {
+    "file": "27-hf-hub-download-big--06-GET-xorbs.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/d190782dfb46007688ce55c6437fd5eacdad34c93dae6a153d2e3650a670f9f5?user_id=000000000000000000000001&repo_id=6adaea00d1462de6734ee881&xip=REDACTED&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 206
+  },
+  {
+    "file": "27-hf-hub-download-big--07-GET-xorbs.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/534681e32dbeb933a08875dc227910f6587d0c0a9486dd6ab7ccd60c1c87ab0b?X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&xip=REDACTED&repo_id=6adaea00d1462de6734ee881&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 206
+  },
+  {
+    "file": "27-hf-hub-download-big--08-GET-xorbs.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/a6257e8dc572cf6a7e3933fc56d3c7f5c605a60d13cb1e31ac29703f4a053d84?X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&xip=REDACTED&repo_id=6adaea00d1462de6734ee881&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 206
+  },
+  {
+    "file": "27-hf-hub-download-big--09-GET-xorbs.json",
+    "step": "27-hf-hub-download-big",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/06c6aad7d7b42cd5a154d67e5e7492c0fc7fcc2b79a884a8ffe0bd1ca924315f?user_id=000000000000000000000001&repo_id=6adaea00d1462de6734ee881&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&xip=REDACTED&Expires=1792735339&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 206
+  },
+  {
+    "file": "28-hf-hub-download-entry-not-found--01-HEAD-models-resolve.json",
+    "step": "28-hf-hub-download-entry-not-found",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/missing.txt",
+    "status": 404
+  },
+  {
+    "file": "29-snapshot-download--01-GET-models-revision.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/revision/s3-branch",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--02-GET-models-tree.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/9afcd3ea6f3fe303354546da38b78dd1cffb1e07?recursive=true&expand=false",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--03-HEAD-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/extra.txt",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--04-HEAD-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/README.md",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--05-HEAD-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/.gitattributes",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--06-HEAD-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/config.json",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--07-GET-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/extra.txt",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--08-GET-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/.gitattributes",
+    "status": 200
+  },
+  {
+    "file": "29-snapshot-download--09-GET-models-resolve.json",
+    "step": "29-snapshot-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/9afcd3ea6f3fe303354546da38b78dd1cffb1e07/README.md",
+    "status": 200
+  },
+  {
+    "file": "30-delete-tag--01-DELETE-models-tag.json",
+    "step": "30-delete-tag",
+    "role": "hub",
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tag/v0-s3",
+    "status": 200
+  },
+  {
+    "file": "31-delete-branch--01-DELETE-models-branch.json",
+    "step": "31-delete-branch",
+    "role": "hub",
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/branch/s3-branch",
+    "status": 200
+  },
+  {
+    "file": "32-hf-upload-cli--01-POST-repos-create.json",
+    "step": "32-hf-upload-cli",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 409
+  },
+  {
+    "file": "32-hf-upload-cli--02-POST-models-preupload.json",
+    "step": "32-hf-upload-cli",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/preupload/main",
+    "status": 200
+  },
+  {
+    "file": "32-hf-upload-cli--03-POST-models-commit.json",
+    "step": "32-hf-upload-cli",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/commit/main",
+    "status": 200
+  },
+  {
+    "file": "33-hf-download-cli--01-HEAD-models-resolve.json",
+    "step": "33-hf-download-cli",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/cli/README.md",
+    "status": 200
+  },
+  {
+    "file": "33-hf-download-cli--02-GET-models-resolve.json",
+    "step": "33-hf-download-cli",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/cli/README.md",
+    "status": 200
+  },
+  {
+    "file": "34-anonymous-private--01-GET-models.json",
+    "step": "34-anonymous-private",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d",
+    "status": 401
+  },
+  {
+    "file": "35-anonymous-download-private--01-HEAD-models-resolve.json",
+    "step": "35-anonymous-download-private",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/config.json",
+    "status": 401
+  },
+  {
+    "file": "40-create-dataset--01-POST-repos-create.json",
+    "step": "40-create-dataset",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/repos/create",
+    "status": 200
+  },
+  {
+    "file": "41-dataset-upload-file--01-POST-datasets-preupload.json",
+    "step": "41-dataset-upload-file",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/datasets/openxet-compat/openxet-compat-s3-682b4d/preupload/main",
+    "status": 200
+  },
+  {
+    "file": "41-dataset-upload-file--02-POST-datasets-commit.json",
+    "step": "41-dataset-upload-file",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/datasets/openxet-compat/openxet-compat-s3-682b4d/commit/main",
+    "status": 200
+  },
+  {
+    "file": "42-dataset-info--01-GET-datasets.json",
+    "step": "42-dataset-info",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/datasets/openxet-compat/openxet-compat-s3-682b4d",
+    "status": 200
+  },
+  {
+    "file": "43-dataset-download--01-HEAD-datasets-resolve.json",
+    "step": "43-dataset-download",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/datasets/openxet-compat/openxet-compat-s3-682b4d/resolve/main/data.csv",
+    "status": 200
+  },
+  {
+    "file": "43-dataset-download--02-GET-datasets-resolve.json",
+    "step": "43-dataset-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/datasets/openxet-compat/openxet-compat-s3-682b4d/resolve/main/data.csv",
+    "status": 200
+  },
+  {
+    "file": "50-create-bucket--01-POST-buckets.json",
+    "step": "50-create-bucket",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d",
+    "status": 200
+  },
+  {
+    "file": "51-bucket-info--01-GET-buckets.json",
+    "step": "51-bucket-info",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d",
+    "status": 200
+  },
+  {
+    "file": "52-bucket-upload--01-GET-buckets-xet-write-token.json",
+    "step": "52-bucket-upload",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/xet-write-token",
+    "status": 200
+  },
+  {
+    "file": "52-bucket-upload--02-GET-v1-chunks.json",
+    "step": "52-bucket-upload",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/ca9a983d7273a42db042ff9338f870cadd139752ebc27c55f0eac48d979303eb",
+    "status": 404
+  },
+  {
+    "file": "52-bucket-upload--03-GET-v1-chunks.json",
+    "step": "52-bucket-upload",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/1c10845a15143d6807d9c92948bf6c6da18c3359320b3691df283e4a8fd09b01",
+    "status": 404
+  },
+  {
+    "file": "52-bucket-upload--04-POST-v1-xorbs.json",
+    "step": "52-bucket-upload",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196",
+    "status": 200
+  },
+  {
+    "file": "52-bucket-upload--05-POST-v2-shards.json",
+    "step": "52-bucket-upload",
+    "role": "cas",
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v2/shards",
+    "status": 200
+  },
+  {
+    "file": "52-bucket-upload--06-POST-buckets-batch.json",
+    "step": "52-bucket-upload",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/batch",
+    "status": 200
+  },
+  {
+    "file": "53-bucket-tree--01-GET-buckets-tree.json",
+    "step": "53-bucket-tree",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/tree?recursive=true",
+    "status": 200
+  },
+  {
+    "file": "54-bucket-paths-info--01-POST-buckets-paths-info.json",
+    "step": "54-bucket-paths-info",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/paths-info",
+    "status": 200
+  },
+  {
+    "file": "55-bucket-download--01-POST-buckets-paths-info.json",
+    "step": "55-bucket-download",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/paths-info",
+    "status": 200
+  },
+  {
+    "file": "55-bucket-download--02-HEAD-buckets-resolve.json",
+    "step": "55-bucket-download",
+    "role": "hub",
+    "method": "HEAD",
+    "url": "https://huggingface.co/buckets/openxet-compat/openxet-compat-s3-682b4d/resolve/hello.txt",
+    "status": 302
+  },
+  {
+    "file": "55-bucket-download--03-GET-buckets-xet-read-token.json",
+    "step": "55-bucket-download",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/xet-read-token",
+    "status": 200
+  },
+  {
+    "file": "55-bucket-download--04-GET-v2-reconstructions.json",
+    "step": "55-bucket-download",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644",
+    "status": 416
+  },
+  {
+    "file": "55-bucket-download--05-GET-v2-reconstructions.json",
+    "step": "55-bucket-download",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644",
+    "status": 416
+  },
+  {
+    "file": "55-bucket-download--06-GET-v2-reconstructions.json",
+    "step": "55-bucket-download",
+    "role": "cas",
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v2/reconstructions/7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644",
+    "status": 200
+  },
+  {
+    "file": "55-bucket-download--07-GET-xorbs.json",
+    "step": "55-bucket-download",
+    "role": "cdn",
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196?xip=REDACTED&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&repo_id=6adaea84c9e6fb018f48591d&Expires=1792735383&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "status": 206
+  },
+  {
+    "file": "56-bucket-delete-file--01-POST-buckets-batch.json",
+    "step": "56-bucket-delete-file",
+    "role": "hub",
+    "method": "POST",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/batch",
+    "status": 200
+  },
+  {
+    "file": "57-list-buckets--01-GET-buckets-ns.json",
+    "step": "57-list-buckets",
+    "role": "hub",
+    "method": "GET",
+    "url": "https://huggingface.co/api/buckets/openxet-compat",
+    "status": 200
+  },
+  {
+    "file": "90-delete-bucket--01-DELETE-buckets.json",
+    "step": "90-delete-bucket",
+    "role": "hub",
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d",
+    "status": 204
+  },
+  {
+    "file": "91-delete-dataset--01-DELETE-repos-delete.json",
+    "step": "91-delete-dataset",
+    "role": "hub",
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/repos/delete",
+    "status": 200
+  },
+  {
+    "file": "92-delete-model--01-DELETE-repos-delete.json",
+    "step": "92-delete-model",
+    "role": "hub",
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/repos/delete",
+    "status": 200
+  },
+  {
+    "file": "93-delete-model-missing--01-DELETE-repos-delete.json",
+    "step": "93-delete-model-missing",
+    "role": "hub",
+    "method": "DELETE",
+    "url": "https://huggingface.co/api/repos/delete",
+    "status": 404
+  }
+]

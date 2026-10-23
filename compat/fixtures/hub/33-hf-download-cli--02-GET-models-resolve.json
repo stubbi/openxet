@@ -1,0 +1,158 @@
+{
+  "step": "33-hf-download-cli",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/cli/README.md",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "huggingface-cli/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-HF-Download-Counter",
+        "1"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "0db39473-c987-4263-9ed6-0b83f2d6f5b2"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "20"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:59 GMT"
+      ],
+      [
+        "ETag",
+        "\"91a33bd4b20b4a3f677205c785b849956b246c6f\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea83-50fb0b414c10c74c3a2e8c31;0db39473-c987-4263-9ed6-0b83f2d6f5b2"
+      ],
+      [
+        "RateLimit",
+        "\"resolvers\";r=4987;t=167"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"resolvers\";q=5000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Repo-Commit",
+        "2861d107fc4988b3afb8c6330812514986bb612e"
+      ],
+      [
+        "Accept-Ranges",
+        "bytes"
+      ],
+      [
+        "Content-Disposition",
+        "inline; filename*=UTF-8''README.md; filename=\"README.md\";"
+      ],
+      [
+        "Content-Security-Policy",
+        "default-src 'none'; sandbox"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 67dcca6cd203eb944e3da0c9e0509316.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "SLeyb6raCYOS0TQN-QwhJG0RIe-MXyMLTQBy9sIKUPbffEcKCsvYng=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 20,
+      "text": "# openxet compat S3\n"
+    }
+  }
+}

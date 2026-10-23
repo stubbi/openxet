@@ -1,0 +1,160 @@
+{
+  "step": "15-list-repo-refs-include-prs",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/refs?include_prs=1",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "267c3be5-c420-4cde-857e-5ea1cafcb0ae"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "360"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:16 GMT"
+      ],
+      [
+        "ETag",
+        "W/\"168-s4O7keVx/7UZ5fOMpKn52ugWAyM\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea58-79c64fb442755326251a4b10;267c3be5-c420-4cde-857e-5ea1cafcb0ae"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=982;t=210"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "I0KWNbwM_lh8Eqd9LV5dEmtONqlf-i3yZX-2o5ja0rDoZkAWefvs-Q=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 360,
+      "json": {
+        "tags": [
+          {
+            "name": "v0-s3",
+            "ref": "refs/tags/v0-s3",
+            "targetCommit": "f3d7a85b4fe6c0f06263bebb2b6a3ddf8487aaa7"
+          }
+        ],
+        "branches": [
+          {
+            "name": "main",
+            "ref": "refs/heads/main",
+            "targetCommit": "9afcd3ea6f3fe303354546da38b78dd1cffb1e07"
+          },
+          {
+            "name": "s3-branch",
+            "ref": "refs/heads/s3-branch",
+            "targetCommit": "9afcd3ea6f3fe303354546da38b78dd1cffb1e07"
+          }
+        ],
+        "converts": [],
+        "pullRequests": []
+      }
+    }
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "step": "52-bucket-upload",
+  "seq": 4,
+  "role": "cas",
+  "request": {
+    "method": "POST",
+    "url": "https://cas-server.xethub.hf.co/v1/xorbs/default/edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "content-length",
+        "50"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 50,
+      "text": "\u0000\u0015\u0000\u0000\u0000\u0015\u0000\u0000{\"hello\": \"openxet\"}\n\u0000\r\u0000\u0000\u0000\r\u0000\u0000bucket hello\n"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:03:01 GMT"
+      ],
+      [
+        "Content-Type",
+        "application/json"
+      ],
+      [
+        "Content-Length",
+        "21"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ86AQH7C0R8FG2FFB45C7"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 21,
+      "json": {
+        "was_inserted": true
+      }
+    }
+  }
+}

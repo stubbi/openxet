@@ -1,0 +1,206 @@
+{
+  "step": "03-whoami-cli",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/whoami-v2",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "d56096aa-e9f9-4229-bc5f-68618c8431e9"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Transfer-Encoding",
+        "chunked"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:00:48 GMT"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "ETag",
+        "W/\"4fc-iPweliYr8uq+hiOzaPPiUNCQ59Q\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea00-4d9a3e7034fa11cd3cde7ede;d56096aa-e9f9-4229-bc5f-68618c8431e9"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=997;t=298"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 fa69f7565a2bc57d2c9d960b3303f2a0.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "Z-1oNUkmsKO9JRfzL5-UwppSnW3-bSRIGvJrf4UmzshqQHeOox31rQ=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 738,
+      "json": {
+        "type": "user",
+        "id": "000000000000000000000001",
+        "name": "openxet-compat",
+        "fullname": "openxet compat",
+        "isPro": false,
+        "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000001/openxet-compat-avatar.jpeg",
+        "orgs": [
+          {
+            "type": "org",
+            "id": "00000000000000000000000a",
+            "name": "openxet-compat-org-a",
+            "fullname": "openxet compat org a",
+            "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000002/openxet-compat-avatar.png"
+          },
+          {
+            "type": "org",
+            "id": "00000000000000000000000b",
+            "name": "openxet-compat-org-b",
+            "fullname": "openxet compat org b",
+            "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000001/openxet-compat-avatar.png"
+          },
+          {
+            "type": "org",
+            "id": "00000000000000000000000c",
+            "name": "openxet-compat-org-c",
+            "fullname": "openxet compat org c",
+            "avatarUrl": "https://cdn-avatars.huggingface.co/v1/production/uploads/000000000000000000000001/openxet-compat-avatar.png"
+          }
+        ],
+        "auth": {
+          "type": "access_token",
+          "accessToken": {
+            "displayName": "openxet-test",
+            "role": "fineGrained",
+            "createdAt": "2026-10-23T02:38:57.413Z",
+            "fineGrained": {
+              "canReadGatedRepos": true,
+              "global": [
+                "discussion.write"
+              ],
+              "scoped": [
+                {
+                  "entity": {
+                    "_id": "000000000000000000000001",
+                    "type": "user",
+                    "name": "openxet-compat"
+                  },
+                  "permissions": [
+                    "repo.contribute.write",
+                    "repo.content.read",
+                    "repo.access.read",
+                    "repo.write",
+                    "discussion.write"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

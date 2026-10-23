@@ -1,0 +1,82 @@
+{
+  "step": "09-upload-folder",
+  "seq": 7,
+  "role": "cas",
+  "request": {
+    "method": "GET",
+    "url": "https://cas-server.xethub.hf.co/v1/chunks/default/b8b7567d5dbfb0cc77368d801fb5ebe488fac82d98dd1e44a2ba77fc423e1000",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "cas-server.xethub.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 404,
+    "reason": "Not Found",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:00:51 GMT"
+      ],
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "53"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "vary",
+        "accept-encoding"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ47BD443ZSDV84RCDHRED"
+      ],
+      [
+        "access-control-allow-credentials",
+        "true"
+      ],
+      [
+        "access-control-expose-headers",
+        "x-xet-file-size"
+      ]
+    ],
+    "body": {
+      "size": 53,
+      "text": "request_id: 01M5KJ47BD443ZSDV84RCDHRED; (1) not found"
+    }
+  }
+}

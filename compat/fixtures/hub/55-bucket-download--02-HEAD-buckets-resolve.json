@@ -1,0 +1,157 @@
+{
+  "step": "55-bucket-download",
+  "seq": 2,
+  "role": "hub",
+  "request": {
+    "method": "HEAD",
+    "url": "https://huggingface.co/buckets/openxet-compat/openxet-compat-s3-682b4d/resolve/hello.txt",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Accept-Encoding",
+        "identity"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "9061ced0-e7eb-42fc-b402-398bb26598f6"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 302,
+    "reason": "Found",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "1218"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:03:02 GMT"
+      ],
+      [
+        "Location",
+        "https://us.aws.cdn.hf.co/xet-bridge-us/6adaea84c9e6fb018f48591d/7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644?response-content-disposition=inline%3B+filename*%3DUTF-8%27%27hello.txt%3B+filename%3D%22hello.txt%22%3B&response-content-type=text%2Fplain%3B+charset%3Dutf-8&user_id=000000000000000000000001&xip=REDACTED&X-Xet-Cas-Uid=000000000000000000000001&Expires=1792735382&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256"
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea86-51218cbd39a090a659ebfdb2;9061ced0-e7eb-42fc-b402-398bb26598f6"
+      ],
+      [
+        "RateLimit",
+        "\"resolvers\";r=4984;t=164"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"resolvers\";q=5000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin, Accept"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Linked-Size",
+        "13"
+      ],
+      [
+        "X-Linked-ETag",
+        "\"7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644\""
+      ],
+      [
+        "X-Xet-Hash",
+        "7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644"
+      ],
+      [
+        "Last-Modified",
+        "Fri, 23 Oct 2026 05:03:01 GMT"
+      ],
+      [
+        "Link",
+        "<https://huggingface.co/api/buckets/openxet-compat/openxet-compat-s3-682b4d/xet-read-token>; rel=\"xet-auth\", <https://cas-server.xethub.hf.co/v1/reconstructions/7d44dbac00d9d571cc7f61661e51083160e5d0f061a3cbadfc8f0b78f4558644>; rel=\"xet-reconstruction-info\""
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 327007f1c5fb72f9f4e936cb0d6d11ae.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "eQihf2NAjhQUyAP_XklWSJ-a3ZytkNMs7jtwDQr5RG597nAPvNr6Ig=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  }
+}

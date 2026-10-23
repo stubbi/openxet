@@ -1,0 +1,173 @@
+{
+  "step": "27-hf-hub-download-big",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "HEAD",
+    "url": "https://huggingface.co/openxet-compat/openxet-compat-s3-682b4d/resolve/main/big.bin",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Accept-Encoding",
+        "identity"
+      ],
+      [
+        "X-HF-Download-Counter",
+        "1"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "c6b0bb6b-f92b-4840-9856-97a787bd4579"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 302,
+    "reason": "Found",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "text/plain; charset=utf-8"
+      ],
+      [
+        "Content-Length",
+        "1191"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:18 GMT"
+      ],
+      [
+        "Location",
+        "https://us.aws.cdn.hf.co/xet-bridge-us/6adaea00d1462de6734ee881/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6?X-Xet-Cas-Uid=000000000000000000000001&response-content-type=application%2Foctet-stream&response-content-disposition=inline%3B+filename*%3DUTF-8%27%27big.bin%3B+filename%3D%22big.bin%22%3B&user_id=000000000000000000000001&xip=REDACTED&Expires=1792735338&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256"
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea5a-7f90fee96093a58028634d6f;c6b0bb6b-f92b-4840-9856-97a787bd4579"
+      ],
+      [
+        "RateLimit",
+        "\"resolvers\";r=4997;t=208"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"resolvers\";q=5000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin, Accept"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Repo-Commit",
+        "9afcd3ea6f3fe303354546da38b78dd1cffb1e07"
+      ],
+      [
+        "Accept-Ranges",
+        "bytes"
+      ],
+      [
+        "X-Hub-Cache",
+        "MISS"
+      ],
+      [
+        "X-Linked-Size",
+        "209715200"
+      ],
+      [
+        "X-Linked-ETag",
+        "\"0041f94a86dd643c7c0da1da750081f871464c6fd9beff4569b387d778aee7eb\""
+      ],
+      [
+        "Cache-Control",
+        "no-store"
+      ],
+      [
+        "X-Xet-Hash",
+        "6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6"
+      ],
+      [
+        "Link",
+        "<https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/xet-read-token/9afcd3ea6f3fe303354546da38b78dd1cffb1e07>; rel=\"xet-auth\", <https://cas-server.xethub.hf.co/v1/reconstructions/6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6>; rel=\"xet-reconstruction-info\""
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "P9ySPRWvrdCdSkUFFuT7omBfOtCp0hiU77A9KH72JCoLRsgWobpA3g=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  }
+}

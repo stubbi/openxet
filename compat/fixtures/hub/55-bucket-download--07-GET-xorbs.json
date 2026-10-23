@@ -1,0 +1,94 @@
+{
+  "step": "55-bucket-download",
+  "seq": 7,
+  "role": "cdn",
+  "request": {
+    "method": "GET",
+    "url": "https://us.aws.cdn.hf.co/xorbs/default/edb637d33c14ff5fb6a6f3d1f735a1707d821a80da5aeda5eab6eaca7a7da196?xip=REDACTED&X-Xet-Session-Id=01a16722-1749-76a1-b25f-0ae57239cab2&user_id=000000000000000000000001&repo_id=6adaea84c9e6fb018f48591d&Expires=1792735383&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED&Hash-Algorithm=SHA256",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "range",
+        "bytes=29-49"
+      ],
+      [
+        "x-xet-session-id",
+        "01a16722-1749-76a1-b25f-0ae57239cab2"
+      ],
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17; hf_xet/1.7.0"
+      ],
+      [
+        "host",
+        "us.aws.cdn.hf.co"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 206,
+    "reason": "Partial Content",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "x-cache-status",
+        "Miss"
+      ],
+      [
+        "content-type",
+        "application/octet-stream"
+      ],
+      [
+        "accept-ranges",
+        "bytes"
+      ],
+      [
+        "content-disposition",
+        "attachment"
+      ],
+      [
+        "content-range",
+        "bytes 29-49/226"
+      ],
+      [
+        "content-length",
+        "21"
+      ],
+      [
+        "vary",
+        "origin, access-control-request-method, access-control-request-headers"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "access-control-expose-headers",
+        "*"
+      ],
+      [
+        "x-request-id",
+        "01M5KJ87ZQGZYPBHF4MWAVK71Q"
+      ],
+      [
+        "x-hf-cdn-pop",
+        "aws-eu-west-3"
+      ],
+      [
+        "date",
+        "Fri, 23 Oct 2026 05:03:03 GMT"
+      ]
+    ],
+    "body": {
+      "size": 21,
+      "omitted": "binary body"
+    }
+  }
+}

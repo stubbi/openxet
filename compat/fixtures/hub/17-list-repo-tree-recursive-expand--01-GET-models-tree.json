@@ -1,0 +1,291 @@
+{
+  "step": "17-list-repo-tree-recursive-expand",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "GET",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/tree/main?recursive=true&expand=true",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "a88a8fec-1d58-4425-9ad3-27643241a8e2"
+      ]
+    ],
+    "body": {
+      "size": 0
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Transfer-Encoding",
+        "chunked"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:17 GMT"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "ETag",
+        "W/\"967-bC/T8g7eXebjpeGRHykSk4maxRc\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea59-5b4e3219759bef1a0feee2aa;a88a8fec-1d58-4425-9ad3-27643241a8e2"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=980;t=209"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "QFyXYshKQZCCy0HZCQjdCKb5iSfkmFTR8TNYHGie2AjGlvoPPCEnNw=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 989,
+      "json": [
+        {
+          "type": "file",
+          "oid": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+          "size": 1519,
+          "path": ".gitattributes",
+          "lastCommit": {
+            "id": "1c89ba5e5b6721c738aca2b40bc39343da1d508e",
+            "title": "initial commit",
+            "date": "2026-10-23T05:00:48.000Z"
+          },
+          "securityFileStatus": {
+            "status": "safe",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "safe",
+              "message": "",
+              "version": "1.5.2/27963"
+            },
+            "pickleImportScan": {
+              "status": "unscanned",
+              "pickleImports": [],
+              "version": "0.0.0"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        },
+        {
+          "type": "file",
+          "oid": "91a33bd4b20b4a3f677205c785b849956b246c6f",
+          "size": 20,
+          "path": "README.md",
+          "lastCommit": {
+            "id": "def4b2e4b59865b5e38a3b833de130ae668b4b88",
+            "title": "S3 upload_folder",
+            "date": "2026-10-23T05:02:14.000Z"
+          },
+          "securityFileStatus": {
+            "status": "unscanned",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "unscanned"
+            },
+            "pickleImportScan": {
+              "status": "unscanned"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        },
+        {
+          "type": "file",
+          "oid": "17b64f87bb29e51e3b430eada023d33a3b90a5f4",
+          "size": 209715200,
+          "lfs": {
+            "oid": "0041f94a86dd643c7c0da1da750081f871464c6fd9beff4569b387d778aee7eb",
+            "size": 209715200,
+            "pointerSize": 134
+          },
+          "xetHash": "6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+          "path": "big.bin",
+          "lastCommit": {
+            "id": "def4b2e4b59865b5e38a3b833de130ae668b4b88",
+            "title": "S3 upload_folder",
+            "date": "2026-10-23T05:02:14.000Z"
+          },
+          "securityFileStatus": {
+            "status": "unscanned",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "unscanned"
+            },
+            "pickleImportScan": {
+              "status": "unscanned"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        },
+        {
+          "type": "file",
+          "oid": "a3879d4133010159f14943fe8058616b35bf58a4",
+          "size": 21,
+          "path": "config.json",
+          "lastCommit": {
+            "id": "def4b2e4b59865b5e38a3b833de130ae668b4b88",
+            "title": "S3 upload_folder",
+            "date": "2026-10-23T05:02:14.000Z"
+          },
+          "securityFileStatus": {
+            "status": "unscanned",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "unscanned"
+            },
+            "pickleImportScan": {
+              "status": "unscanned"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        },
+        {
+          "type": "file",
+          "oid": "0f2287157f7cb0dd40498c7a92f74b6975fa2d57",
+          "size": 6,
+          "path": "extra.txt",
+          "lastCommit": {
+            "id": "9afcd3ea6f3fe303354546da38b78dd1cffb1e07",
+            "title": "S3 delete + add",
+            "date": "2026-10-23T05:02:15.000Z"
+          },
+          "securityFileStatus": {
+            "status": "safe",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "safe",
+              "message": "",
+              "version": "1.5.4/28095"
+            },
+            "pickleImportScan": {
+              "status": "unscanned",
+              "pickleImports": [],
+              "version": "0.0.0"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

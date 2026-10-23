@@ -1,0 +1,214 @@
+{
+  "step": "20-get-paths-info",
+  "seq": 1,
+  "role": "hub",
+  "request": {
+    "method": "POST",
+    "url": "https://huggingface.co/api/models/openxet-compat/openxet-compat-s3-682b4d/paths-info/main",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Host",
+        "huggingface.co"
+      ],
+      [
+        "Accept",
+        "*/*"
+      ],
+      [
+        "Accept-Encoding",
+        "gzip, deflate"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "user-agent",
+        "unknown/None; hf_hub/2.2.0; python/3.13.17"
+      ],
+      [
+        "authorization",
+        "REDACTED"
+      ],
+      [
+        "Content-Length",
+        "69"
+      ],
+      [
+        "Content-Type",
+        "application/x-www-form-urlencoded"
+      ],
+      [
+        "X-Amzn-Trace-Id",
+        "b636590f-96c4-40b7-8ccc-7e2890d52181"
+      ]
+    ],
+    "body": {
+      "size": 69,
+      "text": "paths=README.md&paths=big.bin&paths=sub&paths=missing.txt&expand=true"
+    }
+  },
+  "response": {
+    "status": 200,
+    "reason": "OK",
+    "http_version": "HTTP/1.1",
+    "headers": [
+      [
+        "Content-Type",
+        "application/json; charset=utf-8"
+      ],
+      [
+        "Transfer-Encoding",
+        "chunked"
+      ],
+      [
+        "Connection",
+        "keep-alive"
+      ],
+      [
+        "Date",
+        "Fri, 23 Oct 2026 05:02:17 GMT"
+      ],
+      [
+        "content-encoding",
+        "gzip"
+      ],
+      [
+        "ETag",
+        "W/\"405-9VoT1elztLCdCoMovohiMbkN9Po\""
+      ],
+      [
+        "X-Powered-By",
+        "huggingface-moon"
+      ],
+      [
+        "X-Request-Id",
+        "Root=1-6adaea59-1019738a5a56e43f4fe0c3a8;b636590f-96c4-40b7-8ccc-7e2890d52181"
+      ],
+      [
+        "RateLimit",
+        "\"api\";r=977;t=209"
+      ],
+      [
+        "RateLimit-Policy",
+        "\"fixed window\";\"api\";q=1000;w=300"
+      ],
+      [
+        "cross-origin-opener-policy",
+        "same-origin"
+      ],
+      [
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin"
+      ],
+      [
+        "Access-Control-Max-Age",
+        "86400"
+      ],
+      [
+        "Access-Control-Allow-Origin",
+        "https://huggingface.co"
+      ],
+      [
+        "Vary",
+        "Origin"
+      ],
+      [
+        "vary",
+        "Accept-Encoding"
+      ],
+      [
+        "Access-Control-Expose-Headers",
+        "X-Repo-Commit,X-Request-Id,X-Error-Code,X-Error-Message,X-Total-Count,ETag,Link,Accept-Ranges,Content-Range,X-Linked-Size,X-Linked-ETag,X-Xet-Hash"
+      ],
+      [
+        "X-Cache",
+        "Miss from cloudfront"
+      ],
+      [
+        "Via",
+        "1.1 28690d214b6d5469463f817c40bb6ed8.cloudfront.net (CloudFront)"
+      ],
+      [
+        "X-Amz-Cf-Pop",
+        "CDG52-P7"
+      ],
+      [
+        "Alt-Svc",
+        "h3=\":443\"; ma=86400"
+      ],
+      [
+        "X-Amz-Cf-Id",
+        "RWZLtxeIE3Ic9sdTYG8H0Oi2DkUBW3FvZWz_eOXFdKpvjL2hA_mtTQ=="
+      ],
+      [
+        "Strict-Transport-Security",
+        "max-age=31536000"
+      ]
+    ],
+    "body": {
+      "size": 565,
+      "json": [
+        {
+          "type": "file",
+          "oid": "91a33bd4b20b4a3f677205c785b849956b246c6f",
+          "size": 20,
+          "path": "README.md",
+          "lastCommit": {
+            "id": "def4b2e4b59865b5e38a3b833de130ae668b4b88",
+            "title": "S3 upload_folder",
+            "date": "2026-10-23T05:02:14.000Z"
+          },
+          "securityFileStatus": {
+            "status": "unscanned",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "unscanned"
+            },
+            "pickleImportScan": {
+              "status": "unscanned"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        },
+        {
+          "type": "file",
+          "oid": "17b64f87bb29e51e3b430eada023d33a3b90a5f4",
+          "size": 209715200,
+          "lfs": {
+            "oid": "0041f94a86dd643c7c0da1da750081f871464c6fd9beff4569b387d778aee7eb",
+            "size": 209715200,
+            "pointerSize": 134
+          },
+          "xetHash": "6bc628345f60e2d99568327ee57b3e548cfbc9d8da9904a4aaefe35eff9489b6",
+          "path": "big.bin",
+          "lastCommit": {
+            "id": "def4b2e4b59865b5e38a3b833de130ae668b4b88",
+            "title": "S3 upload_folder",
+            "date": "2026-10-23T05:02:14.000Z"
+          },
+          "securityFileStatus": {
+            "status": "unscanned",
+            "protectAiScan": {
+              "status": "unscanned"
+            },
+            "avScan": {
+              "status": "unscanned"
+            },
+            "pickleImportScan": {
+              "status": "unscanned"
+            },
+            "virusTotalScan": {
+              "status": "unscanned"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
