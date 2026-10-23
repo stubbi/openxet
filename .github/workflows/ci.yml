@@ -43,6 +43,10 @@ jobs:
           key: xet-spec-reference-${{ hashFiles('testdata/xet-spec-reference/SHA256SUMS') }}
       - run: scripts/fetch-reference-files.sh
       - run: cargo nextest run --workspace
+      # Release builds drop upstream's debug self-check of MerkleHashSubtree,
+      # so the incremental file hash is also tested the way production runs it.
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)'
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings

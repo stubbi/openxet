@@ -10,11 +10,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use openxet_protocol::{
-    MerkleHash, ProtocolError, file_hash, hash_from_hex, hash_to_hex, range_hash, read_xorb_chunks,
-    xorb_hash, xorb_with_footer,
+    MAX_REFERENCED_CHUNKS, MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError, Segment,
+    ShardFileEntry, UploadShard, VerifyError, file_hash, hash_from_hex, hash_to_hex, range_hash,
+    read_upload_shard, read_xorb_chunks, verify_segment, verify_shard, xorb_hash, xorb_with_footer,
 };
-// Only to build client-serialized xorbs as test input; production code
-// reaches upstream through openxet_protocol alone.
+// Only to build client-serialized xorbs and shards as test input; production
+// code reaches upstream through openxet_protocol alone.
+use xet_core_structures::metadata_shard::shard_in_memory::MDBInMemoryShard;
 use xet_core_structures::xorb_object::{Chunk, RawXorbData, SerializedXorbObject};
 
 const CSV: &str = "Electric_Vehicle_Population_Data_20250917.csv";
@@ -223,4 +225,348 @@ fn missing_fixture_fails_loudly() {
         err.downcast_ref::<String>().map(String::as_str),
         Some("missing reference file does-not-exist: run scripts/fetch-reference-files.sh")
     );
+}
+
+const UPLOAD_SHARD: &str =
+    "Electric_Vehicle_Population_Data_20250917.csv.shard.verification-no-footer";
+/// SHA-256 of the reference CSV (`shasum -a 256`), as hex of the digest bytes.
+const CSV_SHA256: &str = "f41255b252f776125f2b657136654e4d4d5d2ccf8ef4db0ec186bd1981b69734";
+
+fn reference_upload_shard() -> UploadShard {
+    read_upload_shard(fs::File::open(fixture(UPLOAD_SHARD)).unwrap()).unwrap()
+}
+
+fn reference_segments() -> Vec<Segment> {
+    reference_upload_shard().files.remove(0).segments
+}
+
+fn digest_bytes(hex: &str) -> [u8; 32] {
+    core::array::from_fn(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+}
+
+fn flip_first_byte(h: MerkleHash) -> MerkleHash {
+    let mut bytes: [u8; 32] = h.as_bytes().try_into().unwrap();
+    bytes[0] ^= 1;
+    MerkleHash::from(bytes)
+}
+
+#[test]
+fn verification_shard_without_footer_parses_and_names_the_reference_file() {
+    let shard = reference_upload_shard();
+    assert_eq!(shard.files.len(), 1);
+    let file = &shard.files[0];
+    assert_eq!(
+        hash_to_hex(&file.file_hash),
+        read_trimmed(&format!("{CSV}.xet-file-hash"))
+    );
+    assert!(!file.segments.is_empty());
+    for seg in &file.segments {
+        assert_eq!(hash_to_hex(&seg.xorb), XORB);
+        assert!(seg.verification.is_some());
+    }
+    assert_eq!(file.sha256, Some(digest_bytes(CSV_SHA256)));
+    assert_eq!(
+        shard.xorbs.iter().map(hash_to_hex).collect::<Vec<_>>(),
+        [XORB]
+    );
+}
+
+#[test]
+fn every_reference_segment_verifies_against_the_reference_xorb() {
+    let chunks = reference_xorb_chunks();
+    for seg in reference_segments() {
+        verify_segment(&seg, &chunks).unwrap();
+    }
+}
+
+#[test]
+fn tampered_verification_hash_is_rejected() {
+    let chunks = reference_xorb_chunks();
+    let mut seg = reference_segments().remove(0);
+    seg.verification = seg.verification.map(flip_first_byte);
+    let err = verify_segment(&seg, &chunks).unwrap_err();
+    assert!(
+        matches!(err, VerifyError::RangeHashMismatch { .. }),
+        "{err}"
+    );
+    let msg = err.to_string();
+    assert!(msg.contains(XORB) && msg.contains("0..796"), "{msg}");
+}
+
+#[test]
+fn tampered_unpacked_bytes_is_rejected() {
+    let chunks = reference_xorb_chunks();
+    let mut seg = reference_segments().remove(0);
+    seg.unpacked_bytes += 1;
+    let err = verify_segment(&seg, &chunks).unwrap_err();
+    assert!(matches!(err, VerifyError::LengthMismatch { .. }), "{err}");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("63527245") && msg.contains("63527244"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn segment_out_of_xorb_bounds_is_rejected() {
+    let chunks = reference_xorb_chunks();
+    let mut past_end = reference_segments().remove(0);
+    past_end.chunk_end = u32::try_from(chunks.len()).unwrap() + 1;
+    let mut empty = reference_segments().remove(0);
+    empty.chunk_end = empty.chunk_start;
+    for seg in [past_end, empty] {
+        let err = verify_segment(&seg, &chunks).unwrap_err();
+        assert!(matches!(err, VerifyError::OutOfBounds { .. }), "{err}");
+    }
+}
+
+#[test]
+fn file_hash_recomputes_from_segments() {
+    let chunks = reference_xorb_chunks();
+    let entry = reference_upload_shard().files.remove(0);
+    let referenced: Vec<(MerkleHash, u64)> = entry
+        .segments
+        .iter()
+        .flat_map(|s| chunks[s.chunk_start as usize..s.chunk_end as usize].to_vec())
+        .collect();
+    assert_eq!(file_hash(&referenced), entry.file_hash);
+
+    let lookup = |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks.as_slice());
+    verify_one(&entry, lookup).unwrap();
+
+    let mut wrong = entry.clone();
+    wrong.file_hash = flip_first_byte(wrong.file_hash);
+    let err = verify_one(&wrong, lookup).unwrap_err();
+    assert!(matches!(err, VerifyError::FileHashMismatch { .. }), "{err}");
+}
+
+#[test]
+fn file_referencing_an_unknown_xorb_is_rejected() {
+    let entry = reference_upload_shard().files.remove(0);
+    let err = verify_one(&entry, |_| None).unwrap_err();
+    assert!(matches!(err, VerifyError::UnknownXorb { .. }), "{err}");
+    assert!(err.to_string().contains(XORB), "{err}");
+}
+
+#[test]
+fn shard_without_verification_entries_is_rejected_for_upload() {
+    let shard =
+        read_upload_shard(fs::File::open(fixture(&format!("{CSV}.shard"))).unwrap()).unwrap();
+    let chunks = reference_xorb_chunks();
+    let seg = &shard.files[0].segments[0];
+    assert!(seg.verification.is_none());
+    assert!(matches!(
+        verify_segment(seg, &chunks),
+        Err(VerifyError::MissingVerification { .. })
+    ));
+}
+
+#[test]
+fn footered_shard_parses_like_the_footerless_one() {
+    // The spec says uploads omit the footer
+    // (https://huggingface.co/docs/xet/shard#shard-upload), but upstream's
+    // reference server accepts one, so a footer that matches the sections is
+    // tolerated and discarded.
+    let footered =
+        read_upload_shard(fs::File::open(fixture(&format!("{CSV}.shard.verification"))).unwrap())
+            .unwrap();
+    assert_eq!(footered, reference_upload_shard());
+}
+
+#[test]
+fn shard_serialized_with_lookup_tables_and_footer_parses() {
+    // The wasm build of `xet-data` 1.7.0 uploads `MDBInMemoryShard::to_bytes`
+    // (`processing/shard_interface/wasm.rs`): sections, lookup tables, footer.
+    let bytes = fs::read(fixture(UPLOAD_SHARD)).unwrap();
+    let in_memory = MDBInMemoryShard::from_reader(&mut bytes.as_slice()).unwrap();
+    let wasm_form = in_memory.to_bytes().unwrap();
+    assert!(wasm_form.len() > bytes.len() + 200);
+    assert_eq!(
+        read_upload_shard(wasm_form.as_slice()).unwrap(),
+        reference_upload_shard()
+    );
+}
+
+#[test]
+fn footerless_shard_with_trailing_bytes_is_rejected() {
+    let mut bytes = fs::read(fixture(UPLOAD_SHARD)).unwrap();
+    bytes.push(0);
+    assert!(matches!(
+        read_upload_shard(bytes.as_slice()),
+        Err(ProtocolError::MalformedShard(_))
+    ));
+}
+
+#[test]
+fn shard_with_inconsistent_footer_is_rejected() {
+    let footered = fs::read(fixture(&format!("{CSV}.shard.verification"))).unwrap();
+    // Footer cut short, and an extra byte between the sections and the footer
+    // so its offsets no longer match.
+    let truncated = &footered[..footered.len() - 1];
+    let mut shifted = footered[..footered.len() - 200].to_vec();
+    shifted.push(0);
+    shifted.extend_from_slice(&footered[footered.len() - 200..]);
+    for bytes in [truncated, shifted.as_slice()] {
+        assert!(matches!(
+            read_upload_shard(bytes),
+            Err(ProtocolError::MalformedShard(_))
+        ));
+    }
+}
+
+#[test]
+fn truncated_shard_is_rejected() {
+    let bytes = fs::read(fixture(UPLOAD_SHARD)).unwrap();
+    for len in [0, 47, 48 + 100, bytes.len() - 1] {
+        assert!(
+            matches!(
+                read_upload_shard(&bytes[..len]),
+                Err(ProtocolError::MalformedShard(_))
+            ),
+            "length {len}"
+        );
+    }
+}
+
+#[test]
+fn wrong_header_version_is_rejected() {
+    let mut bytes = fs::read(fixture(UPLOAD_SHARD)).unwrap();
+    bytes[32] = 3;
+    assert!(matches!(
+        read_upload_shard(bytes.as_slice()),
+        Err(ProtocolError::MalformedShard(_))
+    ));
+}
+
+#[test]
+fn oversized_section_claim_is_rejected_before_allocation() {
+    // 1,000,000 segments with verification and metadata entries claim
+    // (2 * 1_000_000 + 1) * 48 bytes, about 96 MB: no arithmetic overflow,
+    // just over the 64 MiB budget, which must refuse it before allocating.
+    let mut bytes = fs::read(fixture(UPLOAD_SHARD)).unwrap();
+    bytes[48 + 36..48 + 40].copy_from_slice(&1_000_000u32.to_le_bytes());
+    let err = read_upload_shard(bytes.as_slice()).unwrap_err();
+    assert!(matches!(err, ProtocolError::MalformedShard(_)), "{err}");
+    let source = std::error::Error::source(&err).unwrap().to_string();
+    assert!(source.contains("exceeds limit"), "{source}");
+    assert_eq!(MAX_UPLOAD_SHARD_BYTES, 64 * 1024 * 1024);
+}
+
+fn reference_lookup<'a>(
+    chunks: &'a [(MerkleHash, u64)],
+) -> impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]> {
+    move |x: &MerkleHash| (hash_to_hex(x) == XORB).then_some(chunks)
+}
+
+#[test]
+fn shard_work_at_the_cap_passes_and_over_it_is_rejected() {
+    // The reference shard references all 796 chunks once.
+    let chunks = reference_xorb_chunks();
+    let shard = reference_upload_shard();
+    verify_shard(&shard, reference_lookup(&chunks), 796).unwrap();
+    let err = verify_shard(&shard, reference_lookup(&chunks), 795).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::TooMuchWork {
+                referenced_chunks: 796,
+                limit: 795
+            }
+        ),
+        "{err}"
+    );
+    assert_eq!(MAX_REFERENCED_CHUNKS, 1 << 24);
+}
+
+#[test]
+fn shard_work_count_cannot_overflow() {
+    // About as many maximal segments as fit in 64 MiB, each spanning u32::MAX
+    // chunks: 1_400_000 * (2^32 - 1) chunks. The count must be exact (no u32
+    // wrap, no panic), and the cap rejects it before any xorb is looked up.
+    let seg = Segment {
+        xorb: MerkleHash::default(),
+        chunk_start: 0,
+        chunk_end: u32::MAX,
+        unpacked_bytes: 0,
+        verification: None,
+    };
+    let entry = ShardFileEntry {
+        file_hash: MerkleHash::default(),
+        segments: vec![seg; 1_400_000],
+        sha256: None,
+    };
+    let shard = UploadShard {
+        files: vec![entry],
+        xorbs: Vec::new(),
+    };
+    let err = verify_shard(&shard, |_| unreachable!(), MAX_REFERENCED_CHUNKS).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::TooMuchWork {
+                referenced_chunks: 6_012_954_213_000_000,
+                limit: MAX_REFERENCED_CHUNKS,
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn file_hash_streams_across_many_segments() {
+    // The same 796 chunks split into segments of varying size, each with a
+    // correct verification entry, still recompute to the reference file hash.
+    let chunks = reference_xorb_chunks();
+    let xorb = hash_from_hex(XORB).unwrap();
+    let mut segments = Vec::new();
+    let mut start = 0;
+    for size in (1..).cycle().take(796) {
+        if start == chunks.len() {
+            break;
+        }
+        let end = (start + size).min(chunks.len());
+        let range = &chunks[start..end];
+        segments.push(Segment {
+            xorb,
+            chunk_start: u32::try_from(start).unwrap(),
+            chunk_end: u32::try_from(end).unwrap(),
+            unpacked_bytes: u32::try_from(range.iter().map(|(_, l)| l).sum::<u64>()).unwrap(),
+            verification: Some(range_hash(
+                &range.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
+            )),
+        });
+        start = end;
+    }
+    assert_eq!(segments.len(), 40);
+    let entry = ShardFileEntry {
+        file_hash: hash_from_hex(&read_trimmed(&format!("{CSV}.xet-file-hash"))).unwrap(),
+        segments,
+        sha256: None,
+    };
+    verify_one(&entry, reference_lookup(&chunks)).unwrap();
+}
+
+#[test]
+fn reference_dedupe_shard_has_no_files() {
+    // A global-dedup response is a shard too; it parses, lists its xorb, and
+    // has nothing to register.
+    let shard = read_upload_shard(fs::File::open(fixture(&format!("{CSV}.shard.dedupe"))).unwrap())
+        .unwrap();
+    assert!(shard.files.is_empty());
+    assert_eq!(
+        shard.xorbs.iter().map(hash_to_hex).collect::<Vec<_>>(),
+        [XORB]
+    );
+}
+
+/// Verifies one file through the public entry point, under the default cap.
+fn verify_one<'a>(
+    entry: &ShardFileEntry,
+    xorb_chunks: impl Fn(&MerkleHash) -> Option<&'a [(MerkleHash, u64)]>,
+) -> Result<(), VerifyError> {
+    let shard = UploadShard {
+        files: vec![entry.clone()],
+        xorbs: Vec::new(),
+    };
+    verify_shard(&shard, xorb_chunks, MAX_REFERENCED_CHUNKS)
 }

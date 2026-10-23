@@ -181,6 +181,7 @@ are added when they exist.
 cargo build                                                # build the workspace
 scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
+cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans

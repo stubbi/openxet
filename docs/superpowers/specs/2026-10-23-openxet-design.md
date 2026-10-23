@@ -874,8 +874,11 @@ own UI and leave this role off.
   plain-HTTPS URL route.
 - **S5:** whether `xet-core-structures` is usable server-side, or which pieces
   to vendor or reimplement, and its versioning on crates.io.
-- **S6:** the shard upload verification rules (spec "shard" page) implemented
-  against the reference files.
+- **S6** *(answered: eleven rules, all checkable from per-xorb chunk hashes
+  and lengths stored at xorb ingest; reference and real `hf_xet` shards
+  pass; `docs/research/S6-shard-verification.md`)*: the shard upload
+  verification rules (spec "shard" page) implemented against the reference
+  files.
 - **S7:** the `git-xet` download handshake, plus `git-lfs` behaviour with a
   separate `lfs.url` host (credentials, `basic` fallback), against a real
   Gitea in CI. Includes the credential-source gap (§10.2) over both HTTPS

@@ -1,4 +1,4 @@
-//! The Xet protocol for openxet: hashes and xorbs.
+//! The Xet protocol for openxet: hashes, xorbs and shards.
 //!
 //! This crate is openxet's only doorway to Hugging Face's `xet-core` crates
 //! (ADR 0001). Every function is a thin wrapper over `xet-core-structures`,
@@ -8,9 +8,14 @@
 #![forbid(unsafe_code)]
 
 mod hash;
+mod shard;
 mod xorb;
 
 pub use hash::{MerkleHash, chunk_hash, file_hash, hash_from_hex, hash_to_hex, range_hash};
+pub use shard::{
+    MAX_REFERENCED_CHUNKS, MAX_UPLOAD_SHARD_BYTES, Segment, ShardFileEntry, UploadShard,
+    VerifyError, read_upload_shard, verify_segment, verify_shard,
+};
 pub use xorb::{StoredXorb, XorbChunks, read_xorb_chunks, xorb_hash, xorb_with_footer};
 
 /// Errors from parsing protocol data.
@@ -28,4 +33,10 @@ pub enum ProtocolError {
          https://huggingface.co/docs/xet/xorb"
     )]
     MalformedXorb(#[source] xet_core_structures::CoreError),
+    /// Bytes are not a valid upload shard.
+    #[error(
+        "malformed shard: expected an upload shard as in \
+         https://huggingface.co/docs/xet/shard#shard-upload"
+    )]
+    MalformedShard(#[source] xet_core_structures::CoreError),
 }
