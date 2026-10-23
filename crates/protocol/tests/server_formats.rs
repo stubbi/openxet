@@ -12,13 +12,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use openxet_protocol::{
-    MerkleHash, ProtocolError, StoredXorb, UploadShard, VerifyError, VerifyLimits, dedup_shard,
-    hash_to_hex, is_dedup_eligible, read_upload_shard, read_xorb_chunks, shard_hash, stored_shard,
-    verify_shard, xorb_with_footer,
+    MerkleHash, ProtocolError, Segment, ShardFileEntry, StoredXorb, UploadShard, VerifyError,
+    VerifyLimits, dedup_shard, hash_to_hex, is_dedup_eligible, read_upload_shard, read_xorb_chunks,
+    shard_hash, stored_shard, verify_shard, xorb_with_footer,
 };
 // Only to read the produced shards back with upstream's own parsers.
 use xet_core_structures::metadata_shard::MDBShardInfo;
 use xet_core_structures::metadata_shard::streaming_shard::MDBMinimalShard;
+use xet_core_structures::xorb_object::XorbObjectInfoV1;
 
 const REFERENCE_XORB: &str = "eea25d6ee393ccae385820daed127b96ef0ea034dfb7cf6da3a950ce334b7632";
 const CAPTURE_XORB: &str = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
@@ -81,6 +82,25 @@ fn chunk_offsets_frame_every_chunk() {
             let chunks = read_xorb_chunks(range).unwrap();
             assert_eq!(chunks.hashes, xorb.chunks.hashes[a..b], "chunks {a}..{b}");
         }
+    }
+}
+
+#[test]
+fn chunk_offsets_of_a_footered_upload_end_where_the_footer_starts() {
+    // Both fixtures are footer-less uploads; their stored form is a footered
+    // body, as a client serializing with a footer uploads it.
+    for footerless in [reference_xorb(), capture_xorb()] {
+        let footered = xorb_with_footer(&footerless.bytes).unwrap();
+        assert_eq!(footered.chunk_offsets, footerless.chunk_offsets);
+        let n = footered.chunks.hashes.len();
+        let end = footered.chunk_offsets[n] as usize;
+        assert!(end < footered.bytes.len());
+        assert_eq!(
+            read_xorb_chunks(&footered.bytes[..end]).unwrap().hashes,
+            footered.chunks.hashes
+        );
+        // Upstream's footer parser reads a footer starting exactly there.
+        XorbObjectInfoV1::deserialize(&mut &footered.bytes[end..]).unwrap();
     }
 }
 
@@ -165,6 +185,13 @@ fn dedup_shard_hides_raw_chunk_hashes() {
             !bytes.windows(32).any(|window| window == chunk.as_bytes()),
             "raw chunk hash {chunk} appears in the dedup shard"
         );
+        // The lookup tables hold hashes truncated to their first 8 bytes.
+        assert!(
+            !bytes
+                .windows(8)
+                .any(|window| window == &chunk.as_bytes()[..8]),
+            "truncated raw chunk hash {chunk} appears in the dedup shard"
+        );
     }
 
     let info = MDBShardInfo::load_from_reader(&mut Cursor::new(&bytes)).unwrap();
@@ -211,4 +238,58 @@ fn dedup_eligibility_matches_upstream() {
         eligible += usize::from(expected);
     }
     assert!(eligible > 0, "no eligible hash among the samples");
+}
+
+/// A lookup holding one xorb whose single chunk is `len` bytes long.
+fn one_chunk_lookup(
+    xorb: MerkleHash,
+    len: u64,
+) -> impl Fn(&MerkleHash) -> Option<Arc<[(MerkleHash, u64)]>> {
+    let chunks: Arc<[(MerkleHash, u64)]> = vec![(MerkleHash::random_from_seed(1), len)].into();
+    move |x: &MerkleHash| (*x == xorb).then(|| Arc::clone(&chunks))
+}
+
+#[test]
+fn chunk_tables_over_the_shard_formats_counts_are_rejected() {
+    let xorb = MerkleHash::random_from_seed(9);
+    let lookup = one_chunk_lookup(xorb, 1 << 32);
+    let table = lookup(&xorb).unwrap();
+    let shard = UploadShard {
+        files: vec![ShardFileEntry {
+            file_hash: MerkleHash::random_from_seed(10),
+            segments: vec![Segment {
+                xorb,
+                chunk_start: 0,
+                chunk_end: 1,
+                unpacked_bytes: 0,
+                verification: Some(MerkleHash::random_from_seed(11)),
+            }],
+            sha256: None,
+        }],
+        xorbs: vec![xorb],
+    };
+    let too_large = |err: &ProtocolError| matches!(err, ProtocolError::XorbTableTooLarge { xorb: x } if *x == xorb);
+    let err = stored_shard(&shard, &lookup).unwrap_err();
+    assert!(too_large(&err), "{err}");
+    let err = dedup_shard(&xorb, &table, MerkleHash::random_from_seed(12), 0).unwrap_err();
+    assert!(too_large(&err), "{err}");
+}
+
+#[test]
+fn stored_shard_keeps_an_empty_file() {
+    let none = |_: &MerkleHash| -> Option<Arc<[(MerkleHash, u64)]>> { None };
+    for sha256 in [None, Some([0; 32])] {
+        let shard = UploadShard {
+            files: vec![ShardFileEntry {
+                file_hash: MerkleHash::default(),
+                segments: Vec::new(),
+                sha256,
+            }],
+            xorbs: Vec::new(),
+        };
+        let stored = stored_shard(&shard, &none).unwrap();
+        let back = read_upload_shard(stored.as_slice()).unwrap();
+        assert_eq!(back, shard);
+        verify_shard(&back, &none, VerifyLimits::default()).unwrap();
+    }
 }
