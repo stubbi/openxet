@@ -17,17 +17,26 @@ days**. If you get none, comment again; that is our miss, not yours.
 Install Rust through [rustup](https://rustup.rs); the toolchain is pinned in
 `rust-toolchain.toml`. `cargo nextest` needs `cargo install cargo-nextest
 --locked` once, and `cargo deny` needs `cargo install cargo-deny --locked`.
+The compatibility suite needs [uv](https://docs.astral.sh/uv/), which
+installs the pinned Python and HF clients from `compat/uv.lock`.
 Run from the repository root. CI runs these same commands
 (`.github/workflows/ci.yml`), so green locally means green there.
 
 ```bash
 cargo build                                                # build the workspace
+scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
+cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
+uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent # agent leg (CI gate)
 ```
+
+The full compatibility suite (`pytest` without `-m agent`) talks to
+huggingface.co, and CI runs it nightly.
 
 ## Before you start
 
@@ -44,7 +53,7 @@ Every commit needs a `Signed-off-by` line certifying the
 `git commit -s`. If you forgot, fix the last commit with
 `git commit --amend -s --no-edit`, or a whole branch with
 `git rebase --signoff main`, then force-push. The `DCO` check on PRs fails
-without it. Dependabot commits are exempt.
+without it. Pull requests opened by Dependabot are exempt.
 
 ## Commits
 
