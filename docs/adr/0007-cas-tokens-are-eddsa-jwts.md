@@ -24,6 +24,13 @@ therefore has to honour `exp` exactly.
    - `exp`, `iat`: Unix seconds.
 
    The header carries `kid`, naming the verification key.
+
+   *Amended (M1-R19):* the only other claim accepted is an optional `nbf`,
+   and the token is rejected while `now < nbf`. Any other claim, such as
+   `aud`, `iss` or `jti`, is rejected rather than ignored, so a restriction
+   openxet cannot honour never fails open. `sub` and `scope` must be
+   non-empty and free of control characters, and `scope` may be at most
+   1024 bytes.
 3. **Key set.** The server accepts several public keys at once and signs
    with one private key. Rotation adds the new public key everywhere,
    switches the signer, then removes the old key after the longest token
