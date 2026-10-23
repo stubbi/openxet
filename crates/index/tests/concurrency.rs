@@ -46,10 +46,23 @@ fn files(label: &str, xorb: MerkleHash, n: u32) -> Vec<NewFile> {
         .collect()
 }
 
+/// `e` with its whole `source()` chain, so a failure names the SQLite cause
+/// and not only the index's advice.
+fn chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        out.push_str(": ");
+        out.push_str(&c.to_string());
+        cause = c.source();
+    }
+    out
+}
+
 async fn open(path: &std::path::Path) -> Arc<dyn Index> {
     match SqliteIndex::open(path).await {
         Ok(index) => Arc::new(index),
-        Err(e) => panic!("open index: {e}"),
+        Err(e) => panic!("open index: {}", chain(&e)),
     }
 }
 
@@ -91,7 +104,7 @@ async fn identical_concurrent_writes_from_separate_instances_insert_once() {
             async move {
                 match index.put_xorb(&xorb, 30_100, &t, &eligible, SCOPE).await {
                     Ok(new) => new,
-                    Err(e) => panic!("put_xorb: {e}"),
+                    Err(e) => panic!("put_xorb: {}", chain(&e)),
                 }
             }
         })
@@ -108,7 +121,7 @@ async fn identical_concurrent_writes_from_separate_instances_insert_once() {
                     .await
                 {
                     Ok(new) => new,
-                    Err(e) => panic!("register_shard: {e}"),
+                    Err(e) => panic!("register_shard: {}", chain(&e)),
                 }
             }
         })
@@ -133,14 +146,14 @@ async fn distinct_concurrent_writers_never_fail_on_the_lock() {
                 let xorb = h(&format!("{label}/xorb"));
                 let t = table(&label, 4);
                 if let Err(e) = index.put_xorb(&xorb, 2500, &t, &[], SCOPE).await {
-                    panic!("put_xorb: {e}");
+                    panic!("put_xorb: {}", chain(&e));
                 }
                 let shard = h(&format!("{label}/shard"));
                 if let Err(e) = index
                     .register_shard(&shard, &files(&label, xorb, 4), SCOPE, Visibility::PerScope)
                     .await
                 {
-                    panic!("register_shard: {e}");
+                    panic!("register_shard: {}", chain(&e));
                 }
             }
             true
