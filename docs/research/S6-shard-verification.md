@@ -17,7 +17,7 @@
 ## Answer
 
 The rules below are implemented in `openxet-protocol` (`src/shard.rs`) as
-`read_upload_shard`, `verify_shard`, `verify_file` and `verify_segment`, and
+`read_upload_shard`, `verify_shard` and `verify_segment`, and
 enforced by
 tests in `crates/protocol/tests/reference_files.rs` and
 `crates/protocol/tests/hf_xet_upload.rs`.
@@ -56,7 +56,9 @@ Every `VerifyError` names the xorb and chunk range (or the file), and the
 expected and actual values, so a client author can see which term is wrong.
 `verify_segment` checks in this order: bounds, verification present, range
 hash, length. `verify_shard` is the entry point for untrusted shards: it
-applies rule 10, then `verify_file` (rules 5 to 9 and 11) to each file.
+applies rule 10, then rules 5 to 9 and 11 to each file. It is the only
+public verification entry point besides `verify_segment`, so the work bound
+can't be skipped by accident.
 
 Rule 9 matters beyond integrity. Rules 5 to 7 only prove the client knows
 each term's chunk hashes; without rule 9 a client could register any file
@@ -124,7 +126,7 @@ can't be reconstructed, or that claim content they don't have.
   `hf_xet` 1.7.0 uploads an empty file as a block with zero entries, file
   hash all zeros, and SHA-256 all zeros, with the verification and metadata
   flags set. Upstream's `file_hash` of no chunks is all zeros, so
-  `verify_file` accepts it by rule 9 and rejects any other hash for an empty
+  `verify_shard` accepts it by rule 9 and rejects any other hash for an empty
   file.
 - **SHA-256 byte order.** The spec calls the metadata field "the 32 byte
   SHA256 of the file contents"
@@ -181,7 +183,12 @@ can't be reconstructed, or that claim content they don't have.
     buffer of at most one xorb's chunk hashes, plus the parsed shard (at most
     about the 64 MiB body).
   - `file_hash_streams_across_many_segments` pins the incremental hash
-    to the reference file hash across 40 segments.
+    to the reference file hash across 40 segments, and
+    `incremental_file_hash_matches_one_shot_over_many_random_segments`
+    to upstream's one-shot `file_hash` over 10^5 synthetic chunks in about
+    over 1,000 seeded random segments (single-chunk ones and ones ending on
+    aggregation group cuts included). CI also runs the latter in a release
+    build, where upstream's debug self-check is compiled out.
 - **Empty-file SHA-256.** With no segments, nothing ties the SHA-256 to
   content. `hf_xet` 1.7.0 sends all zeros (the capture), so openxet accepts
   absent, all zeros, or the real SHA-256 of zero bytes (`e3b0c442…`), and
@@ -219,10 +226,9 @@ uncompressed length)`: exactly `XorbChunks::hashes`, which xorb ingest
   never re-download xorbs to verify a shard.
 - Global dedup's chunk-to-xorb entries come from the same ingest-time
   listing, never from a shard's CAS info section.
-- `verify_shard` and `verify_file` take a lookup closure, so M1 can batch
-  the index reads per shard and pass a map. M1 calls `verify_shard` with
-  `MAX_REFERENCED_CHUNKS` (or an operator-set value), never `verify_file`
-  alone on an untrusted shard.
+- `verify_shard` takes a lookup closure, so M1 can batch the index reads per
+  shard and pass a map. M1 calls it with `MAX_REFERENCED_CHUNKS` or an
+  operator-set value.
 - Worst-case verify memory per request is the parsed shard (about the
   64 MiB body), the index entries it looks up (40 bytes per chunk of each
   distinct referenced xorb), and O(log n) per file. CPU is bounded by the
