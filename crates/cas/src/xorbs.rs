@@ -177,6 +177,9 @@ async fn store(
     request: Request,
 ) -> Result<bool, Response> {
     // hyper's size hint is exact when the request declares a Content-Length.
+    // Unlike other refusals, this body is not drained: it can't be within
+    // the limit, and no stock client sends one, so the 413 goes out unread
+    // and closes the connection rather than read up to 64.5 MiB for nothing.
     if request.body().size_hint().lower() > MAX_XORB_BODY_BYTES {
         return Err(closing(too_large()));
     }
@@ -233,7 +236,7 @@ async fn validate(state: &AppState, body: Bytes) -> Result<StoredXorb, CasError>
 /// `Xorb*` variant, `413` for one over the limit.
 #[allow(
     clippy::match_same_arms,
-    reason = "known variants are named so each classification is reviewed; the wildcard covers the rest"
+    reason = "every variant is named, so each classification is a reviewed decision"
 )]
 fn rejected(reason: ProtocolError) -> CasError {
     let code = match &reason {
@@ -248,8 +251,15 @@ fn rejected(reason: ProtocolError) -> CasError {
         ProtocolError::XorbTrailingBytes { .. } => "xorb_trailing_bytes",
         // Describes a stored chunk table, never an upload body.
         ProtocolError::XorbTableTooLarge { .. } => return CasError::internal(reason),
-        // Not a xorb rule: `xorb_with_footer` returning one is a bug.
-        _ => return CasError::internal(reason),
+        // Not xorb rules: `xorb_with_footer` returning one is a bug. Listed
+        // rather than matched by a wildcard, so a new `Xorb*` variant is a
+        // compile error here instead of a 500 that clients retry.
+        ProtocolError::InvalidHex(_)
+        | ProtocolError::MalformedShard(_)
+        | ProtocolError::ShardNotVerified(_)
+        | ProtocolError::ShardFileSha256Conflict { .. }
+        | ProtocolError::ShardSerialization(_)
+        | ProtocolError::DedupKeyZero => return CasError::internal(reason),
     };
     CasError::InvalidXorb {
         code,
