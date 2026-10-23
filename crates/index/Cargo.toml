@@ -16,7 +16,7 @@ fault-injection = []
 [dependencies]
 async-trait = "0.1"
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio", "migrate", "macros"] }
 thiserror = "2"
 
 [dev-dependencies]

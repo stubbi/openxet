@@ -8,7 +8,7 @@ use openxet_protocol::MerkleHash;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use sqlx::{Row, Sqlite, Transaction};
+use sqlx::{AssertSqlSafe, Row, Sqlite, Transaction};
 
 use crate::types::{decode_chunk_table, decode_terms, encode_chunk_table, encode_terms, hash_from};
 use crate::{ChunkTable, FileRecord, Index, IndexError, NewFile, Visibility};
@@ -25,10 +25,29 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Hashes bound per `IN (...)` query, well under SQLite's variable limit.
 const HASHES_PER_QUERY: usize = 500;
 
-/// A xorb `x` is visible when visibility is global (first bind) or it is
-/// registered to the caller's scope (second bind).
-const VISIBLE: &str =
-    "(? OR EXISTS (SELECT 1 FROM xorb_scopes s WHERE s.xorb = x.hash AND s.scope = ?))";
+/// The SQL condition under which xorb `x` is visible: visibility is global
+/// (first bind) or `x` is registered to the caller's scope (second bind). A
+/// macro, so queries using it stay `&'static str`.
+macro_rules! visible {
+    () => {
+        "(? OR EXISTS (SELECT 1 FROM xorb_scopes s WHERE s.xorb = x.hash AND s.scope = ?))"
+    };
+}
+
+/// A query whose only dynamic part is `count` copies of `placeholder`, for
+/// binding a batch of values. Every text part is `'static`, so no caller data
+/// can enter the SQL.
+fn with_placeholders(
+    head: &'static str,
+    placeholder: &'static str,
+    count: usize,
+    tail: &'static str,
+) -> AssertSqlSafe<String> {
+    AssertSqlSafe(format!(
+        "{head}{}{tail}",
+        vec![placeholder; count].join(", ")
+    ))
+}
 
 /// The index in one SQLite database file, in WAL mode with `synchronous=FULL`
 /// so a committed write survives a crash or power loss (design §5.9 req 7).
@@ -110,9 +129,12 @@ async fn insert_dedup(
     xorb: &MerkleHash,
 ) -> Result<(), IndexError> {
     for batch in chunks.chunks(HASHES_PER_QUERY) {
-        let rows = vec!["(?, ?)"; batch.len()].join(", ");
-        let sql = format!("INSERT INTO dedup (chunk, xorb) VALUES {rows} ON CONFLICT DO NOTHING");
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(with_placeholders(
+            "INSERT INTO dedup (chunk, xorb) VALUES ",
+            "(?, ?)",
+            batch.len(),
+            " ON CONFLICT DO NOTHING",
+        ));
         for chunk in batch {
             query = query.bind(chunk.as_bytes()).bind(xorb.as_bytes());
         }
@@ -169,13 +191,15 @@ impl Index for SqliteIndex {
         scope: &str,
         vis: Visibility,
     ) -> Result<Option<u64>, IndexError> {
-        let sql = format!("SELECT x.size FROM xorbs x WHERE x.hash = ? AND {VISIBLE}");
-        let size: Option<i64> = sqlx::query_scalar(&sql)
-            .bind(xorb.as_bytes())
-            .bind(vis == Visibility::Global)
-            .bind(scope)
-            .fetch_optional(&self.pool)
-            .await?;
+        let size: Option<i64> = sqlx::query_scalar(concat!(
+            "SELECT x.size FROM xorbs x WHERE x.hash = ? AND ",
+            visible!()
+        ))
+        .bind(xorb.as_bytes())
+        .bind(vis == Visibility::Global)
+        .bind(scope)
+        .fetch_optional(&self.pool)
+        .await?;
         size.map(|s| to_u64(s, "xorb size")).transpose()
     }
 
@@ -191,12 +215,12 @@ impl Index for SqliteIndex {
         };
         let mut tables = HashMap::with_capacity(unique.len());
         for batch in unique.chunks(HASHES_PER_QUERY) {
-            let params = vec!["?"; batch.len()].join(", ");
-            let sql = format!(
-                "SELECT x.hash, x.chunk_count, x.chunk_table FROM xorbs x \
-                 WHERE x.hash IN ({params}) AND {VISIBLE}"
-            );
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(with_placeholders(
+                "SELECT x.hash, x.chunk_count, x.chunk_table FROM xorbs x WHERE x.hash IN (",
+                "?",
+                batch.len(),
+                concat!(") AND ", visible!()),
+            ));
             for hash in batch {
                 query = query.bind(hash.as_bytes());
             }
@@ -291,16 +315,16 @@ impl Index for SqliteIndex {
         scope: &str,
         vis: Visibility,
     ) -> Result<Option<MerkleHash>, IndexError> {
-        let sql = format!(
-            "SELECT x.hash FROM dedup d JOIN xorbs x ON x.hash = d.xorb \
-             WHERE d.chunk = ? AND {VISIBLE} ORDER BY x.ingested_seq DESC LIMIT 1"
-        );
-        let xorb: Option<Vec<u8>> = sqlx::query_scalar(&sql)
-            .bind(chunk.as_bytes())
-            .bind(vis == Visibility::Global)
-            .bind(scope)
-            .fetch_optional(&self.pool)
-            .await?;
+        let xorb: Option<Vec<u8>> = sqlx::query_scalar(concat!(
+            "SELECT x.hash FROM dedup d JOIN xorbs x ON x.hash = d.xorb WHERE d.chunk = ? AND ",
+            visible!(),
+            " ORDER BY x.ingested_seq DESC LIMIT 1"
+        ))
+        .bind(chunk.as_bytes())
+        .bind(vis == Visibility::Global)
+        .bind(scope)
+        .fetch_optional(&self.pool)
+        .await?;
         xorb.as_deref().map(hash_from).transpose()
     }
 }
