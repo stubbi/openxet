@@ -44,6 +44,13 @@ pub enum AuthError {
         reason: &'static str,
     },
 
+    /// A CAS token was requested that the verifier would reject.
+    #[error("refusing to sign the CAS token: {reason}")]
+    InvalidClaims {
+        /// What is wrong with the requested claims.
+        reason: &'static str,
+    },
+
     /// A configured static token has an invalid subject or scope.
     #[error(
         "static token #{index} is misconfigured: {reason}; give every static token a non-empty subject and scope without control characters (scope at most 1024 bytes)"

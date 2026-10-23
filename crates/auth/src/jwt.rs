@@ -94,6 +94,7 @@ impl fmt::Debug for PublicKey {
 pub struct TokenSigner {
     kid: String,
     key: SigningKey,
+    max_token_lifetime: Duration,
 }
 
 impl TokenSigner {
@@ -110,6 +111,7 @@ impl TokenSigner {
         Ok(Self {
             kid: kid_of(&key.verifying_key()),
             key,
+            max_token_lifetime: crate::Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
         })
     }
 
@@ -125,10 +127,44 @@ impl TokenSigner {
         PublicKey::from_verifying_key(&self.key.verifying_key())
     }
 
+    /// Limits the lifetime of tokens this signer mints; it should match the
+    /// verifiers' `max_token_lifetime`. The default is
+    /// [`Authenticator::DEFAULT_MAX_TOKEN_LIFETIME`](crate::Authenticator::DEFAULT_MAX_TOKEN_LIFETIME).
+    #[must_use]
+    pub fn with_max_token_lifetime(mut self, max_token_lifetime: Duration) -> Self {
+        self.max_token_lifetime = max_token_lifetime;
+        self
+    }
+
     /// A CAS token for `subject` limited to `scope` and `mode`, issued at
     /// `now` and valid until `exp` (Unix seconds, exclusive).
-    #[must_use]
-    pub fn sign(&self, subject: &str, scope: &str, mode: Mode, exp: u64, now: u64) -> String {
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::InvalidClaims`] for a token the verifier would reject:
+    /// an empty or control-character `subject` or `scope`, a `scope` over
+    /// [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES), `exp <= now`, or `exp`
+    /// more than this signer's lifetime limit after `now`.
+    pub fn sign(
+        &self,
+        subject: &str,
+        scope: &str,
+        mode: Mode,
+        exp: u64,
+        now: u64,
+    ) -> Result<String, AuthError> {
+        crate::check_identity(subject, scope)
+            .map_err(|reason| AuthError::InvalidClaims { reason })?;
+        if exp <= now {
+            return Err(AuthError::InvalidClaims {
+                reason: "exp is not after now, so the token would already be expired",
+            });
+        }
+        if exp > now.saturating_add(self.max_token_lifetime.as_secs()) {
+            return Err(AuthError::InvalidClaims {
+                reason: "exp is further ahead than the maximum token lifetime",
+            });
+        }
         let header = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": self.kid });
         let claims = serde_json::json!({
             "sub": subject, "scope": scope, "mode": mode, "exp": exp, "iat": now,
@@ -141,7 +177,7 @@ impl TokenSigner {
         let signature = self.key.sign(token.as_bytes());
         token.push('.');
         token.push_str(&URL_SAFE_NO_PAD.encode(signature.to_bytes()));
-        token
+        Ok(token)
     }
 }
 
@@ -150,6 +186,7 @@ impl fmt::Debug for TokenSigner {
         f.debug_struct("TokenSigner")
             .field("kid", &self.kid)
             .field("key", &"<redacted>")
+            .field("max_token_lifetime", &self.max_token_lifetime)
             .finish()
     }
 }

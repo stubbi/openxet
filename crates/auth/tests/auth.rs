@@ -113,7 +113,9 @@ fn jwt_round_trip_and_kid_rotation() {
     .expect("valid config");
 
     for s in [&old, &new] {
-        let token = s.sign("alice", "org/model", Mode::Read, NOW + 60, NOW);
+        let token = s
+            .sign("alice", "org/model", Mode::Read, NOW + 60, NOW)
+            .expect("valid claims");
         let principal = auth
             .authenticate(&token, NOW)
             .expect("token from a known key");
@@ -122,7 +124,9 @@ fn jwt_round_trip_and_kid_rotation() {
         assert_eq!(principal.mode, Mode::Read);
     }
 
-    let token = stranger.sign("alice", "org/model", Mode::Write, NOW + 60, NOW);
+    let token = stranger
+        .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
+        .expect("valid claims");
     assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
 }
 
@@ -136,7 +140,9 @@ fn jwt_signed_with_a_known_kid_but_another_key_is_invalid() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let token = impostor.sign("alice", "org/model", Mode::Write, NOW + 60, NOW);
+    let token = impostor
+        .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
+        .expect("valid claims");
     let forged = retarget_kid(&token, known.kid());
     assert_eq!(auth.authenticate(&forged, NOW), Err(AuthError::Invalid));
 }
@@ -147,7 +153,9 @@ fn signer_token_decodes_with_an_independent_decoder() {
     // encoder bug cannot hide a format error (RFC 7515 §7.1, RFC 8037 §3.1).
     let pair = generate_keypair().expect("generate keypair");
     let s = TokenSigner::from_pem(pair.private_pem()).expect("parse");
-    let token = s.sign("alice", "org/model", Mode::Write, NOW + 60, NOW);
+    let token = s
+        .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
+        .expect("valid claims");
     let segments: Vec<&str> = token.split('.').collect();
     assert_eq!(segments.len(), 3);
 
@@ -178,6 +186,57 @@ fn signer_token_decodes_with_an_independent_decoder() {
 }
 
 #[test]
+fn signer_refuses_tokens_the_verifier_would_reject() {
+    let s = signer();
+    let day = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
+    let long_scope = "s".repeat(1025);
+    let refused = [
+        ("", "org/model", NOW + 60),
+        ("alice\n", "org/model", NOW + 60),
+        ("alice", "", NOW + 60),
+        ("alice", "org/model\u{0}", NOW + 60),
+        ("alice", long_scope.as_str(), NOW + 60),
+        ("alice", "org/model", NOW),
+        ("alice", "org/model", NOW - 1),
+        ("alice", "org/model", NOW + day + 1),
+        ("alice", "org/model", u64::MAX),
+    ];
+    for (subject, scope, exp) in refused {
+        let error = s
+            .sign(subject, scope, Mode::Read, exp, NOW)
+            .expect_err("the verifier would reject this token");
+        assert!(
+            matches!(error, AuthError::InvalidClaims { .. }),
+            "{error:?}"
+        );
+    }
+
+    let auth = Authenticator::new(
+        vec![],
+        vec![s.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    for exp in [NOW + 1, NOW + day] {
+        let token = s
+            .sign("alice", "org/model", Mode::Read, exp, NOW)
+            .expect("valid claims");
+        assert!(auth.authenticate(&token, NOW).is_ok(), "{exp}");
+    }
+
+    let hourly = signer().with_max_token_lifetime(Duration::from_hours(1));
+    assert!(
+        hourly
+            .sign("alice", "org/model", Mode::Read, NOW + 3600, NOW)
+            .is_ok()
+    );
+    assert!(matches!(
+        hourly.sign("alice", "org/model", Mode::Read, NOW + 3601, NOW),
+        Err(AuthError::InvalidClaims { .. })
+    ));
+}
+
+#[test]
 fn jwt_expired_exactly_at_exp() {
     let s = signer();
     let auth = Authenticator::new(
@@ -186,7 +245,9 @@ fn jwt_expired_exactly_at_exp() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let token = s.sign("alice", "org/model", Mode::Read, NOW, NOW - 60);
+    let token = s
+        .sign("alice", "org/model", Mode::Read, NOW, NOW - 60)
+        .expect("valid claims");
     assert!(auth.authenticate(&token, NOW - 1).is_ok());
     assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Expired));
     assert_eq!(auth.authenticate(&token, NOW + 1), Err(AuthError::Expired));
@@ -605,7 +666,9 @@ fn jwt_rejects_non_canonical_base64() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let token = s.sign("alice", "org/model", Mode::Read, NOW + 60, NOW);
+    let token = s
+        .sign("alice", "org/model", Mode::Read, NOW + 60, NOW)
+        .expect("valid claims");
     assert!(auth.authenticate(&token, NOW).is_ok());
     let (input, sig) = token.rsplit_once('.').expect("three segments");
     let (header, payload) = input.split_once('.').expect("three segments");
@@ -965,8 +1028,12 @@ fn auth_errors_never_contain_the_credential() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let expired = s.sign("alice", "org/model", Mode::Read, NOW, NOW);
-    let foreign = signer().sign("alice", "org/model", Mode::Read, NOW + 60, NOW);
+    let expired = s
+        .sign("alice", "org/model", Mode::Read, NOW, NOW - 60)
+        .expect("valid claims");
+    let foreign = signer()
+        .sign("alice", "org/model", Mode::Read, NOW + 60, NOW)
+        .expect("valid claims");
     let wrong_static = format!("{STATIC_SECRET}x");
 
     let us = url_signer();
