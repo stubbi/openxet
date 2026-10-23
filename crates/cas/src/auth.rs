@@ -74,21 +74,15 @@ fn authenticate(parts: &Parts, state: &AppState) -> Result<Principal, CasError> 
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::sync::Arc;
-
     use axum::Router;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use axum::routing::post;
-    use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
-    use openxet_index::{SqliteIndex, Visibility};
-    use openxet_protocol::VerifyLimits;
-    use openxet_storage::LocalBucket;
+    use openxet_auth::{Mode, StaticToken};
     use tower::ServiceExt as _;
-    use url::Url;
 
     use super::*;
-    use crate::CasConfig;
+    use crate::test_support;
 
     // The scheme is a constant so the repository's secret scanner, which
     // flags any literal bearer value, can tell these test tokens from leaks.
@@ -107,30 +101,13 @@ mod tests {
 
     /// A write-only route, which the CAS gains only in later tasks.
     async fn write_route(dir: &tempfile::TempDir) -> Router {
-        let state = AppState::new(
-            Arc::new(SqliteIndex::open(&dir.path().join("i")).await.unwrap()),
-            Arc::new(LocalBucket::open(&dir.path().join("b")).unwrap()),
-            Arc::new(
-                Authenticator::new(
-                    vec![token(READ, Mode::Read), token(WRITE, Mode::Write)],
-                    vec![],
-                    Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
-                )
-                .unwrap(),
-            ),
-            Arc::new(UrlSigner::new([1; 32], UrlSigner::DEFAULT_LIFETIME).unwrap()),
-            CasConfig {
-                public_url: Url::parse("http://127.0.0.1:8080").unwrap(),
-                visibility: Visibility::Global,
-                verify_limits: VerifyLimits::default(),
-            },
-        );
+        let tokens = vec![token(READ, Mode::Read), token(WRITE, Mode::Write)];
         Router::new()
             .route(
                 "/w",
                 post(|WriteAccess(p): WriteAccess| async move { p.subject }),
             )
-            .with_state(state)
+            .with_state(test_support::state(dir.path(), tokens).await)
     }
 
     async fn call(router: &Router, auth: &[&str]) -> (StatusCode, String) {

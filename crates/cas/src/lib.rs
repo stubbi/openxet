@@ -17,18 +17,23 @@ mod auth;
 mod error;
 mod misc;
 mod request_id;
+#[cfg(test)]
+mod test_support;
 
+use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::http::header::AUTHORIZATION;
+use axum::response::{IntoResponse as _, Response};
 use openxet_auth::{Authenticator, UrlSigner};
 use openxet_index::{Index, Visibility};
 use openxet_protocol::VerifyLimits;
 use openxet_storage::Bucket;
 use tokio::sync::Semaphore;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use tower_http::trace::TraceLayer;
 use url::Url;
@@ -134,14 +139,66 @@ impl AppState {
 /// - A path no route serves answers `404`, whatever the method: `404` is how
 ///   stock clients learn a route doesn't exist here (S10 "Status codes and
 ///   retries"). A known path with an unserved method answers `405`.
+/// - A handler panic answers `500 internal` with the error body and the
+///   request id, never the panic message.
 /// - Responses are never compressed: clients send no `Accept-Encoding`.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .merge(misc::routes())
+    with_middleware(Router::new().merge(misc::routes()), state)
+}
+
+/// The response to a handler panic: `500 internal`, logged inside the
+/// request's span. The panic payload is neither logged nor sent, since it
+/// may hold request data.
+fn panicked(_payload: Box<dyn Any + Send + 'static>) -> Response {
+    CasError::internal("a request handler panicked").into_response()
+}
+
+/// `routes` with the fallbacks and middleware every CAS route gets.
+fn with_middleware(routes: Router<AppState>, state: AppState) -> Router {
+    routes
         .fallback(error::no_route)
         .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
+        .layer(CatchPanicLayer::custom(panicked))
         .layer(TraceLayer::new_for_http().make_span_with(request_id::span))
         .layer(SetSensitiveRequestHeadersLayer::new([AUTHORIZATION]))
         .layer(axum::middleware::from_fn(request_id::assign))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use tower::ServiceExt as _;
+
+    use super::*;
+
+    async fn boom() -> &'static str {
+        panic!("panic-payload-marker")
+    }
+
+    #[tokio::test]
+    async fn a_panicking_handler_answers_500_with_a_request_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let routes = Router::new().route("/panic", get(boom));
+        let app = with_middleware(routes, test_support::state(dir.path(), vec![]).await);
+
+        let response = app
+            .oneshot(Request::get("/panic").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(response.headers().contains_key(X_REQUEST_ID));
+        assert_eq!(response.headers()["content-type"], "application/json");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["schema"], "openxet.error.v1");
+        assert_eq!(json["code"], "internal");
+        assert!(!body.contains("panic-payload-marker"), "{body}");
+    }
 }
