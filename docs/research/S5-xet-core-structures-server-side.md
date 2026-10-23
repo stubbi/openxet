@@ -65,9 +65,10 @@ Each function or type the server needs:
 | Hash string form | `merklehash::DataHash::hex`, `from_hex` (`merklehash/data_hash.rs`) | yes |
 | Chunk, xorb and file hashes | `merklehash::{compute_data_hash, xorb_hash, file_hash, file_hash_with_salt}` | yes |
 | Range verification hash | `metadata_shard::chunk_verification::range_hash_from_chunks` | yes |
-| Parse a footer-less xorb upload | `xorb_object::deserialize_chunks`, `deserialize_chunks_to_writer`, per-chunk `deserialize_chunk` (`xorb_object/xorb_chunk_format.rs`) | yes |
+| Validate a xorb upload (`POST /v1/xorbs`), footer optional, and build the stored form | `xorb_object::reconstruct_xorb_with_footer` (`xorb_object/xorb_object_format.rs`); wrapped as `openxet_protocol::xorb_with_footer` | yes |
+| Parse a footer-less chunk sequence (no footer allowed) | `xorb_object::deserialize_chunks`, `deserialize_chunks_to_writer`, per-chunk `deserialize_chunk` (`xorb_object/xorb_chunk_format.rs`); wrapped as `openxet_protocol::read_xorb_chunks` | yes |
 | Async xorb parse | `deserialize_chunks_from_async_read`, `deserialize_chunks_from_stream` (`xorb_chunk_format/deserialize_async.rs`) | yes |
-| Add a footer for storage and range reads | `xorb_object::reconstruct_xorb_with_footer`, `XorbObject::deserialize`, `get_byte_offset` (`xorb_object/xorb_object_format.rs`) | yes |
+| Read a stored xorb's footer for range reads | `XorbObject::deserialize`, `get_byte_offset` (`xorb_object/xorb_object_format.rs`) | yes |
 | Parse a footer-less shard upload | `metadata_shard::streaming_shard::MDBMinimalShard::from_reader`; `shard_in_memory::MDBInMemoryShard::from_reader` | yes |
 | Parse with a size budget (untrusted input) | `streaming_shard::process_shard_file_info_section`, `process_shard_xorb_info_section` (`size_limit: Option<u64>`) | yes |
 | Read file entries and verification entries | `file_structs::MDBFileInfoView::{entry, verification, file_hash, contains_verification}`, `FileVerificationEntry::range_hash` | yes |
@@ -87,14 +88,31 @@ reimplementing the format:
 - **Covering "every xorb of the files containing the chunk" (lesson 6).**
   This is index logic: build an `MDBInMemoryShard` from the index, then
   `serialize_from` followed by `export_as_keyed_shard`.
-- **Trailing bytes.** The parsers don't reject them:
-  - `MDBMinimalShard::from_reader` and `MDBInMemoryShard::from_reader` stop
-    at the xorb-section bookend and don't read or check what follows. A
-    footer-less upload and a footered one parse alike.
-  - `deserialize_chunks` does reject trailing bytes that aren't a whole
-    chunk.
-  - The protocol crate must decide whether an upload may carry a footer, and
-    check end-of-input itself.
+- **Xorb upload footers.** Upstream's reference server accepts an optional
+  footer, so openxet does too:
+  - `xet-client` 1.7.0 `cas_client/simulation/local_server/handlers.rs`
+    (`post_xorb`) passes the body with `footer_start: None`.
+  - `local_client.rs` (`upload_xorb`) then calls
+    `reconstruct_xorb_with_footer`, compares the computed hash with the path
+    hash, and stores the result: chunks plus a recomputed footer.
+  - `reconstruct_xorb_with_footer` stops parsing chunks at a header that
+    starts with the footer ident `XETBLOB` (`parse_chunk_header` returns
+    `ChunkHeaderParse`). It discards whatever follows without reading it, and
+    writes a footer computed from the chunks.
+  - Other trailing bytes are rejected. The reference file's 4 bytes `XETB`
+    fail with `UnexpectedEof`.
+  - `deserialize_chunks` (and so `read_xorb_chunks`) is stricter. It rejects
+    a footer too, so it serves only footer-less contexts.
+  - Clients send no footer: `xet-data` calls `from_xorb(xorb, false, …)`.
+    The tolerance covers clients that serialize with `serialize_footer = true`.
+  - The protocol crate's tests pin this: footer-less, client-footered and
+    re-submitted stored forms all hash to `eea25d6e…`, and the stray-`XETB`
+    form is rejected.
+- **Shard trailing bytes.** `MDBMinimalShard::from_reader` and
+  `MDBInMemoryShard::from_reader` stop at the xorb-section bookend and don't
+  read or check what follows, so a footer-less upload and a footered one
+  parse alike. S6 decides whether shard uploads may carry a footer or must
+  end at the bookend.
 - **Size limits.** `from_reader` passes `None` (unlimited) to the section
   parsers. For untrusted uploads, call the `process_shard_*_section`
   functions with a budget instead.
@@ -106,7 +124,8 @@ reimplementing the format:
   nor a valid footered xorb.
   - Clients send footer-less xorbs: `xet-data` 1.7.0,
     `processing/file_upload_session.rs`, calls `SerializedXorbObject::from_xorb(xorb, false, …)`.
-  - `deserialize_chunks` rejects the reference file with `UnexpectedEof`.
+  - Both `deserialize_chunks` and `reconstruct_xorb_with_footer` reject the
+    reference file with `UnexpectedEof`.
   - The golden tests check the chunk section and assert that the full file
     is rejected.
 - The spec's printed hash-string example
@@ -186,8 +205,11 @@ Consequences:
 1. Use `xet-core-structures =1.7.0` for all hashing, xorb and shard work,
    behind `openxet-protocol`. Nothing needs reimplementing; no ADR 0002.
 2. In the protocol crate, own the policies upstream leaves open:
-   - reject trailing bytes and footers on uploads, unless S6 shows that HF
-     accepts them
+   - xorb uploads go through `xorb_with_footer`, which wraps
+     `reconstruct_xorb_with_footer`. An optional `XETBLOB` footer is
+     accepted and replaced, as upstream's reference server does. Stray bytes
+     are rejected, and the computed hash must equal the path hash.
+   - for shard uploads, S6 decides footer and trailing-byte handling
    - parse untrusted shards through the size-budgeted section parsers
    - parse in `spawn_blocking` from a buffered body
 3. Accept the compile-time cost. If it becomes a CI problem, propose
