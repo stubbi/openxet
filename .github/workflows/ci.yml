@@ -147,8 +147,10 @@ jobs:
       # stale, and the build then uses the lock as is.
       - if: steps.changed.outputs.run == 'true'
         run: cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+      # The prebuilt cargo-fuzz is a musl binary and would default to the musl
+      # target, which can't link the sanitizer runtime.
       - if: steps.changed.outputs.run == 'true'
         run: |
           for target in xorb_upload xorb_chunks upload_shard verify_shard; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=60
+            cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=60
           done
