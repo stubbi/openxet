@@ -22,8 +22,7 @@ Legend: **PASS**, **FAIL**, **PARTIAL** as observed; **N/A** the project
 doesn't claim the feature; **NOT RUN** not covered by that run; **Info**
 recorded for context, not graded.
 
-Authorization results are not published for any project; findings go
-privately to maintainers.
+Authorization is not graded or published for any project.
 
 | Project | Size / activity | Protocol core | Stock-client result | Notes |
 |---|---|---|---|---|
@@ -159,8 +158,7 @@ target: cross-machine dedup, Xet downloads with auth on and a working
 Rows are the hands-on protocol's checks, with the lesson each one tests.
 Shardline's column comes from its run above; NOT RUN marks checks that run
 didn't cover. Labels follow the legend at the top. Row 5 grades function
-only: stock `hf_xet` downloads with no extra headers; URL signing falls
-under the unpublished authorization results. Row 8 is graded on bytes
+only: stock `hf_xet` downloads with no extra headers. Row 8 is graded on bytes
 sent from a fresh cache for a 1 MB edit. Maintenance is our
 judgement, not a measurement: **Active** (several maintainers, recent
 code), **Single-maintainer** (one author, code changes within 60 days), or

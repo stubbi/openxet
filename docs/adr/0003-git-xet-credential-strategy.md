@@ -113,7 +113,7 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
     `openxet setup git`, asserting that the refresh succeeds with no
     Authorization header.
   - Same leg, without the setup (decision 2): asserts the push still
-    succeeds when the `href` receives an Authorization header, and that no
+    succeeds even if the `href` receives an Authorization header, and that no
     Authorization value appears in openxet's logs.
   - Unit test: download batches never answer `xet`.
   - Contract test (decision 5): the `git-lfs-authenticate` answer
