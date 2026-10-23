@@ -100,6 +100,14 @@ pub enum CasError {
         xorb: MerkleHash,
     },
 
+    /// No xorb visible to the caller offers the queried chunk for global
+    /// dedup. `404 not_found`, which `hf_xet` reads as "no match" and
+    /// continues the upload (S10 §2). The answer is the same whether the
+    /// chunk was never stored or, under `PerScope` visibility, is another
+    /// scope's, and it names nothing from the request.
+    #[error("no xorb on this server offers the chunk for deduplication")]
+    NoDedupMatch,
+
     /// An uploaded xorb's content hash is not the hash in its path.
     /// `400 xorb_hash_mismatch`, final.
     #[error(
@@ -362,6 +370,13 @@ impl CasError {
                 "xorb_not_found",
                 "Upload the xorb with `POST /v1/xorbs/default/{hash}` and a write token for this \
                  scope.",
+            ),
+            Self::NoDedupMatch => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Nothing to fix: upload the chunk's xorb as usual. Clients treat this as no match \
+                 and continue the upload \
+                 (https://huggingface.co/docs/xet/api#2-query-chunk-deduplication-global-deduplication).",
             ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,

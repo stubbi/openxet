@@ -7,12 +7,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only: `read_dedup_answer`, which reads a dedup answer as a stock
+# client does, for the CAS's tests. Never enable it in a shipped build.
+test-support = []
+
 [dependencies]
 thiserror = "2"
 xet-core-structures = "=1.7.0"
 
 [dev-dependencies]
 bytes = "1"
+openxet-protocol = { path = ".", features = ["test-support"] }
 
 [lints]
 workspace = true

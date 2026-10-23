@@ -1573,6 +1573,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "axum",
+ "getrandom",
  "http-body-util",
  "openxet-auth",
  "openxet-index",
@@ -1611,6 +1612,7 @@ name = "openxet-protocol"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "openxet-protocol",
  "thiserror",
  "xet-core-structures",
 ]
