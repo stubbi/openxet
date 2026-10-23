@@ -1,0 +1,51 @@
+name: Bug report
+description: Something does not work as documented or does not match the Xet protocol
+labels: [bug]
+body:
+  - type: dropdown
+    id: caller
+    attributes:
+      label: Who or what hit the problem?
+      options:
+        - A human
+        - An AI agent
+        - A human and an agent together
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: openxet version
+      description: Output of `openxet version --json`.
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client and version
+      description: For example `hf 1.2.3`, `hf_xet 0.5.0`, `git-xet 0.1.0`, or `openxet`.
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      options:
+        - Self-hosted
+        - openxet.com
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include exact commands, error output and exit codes. Remove secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
