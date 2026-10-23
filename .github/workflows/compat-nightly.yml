@@ -8,8 +8,6 @@ on:
   schedule:
     - cron: "0 4 * * *"
   workflow_dispatch:
-  pull_request:
-    paths: [.github/workflows/compat-nightly.yml]
 
 permissions:
   contents: read
