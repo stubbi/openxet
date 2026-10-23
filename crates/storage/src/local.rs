@@ -15,6 +15,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
@@ -27,10 +28,34 @@ const TMP_DIR: &str = ".tmp";
 /// stays in flight for an hour.
 const STALE_TEMP_AGE: Duration = Duration::from_hours(1);
 
-/// A [`Bucket`] on a local filesystem. Cheap to clone-share behind an `Arc`.
+/// The filesystem calls that make a write durable, behind a seam so tests can
+/// observe that each one happens and in which order. Crate-private.
+pub(crate) trait Durability: Send + Sync + std::fmt::Debug + 'static {
+    fn sync_file(&self, file: &File) -> std::io::Result<()>;
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()>;
+}
+
+#[derive(Debug)]
+struct RealFs;
+
+impl Durability for RealFs {
+    fn sync_file(&self, file: &File) -> std::io::Result<()> {
+        file.sync_all()
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        File::open(dir)?.sync_all()
+    }
+}
+
+/// A [`Bucket`] on a local filesystem. Share it behind an `Arc`.
 #[derive(Debug)]
 pub struct LocalBucket {
     root: PathBuf,
+    fs: Arc<dyn Durability>,
 }
 
 impl LocalBucket {
@@ -41,11 +66,29 @@ impl LocalBucket {
     ///
     /// [`StorageError::Io`] if the directories cannot be created or listed.
     pub fn open(root: &Path) -> Result<Self, StorageError> {
+        Self::open_with(root, Arc::new(RealFs))
+    }
+
+    pub(crate) fn open_with(root: &Path, fs: Arc<dyn Durability>) -> Result<Self, StorageError> {
         let tmp = root.join(TMP_DIR);
-        fs::create_dir_all(&tmp).map_err(io("create bucket directory", &tmp))?;
+        let xorbs = root.join("xorbs");
+        let skeleton = [tmp.clone(), root.join("shards"), xorbs.join("default")];
+        for dir in &skeleton {
+            fs::create_dir_all(dir).map_err(io("create bucket directory", dir))?;
+        }
+        // Without this, a power loss right after the first put can drop the
+        // skeleton's own directory entries and the object with them.
+        for dir in skeleton
+            .iter()
+            .map(PathBuf::as_path)
+            .chain([xorbs.as_path(), root])
+        {
+            fsync_dir(fs.as_ref(), dir)?;
+        }
         sweep_stale_temp(&tmp)?;
         Ok(Self {
             root: root.to_path_buf(),
+            fs,
         })
     }
 
@@ -89,10 +132,8 @@ fn sweep_stale_temp(tmp: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn fsync_dir(dir: &Path) -> Result<(), StorageError> {
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(io("fsync directory", dir))
+fn fsync_dir(durable: &dyn Durability, dir: &Path) -> Result<(), StorageError> {
+    durable.sync_dir(dir).map_err(io("fsync directory", dir))
 }
 
 fn existing_size(path: &Path) -> Result<Option<u64>, StorageError> {
@@ -103,7 +144,19 @@ fn existing_size(path: &Path) -> Result<Option<u64>, StorageError> {
     }
 }
 
+/// Makes the object's directory entries durable: the prefix directory in its
+/// parent, and the object in the prefix directory. Whichever put created
+/// them, no put returns `Ok` before they are on disk.
+fn sync_object_dirs(durable: &dyn Durability, final_path: &Path) -> Result<(), StorageError> {
+    let prefix_dir = final_path.parent().unwrap_or(final_path);
+    if let Some(grandparent) = prefix_dir.parent() {
+        fsync_dir(durable, grandparent)?;
+    }
+    fsync_dir(durable, prefix_dir)
+}
+
 fn put_blocking(
+    durable: &dyn Durability,
     root: &Path,
     key: Key,
     final_path: &Path,
@@ -118,13 +171,16 @@ fn put_blocking(
         }
     };
     if let Some(existing) = existing_size(final_path)? {
-        return check(existing);
+        check(existing)?;
+        // The object may come from a concurrent put that has not finished its
+        // fsyncs; our Ok must not outrun them.
+        return sync_object_dirs(durable, final_path);
     }
 
     let tmp_path = root
         .join(TMP_DIR)
         .join(uuid::Uuid::new_v4().simple().to_string());
-    let result = write_and_publish(&tmp_path, final_path, bytes);
+    let result = write_and_publish(durable, &tmp_path, final_path, bytes);
     if result.is_err() {
         // Best effort: a leftover is also swept by the next `open`.
         let _ = fs::remove_file(&tmp_path);
@@ -132,24 +188,31 @@ fn put_blocking(
     result
 }
 
-fn write_and_publish(tmp_path: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), StorageError> {
+fn write_and_publish(
+    durable: &dyn Durability,
+    tmp_path: &Path,
+    final_path: &Path,
+    bytes: &[u8],
+) -> Result<(), StorageError> {
     let mut file = File::create_new(tmp_path).map_err(io("create temp file", tmp_path))?;
     file.write_all(bytes)
         .map_err(io("write temp file", tmp_path))?;
-    file.sync_all().map_err(io("fsync temp file", tmp_path))?;
+    durable
+        .sync_file(&file)
+        .map_err(io("fsync temp file", tmp_path))?;
     drop(file);
 
-    // `final_path` always has a parent: it is `{root}/.../{prefix}/{hex}`.
     let prefix_dir = final_path.parent().unwrap_or(final_path);
-    let prefix_existed = prefix_dir.exists();
     fs::create_dir_all(prefix_dir).map_err(io("create directory", prefix_dir))?;
-
-    fs::rename(tmp_path, final_path).map_err(io("rename into place", final_path))?;
-    fsync_dir(prefix_dir)?;
-    if !prefix_existed && let Some(grandparent) = prefix_dir.parent() {
-        // The new prefix directory's own entry must be durable too.
-        fsync_dir(grandparent)?;
+    // Before the rename, so a crash never leaves the object under a prefix
+    // directory whose own entry was lost.
+    if let Some(grandparent) = prefix_dir.parent() {
+        fsync_dir(durable, grandparent)?;
     }
+    durable
+        .rename(tmp_path, final_path)
+        .map_err(io("rename into place", final_path))?;
+    fsync_dir(durable, prefix_dir)?;
     Ok(())
 }
 
@@ -198,9 +261,12 @@ fn join_error(e: &tokio::task::JoinError) -> StorageError {
 impl Bucket for LocalBucket {
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         let (root, key, path) = (self.root.clone(), *key, self.path(key));
-        tokio::task::spawn_blocking(move || put_blocking(&root, key, &path, &bytes))
-            .await
-            .map_err(|e| join_error(&e))?
+        let durable = Arc::clone(&self.fs);
+        tokio::task::spawn_blocking(move || {
+            put_blocking(durable.as_ref(), &root, key, &path, &bytes)
+        })
+        .await
+        .map_err(|e| join_error(&e))?
     }
 
     async fn get_range(
@@ -220,5 +286,160 @@ impl Bucket for LocalBucket {
         tokio::task::spawn_blocking(move || existing_size(&path))
             .await
             .map_err(|e| join_error(&e))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::sync::Mutex;
+
+    use openxet_protocol::chunk_hash;
+
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Event {
+        SyncFile,
+        Rename,
+        SyncDir(PathBuf),
+    }
+
+    #[derive(Debug, Default)]
+    struct Recorder(Mutex<Vec<Event>>);
+
+    impl Recorder {
+        fn take(&self) -> Vec<Event> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    #[derive(Debug)]
+    struct Recording(Arc<Recorder>);
+
+    impl Durability for Recording {
+        fn sync_file(&self, file: &File) -> std::io::Result<()> {
+            self.0.0.lock().unwrap().push(Event::SyncFile);
+            RealFs.sync_file(file)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            self.0.0.lock().unwrap().push(Event::Rename);
+            RealFs.rename(from, to)
+        }
+        fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+            self.0
+                .0
+                .lock()
+                .unwrap()
+                .push(Event::SyncDir(dir.to_path_buf()));
+            RealFs.sync_dir(dir)
+        }
+    }
+
+    fn recording_bucket(root: &Path) -> (LocalBucket, Arc<Recorder>) {
+        let rec = Arc::new(Recorder::default());
+        let bucket = LocalBucket::open_with(root, Arc::new(Recording(Arc::clone(&rec)))).unwrap();
+        (bucket, rec)
+    }
+
+    fn sync_dirs(events: &[Event]) -> Vec<&Path> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::SyncDir(p) => Some(p.as_path()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn open_syncs_the_skeleton_and_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_bucket, rec) = recording_bucket(dir.path());
+        let events = rec.take();
+        let r = dir.path();
+        let synced = sync_dirs(&events);
+        for expected in [
+            r.join(".tmp"),
+            r.join("shards"),
+            r.join("xorbs/default"),
+            r.join("xorbs"),
+            r.to_path_buf(),
+        ] {
+            assert!(
+                synced.contains(&expected.as_path()),
+                "{expected:?} not fsynced: {synced:?}"
+            );
+        }
+        assert!(r.join("xorbs/default").is_dir() && r.join("shards").is_dir());
+    }
+
+    #[tokio::test]
+    async fn put_into_a_fresh_prefix_syncs_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bucket, rec) = recording_bucket(dir.path());
+        rec.take();
+        let key = Key::Xorb(chunk_hash(b"order"));
+        bucket
+            .put(&key, Bytes::from_static(b"payload"))
+            .await
+            .unwrap();
+
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
+        let prefix_parent = object_parent.parent().unwrap().to_path_buf();
+        assert_eq!(
+            rec.take(),
+            [
+                Event::SyncFile,
+                Event::SyncDir(prefix_parent),
+                Event::Rename,
+                Event::SyncDir(object_parent),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_put_syncs_directories_before_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bucket, rec) = recording_bucket(dir.path());
+        let key = Key::Shard(chunk_hash(b"dup"));
+        bucket
+            .put(&key, Bytes::from_static(b"payload"))
+            .await
+            .unwrap();
+        rec.take();
+        bucket
+            .put(&key, Bytes::from_static(b"payload"))
+            .await
+            .unwrap();
+
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
+        let prefix_parent = object_parent.parent().unwrap().to_path_buf();
+        assert_eq!(
+            rec.take(),
+            [Event::SyncDir(prefix_parent), Event::SyncDir(object_parent)]
+        );
+    }
+
+    #[tokio::test]
+    async fn put_into_an_existing_prefix_still_syncs_its_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bucket, rec) = recording_bucket(dir.path());
+        let key = Key::Shard(chunk_hash(b"existing"));
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&object_parent).unwrap();
+        rec.take();
+        bucket
+            .put(&key, Bytes::from_static(b"payload"))
+            .await
+            .unwrap();
+
+        let prefix_parent = object_parent.parent().unwrap().to_path_buf();
+        let events = rec.take();
+        assert!(
+            sync_dirs(&events).contains(&prefix_parent.as_path()),
+            "{events:?}"
+        );
     }
 }

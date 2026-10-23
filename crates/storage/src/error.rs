@@ -32,7 +32,8 @@ pub enum StorageError {
 
     /// The key exists with a different size than the bytes being stored.
     /// Content addressing makes identical keys identical in size, so this
-    /// means corruption or a bug; the existing object is left untouched.
+    /// means a bug or a hash collision. The existing object is left untouched
+    /// when this is reported; detection is best-effort under concurrent puts.
     #[error(
         "object {key} already exists with {existing} bytes but {new} bytes were supplied; the existing object was not modified. Content-addressed keys must have identical bytes, so verify the bucket's integrity and report this as a bug"
     )]

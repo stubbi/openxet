@@ -46,8 +46,11 @@ pub trait Bucket: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// [`StorageError::SizeConflict`] if the key exists with a different size
-    /// (corruption or a bug: the object is never overwritten), and
+    /// [`StorageError::SizeConflict`] if the key already exists with a
+    /// different size. Keys are verified content hashes, so this means a bug
+    /// or a hash collision. It is detected when puts are sequential and is
+    /// best-effort under concurrent puts of the same key, so callers must
+    /// verify content before putting, not rely on this check. And
     /// [`StorageError::Io`] if the write fails. Nothing is stored on error.
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError>;
 
