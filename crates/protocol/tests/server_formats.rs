@@ -335,6 +335,17 @@ fn stored_shard_keeps_the_first_of_duplicate_file_entries() {
 }
 
 #[test]
+fn verify_shard_rejects_duplicate_files_with_conflicting_sha256() {
+    let (shard, other) = capture_with_duplicate(Some([7; 32]));
+    let file = shard.files[1].file_hash;
+    let err = verify_shard(&shard, &lookup_with(other), VerifyLimits::default()).unwrap_err();
+    assert!(
+        matches!(&err, VerifyError::ConflictingFileSha256 { file: f } if *f == file),
+        "{err}"
+    );
+}
+
+#[test]
 fn stored_shard_rejects_duplicate_files_with_conflicting_sha256() {
     let (shard, other) = capture_with_duplicate(Some([7; 32]));
     let file = shard.files[1].file_hash;

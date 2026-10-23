@@ -52,12 +52,13 @@ demonstrate.
 | 10b | The segments reference at most `max_referenced_xorbs` distinct xorbs (default `MAX_REFERENCED_XORBS` = 4096). Checked by `verify_shard` after rule 10, before any xorb lookup. Xorbs listed in the CAS info section that no segment references are ignored, never looked up or registered. | none (spec silent; see "Gaps") | `distinct_xorb_count_at_the_cap_passes_and_over_it_is_rejected`, `distinct_xorb_cap_is_checked_before_any_lookup`, `xorbs_listed_but_not_referenced_are_ignored` |
 | 11 | A file with no segments (empty file) has file hash all zeros and SHA-256 absent, all zeros, or SHA-256 of zero bytes. | [hashing#file-hashes](https://huggingface.co/docs/xet/hashing#file-hashes); otherwise silent, see below | `empty_file_sha256_must_be_absent_zero_or_the_empty_digest` |
 | 12 | Stock clients' shards pass all of the above. | | `every_reference_segment_verifies_against_the_reference_xorb`, `hf_xet_upload_shard_verifies_against_its_xorb`, `hf_xet_upload_shard_names_its_files_and_xorb` |
+| 13 | Entries repeating a file hash don't disagree on its SHA-256 (both present and different is a conflict). Checked before any xorb lookup, so `stored_shard` never meets a conflict after a successful verification. | none (spec silent; see "Gaps") | `verify_shard_rejects_duplicate_files_with_conflicting_sha256` |
 
 Every `VerifyError` names the xorb and chunk range (or the file), and the
 expected and actual values, so a client author can see which term is wrong.
 `verify_segment` checks in this order: bounds, verification present, range
 hash, length. `verify_shard` is the entry point for untrusted shards: it
-applies rules 10 and 10b, then rules 5 to 9 and 11 to each file. It is the
+applies rules 10 and 10b, then rule 13, then rules 5 to 9 and 11 to each file. It is the
 only public verification entry point besides `verify_segment`, so the work
 bounds can't be skipped by accident.
 
@@ -212,10 +213,12 @@ can't be reconstructed, or that claim content they don't have.
   file hash twice is idempotent in M1. The stored shard (`stored_shard`)
   keeps the first entry per file hash and leaves out the others, along with
   xorbs only they reference; entries for one file hash reconstruct the same
-  content. Entries that both carry a SHA-256 and disagree are rejected
-  (`ShardFileSha256Conflict`), so the stored digest is never an arbitrary
-  pick (`stored_shard_keeps_the_first_of_duplicate_file_entries`,
-  `stored_shard_rejects_duplicate_files_with_conflicting_sha256`).
+  content. Entries that both carry a SHA-256 and disagree are rejected by
+  `verify_shard` (rule 13, `VerifyError::ConflictingFileSha256`), so the stored
+  digest is never an arbitrary pick; `stored_shard` keeps the same check as a
+  defensive `ShardFileSha256Conflict` (`stored_shard_keeps_the_first_of_duplicate_file_entries`,
+  `stored_shard_rejects_duplicate_files_with_conflicting_sha256`,
+  `verify_shard_rejects_duplicate_files_with_conflicting_sha256`).
 - **The client's CAS info chunk listings.** Dropped by the parser. They feed
   global dedup, so trusting them would let one client poison dedup for
   everyone. M1 takes chunk hashes from xorb ingest instead.
