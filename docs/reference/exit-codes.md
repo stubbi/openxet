@@ -25,7 +25,9 @@ Without `--json`, a usage error is clap's message and usage line, and an
 `io` error is one line starting with `error: `.
 
 `--json` counts only as an option: after `--`, or as the value of an option
-that takes one, it is an ordinary argument. `openxet --help` and
+that accepts values starting with `-`, it is an ordinary argument. Right
+after any other option that takes a value, it is still `--json`, and the
+missing value is reported as a JSON usage error. `openxet --help` and
 `openxet --version` print to stdout and exit 0. `openxet` with no command
 prints the help to stderr and exits 2, since nothing was run.
 

@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, Write};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use openxet_protocol::PROTOCOL_SPEC;
@@ -98,7 +98,8 @@ impl CliError {
     /// Prints the error with `--json`; the caller prints the text form.
     fn report_json(&self) -> u8 {
         if let Ok(line) = serde_json::to_string(self) {
-            eprintln!("{line}");
+            // A closed stderr leaves nothing to report to; keep the exit code.
+            let _ = writeln!(io::stderr(), "{line}");
         }
         self.exit
     }
@@ -144,43 +145,54 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
             if json {
                 return error.report_json();
             }
-            eprintln!("error: {}", error.message);
+            let _ = writeln!(io::stderr(), "error: {}", error.message);
             error.exit
         }
     }
 }
 
 /// Whether `--json` is among the options, so even a parse failure can be
-/// reported as JSON. Matches clap's reading: arguments after `--` are
+/// reported as JSON. Matches clap 4's reading: arguments after `--` are
 /// positional, and the argument after an option that takes a value is that
-/// value.
+/// value, unless it starts with `-` and the option doesn't allow hyphen
+/// values (clap then reports the value as missing).
 fn json_requested(cmd: &clap::Command, args: &[OsString]) -> bool {
-    let takes_value = |arg: &str| {
+    // `Some(allows hyphen values)` if `arg` names an option that takes one.
+    let value_option = |arg: &str| {
         let mut cmds = vec![cmd];
         while let Some(cmd) = cmds.pop() {
             cmds.extend(cmd.get_subcommands());
-            let found = cmd.get_arguments().any(|a| {
+            let found = cmd.get_arguments().find(|a| {
                 a.get_action().takes_values()
                     && (a
                         .get_long()
                         .is_some_and(|l| arg.strip_prefix("--") == Some(l))
                         || a.get_short().is_some_and(|s| arg == format!("-{s}")))
             });
-            if found {
-                return true;
+            if let Some(a) = found {
+                return Some(a.is_allow_hyphen_values_set());
             }
         }
-        false
+        None
     };
-    let mut args = args.iter().skip(1).map(|arg| arg.to_string_lossy());
+    let mut args = args
+        .iter()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy())
+        .peekable();
     while let Some(arg) = args.next() {
         match arg.as_ref() {
             "--" => return false,
             "--json" => return true,
-            arg if takes_value(arg) => {
-                args.next();
+            arg => {
+                if let Some(hyphen_values) = value_option(arg)
+                    && args
+                        .peek()
+                        .is_some_and(|next| hyphen_values || !next.starts_with('-'))
+                {
+                    args.next();
+                }
             }
-            _ => {}
         }
     }
     false
@@ -210,21 +222,34 @@ mod tests {
     }
 
     #[test]
-    fn json_as_an_option_value_is_not_the_flag() {
-        let cmd = Cli::command().subcommand(
-            clap::Command::new("put").arg(clap::Arg::new("out").long("out").short('o')),
-        );
-        assert!(!json_requested(
+    fn json_after_a_value_option_is_the_flag_unless_hyphen_values_are_allowed() {
+        let cmd = Cli::command()
+            .subcommand(clap::Command::new("put").arg(clap::Arg::new("out").long("out").short('o')))
+            .subcommand(
+                clap::Command::new("run")
+                    .arg(clap::Arg::new("arg").long("arg").allow_hyphen_values(true)),
+            );
+        // clap rejects `--out --json` as a missing value, and the caller
+        // asked for JSON, so the error must be JSON.
+        assert!(json_requested(
             &cmd,
             &args(&["openxet", "put", "--out", "--json"])
         ));
-        assert!(!json_requested(
+        assert!(json_requested(
             &cmd,
             &args(&["openxet", "put", "-o", "--json"])
         ));
         assert!(json_requested(
             &cmd,
             &args(&["openxet", "put", "--out", "x", "--json"])
+        ));
+        assert!(!json_requested(
+            &cmd,
+            &args(&["openxet", "put", "--out", "json", "x"])
+        ));
+        assert!(!json_requested(
+            &cmd,
+            &args(&["openxet", "run", "--arg", "--json"])
         ));
     }
 
