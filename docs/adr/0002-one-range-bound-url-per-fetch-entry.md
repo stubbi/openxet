@@ -155,7 +155,8 @@ That includes whether they can bind a range.
     xorb. That means more signing work and bigger JSON for heavily
     deduplicated files. The number of object-store GETs is unchanged,
     because default clients already split.
-  - Benchmarks in M1 must show the signing cost is acceptable.
+  - Benchmarks in M3, with the production backends, must show the
+    signing cost is acceptable.
   - Startup does one probe write and three probe GETs per pool.
 - **We must keep true:**
   - No fetch entry ever has more than one range.
@@ -184,7 +185,7 @@ That includes whether they can bind a range.
   - **Shape:** a CAS unit test asserts the one-range-per-entry invariant
     and that every direct URL carries the range binding. The redacted
     exchanges in `compat/fixtures/s1/` are the reference shapes.
-- **Open, owned by M1:**
+- **Open, owned by M3** (production backends, design §12):
   - Run the probe against real AWS S3, R2, Garage, GCS and Azure, and
     record which pass.
   - Until a store passes, its pools use the transfer role. That follows

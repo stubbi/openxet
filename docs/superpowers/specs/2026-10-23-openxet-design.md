@@ -1372,21 +1372,25 @@ but sets no calendar dates.
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
+  - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
+    `basic` download `href`s point at it (ADR 0003).
   - `openxet purge <file-hash>` (§5.4).
 - **M3:** production backends.
   - Postgres; S3, GCS and Azure; presigned downloads.
+  - The range-binding probe against real AWS S3, R2, Garage, GCS and
+    Azure, and the presigned-URL signing benchmarks (ADR 0002).
   - OIDC and webhook auth.
   - A multi-node scale test.
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
-  - Metrics, tracing and HTTP read gateway.
+  - Metrics, tracing, and the rest of the HTTP read gateway.
   - Server-side chunking for non-Xet clients.
   - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
   - The `git-xet` setup of §10.2: the server-side capability route, plus
-    the upstream credential-sourcing contribution to `xet-core`.
+    the upstream `git-xet` contributions listed there.
   - Upstream: Xet download support in `git-xet` (§6.1). This is contributed
-    alongside the credential-sourcing change and coordinated with Hugging
-    Face before any PR is filed.
+    alongside the other `git-xet` contributions and coordinated with
+    Hugging Face before any PR is filed.
 - **M5:** reach.
   - `bucket`, `space` and `kernel` repo types.
   - Cache tier.
