@@ -15,9 +15,15 @@ It was implemented against the contract below, which openxet's maintainers
 committed to on 2026-10-23. This ADR makes the contract binding, reviewable
 and testable.
 
-The token response shape is identical to Hugging Face's Hub token route (Xet
-spec, "auth" page). The batch header names match xet-core
-`git_xet/src/constants.rs`.
+The token response shape is identical to Hugging Face's Hub token route.
+That was checked against the Xet spec's "auth" page, the huggingface.co
+token exchanges captured by spike S3 (`compat/fixtures/hub/`), and
+`hf_xet`'s `CasJWTInfo` (`xet_client/src/hub_client/types.rs` at xet-core
+`v1.7.0`). The batch header names `X-Xet-Cas-Url`, `X-Xet-Access-Token`,
+`X-Xet-Token-Expiration` and `X-Xet-Session-Id` were read from
+`git_xet/src/constants.rs` at xet-core `v1.7.0`. `X-Xet-Hash` is not in
+that file; it is the `resolve` response header, observed in the S1 and S3
+captures.
 
 ## Decision
 
@@ -51,7 +57,9 @@ spec, "auth" page). The batch header names match xet-core
    Files without the sha256 extension register but can't be served to plain
    git-lfs by oid.
 8. **Downloads.** A read token allows `/v2/reconstructions/{xet-hash}` (and
-   v1) for any file registered to the scope. For Xet-native clients (token
+   v1) for any file registered to the scope, until GC collects it. That
+   includes files only force-pushed-away commits referenced (ruling R25,
+   design §5.4). For Xet-native clients (token
    route) there is no per-object handshake. git-lfs/git-xet clients get the
    hash from the batch response (item 10). Spike S7 found that `git-xet`
    0.2.1 does not download at all, and huggingface.co sends no `X-Xet-Hash`
@@ -79,8 +87,7 @@ spec, "auth" page). The batch header names match xet-core
       to it are ignored and never logged.
     - The download action's `href` is the HTTP read gateway URL for the
       object (absolute), not a token route.
-    - openxet's `verify` action never echoes the client's credential
-      (huggingface.co's does; S7).
+    - openxet's `verify` action never echoes the client's credential.
 11. **Dev mode.** `openxet serve` with no config runs SQLite plus local disk,
     prints a static access token and the env/URL lines, and supports `--json`
     startup info. Port and flags are not final.
@@ -91,8 +98,9 @@ spec, "auth" page). The batch header names match xet-core
   per-object round trips.
 - Token scope is coarse (scope + mode). Implication: per-object restriction
   is not available, so the authorizer decision happens at token issue.
-- The registration in 7 makes shard upload a state-changing step for the
-  index.
+- Shard upload registers files (item 7). Implication: it changes index
+  state, so it must be verified before registering (S6) and idempotent
+  on retry.
 - Header-key casing and the pointer encoding are compatibility commitments.
   Implication: changing either needs a superseding ADR.
 - Tests, built in M1/M2, enforce this:

@@ -68,10 +68,9 @@ shaped on ADR 0005. The evidence is in `docs/research/S7-git-lfs-xet.md` and
      (ADR 0005 item 1).
      - `git-lfs` forwards `X-Xet-Hash` to the `href`, which ignores it.
      - Keeping the CAS token out of the action keeps it out of `GIT_TRACE`
-       output (S7 saw HF's token there) and out of reach of any off-host
-       redirect of the download `href`.
-   - openxet's `verify` action never echoes the client's credential, unlike
-     huggingface.co's (S7).
+       output and out of reach of any off-host redirect of the download
+       `href`.
+   - openxet's `verify` action never echoes the client's credential.
    - openxet's own download agent (design §10.8) registers under its own
      transfer name, not `xet`. The server chooses that name when it is
      offered.
