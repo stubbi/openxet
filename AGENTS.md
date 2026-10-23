@@ -7,7 +7,8 @@ it is part of your change.
 ## What openxet is
 
 openxet is the open-source server and client for the Xet protocol, Hugging
-Face's chunk-deduplicated storage for large, versioned files. The official
+Face's chunk-deduplicated storage for large, versioned files (models and
+datasets are examples, not the definition). The official
 tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`, `git-lfs`,
 `huggingface.js`) work against it unmodified. It runs on storage and identity
 systems people already own, and as a hosted service at **openxet.com**.
@@ -80,6 +81,25 @@ change would lower any of those measures, it isn't done.
 5. **Stateless nodes.** Any node can serve any request; scale by adding
    nodes.
 6. **No telemetry** unless the operator explicitly opts in.
+
+## Security requirements
+
+Design §5.9 lists them, each with the test that enforces it. Every change
+keeps them true, and a change that weakens one is a release blocker:
+- No unauthenticated reads when auth is on. Every data URL needs a
+  credential or is a signed, range-bound URL.
+- Credentials are repo-scoped on every route and signed URL. Repo creation
+  is authorized per namespace.
+- Caches and proxies are keyed by the caller's credential and fail closed.
+- Dedup answers are HMAC-keyed and never expose raw chunk hashes.
+- Uploaded xorbs and shards are verified before anything is registered.
+- Credentials are never echoed or logged.
+- No silent no-op success; acknowledged writes survive a crash.
+- Git reads check reachability, and every ref writer is fenced.
+
+Public text (docs, commits, issues, PRs) describes our own requirements.
+It never names or hints at weaknesses in other projects; report those
+privately to their maintainers.
 
 ## How we work
 
