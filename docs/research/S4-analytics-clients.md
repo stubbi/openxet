@@ -154,7 +154,7 @@ the clients.
   **absolute** `Location`: DuckDB 2.0.0 and polars 2.0.0 both followed
   both, and read 261,698 rows. The stub log shows `302` on the
   redirecting path and `206` on the target (`/v/blob/`).
-- Private path (stub answers `401` unless `Authorization: Bearer ...`):
+- Private path (stub answers `401` unless `Authorization: Bearer REDACTED`):
   - DuckDB without credentials: `HTTP 401`. With
     `create secret (type http, bearer_token '...', scope
     'http://127.0.0.1:8765')`: 261,698 rows, and every request the stub
