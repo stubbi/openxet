@@ -12,9 +12,8 @@ Method:
   2.2.0, `hf_xet` 1.7.0, `git-xet` 0.2.1, `git-lfs` 3.5.1, git 2.39.5. Each
   run follows the same protocol of 18 checks (setup, `hf` and Python API,
   Xet transfer, Range, dedup, Git, crash, authorization, storage,
-  throughput, code, maintenance), each recorded as PASS, FAIL, PARTIAL, N/A
-  (the project doesn't claim the feature) or NOT RUN, with the command and
-  its output as evidence.
+  throughput, code, maintenance), each graded with the labels in the
+  legend below, with the command and its output as evidence.
 
 openxet has no server release yet, so this records the bar to beat and the
 mistakes to avoid.
@@ -63,17 +62,17 @@ affiliated with ggoggam/openxet; the names collide.
 | Setup | PARTIAL | ~5 min from clone to a running server (4m20s cold build). `examples/README.md` claims stock `huggingface_hub` works via `endpoint` (it can't: `405` on `/api/repos/create`); `demo.sh` installs an unpinned `hf_xet`, gets 1.7.0, and its own demo fails |
 | Upload via `hf_xet` | FAIL on 1.7.0 and 1.6.0, PASS on 1.5.2 | 1.7.0: `405 Method Not Allowed` on `/v2/shards`; only `/v1/shards` is routed. 1.5.2: 5 xorbs, shard 200 |
 | Download via `hf_xet` | PASS (1.5.2 and 1.7.0) | sha256 matches for all 3 files |
-| Xet URLs without headers | PASS | Stock `hf_xet` 1.7.0 and 1.5.2 downloads fetch `/v1/xorbs/default/<h>` with no extra headers; sha256 matches |
+| Xet URLs without headers | PARTIAL | Stock `hf_xet` 1.7.0 and 1.5.2 fetch unsigned `/v1/xorbs/default/<h>` URLs with no extra headers; sha256 matches. They are not signed, self-authorizing URLs (L4) |
 | Range | FAIL | A 1000-byte `/v2/reconstructions` range returns chunks `0..1030`, ~67 MB: term, not chunk, granularity |
 | Dedup, same machine | PASS | A 1 MB edit sends 1,134,889 B; an identical copy sends 0 B of xorbs |
-| Dedup, second machine | FAIL | 314,611,672 B re-sent for a 1 MB edit: every `GET /v1/chunks/default/<h>` is 404; only `default-merkledb` is routed |
+| Dedup, second machine (bytes sent) | FAIL | 314,611,672 B re-sent for a 1 MB edit: every `GET /v1/chunks/default/<h>` is 404; only `default-merkledb` is routed |
 | 1 GiB incompressible | PASS | 17 xorbs of ~64 MiB accepted; the body cap is derived from the protocol limit |
 | SIGKILL mid-upload of 512 MB | PASS | The original client finished on retry after restart; the download is byte-identical |
 | GC (no fsck) | PASS | `POST /v1/gc` removed 2 orphan xorbs and 1 superseded shard; all live files still downloaded intact |
 | Authorization | Withheld | |
 | Storage overhead | PASS | 1 GiB stored as 1.0001× xorbs, plus 0.8 MB shards and a 20 MB index: ~2% in total |
 | Throughput (1 GiB, local) | PASS | Upload ~88 MB/s (1.5.2), download ~307 MB/s; peak RSS 327 MiB |
-| Code | PASS, one gap | Uses HF's crates for formats and hashing; 12 reference-file tests run against the HF dataset and pass; 93 tests, ignored ones explicitly `#[ignore]`; no `unsafe`. Gap: `xetcore_compat.rs` replays request patterns instead of running real `hf_xet`, which likely explains why the `/v2/shards` and `/v1/chunks/default` mismatches went unnoticed |
+| Code | Info, one gap | Uses HF's crates for formats and hashing; 12 reference-file tests run against the HF dataset and pass; 93 tests, ignored ones explicitly `#[ignore]`; no `unsafe`. Gap: `xetcore_compat.rs` replays request patterns instead of running real `hf_xet`, which likely explains why the `/v2/shards` and `/v1/chunks/default` mismatches went unnoticed |
 | Maintenance | Inactive | 33 commits, 1 contributor, 32 of 36 PRs self-merged; last code change 2026-07-10 |
 
 The protocol core is the strongest of the projects evaluated: HF's own
@@ -96,8 +95,8 @@ README configuration and default limits. Clients: `huggingface_hub` 2.2.0,
 | Xet download via `hf_xet` | FAIL | `error decoding response body`: the reconstruction response is a custom schema keyed by sha256 |
 | Range | FAIL | Ignored on `resolve` (200, full body) and on reconstruction |
 | Dedup, same machine | FAIL | A 1 MB edit sends 315 MB and writes a new 316 MB xorb; an identical copy is re-sent (1.26 GB over 4 attempts, three 504s) |
-| Dedup, second machine | FAIL | `/v1/chunks/default/<h>` with a write token: `403 'read' required`; with a read token: `200 {"found":false}`, not a shard |
-| Python API | FAIL (3 of 10) | `list_repo_tree` and `hf_hub_download` at a commit pass; `paths-info`, refs, commits, branch, tag 404; delete fails (``unknown variant `deletedFile` ``); `model_info().sha` is `None` |
+| Dedup, second machine (bytes sent) | FAIL | `/v1/chunks/default/<h>` with a write token: `403 'read' required`; with a read token: `200 {"found":false}`, not a shard |
+| Python API | FAIL | `list_repo_tree` and `hf_hub_download` at a commit pass; `paths-info`, refs, commits, branch, tag 404; delete fails (``unknown variant `deletedFile` ``); `model_info().sha` is `None` |
 | `git-lfs` + `git-xet` | PARTIAL | Push and clone work, sha matches, but the batch answers `"transfer":"basic"`, so `git-xet` is never used |
 | Plain `git-lfs` | PASS | 50 MB round trip; absolute `href`, `expires_in` |
 | 1 GiB upload | FAIL | Default `413 max 536870912`; with limits raised, a 504 at 600 s, then 401 on retry (5-minute proxy token expired) |
@@ -107,7 +106,7 @@ README configuration and default limits. Clients: `huggingface_hub` 2.2.0,
 | Throughput | FAIL | 512 MiB upload 121 s, download ~24 MB/s; CAS peak RSS 1.06 GB (whole-file conversion buffer) |
 | Code | Info | Own formats; no `unsafe` outside tests; `cargo test` stops at its first failing binary (201 pass, 1 fail, later binaries not run) |
 | Maintenance | Single-maintainer | MIT, created 2026-06, last push 2026-10-10, one main author |
-| Configuration | Info | The token exchange returns the Hub's own `HUB_CAS_BASE_URL` as `casUrl`, so clients get whatever address the Hub uses internally |
+| Configuration | Info | `casUrl` is taken from the Hub's `HUB_CAS_BASE_URL`, so unless that is set to a public address, clients get a CAS address they can't reach |
 
 The Hub layer is careful work: clean errors, namespace authorization,
 snapshot commits, crash recovery. The Xet layer isn't wire-compatible with
@@ -131,14 +130,14 @@ checks of 2, 6, 9 and 14; "–" means not re-run.
 | Xet URLs, no extra headers | PARTIAL | PASS | Main: unsigned xorb URLs work with auth off; with auth on, the Hub mints tokens the CAS never accepts (`hubserver/repo.go:169-185`), so every transfer gets 401. Taytay: HMAC-signed `?token=` xorb URLs; tampered URLs get 401; a full `hf` round trip works with auth on |
 | Range | FAIL | FAIL | `resolve` with Range is 501; a 1000-byte reconstruction range returns ~67 MB |
 | Dedup, same machine | PASS | – | A 1 MB edit sends one 1,046,210 B xorb; an identical copy sends 0 xorbs |
-| Dedup, second machine | FAIL | PASS | Main: every `/v1/chunks/default/<h>` is `400 unsupported chunk-dedup prefix`; 300,037,856 B re-sent. Taytay: answers on `default`; 1,130,754 B sent for the 1 MB edit |
+| Dedup, second machine (bytes sent) | FAIL | PASS | Main: every `/v1/chunks/default/<h>` is `400 unsupported chunk-dedup prefix`; 300,037,856 B re-sent. Taytay: answers on `default`; 1,130,754 B sent for the 1 MB edit |
 | Python API | FAIL | FAIL | `list_repo_tree` and branch upload pass; `paths-info`, refs, commits, tag, `model_info` and download at an older SHA 404. A new branch starts empty instead of from main; `create_commit` with a delete answers 200 but the file stays |
-| Git | FAIL | PASS (`git-xet`) | Main: the LFS batch answers `{"transfer":"xet"}` with no actions even to plain `git-lfs`, so `git push` exits 0 having uploaded nothing (silent data loss); pull fails. Taytay: `git-xet` push of 300 MB and `git-lfs` pull, sha256 match, exactly `X-Xet-Cas-Url`, `X-Xet-Access-Token`, `X-Xet-Token-Expiration` (epoch), absolute `href`; plain `git-lfs` push gets a clear `422 … install git-xet` |
+| Git | FAIL | PARTIAL | Main: the LFS batch answers `{"transfer":"xet"}` with no actions even to plain `git-lfs`, so `git push` exits 0 having uploaded nothing (silent data loss); pull fails. Taytay: `git-xet` push of 300 MB and `git-lfs` pull, sha256 match, exactly `X-Xet-Cas-Url`, `X-Xet-Access-Token`, `X-Xet-Token-Expiration` (epoch), absolute `href`; plain `git-lfs` push gets a clear `422 … install git-xet` |
 | 1 GiB incompressible | PASS | – | Accepted, no 413 |
 | SIGKILL | FAIL | – | Mid-upload kill recovers on retry. But an acknowledged commit followed by SIGKILL within the 1-minute snapshot window is lost (`tree` is `[]`). A re-upload from the same machine then "succeeds" while download returns `500 reconstruction references unknown xorb`: shard upload doesn't check that its xorbs exist |
 | Integrity tool | N/A | N/A | None |
 | Authorization | FAIL | Withheld | Main: one shared token with no per-namespace authorization; a bad token gets a clean `unauthenticated` message in `hf` |
-| Storage overhead | PASS | – | +7% over unique data, all from the second-machine re-upload; ~0 on one machine; no per-chunk copies |
+| Storage overhead | PARTIAL | – | +7% over unique data (L13 allows ≤ 5%), all from the failed cross-machine dedup re-sending the file; ~0 on one machine; no per-chunk copies |
 | Throughput (1 GiB, local) | PASS | – | Upload ~50 MB/s, download ~182 MB/s, peak RSS 55 MiB |
 | Code | Info | Info | Go reimplementation with one dependency; reference tests replay 3 captured `hf_xet` binaries; 686 tests pass; the real-`hf` integration test skips without pipenv |
 | Maintenance | Single-maintainer | Single-maintainer | guilt: 16 commits, 1 author, last push 2026-09-16. Taytay: 7 PRs open inside the fork, last push 2026-09-16 |
@@ -160,7 +159,8 @@ target: cross-machine dedup, self-authorizing xorb URLs and a working
 
 Rows are the hands-on protocol's checks, with the lesson each one tests.
 Shardline's column comes from its run above; NOT RUN marks checks that run
-didn't cover. Labels follow the legend at the top. Maintenance is our
+didn't cover. Labels follow the legend at the top. Row 8 is graded on
+bytes sent from a fresh cache for a 1 MB edit. Maintenance is our
 judgement, not a measurement: **Active** (several maintainers, recent
 code), **Single-maintainer** (one author, code changes within 60 days), or
 **Inactive** (one author, no code change for over 60 days).
@@ -169,19 +169,19 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 |---|---|---|---|---|---|
 | 1 Setup from README (L14) | FAIL | PARTIAL | FAIL | PARTIAL | NOT RUN |
 | 2 `whoami` (L2) | FAIL | N/A | PASS | FAIL | FAIL |
-| 3 `hf upload` uses Xet (L1) | FAIL | FAIL (`hf_xet` 1.7.0) | FAIL | PASS | NOT RUN |
+| 3 `hf upload` uses Xet (L1, L16–L18) | FAIL | FAIL (`hf_xet` 1.7.0) | FAIL | PASS | NOT RUN |
 | 4 `hf download`, `resolve` headers (L3) | FAIL | N/A | PARTIAL | PARTIAL | NOT RUN |
-| 5 Xet URLs without headers (L4) | FAIL | PASS | FAIL | PARTIAL | PASS |
+| 5 Xet URLs without headers (L4) | FAIL | PARTIAL | FAIL | PARTIAL | PASS |
 | 6 Range (L5) | FAIL | FAIL | FAIL | FAIL | FAIL |
 | 7 Dedup, same machine | NOT RUN | PASS | FAIL | PASS | NOT RUN |
-| 8 Dedup, second machine (L6, L15) | FAIL | FAIL | FAIL | FAIL | PASS |
+| 8 Dedup, second machine: bytes sent for a 1 MB edit (L15) | FAIL | FAIL | FAIL | FAIL | PASS |
 | 9 Python Hub API (L19) | FAIL | N/A | FAIL | FAIL | FAIL |
-| 10 Git: `git-xet`, `git-lfs` (L7, L8, L20) | FAIL | N/A | PARTIAL | FAIL | PASS |
-| 11 1 GiB incompressible (L9) | NOT RUN | PASS | FAIL | PASS | NOT RUN |
-| 12 SIGKILL (L10, L21) | FAIL | PASS | PASS* | FAIL | NOT RUN |
+| 10 Git: `git-xet`, `git-lfs` (L7, L8, L20) | FAIL | N/A | PARTIAL | FAIL | PARTIAL |
+| 11 1 GiB incompressible (L9, L24) | NOT RUN | PASS | FAIL | PASS | NOT RUN |
+| 12 SIGKILL (L10, L21, L22) | FAIL | PASS | PASS* | FAIL | NOT RUN |
 | 13 Integrity tool (L11) | FAIL | N/A | N/A | N/A | N/A |
 | 14 Authorization (L12) | Withheld | Withheld | PASS | FAIL | Withheld |
-| 15 Storage overhead (L13) | FAIL | PASS | FAIL | PASS | NOT RUN |
+| 15 Storage overhead (L13) | FAIL | PASS | FAIL | PARTIAL | NOT RUN |
 | 16 Performance (1 GiB up / down) | PARTIAL (18 / 60 MB/s) | PASS (88 / 307 MB/s) | FAIL (1 GiB fails) | PASS (50 / 182 MB/s) | NOT RUN |
 | 17 Code | Info | Info | Info | Info | Info |
 | 18 Maintenance | Single-maintainer | Inactive | Single-maintainer | Single-maintainer | Single-maintainer |
