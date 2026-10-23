@@ -257,7 +257,12 @@ Durability details *(builder-check calls)*:
     (documented RPO ≤ 60 s).
   - So after total database loss, `reindex` may roll a branch back to an
     earlier commit, but no data or commit object is lost. Newer commits it
-    cannot place on a branch are listed as recoverable.
+    cannot place on a branch are listed as recoverable, by `reindex` and
+    by `verify`.
+  - Packs that hold only such unplaced commits go to a `recovered` state
+    (ADR 0004). GC never collects it, and the repo's full repack is held
+    while any remain. Only an operator, after review, restores an
+    unplaced commit as a ref or discards the rest.
 
 ### 5.4 Identity, authorization and tenancy
 
@@ -438,6 +443,16 @@ fixtures, pinned by the compatibility suite.
   or downloaded by the other (§10.9).
 - Refs are branches and tags with compare-and-swap updates, so concurrent
   commits are safe.
+- The Hub API obeys the Git engine's safety rules (ADR 0004 item 6), so
+  it can't be used to get around them:
+  - Every Hub read and write runs on the same per-request snapshot of
+    committed packs as a Git request.
+  - A revision given as a commit OID must be reachable from the current
+    refs, under the same rule that Git fetches use (R22).
+  - Hub ref creates, updates and deletes and Hub commits use the push's
+    fenced commit transaction. Hub commits get a connectivity check
+    against the snapshot first, and a branch or tag can only be created
+    at an object the current refs already reach.
 
 **Small files:** `preupload` decides whether small "regular" files go inline
 in the commit (stored as content-addressed blobs) or through Xet. The
@@ -989,12 +1004,23 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
   - The `ref_log` table is written by every ref writer, Hub API
     included, in its CAS transaction. The bucket ref log (§5.3) is
     derived from it.
+  - Every ref writer uses that same transaction, `full_repack_gen` check
+    included: pushes, Hub ref creates, updates and deletes, and Hub
+    commits. Any failure, the fence included, leaves the writer's pack
+    `lost`.
+  - A writer may only make reachable what was already reachable from its
+    snapshot's refs, or what it sent in its own pack. That also stops a
+    push or a Hub `create_branch` from resurrecting a force-pushed-away
+    object.
+  - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
+    serves `object-info` for any object, so openxet refuses it, along
+    with `bundle-uri` and unknown commands.
   - Each request reads refs and its pack set in one database snapshot,
     from the primary.
     - Only `committed` packs are exposed to new snapshots.
-    - `pending`, `lost` and `superseded` packs never are, so a push's
-      connectivity check can't lean on another in-flight pack or on a
-      repack input.
+    - `pending`, `lost`, `superseded` and `recovered` packs never are,
+      so a push's connectivity check can't lean on another in-flight
+      pack or on a repack input.
     - In-flight requests keep their links.
 - **Repacking** takes committed packs only, on one leaseholder per repo:
   - geometric, with a multi-pack-index bitmap, which leaves cruft packs
@@ -1011,9 +1037,13 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
   - The pack lifecycle is not prototyped yet. M2 prototypes it, with
     property-based and fault-injection tests, before production use
     (ADR 0004).
+  - A repack publish checks the lease epoch, so a stale leaseholder
+    can't publish.
   - Superseded, lost and expired pending packs go to GC (§5.6).
+    `recovered` packs never do.
 - **gitoxide stays in-process off the wire path,** for Hub API object
-  reads, the reachability check and Hub commit writes.
+  reads, the reachability check and Hub commit writes. It only ever
+  opens a request snapshot, never the node cache.
 - **git ≥ 2.37 is a runtime dependency** (§9). Container images ship it
   from the distro (GPL-2.0, run as a separate program).
 - **Measured** (`docs/research/S9-git-engine.md`):

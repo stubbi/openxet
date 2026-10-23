@@ -419,8 +419,8 @@ binding.
    - receive-pack (or gix) indexes the incoming pack into the request's
      quarantine. `unpackLimit=1` means a pushed pack is never exploded
      into loose objects.
-   - openxet uploads `.pack` and `.idx` to the bucket and inserts the
-     pack row as `pending`.
+   - openxet inserts the pack row as `pending`, then uploads `.pack` and
+     `.idx` to the bucket.
    - The ref CAS and the update
      `packs.state = 'committed' WHERE state = 'pending'` commit in one
      transaction, together with:
@@ -428,8 +428,11 @@ binding.
        snapshot (the repack fence, item 3)
      - the insert of the database `ref_log` rows
    - The client gets `ok` only after that commit.
-   - A failed CAS sets the row to `lost` (`WHERE state = 'pending'`), and
-     a pending pack already expired by GC can't be committed.
+   - A failed transaction, whether on the CAS or on the fence, rolls back
+     and then sets the row to `lost` (`WHERE state = 'pending'`). A
+     pending pack already expired by GC can't be committed.
+   - Hub ref writes and Hub commits use the same fenced transaction, on
+     the same kind of snapshot (ADR 0004 item 6).
    - The bucket ref log (§5.3) is derived from the `ref_log` rows, for
      every ref writer, Hub API included (inferred; the prototype had no
      states and wrote the bucket ref log directly).
@@ -539,9 +542,12 @@ binding.
      - Unreachable objects inside committed packs leave by cruft expiry,
        once they are outside the keep-ref window and older than the grace
        period.
-   - The bucket stays the truth: `reindex` rebuilds the pack list by
-     listing `repos/<id>/packs/`. A pack is `committed` if the ref-log tips
-     reach its objects; otherwise it is `pending` and ages out.
+   - The bucket stays the truth: `reindex` rebuilds refs, `ref_log` and
+     the pack list by listing `repos/<id>/packs/`. A pack is `committed`
+     if a rebuilt ref reaches its objects. Otherwise it is `recovered`:
+     never exposed, never collected, and listed with its unplaced commits
+     until an operator restores or discards them. The full repack is held
+     until then (§5.3, ADR 0004 item 4).
 4. **Two nodes accepting pushes at once.**
    - Both index and publish their pack. Only the database CAS chooses a
      winner (60 of 60 rounds above). The engine never decides.
@@ -562,7 +568,7 @@ binding.
 
 ## Safety rules
 
-These came out of two review rounds after the spike. They are binding
+These came out of the review rounds after the spike. They are binding
 through ADR 0004.
 
 1. **Upload-pack serves any object in the odb (source).**
@@ -614,12 +620,38 @@ through ADR 0004.
    - **No alternates.** Snapshots link exactly their pack set, so there is
      no cross-repo object sharing (fork pools) without a layer that
      enforces reachability.
+   - **v2 command allowlist (source: git `serve.c`, tags v2.37.0 to
+     v2.51.0).**
+     - git 2.37–2.44 advertises and serves `object-info` unconditionally
+       (`always_advertise`). It returns the size of any OID in the odb,
+       with no reachability check.
+     - From 2.45, `object-info` is gated by `transfer.advertiseObjectInfo`
+       (default false). `bundle-uri` (2.40+) is gated by
+       `uploadpack.advertiseBundleURIs` (default false).
+     - So openxet's interposer accepts only `ls-refs` and `fetch`, and
+       refuses every other command itself. The config keys are pinned
+       off as well, for defence in depth.
+   - **Writers and the Hub API.** R22 also binds writers: a push or Hub
+     ref write may only make reachable what its snapshot's refs already
+     reach or what it sent itself. Hub reads by commit OID pass the same
+     check. Hub reads and writes run on a request snapshot, never on the
+     node cache (ADR 0004 items 3 and 6).
+   - **Known residuals,** for the `git-reachability` follow-up:
+     - git ACKs a `have` for any object in the snapshot, which confirms
+       existence without sending content
+     - a thin push can delta against an unreachable base if the writer
+       knows its OID and exact size
 2. **Pack states** (inferred). See "Bucket-backed packs", items 1–3.
    - `pending`, then `committed` in the CAS transaction, and only while
      the row is still `pending`
    - `lost`, on a failed CAS
    - `expired`, a stale pending pack marked by GC
    - `superseded`, a repack input, which leaves new snapshots at once
+   - `recovered`, a pack that `reindex` found but no rebuilt ref reaches.
+     Only an operator restore (to `committed`) or discard (to `lost`)
+     ends it.
+   - Any failed commit transaction, the fence included, ends in `lost`.
+     Repack publishes also check the lease epoch.
    - Only committed packs reach new snapshots.
    - Repack runs over committed packs, with keep refs from the database
      `ref_log` grace window and the `full_repack_gen` fence in both
@@ -715,6 +747,11 @@ Columns per the task brief. Each cell says how it is known.
   - keep refs and pinned mtimes, and carrying `.mtimes` through the
     bucket
   - the database `ref_log` and the `full_repack_gen` fence
+  - Hub writes on request snapshots, the writer reachability rule, and
+    Hub reads by OID under R22
+  - the v2 command allowlist
+  - lease epochs at repack publish
+  - the `recovered` state and the reindex hold
 
   ADR 0004 requires all of this to be prototyped in M2, with
   property-based and fault-injection tests, before production use.
