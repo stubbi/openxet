@@ -23,6 +23,8 @@ mod jwt;
 mod signed_url;
 mod static_tokens;
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 pub use error::{AuthError, ForbiddenReason};
@@ -70,17 +72,42 @@ impl Principal {
 pub struct Authenticator {
     static_tokens: Vec<StaticToken>,
     jwt_keys: Vec<PublicKey>,
+    max_token_lifetime: Duration,
 }
 
 impl Authenticator {
+    /// The default longest CAS-token lifetime: 24 hours.
+    pub const DEFAULT_MAX_TOKEN_LIFETIME: Duration = Duration::from_hours(24);
+
+    /// How far a CAS token's `iat` may lie in the future, for clock skew
+    /// between issuer and verifier: 5 minutes.
+    pub const MAX_CLOCK_SKEW: Duration = Duration::from_mins(5);
+
     /// An authenticator accepting `static_tokens` and CAS tokens signed by
-    /// any of `jwt_keys`. Several keys allow rotation (ADR 0007 §3).
-    #[must_use]
-    pub fn new(static_tokens: Vec<StaticToken>, jwt_keys: Vec<PublicKey>) -> Self {
-        Self {
+    /// any of `jwt_keys` (several keys allow rotation, ADR 0007 §3). A CAS
+    /// token whose `exp` lies more than `max_token_lifetime` after the
+    /// verifier's clock is refused, so no issuer can mint a near-permanent
+    /// token (ruling M1-R19).
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::InvalidStaticToken`] if a static token's subject or
+    /// scope fails the checks CAS-token claims must pass: non-empty, no
+    /// control characters, scope at most [`MAX_SCOPE_BYTES`].
+    pub fn new(
+        static_tokens: Vec<StaticToken>,
+        jwt_keys: Vec<PublicKey>,
+        max_token_lifetime: Duration,
+    ) -> Result<Self, AuthError> {
+        for (index, token) in static_tokens.iter().enumerate() {
+            check_identity(&token.subject, &token.scope)
+                .map_err(|reason| AuthError::InvalidStaticToken { index, reason })?;
+        }
+        Ok(Self {
             static_tokens,
             jwt_keys,
-        }
+            max_token_lifetime,
+        })
     }
 
     /// Authenticates the token from an `Authorization: Bearer` header.
@@ -92,7 +119,9 @@ impl Authenticator {
     ///
     /// [`AuthError::Missing`] for an empty token, [`AuthError::Expired`] for
     /// a CAS token at or past its `exp`, and [`AuthError::Invalid`] for
-    /// anything else that does not verify.
+    /// anything else that does not verify, including a CAS token before its
+    /// `nbf`, beyond the lifetime cap, or with `iat` more than
+    /// [`Authenticator::MAX_CLOCK_SKEW`] ahead.
     pub fn authenticate(&self, bearer: &str, now: u64) -> Result<Principal, AuthError> {
         if bearer.is_empty() {
             return Err(AuthError::Missing);
@@ -100,7 +129,7 @@ impl Authenticator {
         if let Some(token) = static_tokens::find(&self.static_tokens, bearer) {
             return Ok(token.principal());
         }
-        jwt::verify(&self.jwt_keys, bearer, now)
+        jwt::verify(&self.jwt_keys, bearer, now, self.max_token_lifetime)
     }
 }
 

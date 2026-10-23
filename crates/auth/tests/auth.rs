@@ -52,7 +52,12 @@ fn query_of(url: &Url) -> TransferQuery {
 
 #[test]
 fn static_token_matches_by_hash() {
-    let auth = Authenticator::new(vec![static_token(STATIC_SECRET, Mode::Write)], vec![]);
+    let auth = Authenticator::new(
+        vec![static_token(STATIC_SECRET, Mode::Write)],
+        vec![],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static token");
     assert_eq!(
         principal,
@@ -68,7 +73,12 @@ fn static_token_matches_by_hash() {
 
 #[test]
 fn unknown_token_is_invalid() {
-    let auth = Authenticator::new(vec![static_token(STATIC_SECRET, Mode::Read)], vec![]);
+    let auth = Authenticator::new(
+        vec![static_token(STATIC_SECRET, Mode::Read)],
+        vec![],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     assert_eq!(
         auth.authenticate("oxt_static_secret_never_printed_012345678X", NOW),
         Err(AuthError::Invalid)
@@ -78,7 +88,12 @@ fn unknown_token_is_invalid() {
 
 #[test]
 fn read_mode_cannot_write() {
-    let auth = Authenticator::new(vec![static_token(STATIC_SECRET, Mode::Read)], vec![]);
+    let auth = Authenticator::new(
+        vec![static_token(STATIC_SECRET, Mode::Read)],
+        vec![],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static token");
     assert!(principal.can_read());
     assert!(!principal.can_write());
@@ -90,10 +105,15 @@ fn jwt_round_trip_and_kid_rotation() {
     let new = signer();
     let stranger = signer();
     assert_ne!(old.kid(), new.kid());
-    let auth = Authenticator::new(vec![], vec![old.public_key(), new.public_key()]);
+    let auth = Authenticator::new(
+        vec![],
+        vec![old.public_key(), new.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
 
     for s in [&old, &new] {
-        let token = s.sign("alice", "org/model", Mode::Read, NOW + 60);
+        let token = s.sign("alice", "org/model", Mode::Read, NOW + 60, NOW);
         let principal = auth
             .authenticate(&token, NOW)
             .expect("token from a known key");
@@ -102,7 +122,7 @@ fn jwt_round_trip_and_kid_rotation() {
         assert_eq!(principal.mode, Mode::Read);
     }
 
-    let token = stranger.sign("alice", "org/model", Mode::Write, NOW + 60);
+    let token = stranger.sign("alice", "org/model", Mode::Write, NOW + 60, NOW);
     assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
 }
 
@@ -110,8 +130,13 @@ fn jwt_round_trip_and_kid_rotation() {
 fn jwt_signed_with_a_known_kid_but_another_key_is_invalid() {
     let known = signer();
     let impostor = signer();
-    let auth = Authenticator::new(vec![], vec![known.public_key()]);
-    let token = impostor.sign("alice", "org/model", Mode::Write, NOW + 60);
+    let auth = Authenticator::new(
+        vec![],
+        vec![known.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let token = impostor.sign("alice", "org/model", Mode::Write, NOW + 60, NOW);
     let forged = retarget_kid(&token, known.kid());
     assert_eq!(auth.authenticate(&forged, NOW), Err(AuthError::Invalid));
 }
@@ -122,7 +147,7 @@ fn signer_token_decodes_with_an_independent_decoder() {
     // encoder bug cannot hide a format error (RFC 7515 §7.1, RFC 8037 §3.1).
     let pair = generate_keypair().expect("generate keypair");
     let s = TokenSigner::from_pem(pair.private_pem()).expect("parse");
-    let token = s.sign("alice", "org/model", Mode::Write, NOW + 60);
+    let token = s.sign("alice", "org/model", Mode::Write, NOW + 60, NOW);
     let segments: Vec<&str> = token.split('.').collect();
     assert_eq!(segments.len(), 3);
 
@@ -138,7 +163,7 @@ fn signer_token_decodes_with_an_independent_decoder() {
     assert_eq!(claims["scope"], "org/model");
     assert_eq!(claims["mode"], "write");
     assert_eq!(claims["exp"], NOW + 60);
-    assert!(claims["iat"].is_u64());
+    assert_eq!(claims["iat"], NOW);
 
     let signature: [u8; 64] = b64url_decode_by_hand(segments[2])
         .try_into()
@@ -155,8 +180,13 @@ fn signer_token_decodes_with_an_independent_decoder() {
 #[test]
 fn jwt_expired_exactly_at_exp() {
     let s = signer();
-    let auth = Authenticator::new(vec![], vec![s.public_key()]);
-    let token = s.sign("alice", "org/model", Mode::Read, NOW);
+    let auth = Authenticator::new(
+        vec![],
+        vec![s.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let token = s.sign("alice", "org/model", Mode::Read, NOW, NOW - 60);
     assert!(auth.authenticate(&token, NOW - 1).is_ok());
     assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Expired));
     assert_eq!(auth.authenticate(&token, NOW + 1), Err(AuthError::Expired));
@@ -172,7 +202,9 @@ fn jwt_wrong_alg_rejected() {
     let auth = Authenticator::new(
         vec![],
         vec![PublicKey::from_pem(&public_pem).expect("parse")],
-    );
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let payload = b64(&valid_claims().to_string());
 
     // HS256 keyed with the public key in every form a verifier might hold:
@@ -222,7 +254,9 @@ fn jwt_rejects_header_with_extra_fields() {
     let auth = Authenticator::new(
         vec![],
         vec![PublicKey::from_pem(&public_pem).expect("parse")],
-    );
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let payload = b64(&valid_claims().to_string());
 
     let good = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid });
@@ -270,7 +304,9 @@ fn jwt_rejects_bad_claims() {
     let auth = Authenticator::new(
         vec![],
         vec![PublicKey::from_pem(&public_pem).expect("parse")],
-    );
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let header = b64(&serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid }).to_string());
 
     let mut cases = Vec::new();
@@ -311,7 +347,9 @@ fn auth_for_raw_tokens() -> (Authenticator, SigningKey, String) {
     let auth = Authenticator::new(
         vec![],
         vec![PublicKey::from_pem(&public_pem).expect("parse")],
-    );
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let header = b64(&serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid }).to_string());
     (auth, key, header)
 }
@@ -430,6 +468,101 @@ fn jwt_rejects_empty_or_malformed_subject_and_scope() {
 }
 
 #[test]
+fn jwt_lifetime_is_capped() {
+    let (key, public_pem, kid) = raw_keypair();
+    let header = b64(&serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid }).to_string());
+    let day = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
+    assert_eq!(day, 24 * 3600);
+    let token_with = |exp: u64, iat: u64| {
+        let mut claims = valid_claims();
+        claims["exp"] = exp.into();
+        claims["iat"] = iat.into();
+        sign_raw(&key, &header, &b64(&claims.to_string()))
+    };
+    let auth = |cap: Duration| {
+        Authenticator::new(
+            vec![],
+            vec![PublicKey::from_pem(&public_pem).expect("parse")],
+            cap,
+        )
+        .expect("valid config")
+    };
+
+    let default = auth(Authenticator::DEFAULT_MAX_TOKEN_LIFETIME);
+    assert!(
+        default
+            .authenticate(&token_with(NOW + day, NOW), NOW)
+            .is_ok()
+    );
+    for exp in [NOW + day + 1, NOW + 365 * day, u64::MAX] {
+        assert_eq!(
+            default.authenticate(&token_with(exp, NOW), NOW),
+            Err(AuthError::Invalid),
+            "{exp}"
+        );
+    }
+
+    let hour = auth(Duration::from_hours(1));
+    assert!(hour.authenticate(&token_with(NOW + 3600, NOW), NOW).is_ok());
+    assert_eq!(
+        hour.authenticate(&token_with(NOW + 3601, NOW), NOW),
+        Err(AuthError::Invalid)
+    );
+    // The cap is measured from the verifier's clock, not the token's `iat`.
+    assert!(
+        hour.authenticate(&token_with(NOW + 3600, NOW + 300), NOW)
+            .is_ok()
+    );
+}
+
+#[test]
+fn jwt_iat_tolerates_five_minutes_of_skew() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    for (iat, ok) in [
+        (0, true),
+        (NOW, true),
+        (NOW + 300, true),
+        (NOW + 301, false),
+        (u64::MAX, false),
+    ] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("iat", iat.into()).to_string()),
+        );
+        assert_eq!(auth.authenticate(&token, NOW).is_ok(), ok, "{iat}");
+    }
+}
+
+#[test]
+fn static_tokens_with_invalid_subject_or_scope_are_rejected_at_construction() {
+    let long_scope = "s".repeat(1025);
+    for (subject, scope) in [
+        ("", "org/model"),
+        ("ci\n", "org/model"),
+        ("ci", ""),
+        ("ci", "org/model\r"),
+        ("ci", long_scope.as_str()),
+    ] {
+        let mut token = static_token(STATIC_SECRET, Mode::Read);
+        token.subject = subject.to_owned();
+        token.scope = scope.to_owned();
+        let good = static_token("another secret", Mode::Read);
+        let error = Authenticator::new(
+            vec![good, token],
+            vec![],
+            Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+        )
+        .expect_err("invalid static token config");
+        assert!(
+            matches!(error, AuthError::InvalidStaticToken { index: 1, .. }),
+            "{subject:?} {scope:?}: {error:?}"
+        );
+        assert!(!error.to_string().contains(STATIC_SECRET));
+    }
+}
+
+#[test]
 fn jwt_rejects_oversized_token() {
     let (key, public_pem, _) = raw_keypair();
     let kid = PublicKey::from_pem(&public_pem)
@@ -439,7 +572,9 @@ fn jwt_rejects_oversized_token() {
     let auth = Authenticator::new(
         vec![],
         vec![PublicKey::from_pem(&public_pem).expect("parse")],
-    );
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     let header = b64(&serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid }).to_string());
 
     let sized = |len: usize| {
@@ -464,8 +599,13 @@ fn jwt_rejects_oversized_token() {
 #[test]
 fn jwt_rejects_non_canonical_base64() {
     let s = signer();
-    let auth = Authenticator::new(vec![], vec![s.public_key()]);
-    let token = s.sign("alice", "org/model", Mode::Read, NOW + 60);
+    let auth = Authenticator::new(
+        vec![],
+        vec![s.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let token = s.sign("alice", "org/model", Mode::Read, NOW + 60, NOW);
     assert!(auth.authenticate(&token, NOW).is_ok());
     let (input, sig) = token.rsplit_once('.').expect("three segments");
     let (header, payload) = input.split_once('.').expect("three segments");
@@ -735,9 +875,11 @@ fn auth_errors_never_contain_the_credential() {
     let auth = Authenticator::new(
         vec![static_token(STATIC_SECRET, Mode::Read)],
         vec![s.public_key()],
-    );
-    let expired = s.sign("alice", "org/model", Mode::Read, NOW);
-    let foreign = signer().sign("alice", "org/model", Mode::Read, NOW + 60);
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let expired = s.sign("alice", "org/model", Mode::Read, NOW, NOW);
+    let foreign = signer().sign("alice", "org/model", Mode::Read, NOW + 60, NOW);
     let wrong_static = format!("{STATIC_SECRET}x");
 
     let us = url_signer();
@@ -794,7 +936,12 @@ fn static_token_debug_is_redacted() {
     assert!(!rendered.contains(&hex_of(&token.sha256)));
     assert!(rendered.contains("ci"));
 
-    let auth = Authenticator::new(vec![token], vec![]);
+    let auth = Authenticator::new(
+        vec![token],
+        vec![],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
     assert!(!format!("{auth:?}").contains(&hex_of(&StaticToken::digest(STATIC_SECRET))));
 }
 

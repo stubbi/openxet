@@ -14,11 +14,12 @@
 //!   checked with `verify_strict` against the key named by `kid`;
 //! - claims `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and `iat`,
 //!   plus optional `nbf`, and nothing else; `exp` is exclusive and `nbf`
-//!   inclusive, with no leeway; `sub` and `scope` pass
+//!   inclusive, with no leeway; `exp` at most the lifetime cap after `now`
+//!   and `iat` at most [`Authenticator::MAX_CLOCK_SKEW`] ahead of it; `sub` and `scope` pass
 //!   [`check_identity`](crate::check_identity).
 
 use std::fmt::{self, Write as _};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -32,7 +33,7 @@ use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::{AuthError, Mode, Principal};
+use crate::{AuthError, Authenticator, Mode, Principal};
 
 /// The longest accepted CAS token, in bytes. Real tokens are a few hundred
 /// bytes; the cap bounds decoding work for hostile input.
@@ -124,16 +125,13 @@ impl TokenSigner {
         PublicKey::from_verifying_key(&self.key.verifying_key())
     }
 
-    /// A CAS token for `subject` limited to `scope` and `mode`, valid until
-    /// `exp` (Unix seconds, exclusive). `iat` is the current time.
+    /// A CAS token for `subject` limited to `scope` and `mode`, issued at
+    /// `now` and valid until `exp` (Unix seconds, exclusive).
     #[must_use]
-    pub fn sign(&self, subject: &str, scope: &str, mode: Mode, exp: u64) -> String {
-        let iat = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
+    pub fn sign(&self, subject: &str, scope: &str, mode: Mode, exp: u64, now: u64) -> String {
         let header = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": self.kid });
         let claims = serde_json::json!({
-            "sub": subject, "scope": scope, "mode": mode, "exp": exp, "iat": iat,
+            "sub": subject, "scope": scope, "mode": mode, "exp": exp, "iat": now,
         });
         let mut token = format!(
             "{}.{}",
@@ -238,7 +236,6 @@ struct Claims {
     scope: String,
     mode: Mode,
     exp: u64,
-    #[allow(dead_code, reason = "required by ADR 0007 but carries no policy")]
     iat: u64,
     #[serde(default, deserialize_with = "present_u64")]
     nbf: Option<u64>,
@@ -249,7 +246,12 @@ fn present_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D:
     u64::deserialize(d).map(Some)
 }
 
-pub(crate) fn verify(keys: &[PublicKey], token: &str, now: u64) -> Result<Principal, AuthError> {
+pub(crate) fn verify(
+    keys: &[PublicKey],
+    token: &str,
+    now: u64,
+    max_lifetime: Duration,
+) -> Result<Principal, AuthError> {
     if token.len() > MAX_TOKEN_BYTES {
         return Err(AuthError::Invalid);
     }
@@ -280,6 +282,11 @@ pub(crate) fn verify(keys: &[PublicKey], token: &str, now: u64) -> Result<Princi
     }
     if now >= claims.exp {
         return Err(AuthError::Expired);
+    }
+    if claims.exp > now.saturating_add(max_lifetime.as_secs())
+        || claims.iat > now.saturating_add(Authenticator::MAX_CLOCK_SKEW.as_secs())
+    {
+        return Err(AuthError::Invalid);
     }
     Ok(Principal {
         subject: claims.sub,
@@ -381,7 +388,10 @@ mod tests {
         // The full token fails only on openxet's header policy.
         let key = PublicKey::from_verifying_key(&a1_public());
         let token = format!("{A4_HEADER}.{A4_PAYLOAD}.{A4_SIGNATURE}");
-        assert_eq!(verify(&[key], &token, 0), Err(AuthError::Invalid));
+        assert_eq!(
+            verify(&[key], &token, 0, Authenticator::DEFAULT_MAX_TOKEN_LIFETIME),
+            Err(AuthError::Invalid)
+        );
     }
 
     /// A signature with `R` = the identity point and `S = k·a`, which only
@@ -434,6 +444,14 @@ mod tests {
             "the probe must be accepted by non-strict verification"
         );
         let token = format!("{input}.{}", URL_SAFE_NO_PAD.encode(weak));
-        assert_eq!(verify(&[public], &token, 0), Err(AuthError::Invalid));
+        assert_eq!(
+            verify(
+                &[public],
+                &token,
+                0,
+                Authenticator::DEFAULT_MAX_TOKEN_LIFETIME
+            ),
+            Err(AuthError::Invalid)
+        );
     }
 }

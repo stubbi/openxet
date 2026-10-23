@@ -44,6 +44,17 @@ pub enum AuthError {
         reason: &'static str,
     },
 
+    /// A configured static token has an invalid subject or scope.
+    #[error(
+        "static token #{index} is misconfigured: {reason}; give every static token a non-empty subject and scope without control characters (scope at most 1024 bytes)"
+    )]
+    InvalidStaticToken {
+        /// The token's position in the configured list, counting from 0.
+        index: usize,
+        /// What is wrong; never the token or its hash.
+        reason: &'static str,
+    },
+
     /// A signed-URL lifetime below [`crate::UrlSigner::MIN_LIFETIME`] was
     /// configured.
     #[error(
