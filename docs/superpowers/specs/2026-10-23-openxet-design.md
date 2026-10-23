@@ -250,10 +250,25 @@ Durability details *(builder-check calls)*:
 - Commit objects and storage-only pins are written to the bucket
   **synchronously**, before they are acknowledged.
 - Branch and tag pointers live in the database, which is authoritative while
-  it exists. They are also appended to a ref log in the bucket within seconds
-  (documented RPO ≤ 60 s). So after total database loss, `reindex` may roll
-  a branch back to an earlier commit, but no data or commit object is lost.
-  Newer commits it cannot place on a branch are listed as recoverable.
+  it exists.
+  - Every ref change also inserts a row into the database ref log in the
+    same transaction (ADR 0004).
+  - The ref log in the bucket is derived from those rows within seconds
+    (documented RPO ≤ 60 s).
+  - So after total database loss, `reindex` may roll a branch back to an
+    earlier commit, but no data or commit object is lost. Newer commits it
+    cannot place on a branch are listed as recoverable, by `reindex` and
+    by `verify`.
+  - A pack that holds no object reachable from a rebuilt ref goes to a
+    `recovered` state (ADR 0004). It is never served and GC never
+    collects it.
+  - Unplaced commits and recovered packs are persisted in the database.
+    `verify` keeps listing them, and repacks keep everything they need,
+    so nothing restorable is dropped. Full repacks are never blocked.
+  - Nothing is discarded automatically. A metric and an alert flag
+    unresolved repos, and an operator, after review, runs `openxet
+    reindex restore` or `openxet reindex discard` (per repo or bulk,
+    with `--dry-run`). Until then the data stays stored.
 
 ### 5.4 Identity, authorization and tenancy
 
@@ -434,6 +449,16 @@ fixtures, pinned by the compatibility suite.
   or downloaded by the other (§10.9).
 - Refs are branches and tags with compare-and-swap updates, so concurrent
   commits are safe.
+- The Hub API obeys the Git engine's safety rules (ADR 0004 item 6), so
+  it can't be used to get around them:
+  - Every Hub read and write runs on the same per-request snapshot of
+    committed packs as a Git request.
+  - A revision given as a commit OID must be reachable from the current
+    refs, under the same rule that Git fetches use (R22).
+  - Hub ref creates, updates and deletes and Hub commits use the push's
+    fenced commit transaction. Hub commits get a connectivity check
+    against the snapshot first, and a branch or tag can only be created
+    at an object the current refs already reach.
 
 **Small files:** `preupload` decides whether small "regular" files go inline
 in the commit (stored as content-addressed blobs) or through Xet. The
@@ -668,6 +693,16 @@ says which spec version and client versions are supported.
       compose-internal service name
   - Terraform examples for AWS, GCP and Azure
   - library crates on crates.io for embedding the storage core
+  - **The `git` role needs `git` ≥ 2.37 on `PATH`** (ADR 0004).
+    - openxet runs git as a separate program. That is aggregation, so
+      openxet stays Apache-2.0 (inferred, not legal advice).
+    - Container images ship the distro's unmodified git package, which is
+      GPL-2.0, and list it in their licence notice.
+    - Each image release publishes the exact git source package next to
+      the image, or includes a written offer for it (GPL-2.0 §3).
+    - The static binaries don't bundle git. They check for it at start-up
+      when the `git` or `ssh` role is enabled, and fail with an actionable
+      error.
 - Also v1:
   - one-click templates (Railway, Fly, Render)
   - a Nix package
@@ -937,10 +972,97 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
 - **Hooks for integrators:** post-receive webhooks (repo, ref, old/new sha)
   so platforms can react to pushes, e.g. to trigger CI.
 
-**Left to the builder:** in-process Git via gitoxide versus shelling out to
-`git` on a cached bare repo, and the pack layout and repacking strategy.
-Spike S9 decides this. This is the hardest new component; budget for it
-accordingly.
+**Engine** *(decided by S9, ADR 0004)*:
+- **The `git` binary serves the wire protocol.**
+  - Each request runs `git upload-pack` / `receive-pack` on a throwaway
+    snapshot repo, built from one database snapshot:
+    - `packed-refs`
+    - hard links to exactly the committed packs in the node's cache,
+      with no alternates
+  - The snapshot lives on the cache's filesystem, which start-up checks.
+  - openxet answers the protocol v2 capability advertisement and `ls-refs`
+    in-process.
+  - openxet enforces reachability for every upload-pack want, v0 to v2
+    (R22), because git's v2 `upload-pack` serves any object in the odb.
+    It interposes on the request stream and checks wants before
+    forwarding them to git.
+    - Ref tips pass.
+    - All other wants share one gix walk per request, within a configured
+      commit, time and concurrency budget.
+    - Anything not found is refused (fail closed).
+  - Objects are never shared across repos.
+  - Ref updates go through a hardened `proc-receive` hook back into
+    openxet:
+    - an inherited socketpair fd (HTTP and SSH) and a single-use token
+      bound to repo, principal and request
+    - pack paths confined to the request's snapshot
+    - policy re-checked in openxet
+    - a sanitised git environment
+  - openxet then publishes the pushed pack to the bucket as `pending`.
+    Next it runs one transaction that does four things:
+    - the ref CAS
+    - marks the pack `committed`, only while it is still `pending`
+    - checks `full_repack_gen`
+    - inserts the database `ref_log` rows
+
+    Losing pushes mark their pack `lost` (again only while it is
+    `pending`). Then it acknowledges.
+  - The `ref_log` table is written by every ref writer, Hub API
+    included, in its CAS transaction. The bucket ref log (§5.3) is
+    derived from it.
+  - Every ref writer uses that same transaction, `full_repack_gen` check
+    included: pushes, Hub ref creates, updates and deletes, and Hub
+    commits. Any failure, the fence included, leaves the writer's pack
+    `lost`.
+  - A writer may only make reachable what was already reachable from its
+    snapshot's refs, or what the client itself sent. Bases that git's
+    `--fix-thin` appends don't count as sent, and they must lie in a
+    boundary commit's tree. That stops a push or a Hub `create_branch`
+    from resurrecting, or copying out, a force-pushed-away object.
+  - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
+    serves `object-info` for any object, so openxet refuses it, along
+    with `bundle-uri` and unknown commands.
+  - Each request reads refs and its pack set in one database snapshot,
+    from the primary.
+    - Only `committed` packs are exposed to new snapshots.
+    - `pending`, `lost`, `superseded` and `recovered` packs never are,
+      so a push's connectivity check can't lean on another in-flight
+      pack or on a repack input.
+    - In-flight requests keep their links.
+- **Repacking** takes committed packs only, on one leaseholder per repo:
+  - geometric, with a multi-pack-index bitmap, which leaves cruft packs
+    alone
+  - plus a periodic full `repack -adb --cruft --cruft-expiration=<grace>`
+  - Temporary keep refs hold every `ref_log` tip from the grace window.
+    Cruft expiry goes by object mtime, so hydrated packs keep their
+    creation mtime, the leaseholder re-pins mtimes before each repack,
+    and `.mtimes` files travel through the bucket.
+  - A full-repack publish increments `full_repack_gen`, which fails any
+    push that read the old generation. The publish aborts if `ref_log`
+    advanced during the repack. Geometric repacks drop nothing and need
+    no fence.
+  - The pack lifecycle is not prototyped yet. M2 prototypes it, with
+    property-based and fault-injection tests, before production use
+    (ADR 0004).
+  - A repack publish checks the lease epoch, so a stale leaseholder
+    can't publish.
+  - Superseded, lost and expired pending packs go to GC (§5.6).
+    `recovered` packs never do. Objects that reindex could not place
+    stay protected as keep roots, without blocking repacks, until an
+    operator restores or discards them.
+- **gitoxide stays in-process off the wire path,** for Hub API object
+  reads, the reachability check and Hub commit writes. It only ever
+  opens a request snapshot, never the node cache.
+- **git ≥ 2.37 is a runtime dependency** (§9). Container images ship it
+  from the distro (GPL-2.0, run as a separate program).
+- **Measured** (`docs/research/S9-git-engine.md`):
+  - A full clone of a 10k-commit repo cost git 0.18 s CPU, against 2.86 s
+    for an in-process gix server. gix 0.90 has no server side, no delta
+    compression and no bitmaps.
+  - Concurrent pushes across two nodes produced exactly one winner in
+    60/60 rounds.
+
+This is the hardest new component; budget for it accordingly.
 
 ### 10.10 Minimal self-service web UI *(decided by the user: v1)*
 
@@ -998,10 +1120,17 @@ own UI and leave this role off.
   leg is specified in ADR 0003). Includes the
   credential-source gap (§10.2) over both HTTPS and SSH, and whether
   `git-lfs-transfer` (pure SSH) can negotiate the `xet` custom transfer.
-- **S9:** Git hosting engine: gitoxide server-side capabilities
-  (upload-pack/receive-pack, protocol v2) against the `git` binary on a
-  cached bare repo. Measure throughput and latency, and check that
-  bucket-backed packs keep nodes stateless.
+- **S9** *(answered: the `git` binary serves the protocol on per-request
+  snapshot repos, over openxet-owned database refs and bucket packs, with
+  gix in-process off the wire path; gix 0.90 has no upload-pack or
+  receive-pack server, no delta compression and no bitmaps, and cost 16x
+  git's CPU to serve a 10k-commit clone; database CAS gave exactly one
+  winner in 60/60 concurrent-push rounds across two nodes; JGit DFS,
+  go-git, libgit2, Gitaly and Mononoke were assessed and rejected;
+  `docs/research/S9-git-engine.md`, ADR 0004)*: Git hosting engine:
+  gitoxide server-side capabilities (upload-pack/receive-pack, protocol
+  v2) against the `git` binary on a cached bare repo. Measure throughput
+  and latency, and check that bucket-backed packs keep nodes stateless.
 - **S8** *(answered: the Hub read surface plus CAS reconstruction, with
   every URL and token re-issued by openxet; HF reconstructions can be
   fetched with per-repo 900 s read tokens, but their 3600 s,
