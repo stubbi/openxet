@@ -167,12 +167,20 @@ impl From<StorageError> for CasError {
     )]
     fn from(e: StorageError) -> Self {
         match e {
-            // An object the index names but the bucket lacks can be listing
-            // lag in an object store, so it is retryable like an I/O failure.
-            StorageError::Io { .. } | StorageError::NotFound { .. } => Self::Unavailable {
+            StorageError::Io { .. } => Self::Unavailable {
                 component: "storage",
                 source: e.into(),
             },
+            // Every supported bucket is read-after-write consistent (ruling
+            // M1-R21), so an object the index names but the bucket lacks is
+            // data loss or a bug. A retry would only hide it.
+            StorageError::NotFound { key } => {
+                tracing::error!(
+                    %key,
+                    "integrity fault: the index names an object the bucket lacks"
+                );
+                Self::internal(e)
+            }
             // The index and the bucket disagree, or a hash collided: a bug.
             StorageError::RangeOutOfBounds { .. } | StorageError::SizeConflict { .. } => {
                 Self::internal(e)
@@ -536,18 +544,34 @@ mod tests {
         assert_no_detail(&reply, &["secret-layout", "disk full", "temp file"]);
     }
 
-    #[tokio::test]
-    async fn storage_not_found_is_503_unavailable() {
-        // The index names an object the bucket lacks. With object stores
-        // that can be a transient listing lag, so it is retryable.
-        let reply = assert_maps(
-            StorageError::NotFound {
-                key: Key::Xorb(MerkleHash::default()),
-            },
-            StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable",
-        )
-        .await;
+    #[test]
+    fn storage_not_found_is_500_internal_and_logged_as_an_integrity_fault() {
+        // Object stores are read-after-write consistent (ruling M1-R21): an
+        // object the index names but the bucket lacks is data loss or a bug.
+        let key = Key::Xorb(MerkleHash::default());
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let error = tracing::subscriber::with_default(subscriber, || {
+            CasError::from(StorageError::NotFound { key })
+        });
+
+        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("ERROR"), "{logs}");
+        assert!(logs.contains("integrity fault"), "{logs}");
+        assert!(logs.contains(&key.to_string()), "{logs}");
+        let reply = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(assert_maps(
+                error,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ));
         assert_no_detail(&reply, &["xorbs/"]);
     }
 
