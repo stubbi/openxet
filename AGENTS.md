@@ -164,10 +164,10 @@ One logical change per commit. Every commit builds and passes tests.
 
 ## Current state
 
-Pre-code. The design is approved. Next:
-- Evaluate existing Xet servers (notably Shardline) to decide whether to
-  build, build on, or contribute.
-- Then write the first implementation plan.
+Pre-code. The design is approved, and ADR 0001 decides to build from
+scratch on `xet-core`'s crates (after evaluating existing Xet servers; see
+`docs/competitive-matrix.md`). Next is the M0 foundation plan in
+`docs/superpowers/plans/`.
 
 The workspace scaffold adds a **Commands** section here (build, test,
 compatibility suite, benchmarks). Keep it exact and current.

@@ -443,9 +443,15 @@ Rules for this endpoint:
   HTTP password.
 - LFS repos are scopes like Hub repos. Creating one is an authorizer
   `create` decision, so the first push can create it.
+- **Downloads always need a `basic` transfer.** `git-xet` 0.2.1 implements
+  uploads only ("custom transfer for download is not implemented yet",
+  observed 2026-10-23), so `git-lfs` downloads through `basic`. openxet offers
+  `basic` (absolute `href`s, never relative) served by the HTTP read gateway
+  (§5.5), and also offers `xet` for downloads so it is ready when `git-xet`
+  gains download support.
 - Clients **without** `git-xet`:
-  - **Downloads work** via the `basic` transfer, served by the HTTP read
-    gateway (§5.5). Collaborators who only clone don't need anything extra.
+  - **Downloads work** the same way. Collaborators who only clone don't need
+    anything extra.
   - **Uploads work** via `basic`/`multipart`, with server-side chunking
     (§10.3), so the data is still deduplicated in storage. The response
     suggests installing `git-xet` for faster uploads.
