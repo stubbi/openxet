@@ -901,7 +901,8 @@ is ever needed.
 Prior art found on 2026-10-23: another repository already uses the name
 (`ggoggam/openxet`, Apache-2.0, 8 stars). The GitHub organization `openxet`
 exists (created 2025-08-15, empty) and belongs to someone else, so our GitHub
-organization needs a different handle; that is the user's choice. The user
+organization needs a different handle; that is the user's choice. For now the
+repository lives at `github.com/stubbi/openxet` *(decided by the user)*. The user
 owns the openxet.com domain.
 
 ## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
