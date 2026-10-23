@@ -217,9 +217,12 @@ async fn missing_or_bad_credential_is_401_and_wrong_mode_is_403() {
         missing.assert_error(401, "missing_credential");
         assert_eq!(missing.headers[WWW_AUTHENTICATE], "Bearer");
 
-        send(Some(bearer("oxt_test_unknown")))
-            .await
-            .assert_error(401, "invalid_credential");
+        let invalid = send(Some(bearer("oxt_test_unknown"))).await;
+        invalid.assert_error(401, "invalid_credential");
+        assert_eq!(
+            invalid.headers[WWW_AUTHENTICATE],
+            r#"Bearer error="invalid_token""#
+        );
         send(Some(format!("Basic {}", server.write_token)))
             .await
             .assert_error(401, "invalid_credential");
