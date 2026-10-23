@@ -185,9 +185,10 @@ fn decompress_chunk(
         Ok(out.buf)
     };
     let data = match scheme {
-        // Upstream's BG4 decoder inflates the whole LZ4 stream before
-        // regrouping it, and regrouping keeps the length, so a bounded LZ4
-        // pass over the same bytes enforces the limit first.
+        // A BG4 chunk is an LZ4 stream of its regrouped bytes, which have the
+        // chunk's length (xorb#byte-grouping-lz4-compression). The BG4 decode
+        // regroups only a complete stream, so a bounded LZ4 pass over the
+        // same bytes enforces the limit first.
         CompressionScheme::ByteGrouping4LZ4 => {
             let lz4_len = bounded(CompressionScheme::LZ4)?.len();
             if lz4_len as u64 != u64::from(declared) {
