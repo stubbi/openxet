@@ -4,6 +4,14 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # Marvin (RSA private-key timing). `rsa` comes only from jsonwebtoken's
+    # `rust_crypto` backend, which compiles every algorithm in. openxet-auth
+    # verifies EdDSA only and never constructs an RSA key, so the affected
+    # private-key operations are unreachable. Revisit when jsonwebtoken or
+    # rsa ships a fix.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is linked by jsonwebtoken but no RSA key is ever used" },
+]
 
 [licenses]
 version = 2
