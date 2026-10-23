@@ -7,9 +7,9 @@ use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
 use axum::extract::{
     DefaultBodyLimit, FromRequest as _, FromRequestParts, RawPathParams, Request, State,
 };
-use axum::http::StatusCode;
-use axum::http::header::CONTENT_LENGTH;
+use axum::http::header::{CONTENT_LENGTH, EXPECT};
 use axum::http::request::Parts;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use http_body_util::BodyExt as _;
@@ -117,7 +117,7 @@ async fn upload(
     let (mut parts, body) = request.into_parts();
     let (hash, principal) = match authorize(&mut parts, &state).await {
         Ok(checked) => checked,
-        Err(e) => return Err(refuse_unread(e, body).await),
+        Err(e) => return Err(refuse_unread(e, &parts.headers, body).await),
     };
     let result = store(
         &state,
@@ -149,10 +149,18 @@ async fn authorize(
 /// The body is read and discarded first, never buffered. A server that
 /// answers and closes with request bytes unread resets the connection, and
 /// the client then sees a failed body write, which it retries, instead of
-/// this final answer (S10 "Status codes and retries"). A body over
-/// [`MAX_XORB_BODY_BYTES`] is not read: the answer closes the connection.
-async fn refuse_unread(e: CasError, mut body: Body) -> Response {
-    if body.size_hint().lower() > MAX_XORB_BODY_BYTES {
+/// this final answer (S10 "Status codes and retries"). Two bodies are not
+/// read, and the answer closes the connection instead:
+/// - one over [`MAX_XORB_BODY_BYTES`]
+/// - one announced with `Expect: 100-continue`, whose client waits for the
+///   server before sending it (RFC 9110 §10.1.1). The final status goes out
+///   instead of `100 Continue`, which hyper sends only once the body is
+///   read, so the client never sends the body.
+async fn refuse_unread(e: CasError, headers: &HeaderMap, mut body: Body) -> Response {
+    let expects_continue = headers
+        .get(EXPECT)
+        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"100-continue"));
+    if expects_continue || body.size_hint().lower() > MAX_XORB_BODY_BYTES {
         return closing(e);
     }
     let mut read = 0u64;

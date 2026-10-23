@@ -511,3 +511,44 @@ async fn refusals_before_the_body_reach_the_client() {
         server.bucket_files()
     );
 }
+
+#[tokio::test]
+async fn refusals_answer_expect_continue_before_the_body() {
+    // A client that sends `Expect: 100-continue` waits for the server
+    // before sending the body (RFC 9110 §10.1.1). A refusal is final, so it
+    // answers at once, never `100 Continue`, and closes the connection
+    // rather than read a body nobody wants. Without `Expect`, the body is
+    // drained as before so the answer arrives intact.
+    let server = TestServer::start_default().await;
+    let upper = format!("/v1/xorbs/default/{}", HF_XET_XORB.to_ascii_uppercase());
+    let valid = xorb_path(&hash_from_hex(HF_XET_XORB).unwrap());
+    let body = vec![0u8; 1000];
+
+    for (path, token, status) in [
+        (upper.as_str(), server.write_token.as_str(), "400"),
+        (&valid, &server.read_token, "403"),
+        (&valid, "oxt_test_unknown", "401"),
+    ] {
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nAuthorization: {}\r\nContent-Length: {}",
+            bearer(token),
+            body.len()
+        );
+
+        let expecting = server
+            .raw(&format!("{head}\r\nExpect: 100-continue"), b"", false)
+            .await;
+        assert!(
+            expecting.starts_with(&format!("HTTP/1.1 {status}")),
+            "{expecting}"
+        );
+        assert!(
+            expecting.to_ascii_lowercase().contains("connection: close"),
+            "{expecting}"
+        );
+
+        let plain = server.raw(&head, &body, false).await;
+        assert!(plain.starts_with(&format!("HTTP/1.1 {status}")), "{plain}");
+        assert!(!plain.contains("100 Continue"), "{plain}");
+    }
+}
