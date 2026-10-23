@@ -5,9 +5,11 @@
 
 #![allow(clippy::unwrap_used)]
 
+use std::sync::Arc;
+
 use openxet_protocol::{
-    MAX_REFERENCED_CHUNKS, MerkleHash, Segment, ShardFileEntry, UploadShard, VerifyError,
-    chunk_hash, file_hash, range_hash, verify_shard,
+    MerkleHash, Segment, ShardFileEntry, UploadShard, VerifyError, VerifyLimits, chunk_hash,
+    file_hash, range_hash, verify_shard,
 };
 
 const CHUNKS: usize = 100_000;
@@ -91,7 +93,8 @@ fn incremental_file_hash_matches_one_shot_over_many_random_segments() {
         "{single} single, {on_cut} on cuts"
     );
 
-    let lookup = |x: &MerkleHash| (*x == xorb).then_some(nodes.as_slice());
+    let table: Arc<[(MerkleHash, u64)]> = nodes.as_slice().into();
+    let lookup = |x: &MerkleHash| (*x == xorb).then(|| Arc::clone(&table));
     let mut shard = UploadShard {
         files: vec![ShardFileEntry {
             file_hash: file_hash(&nodes),
@@ -100,11 +103,11 @@ fn incremental_file_hash_matches_one_shot_over_many_random_segments() {
         }],
         xorbs: vec![xorb],
     };
-    verify_shard(&shard, lookup, MAX_REFERENCED_CHUNKS).unwrap();
+    verify_shard(&shard, &lookup, VerifyLimits::default()).unwrap();
 
     let mut bytes: [u8; 32] = shard.files[0].file_hash.as_bytes().try_into().unwrap();
     bytes[31] ^= 1;
     shard.files[0].file_hash = MerkleHash::from(bytes);
-    let err = verify_shard(&shard, lookup, MAX_REFERENCED_CHUNKS).unwrap_err();
+    let err = verify_shard(&shard, &lookup, VerifyLimits::default()).unwrap_err();
     assert!(matches!(err, VerifyError::FileHashMismatch { .. }), "{err}");
 }
