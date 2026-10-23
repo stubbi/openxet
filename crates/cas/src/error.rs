@@ -137,7 +137,9 @@ pub enum CasError {
 
     /// An uploaded shard parses but fails verification against the stored
     /// xorbs, or exceeds the verification limits.
-    /// `400 shard_verification_failed`, final.
+    /// `400 shard_verification_failed`, final. The message is the reason's
+    /// client-safe `Display`; the values it withholds are logged
+    /// under the request id (ruling M1-R23).
     #[error("shard verification failed: {0}")]
     ShardVerificationFailed(Box<VerifyError>),
 
@@ -429,14 +431,27 @@ impl CasError {
         matches!(self, Self::Unavailable { .. })
     }
 
-    /// Logs the failure inside the request's span: a `5xx` with its cause
-    /// and the cause's sources, anything else by code only.
+    /// Logs the failure inside the request's span, so under its request id:
+    /// - a `5xx` at error, with its cause and the cause's sources
+    /// - a rejected shard at warn, with its full reason: a parse failure
+    ///   with its sources, a verification failure with the values derived
+    ///   from stored chunks that its message withholds (ruling M1-R23). The
+    ///   v1 client never shows the body, so this is where the reason is read.
+    /// - anything else at debug, by code only
     pub(crate) fn log(&self) {
         let (status, code, _) = self.parts();
-        if status.is_server_error() {
-            tracing::error!(code, error = self as &dyn StdError, "request failed");
-        } else {
-            tracing::debug!(code, "request refused");
+        match self {
+            Self::MalformedShard(reason) => {
+                tracing::warn!(code, error = &**reason as &dyn StdError, "shard rejected");
+            }
+            Self::ShardVerificationFailed(reason) => {
+                tracing::warn!(code, reason = %reason.detail(), "shard rejected");
+            }
+            Self::UnknownXorb { .. } => tracing::warn!(code, reason = %self, "shard rejected"),
+            _ if status.is_server_error() => {
+                tracing::error!(code, error = self as &dyn StdError, "request failed");
+            }
+            _ => tracing::debug!(code, "request refused"),
         }
     }
 }

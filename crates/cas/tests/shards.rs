@@ -690,3 +690,32 @@ async fn foreign_writer_cannot_forge_shard_under_global() {
     }
     assert_eq!(files(&server, SCOPE_B).await, [None, None, None]);
 }
+
+#[tokio::test]
+async fn rejections_are_logged_with_their_full_reason() {
+    // The v1 client never shows the body, so the operator's log holds the
+    // reason, server-derived values included, under the request id.
+    let server = TestServer::start_default().await;
+    upload_xorb(&server, &server.write_token).await;
+
+    let reply = upload_v1(&server, tampered_shard(), &server.write_token).await;
+    reply.assert_error(400, "shard_verification_failed");
+    let id = reply.headers["x-request-id"].to_str().unwrap().to_owned();
+    let true_file_hash = common::shard::HF_XET_FILES[1];
+    assert!(!reply.body.contains(true_file_hash), "{}", reply.body);
+    let logs = server.logs();
+    let line = logs
+        .lines()
+        .find(|l| l.contains(&id) && l.contains("WARN") && l.contains(true_file_hash))
+        .unwrap_or_else(|| panic!("no WARN line with the full reason: {logs}"));
+    assert!(line.contains("shard_verification_failed"), "{line}");
+
+    let reply = upload_v1(&server, b"not a shard".to_vec(), &server.write_token).await;
+    let id = reply.headers["x-request-id"].to_str().unwrap().to_owned();
+    let logs = server.logs();
+    assert!(
+        logs.lines()
+            .any(|l| l.contains(&id) && l.contains("WARN") && l.contains("shard_malformed")),
+        "{logs}"
+    );
+}
