@@ -38,6 +38,8 @@ clear seams, no opinions forced on the operator.
   gigabytes.
 - It scales by adding nodes, with no redesign, from a laptop to petabytes.
 - Operators recommend it because it is boring to run.
+- People who don't want to run anything get the same thing, done perfectly, on
+  **openxet.com** (§15).
 
 ## 2. Goals, non-goals, anti-goals
 
@@ -839,3 +841,58 @@ The project starts as **openxet** *(decided by the user)*. Because it uses the
 "Xet" name, there is some trademark risk. Keep brand-specific strings in a few
 places (binary name, image name, docs domain) so a rename stays cheap if it
 is ever needed.
+
+Prior art found on 2026-10-23: another repository already uses the name
+(`ggoggam/openxet`, Apache-2.0, 8 stars). The GitHub organization `openxet`
+exists (created 2025-08-15, empty); whether it is ours is unconfirmed. The
+user owns the openxet.com domain.
+
+## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
+
+openxet.com is a first-class product, not an afterthought. "Perfect" is
+measured by the same anti-goals as the open-source project: fast, effortless,
+and listening. Detailed design is its own brainstorming round (pricing, legal,
+operations). These requirements are fixed now because they shape the core:
+
+**Experience:**
+- From the landing page to a working `hf upload` in under 60 seconds: sign in
+  with GitHub, Google or SSO; a token is shown with copy-ready commands; done.
+- A free tier with no time limit, and no card needed to start.
+- Every page shows what the user gains: stored vs. uploaded bytes and the dedup
+  savings, in money where possible.
+- Bring your own bucket as a headline option: we operate openxet, and the data
+  stays in the customer's S3/GCS/Azure account. An EU region is available from
+  day one.
+- Git hosting, `git-xet`, `hf`, our client and the web UI all work on
+  openxet.com exactly as they do self-hosted.
+- No dead ends: every error says what to do next. Support is reachable from
+  every page, and replies come within one business day.
+
+**Dogfooding rule:** openxet.com runs the released open-source build. There is
+no private fork and no hosted-only core feature. Hosted-only parts are
+operational: billing, sign-up, abuse handling, the status page. They live
+behind the same seams (authorizer webhook, metering, admin API). Anything
+openxet.com needs from the core is built into the core, which makes
+self-hosting better too.
+
+**What this adds to the core:**
+- Hard multi-tenant isolation (per-scope dedup visibility, pools per tenant,
+  noisy-neighbour limits).
+- Enforced quotas and per-tenant rate limits.
+- Metering accurate enough to bill.
+- Self-service sign-up via the web UI.
+- Admin tooling for abuse and takedowns.
+- Zero-downtime rolling upgrades.
+
+**Operations bar:**
+- A published SLO with a public status page.
+- Tested backups and restores.
+- Cheap-egress storage and a CDN, so it can be profitable.
+- Abuse reporting and DMCA/DSA takedown processes, plus terms of service and
+  a DPA, before public launch.
+
+**Truly useful, not just available:**
+- Two or three design partners (aqora first) run on openxet.com before billing
+  is switched on.
+- We measure their time to first upload and their dedup savings, and act on
+  what they report.
