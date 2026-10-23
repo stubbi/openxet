@@ -35,7 +35,7 @@ use openxet_protocol::{
 };
 use openxet_storage::Key;
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
@@ -81,7 +81,8 @@ struct Registered {
 /// `POST /v1/shards`: `200 {"result": 1|0}`. A shard that doesn't parse or
 /// verify is `400` with its rule's code, final; a storage or index failure
 /// is `503`, which the client retries. The client doesn't show the body, so
-/// the reason is also logged under the request id (S10 §4).
+/// the full reason is logged at warn under the request id (S10 §4;
+/// [`CasError::log`]).
 async fn upload_v1(
     State(state): State<AppState>,
     request: Request,
@@ -112,7 +113,7 @@ async fn upload_v1(
 /// `404` or `501` here would send the client to v1 with the same shard, and
 /// any status would lose the message, the only server text the user sees.
 /// A shard that doesn't parse or verify gets `retryable: false` and the
-/// rule it broke. A storage or index failure gets `retryable: true`, which
+/// rule it broke, naming only what the client sent (ruling M1-R23). A storage or index failure gets `retryable: true`, which
 /// retries the whole upload, and a message naming the request id; its
 /// cause is logged under that id.
 ///
@@ -227,8 +228,8 @@ impl Progress {
 
 /// Writes the v2 stream: each progress event as it comes, the last one
 /// again after `heartbeat` of silence, and the outcome of `work` as the one
-/// terminal event. `events` closes when the work ends; its remaining events
-/// go out before the terminal one.
+/// terminal event. Every event the work reported goes out before the
+/// terminal one: those still queued when the work ends are drained first.
 async fn stream(
     mut work: JoinHandle<Result<bool, CasError>>,
     mut events: mpsc::UnboundedReceiver<Event>,
@@ -260,6 +261,11 @@ async fn stream(
             return;
         }
     };
+    // The work may have queued its last events after the select last
+    // polled `events`; they go out before the terminal event.
+    while let Ok(event) = events.try_recv() {
+        connected = connected && send(&mut lines, &event).await;
+    }
     let terminal = match outcome {
         Ok(Ok(inserted)) => Event::Result {
             result: u8::from(inserted),
@@ -311,14 +317,24 @@ async fn ingest(
     body: Bytes,
     progress: &Progress,
 ) -> Result<bool, CasError> {
-    let shard = blocking(state, move || read_upload_shard(&body[..]))
-        .await?
-        .map_err(shard_error)?;
-    let total = shard.files.len() as u64;
+    // One permit covers parsing, loading the chunk tables and verifying, so
+    // at most `validate`'s permit count of shards are in those steps at
+    // once. Each holds its body (at most `MAX_UPLOAD_SHARD_BYTES`), its
+    // parsed form and at most `max_referenced_xorbs` chunk tables of at most
+    // 320 KiB each (S6 "M1 index implication"), so that is what bounds the
+    // process's verification memory, however many uploads wait (ruling
+    // M1-R8). A v2 upload whose client left waits like any other.
+    let permit = Arc::clone(&state.validate)
+        .acquire_owned()
+        .await
+        .map_err(CasError::internal)?;
+    let (permit, shard) = blocking(permit, move || read_upload_shard(&body[..])).await?;
+    let shard = shard.map_err(shard_error)?;
+    let total = u64::try_from(shard.files.len()).map_err(CasError::internal)?;
     progress.report(Event::Validating { verified: 0, total });
 
-    // The limits bound the chunk tables held below, so they are checked
-    // before any is loaded.
+    // The limits bound the chunk tables loaded below, so they are checked
+    // before any is.
     let limits = state.cfg.verify_limits;
     limits.check(&shard).map_err(verification_failed)?;
     let referenced: Vec<MerkleHash> = shard.referenced_xorbs().copied().collect();
@@ -332,13 +348,15 @@ async fn ingest(
         .map(|(xorb, table)| (xorb, table.hashes))
         .collect();
 
-    let (shard, lookup, stored, hash) = blocking(state, move || {
+    let (permit, verified) = blocking(permit, move || {
         verify_shard(&shard, &lookup, limits).map_err(verification_failed)?;
         let stored = stored_shard(&shard, &lookup).map_err(shard_error)?;
         let hash = shard_hash(&stored);
         Ok::<_, CasError>((shard, lookup, stored, hash))
     })
-    .await??;
+    .await?;
+    drop(permit);
+    let (shard, lookup, stored, hash) = verified?;
     progress.report(Event::Validating {
         verified: total,
         total,
@@ -372,22 +390,18 @@ async fn ingest(
     Ok(inserted)
 }
 
-/// Runs `work` on a blocking thread under a `validate` permit (ruling
-/// M1-R8). The blocking task holds the permit, so it is returned when the
-/// work ends, never before: a blocking task can't be cancelled, and a permit
-/// held by the caller would be returned early if the caller were dropped
-/// while the work runs on.
+/// Runs `work` on a blocking thread holding `permit`, and hands the permit
+/// back with the result. The blocking task holds it while the work runs: a
+/// blocking task can't be cancelled, so a permit held by the caller would be
+/// returned early if the caller were dropped while the work ran on (ruling
+/// M1-R8). A caller dropped meanwhile drops the permit as the work ends.
 async fn blocking<T: Send + 'static>(
-    state: &AppState,
+    permit: OwnedSemaphorePermit,
     work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, CasError> {
-    let permit = Arc::clone(&state.validate)
-        .acquire_owned()
-        .await
-        .map_err(CasError::internal)?;
+) -> Result<(OwnedSemaphorePermit, T), CasError> {
     tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        work()
+        let out = work();
+        (permit, out)
     })
     .await
     .map_err(CasError::internal)
@@ -490,44 +504,150 @@ fn shard_error(reason: ProtocolError) -> CasError {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use openxet_index::{ChunkTable, Index, IndexError, Visibility};
+    use tokio::sync::Semaphore;
 
     use super::*;
     use crate::test_support;
 
     #[tokio::test]
     async fn the_permit_lives_as_long_as_the_blocking_work() {
-        // A v2 client that disconnects doesn't stop the work, but a dropped
-        // caller (a v1 client gone mid-verification) mustn't return the
-        // permit while the blocking work runs on (ruling M1-R8).
+        // A dropped caller (a v1 client gone mid-verification) mustn't
+        // return the permit while the blocking work runs on (ruling M1-R8).
         let dir = tempfile::tempdir().unwrap();
-        let mut state = test_support::state(dir.path(), vec![]).await;
-        state.validate = Arc::new(tokio::sync::Semaphore::new(1));
+        let validate = Arc::new(Semaphore::new(1));
         let done = Arc::new(AtomicBool::new(false));
 
         let caller = {
-            let (state, done) = (state.clone(), Arc::clone(&done));
+            let (validate, done) = (Arc::clone(&validate), Arc::clone(&done));
             tokio::spawn(async move {
-                blocking(&state, move || {
+                let permit = validate.acquire_owned().await.unwrap();
+                blocking(permit, move || {
                     std::thread::sleep(Duration::from_millis(200));
                     done.store(true, Ordering::SeqCst);
                 })
                 .await
+                .map(|_| ())
             })
         };
-        while state.validate.available_permits() == 1 {
+        while validate.available_permits() == 1 {
             tokio::task::yield_now().await;
         }
         caller.abort();
         assert!(caller.await.unwrap_err().is_cancelled());
 
-        assert_eq!(state.validate.available_permits(), 0);
+        assert_eq!(validate.available_permits(), 0);
         let released = tokio::time::timeout(Duration::from_secs(30), async {
-            while state.validate.available_permits() == 0 {
+            while validate.available_permits() == 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         });
         released.await.unwrap();
         assert!(done.load(Ordering::SeqCst), "the permit came back first");
+        drop(dir);
+    }
+
+    /// An index that records how many `validate` permits are free whenever
+    /// chunk tables are loaded.
+    struct PermitProbe {
+        inner: Arc<dyn Index>,
+        validate: Arc<Semaphore>,
+        free_at_load: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Index for PermitProbe {
+        async fn put_xorb(
+            &self,
+            xorb: &MerkleHash,
+            size: u64,
+            table: &ChunkTable,
+            eligible: &[MerkleHash],
+            scope: &str,
+        ) -> Result<bool, IndexError> {
+            self.inner
+                .put_xorb(xorb, size, table, eligible, scope)
+                .await
+        }
+
+        async fn xorb_size(
+            &self,
+            xorb: &MerkleHash,
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<Option<u64>, IndexError> {
+            self.inner.xorb_size(xorb, scope, vis).await
+        }
+
+        async fn chunk_tables(
+            &self,
+            xorbs: &[MerkleHash],
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
+            self.free_at_load
+                .store(self.validate.available_permits(), Ordering::SeqCst);
+            self.inner.chunk_tables(xorbs, scope, vis).await
+        }
+
+        async fn register_shard(
+            &self,
+            shard: &MerkleHash,
+            files: &[NewFile],
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<bool, IndexError> {
+            self.inner.register_shard(shard, files, scope, vis).await
+        }
+
+        async fn file(
+            &self,
+            file: &MerkleHash,
+            scope: &str,
+        ) -> Result<Option<FileRecord>, IndexError> {
+            self.inner.file(file, scope).await
+        }
+
+        async fn dedup_xorb(
+            &self,
+            chunk: &MerkleHash,
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<Option<MerkleHash>, IndexError> {
+            self.inner.dedup_xorb(chunk, scope, vis).await
+        }
+    }
+
+    #[tokio::test]
+    async fn one_permit_covers_loading_the_tables_and_verifying() {
+        // The chunk tables are the large part of verification memory, so
+        // they are loaded under the permit that verification then uses.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![]).await;
+        state.validate = Arc::new(Semaphore::new(1));
+        let probe = Arc::new(PermitProbe {
+            inner: Arc::clone(&state.index),
+            validate: Arc::clone(&state.validate),
+            free_at_load: AtomicUsize::new(usize::MAX),
+        });
+        state.index = Arc::clone(&probe) as Arc<dyn Index>;
+        let shard = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/hf-xet-1.7.0-upload/upload.shard"),
+        )
+        .unwrap();
+
+        // The capture's xorb isn't stored here, so verification fails; the
+        // tables were loaded all the same.
+        let outcome = ingest(&state, "s", Bytes::from(shard), &Progress::none()).await;
+
+        assert!(
+            matches!(outcome, Err(CasError::UnknownXorb { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(probe.free_at_load.load(Ordering::SeqCst), 0);
+        assert_eq!(state.validate.available_permits(), 1);
     }
 }
