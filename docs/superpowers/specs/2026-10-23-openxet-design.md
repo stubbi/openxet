@@ -339,9 +339,17 @@ and shared.
   is served too, for older clients.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`
-  support. This makes openxet readable by anything that speaks HTTP or `hf://`
-  (curl, browsers, fsspec, pandas, polars, and DuckDB if its `hf://` endpoint
-  can be pointed at openxet, spike S4). It is served by the transfer role so
+  support. This makes openxet readable by anything that speaks HTTP (curl,
+  browsers, pandas, polars, DuckDB via the plain resolve URL) or `hf://`
+  through fsspec `HfFileSystem`. DuckDB and polars hard-code
+  huggingface.co in their own `hf://` handlers (spike S4,
+  `docs/research/S4-analytics-clients.md`), so they read openxet through
+  `https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. The gateway
+  must pass the conformance checklist in that note (HEAD, all three
+  `Range` forms, `416`, `ETag`/`If-Range`, redirects, auth); private
+  repos need a DuckDB `http` secret, and polars needs an fsspec file
+  object. Private-CA https works in DuckDB but not in polars on macOS
+  (observed; `docs/research/S4-analytics-clients.md`). It is served by the transfer role so
   it scales and caches independently.
 
 ### 5.6 Garbage collection and retention
@@ -859,8 +867,11 @@ own UI and leave this role off.
   what TLS setup the quickstart needs.
 - **S3:** the exact `whoami-v2`, `preupload`, `commit` and `tree` response
   shapes `huggingface_hub` requires, captured as fixtures.
-- **S4:** whether DuckDB `hf://` (and polars or fsspec) can target a custom
-  endpoint; if not, document the plain-HTTPS URL route.
+- **S4** *(answered: no for DuckDB and polars `hf://`, yes for fsspec
+  `HfFileSystem`; plain HTTPS `resolve` URLs work for all;
+  `docs/research/S4-analytics-clients.md`)*: whether DuckDB `hf://` (and
+  polars or fsspec) can target a custom endpoint; if not, document the
+  plain-HTTPS URL route.
 - **S5:** whether `xet-core-structures` is usable server-side, or which pieces
   to vendor or reimplement, and its versioning on crates.io.
 - **S6:** the shard upload verification rules (spec "shard" page) implemented
