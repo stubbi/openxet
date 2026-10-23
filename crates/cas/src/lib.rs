@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod body;
 mod error;
 mod misc;
 mod request_id;

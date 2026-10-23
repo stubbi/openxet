@@ -2,17 +2,13 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::body::{Body, Bytes, HttpBody as _};
-use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{
-    DefaultBodyLimit, FromRequest as _, FromRequestParts, RawPathParams, Request, State,
-};
-use axum::http::header::{CONTENT_LENGTH, EXPECT};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, FromRequestParts, RawPathParams, Request, State};
+use axum::http::StatusCode;
+use axum::http::header::CONTENT_LENGTH;
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use http_body_util::BodyExt as _;
 use openxet_auth::Principal;
 use openxet_index::ChunkTable;
 use openxet_protocol::{
@@ -22,8 +18,7 @@ use openxet_protocol::{
 use openxet_storage::Key;
 use serde::Serialize;
 
-use crate::error::closing;
-use crate::{AppState, CasError, ReadAccess, WriteAccess};
+use crate::{AppState, CasError, ReadAccess, WriteAccess, body};
 
 /// The only xorb prefix: what clients send (`HF_XET_DATA_DEFAULT_PREFIX`;
 /// S10 "Conventions for every route") and where the bucket keeps xorbs.
@@ -117,7 +112,9 @@ async fn upload(
     let (mut parts, body) = request.into_parts();
     let (hash, principal) = match authorize(&mut parts, &state).await {
         Ok(checked) => checked,
-        Err(e) => return Err(refuse_unread(e, &parts.headers, body).await),
+        Err(e) => {
+            return Err(body::refuse_unread(e, &parts.headers, body, MAX_XORB_BODY_BYTES).await);
+        }
     };
     let result = store(
         &state,
@@ -144,61 +141,13 @@ async fn authorize(
     Ok((hash, principal))
 }
 
-/// The answer `e` to an upload refused before its body was read.
-///
-/// The body is read and discarded first, never buffered. A server that
-/// answers and closes with request bytes unread resets the connection, and
-/// the client then sees a failed body write, which it retries, instead of
-/// this final answer (S10 "Status codes and retries"). Two bodies are not
-/// read, and the answer closes the connection instead:
-/// - one over [`MAX_XORB_BODY_BYTES`]
-/// - one announced with `Expect: 100-continue`, whose client waits for the
-///   server before sending it (RFC 9110 §10.1.1). The final status goes out
-///   instead of `100 Continue`, which hyper sends only once the body is
-///   read, so the client never sends the body.
-async fn refuse_unread(e: CasError, headers: &HeaderMap, mut body: Body) -> Response {
-    let expects_continue = headers
-        .get(EXPECT)
-        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"100-continue"));
-    if expects_continue || body.size_hint().lower() > MAX_XORB_BODY_BYTES {
-        return closing(e);
-    }
-    let mut read = 0u64;
-    while let Some(frame) = body.frame().await {
-        let Ok(frame) = frame else {
-            return closing(e);
-        };
-        if let Some(data) = frame.data_ref() {
-            read = read.saturating_add(data.len() as u64);
-            if read > MAX_XORB_BODY_BYTES {
-                return closing(e);
-            }
-        }
-    }
-    e.into_response()
-}
-
 async fn store(
     state: &AppState,
     hash: MerkleHash,
     scope: &str,
     request: Request,
 ) -> Result<bool, Response> {
-    // hyper's size hint is exact when the request declares a Content-Length.
-    // Unlike other refusals, this body is not drained: it can't be within
-    // the limit, and no stock client sends one, so the 413 goes out unread
-    // and closes the connection rather than read up to 64.5 MiB for nothing.
-    if request.body().size_hint().lower() > MAX_XORB_BODY_BYTES {
-        return Err(closing(too_large()));
-    }
-    let body = Bytes::from_request(request, state)
-        .await
-        .map_err(|rejection| match rejection {
-            BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_)) => {
-                closing(too_large())
-            }
-            _ => CasError::UnreadableBody.into_response(),
-        })?;
+    let body = body::buffer(request, MAX_XORB_BODY_BYTES, too_large).await?;
     let stored = validate(state, body)
         .await
         .map_err(IntoResponse::into_response)?;
@@ -329,7 +278,7 @@ async fn head(
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use axum::body::{Body, to_bytes};
+    use axum::body::{Body, HttpBody as _, to_bytes};
     use axum::http::header::{AUTHORIZATION, CONNECTION};
     use http_body_util::{BodyExt as _, Full};
     use openxet_auth::{Mode, StaticToken};
