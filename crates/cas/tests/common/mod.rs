@@ -63,6 +63,11 @@ pub struct Route {
     /// The status an authorized request with an empty body answers on a
     /// fresh server.
     pub authorized: u16,
+    /// The error code of that answer, if it is an error. Pinning it proves
+    /// the request reached the handler, not a 400 or 404 on the way. A
+    /// `HEAD` answer has no body, so there only the status and the error
+    /// headers can be checked.
+    pub authorized_code: Option<&'static str>,
 }
 
 /// Every route the CAS serves. Extend it whenever a route is added.
@@ -72,6 +77,7 @@ pub const ROUTES: &[Route] = &[
         path: "/v1/telemetry",
         access: Access::Read,
         authorized: 204,
+        authorized_code: None,
     },
     Route {
         method: Method::POST,
@@ -79,14 +85,30 @@ pub const ROUTES: &[Route] = &[
         access: Access::Write,
         // An empty body is a xorb without chunks.
         authorized: 400,
+        authorized_code: Some("xorb_empty"),
     },
     Route {
         method: Method::HEAD,
         path: XORB_PATH,
         access: Access::Read,
         authorized: 404,
+        authorized_code: Some("xorb_not_found"),
     },
 ];
+
+impl Route {
+    /// Asserts `reply` is this route's answer to an authorized request.
+    pub fn assert_authorized(&self, reply: &Reply) {
+        match self.authorized_code {
+            Some(code) => reply.assert_error(self.authorized, code),
+            None => assert_eq!(
+                reply.status, self.authorized,
+                "{} {}",
+                self.path, reply.body
+            ),
+        }
+    }
+}
 
 /// A xorb route's path, for a xorb no test stores.
 pub const XORB_PATH: &str =

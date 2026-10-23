@@ -271,25 +271,11 @@ async fn missing_or_bad_credential_is_401_and_wrong_mode_is_403() {
         if route.access == Access::Write {
             read.assert_error(403, "insufficient_scope");
         } else {
-            assert_eq!(
-                read.status, route.authorized,
-                "{} {}",
-                route.path, read.body
-            );
+            route.assert_authorized(&read);
         }
 
-        let accepted = send(Some(bearer(&expiring))).await;
-        assert_eq!(
-            accepted.status, route.authorized,
-            "{} {}",
-            route.path, accepted.body
-        );
-        let lowercase = send(Some(format!("bearer {}", server.write_token))).await;
-        assert_eq!(
-            lowercase.status, route.authorized,
-            "{} {}",
-            route.path, lowercase.body
-        );
+        route.assert_authorized(&send(Some(bearer(&expiring))).await);
+        route.assert_authorized(&send(Some(format!("bearer {}", server.write_token))).await);
     }
 
     server.clock.advance(60);
