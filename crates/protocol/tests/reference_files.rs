@@ -315,10 +315,17 @@ fn tampered_unpacked_bytes_is_rejected() {
     seg.unpacked_bytes += 1;
     let err = verify_segment(&seg, &chunks).unwrap_err();
     assert!(matches!(err, VerifyError::LengthMismatch { .. }), "{err}");
+    // The client sees its own claim; the stored length is for the log only
+    // (ruling M1-R23).
     let msg = err.to_string();
     assert!(
-        msg.contains("63527245") && msg.contains("63527244"),
+        msg.contains("63527245") && !msg.contains("63527244"),
         "{msg}"
+    );
+    let detail = err.detail();
+    assert!(
+        detail.contains("63527245") && detail.contains("63527244"),
+        "{detail}"
     );
 }
 
@@ -641,6 +648,32 @@ fn distinct_xorb_cap_is_checked_before_any_lookup() {
         VerifyLimits::default(),
         limits(MAX_REFERENCED_CHUNKS, MAX_REFERENCED_XORBS)
     );
+}
+
+#[test]
+fn limits_check_needs_no_lookup_and_agrees_with_verify_shard() {
+    // A server checks the limits before it loads any chunk table, which is
+    // what bounds the tables it holds (S6 "M1 index implication").
+    let chunks = reference_xorb_chunks();
+    let shard = reference_upload_shard();
+    let lookup = reference_lookup(&chunks);
+    for limits in [
+        limits(796, 1),
+        limits(795, 1),
+        limits(MAX_REFERENCED_CHUNKS, 0),
+    ] {
+        let checked = limits.check(&shard).map_err(|e| e.to_string());
+        let verified = verify_shard(&shard, &lookup, limits).map_err(|e| e.to_string());
+        assert_eq!(checked, verified, "{limits:?}");
+    }
+    assert!(matches!(
+        limits(795, 1).check(&shard),
+        Err(VerifyError::TooMuchWork { .. })
+    ));
+    assert!(matches!(
+        limits(796, 0).check(&shard),
+        Err(VerifyError::TooManyXorbs { .. })
+    ));
 }
 
 #[test]

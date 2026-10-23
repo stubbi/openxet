@@ -4,7 +4,8 @@
 //! `127.0.0.1:0`, backed by a temporary `SqliteIndex` and `LocalBucket`, and
 //! captures every log line the server writes ([`TestServer::logs`]).
 //! [`TestServer::start_with`] swaps in another bucket, such as
-//! [`FailingBucket`].
+//! [`FailingBucket`], and [`TestServer::start_with_index`] wraps the index,
+//! as [`SlowIndex`] does.
 //!
 //! [`ROUTES`] lists every route the CAS serves. Tests that must hold on every
 //! route (credentials are never echoed, every route authenticates) iterate
@@ -13,9 +14,11 @@
 
 #![allow(dead_code)]
 
+pub mod shard;
 pub mod xorb;
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
@@ -26,7 +29,8 @@ use std::time::Duration;
 use axum::body::Bytes;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, CasConfig, Clock, SystemClock, router};
-use openxet_index::{Index, SqliteIndex, Visibility};
+use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
+use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
 use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
 use reqwest::Method;
@@ -94,6 +98,22 @@ pub const ROUTES: &[Route] = &[
         authorized: 404,
         authorized_code: Some("xorb_not_found"),
     },
+    Route {
+        method: Method::POST,
+        path: "/v1/shards",
+        access: Access::Write,
+        // An empty body is not a shard.
+        authorized: 400,
+        authorized_code: Some("shard_malformed"),
+    },
+    Route {
+        method: Method::POST,
+        path: "/v2/shards",
+        access: Access::Write,
+        // Content failures are `error` events in a `200` stream (S10 §4).
+        authorized: 200,
+        authorized_code: None,
+    },
 ];
 
 impl Route {
@@ -144,6 +164,7 @@ pub fn config(visibility: Visibility) -> CasConfig {
         public_url: Url::parse("http://replaced.invalid").unwrap(),
         visibility,
         verify_limits: VerifyLimits::default(),
+        heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
     }
 }
 
@@ -242,16 +263,36 @@ impl TestServer {
     pub async fn start(cfg: CasConfig) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let bucket = Arc::new(LocalBucket::open(&dir.path().join(BUCKET_DIR)).unwrap());
-        Self::start_in(dir, cfg, bucket).await
+        Self::start_in(dir, cfg, bucket, Box::new(|index| index)).await
     }
 
     /// Starts a server with `cfg` over `bucket` instead of a local one, for
     /// tests that need a bucket that fails.
     pub async fn start_with(cfg: CasConfig, bucket: Arc<dyn Bucket>) -> Self {
-        Self::start_in(tempfile::tempdir().unwrap(), cfg, bucket).await
+        Self::start_in(
+            tempfile::tempdir().unwrap(),
+            cfg,
+            bucket,
+            Box::new(|index| index),
+        )
+        .await
     }
 
-    async fn start_in(dir: TempDir, cfg: CasConfig, bucket: Arc<dyn Bucket>) -> Self {
+    /// Starts a server with `cfg` whose index is `wrap` of the usual one,
+    /// for tests that need a slow index. [`TestServer::index`] is the
+    /// wrapped index.
+    pub async fn start_with_index(cfg: CasConfig, wrap: WrapIndex) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let bucket = Arc::new(LocalBucket::open(&dir.path().join(BUCKET_DIR)).unwrap());
+        Self::start_in(dir, cfg, bucket, wrap).await
+    }
+
+    async fn start_in(
+        dir: TempDir,
+        cfg: CasConfig,
+        bucket: Arc<dyn Bucket>,
+        wrap: WrapIndex,
+    ) -> Self {
         let write_token = new_token();
         let read_token = new_token();
         let other_scope_token = new_token();
@@ -301,8 +342,9 @@ impl TestServer {
                 .build()
                 .unwrap();
             runtime.block_on(async move {
-                let index: Arc<dyn Index> =
-                    Arc::new(SqliteIndex::open(&root.join("index.sqlite")).await.unwrap());
+                let index: Arc<dyn Index> = wrap(Arc::new(
+                    SqliteIndex::open(&root.join("index.sqlite")).await.unwrap(),
+                ));
                 let state = AppState::new(
                     Arc::clone(&index),
                     server_bucket,
@@ -509,6 +551,84 @@ impl Reply {
         assert_eq!(json["code"], code, "body: {}", self.body);
         assert!(!json["message"].as_str().unwrap().is_empty());
         assert!(!json["hint"].as_str().unwrap().is_empty());
+    }
+}
+
+/// Wraps the server's index, for [`TestServer::start_with_index`].
+pub type WrapIndex = Box<dyn FnOnce(Arc<dyn Index>) -> Arc<dyn Index> + Send>;
+
+/// An index whose `chunk_tables` takes `delay` longer, for tests of what a
+/// client sees while shard verification is slow. Everything else is the
+/// wrapped index's.
+pub struct SlowIndex {
+    /// The index answering every call.
+    pub inner: Arc<dyn Index>,
+    /// The extra time `chunk_tables` takes.
+    pub delay: Duration,
+}
+
+impl SlowIndex {
+    /// A [`WrapIndex`] that slows the index's `chunk_tables` by `delay`.
+    pub fn wrap(delay: Duration) -> WrapIndex {
+        Box::new(move |inner| Arc::new(Self { inner, delay }))
+    }
+}
+
+#[async_trait::async_trait]
+impl Index for SlowIndex {
+    async fn put_xorb(
+        &self,
+        xorb: &MerkleHash,
+        size: u64,
+        table: &ChunkTable,
+        eligible: &[MerkleHash],
+        scope: &str,
+    ) -> Result<bool, IndexError> {
+        self.inner
+            .put_xorb(xorb, size, table, eligible, scope)
+            .await
+    }
+
+    async fn xorb_size(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<u64>, IndexError> {
+        self.inner.xorb_size(xorb, scope, vis).await
+    }
+
+    async fn chunk_tables(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
+        tokio::time::sleep(self.delay).await;
+        self.inner.chunk_tables(xorbs, scope, vis).await
+    }
+
+    async fn register_shard(
+        &self,
+        shard: &MerkleHash,
+        files: &[NewFile],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<bool, IndexError> {
+        self.inner.register_shard(shard, files, scope, vis).await
+    }
+
+    async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
+        self.inner.file(file, scope).await
+    }
+
+    async fn dedup_xorb(
+        &self,
+        chunk: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<MerkleHash>, IndexError> {
+        self.inner.dedup_xorb(chunk, scope, vis).await
     }
 }
 

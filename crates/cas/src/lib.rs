@@ -14,9 +14,11 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod body;
 mod error;
 mod misc;
 mod request_id;
+mod shards;
 #[cfg(test)]
 mod test_support;
 mod xorbs;
@@ -24,7 +26,7 @@ mod xorbs;
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::http::header::AUTHORIZATION;
@@ -55,6 +57,16 @@ pub struct CasConfig {
     pub visibility: Visibility,
     /// The work bounds shard verification enforces.
     pub verify_limits: VerifyLimits,
+    /// How often a `/v2/shards` stream repeats its last progress event
+    /// while the upload's work runs. `hf_xet` fails a stream silent for its
+    /// 300 s read timeout (S10 §4).
+    pub heartbeat_interval: Duration,
+}
+
+impl CasConfig {
+    /// The default [`CasConfig::heartbeat_interval`]: 5 s, well inside the
+    /// client's 300 s read timeout.
+    pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 }
 
 /// The current time, in Unix seconds. Credentials are checked against it, so
@@ -93,15 +105,30 @@ pub struct AppState {
     /// This server's configuration.
     pub cfg: CasConfig,
     /// Bounds concurrent xorb validation, which decompresses up to 2 × the
-    /// xorb's size (ruling M1-R8).
+    /// xorb's size, and shard parsing and verification (ruling M1-R8).
     pub validate: Arc<Semaphore>,
+    /// Bounds concurrent shard commits, from the bucket write to the end of
+    /// index registration (ruling M1-R24), including v2 uploads whose client
+    /// has left. Separate from `validate`, so slow storage never holds a
+    /// CPU permit.
+    ///
+    /// With both, shard ingest's memory per process is at most `validate`'s
+    /// permits × (a body of at most 64 MiB, its parsed form and
+    /// `max_referenced_xorbs` chunk tables of at most 320 KiB each), plus
+    /// `commit`'s permits × (a stored shard of at most 64 MiB and its
+    /// files). Uploads waiting for a permit hold only their body.
+    pub commit: Arc<Semaphore>,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,
 }
 
+/// Commit permits per available CPU (ruling M1-R24).
+const COMMITS_PER_CPU: usize = 4;
+
 impl AppState {
-    /// State with the system clock and one validation permit per available
-    /// CPU (ruling M1-R8).
+    /// State with the system clock, one validation permit per available
+    /// CPU (ruling M1-R8) and four commit permits per CPU (ruling M1-R24):
+    /// committing waits on I/O, not CPU, so more can run than validate.
     #[must_use]
     pub fn new(
         index: Arc<dyn Index>,
@@ -118,6 +145,7 @@ impl AppState {
             urls,
             cfg,
             validate: Arc::new(Semaphore::new(permits)),
+            commit: Arc::new(Semaphore::new(permits.saturating_mul(COMMITS_PER_CPU))),
             clock: Arc::new(SystemClock),
         }
     }
@@ -146,7 +174,10 @@ impl AppState {
 /// - Responses are never compressed: clients send no `Accept-Encoding`.
 pub fn router(state: AppState) -> Router {
     with_middleware(
-        Router::new().merge(misc::routes()).merge(xorbs::routes()),
+        Router::new()
+            .merge(misc::routes())
+            .merge(xorbs::routes())
+            .merge(shards::routes()),
         state,
     )
 }

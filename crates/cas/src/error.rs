@@ -6,7 +6,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{AuthError, ForbiddenReason};
 use openxet_index::IndexError;
-use openxet_protocol::{MerkleHash, ProtocolError, hash_to_hex};
+use openxet_protocol::{MerkleHash, ProtocolError, VerifyError, hash_to_hex};
 use openxet_storage::StorageError;
 use serde::Serialize;
 
@@ -67,10 +67,17 @@ pub enum CasError {
     #[error("a signed transfer URL must be fetched with the `Range` header it was signed for")]
     BadRange,
 
-    /// A shard's file references a xorb that isn't visible to the caller.
-    /// `400 unknown_xorb`, which clients don't retry.
+    /// A shard's file references a xorb that isn't visible to the caller:
+    /// missing, or under `PerScope` another scope's, which reads the same
+    /// (ruling M1-R17). `400 unknown_xorb`, which clients don't retry.
+    ///
+    /// The message carries the stale-cache note (ruling M1-R5): on
+    /// `/v2/shards` it is the only text the user sees (S10 §4), and clients
+    /// dedup against shards cached for up to 21 days, so a reset server is
+    /// the usual cause.
     #[error(
-        "a file in the shard references xorb {}, which is not stored on this server",
+        "xorb {} is not stored on this server. If the server was reset, clear the client's Xet \
+         cache for this endpoint (~/.cache/huggingface/xet or $HF_XET_CACHE) and upload again.",
         hash_to_hex(.xorb)
     )]
     UnknownXorb {
@@ -121,6 +128,25 @@ pub enum CasError {
     #[error("the xorb body is larger than this server accepts ({limit} bytes)")]
     XorbTooLarge {
         /// [`openxet_protocol::MAX_XORB_BODY_BYTES`].
+        limit: u64,
+    },
+
+    /// An uploaded shard doesn't parse. `400 shard_malformed`, final.
+    #[error("{0}")]
+    MalformedShard(Box<ProtocolError>),
+
+    /// An uploaded shard parses but fails verification against the stored
+    /// xorbs, or exceeds the verification limits.
+    /// `400 shard_verification_failed`, final. The message is the reason's
+    /// client-safe `Display`; the values it withholds are logged
+    /// under the request id (ruling M1-R23).
+    #[error("shard verification failed: {0}")]
+    ShardVerificationFailed(Box<VerifyError>),
+
+    /// An uploaded shard body exceeds the limit. `413 shard_too_large`.
+    #[error("the shard body is larger than this server accepts ({limit} bytes)")]
+    ShardTooLarge {
+        /// [`openxet_protocol::MAX_UPLOAD_SHARD_BYTES`].
         limit: u64,
     },
 
@@ -244,11 +270,15 @@ struct Body<'a> {
     hint: &'static str,
 }
 
-/// The hint for a xorb a shard references but the server lacks (ruling
-/// M1-R5): clients dedup against shards cached for up to 21 days.
-const STALE_CACHE_HINT: &str = "Upload the xorb before the shard that references it. If the \
-     server was reset, clear the client's Xet cache for this endpoint \
-     (~/.cache/huggingface/xet or $HF_XET_CACHE) and upload again.";
+/// The hint for a xorb a shard references but the server lacks; the
+/// message itself carries the stale-cache note (ruling M1-R5).
+const UNKNOWN_XORB_HINT: &str = "Upload every xorb before the shard that references it, with \
+     `POST /v1/xorbs/default/{hash}` and a write token for this scope \
+     (https://huggingface.co/docs/xet/upload-protocol#ordering-and-concurrency).";
+
+const SHARD_HINT: &str = "Build the shard from the xorbs uploaded to this server, as stock \
+     clients do (https://huggingface.co/docs/xet/shard#shard-upload). The message names the \
+     rule broken and the file or xorb it was found in.";
 
 const RETRY_HINT: &str = "Retry; stock clients do so automatically. If it persists, give the \
      operator the `X-Request-Id` response header: the server log records the cause under it.";
@@ -258,6 +288,10 @@ const CREDENTIAL_HINT: &str = "Send `Authorization: Bearer <token>` with a token
 
 impl CasError {
     /// The HTTP status, the stable code, and the hint.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per variant: the table of every code reads best whole"
+    )]
     fn parts(&self) -> (StatusCode, &'static str, &'static str) {
         match self {
             Self::NoRoute => (
@@ -302,7 +336,21 @@ impl CasError {
                 "bad_range",
                 "Send `Range: bytes={start}-{end}` equal to the URL's `range` query parameter.",
             ),
-            Self::UnknownXorb { .. } => (StatusCode::BAD_REQUEST, "unknown_xorb", STALE_CACHE_HINT),
+            Self::UnknownXorb { .. } => {
+                (StatusCode::BAD_REQUEST, "unknown_xorb", UNKNOWN_XORB_HINT)
+            }
+            Self::MalformedShard(_) => (StatusCode::BAD_REQUEST, "shard_malformed", SHARD_HINT),
+            Self::ShardVerificationFailed(_) => (
+                StatusCode::BAD_REQUEST,
+                "shard_verification_failed",
+                SHARD_HINT,
+            ),
+            Self::ShardTooLarge { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "shard_too_large",
+                "Split the upload into shards of at most 64 MiB, as stock clients do \
+                 (https://huggingface.co/docs/xet/upload-protocol#6-shard-serialization-and-upload).",
+            ),
             Self::InvalidHash => (
                 StatusCode::BAD_REQUEST,
                 "invalid_hash",
@@ -370,14 +418,48 @@ impl CasError {
     }
 }
 
+impl CasError {
+    /// Whether this is the server's fault rather than the request's: a
+    /// `5xx`, whose cause is logged and never sent.
+    pub(crate) fn is_server_error(&self) -> bool {
+        self.parts().0.is_server_error()
+    }
+
+    /// Whether a retry may succeed: the index or the bucket was
+    /// unavailable. A request's fault or a server bug stays on retry.
+    pub(crate) fn is_retryable(&self) -> bool {
+        matches!(self, Self::Unavailable { .. })
+    }
+
+    /// Logs the failure inside the request's span, so under its request id:
+    /// - a `5xx` at error, with its cause and the cause's sources
+    /// - a rejected shard at warn, with its full reason: a parse failure
+    ///   with its sources, a verification failure with the values derived
+    ///   from stored chunks that its message withholds (ruling M1-R23). The
+    ///   v1 client never shows the body, so this is where the reason is read.
+    /// - anything else at debug, by code only
+    pub(crate) fn log(&self) {
+        let (status, code, _) = self.parts();
+        match self {
+            Self::MalformedShard(reason) => {
+                tracing::warn!(code, error = &**reason as &dyn StdError, "shard rejected");
+            }
+            Self::ShardVerificationFailed(reason) => {
+                tracing::warn!(code, reason = %reason.detail(), "shard rejected");
+            }
+            Self::UnknownXorb { .. } => tracing::warn!(code, reason = %self, "shard rejected"),
+            _ if status.is_server_error() => {
+                tracing::error!(code, error = self as &dyn StdError, "request failed");
+            }
+            _ => tracing::debug!(code, "request refused"),
+        }
+    }
+}
+
 impl IntoResponse for CasError {
     fn into_response(self) -> Response {
         let (status, code, hint) = self.parts();
-        if status.is_server_error() {
-            tracing::error!(code, error = &self as &dyn StdError, "request failed");
-        } else {
-            tracing::debug!(code, "request refused");
-        }
+        self.log();
         let message = self.to_string();
         let mut response = (
             status,
@@ -561,7 +643,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_xorb_is_final_400_with_the_stale_cache_hint() {
+    async fn unknown_xorb_is_final_400_with_the_stale_cache_note() {
+        // The note is in the message: on `/v2/shards` the message is the
+        // only text the user sees (S10 §4).
         let xorb = MerkleHash::default();
         let reply = assert_maps(
             IndexError::UnknownXorb { xorb },
@@ -569,17 +653,17 @@ mod tests {
             "unknown_xorb",
         )
         .await;
+        let message = reply.body["message"].as_str().unwrap();
+        assert!(message.contains(&hash_to_hex(&xorb)), "{message}");
         assert!(
-            reply.body["message"]
-                .as_str()
-                .unwrap()
-                .contains(&hash_to_hex(&xorb))
+            message.contains("~/.cache/huggingface/xet or $HF_XET_CACHE"),
+            "{message}"
         );
         assert!(
             reply.body["hint"]
                 .as_str()
                 .unwrap()
-                .contains("~/.cache/huggingface/xet or $HF_XET_CACHE")
+                .contains("POST /v1/xorbs/default/{hash}")
         );
     }
 

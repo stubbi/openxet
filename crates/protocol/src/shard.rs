@@ -136,6 +136,46 @@ impl Default for VerifyLimits {
     }
 }
 
+impl VerifyLimits {
+    /// Whether `shard` stays within these limits; the first check
+    /// [`verify_shard`] makes. It needs no chunk table, so a caller whose
+    /// lookup is preloaded runs it before loading any: the distinct-xorb
+    /// limit only bounds memory if the tables of an oversized shard are
+    /// never loaded (`docs/research/S6-shard-verification.md`, "M1 index
+    /// implication").
+    ///
+    /// # Errors
+    ///
+    /// [`VerifyError::TooMuchWork`] if the shard references more chunks
+    /// than `max_referenced_chunks`, else [`VerifyError::TooManyXorbs`] if
+    /// it references more distinct xorbs than `max_referenced_xorbs`.
+    pub fn check(&self, shard: &UploadShard) -> Result<(), VerifyError> {
+        // Each term is at most u32::MAX chunks and a 64 MiB shard holds well
+        // under 2^32 terms, so the sum fits in u64; saturate anyway rather
+        // than trust it.
+        let referenced_chunks = shard
+            .files
+            .iter()
+            .flat_map(|file| &file.segments)
+            .map(|seg| u64::from(seg.chunk_end.saturating_sub(seg.chunk_start)))
+            .fold(0u64, u64::saturating_add);
+        if referenced_chunks > self.max_referenced_chunks {
+            return Err(VerifyError::TooMuchWork {
+                referenced_chunks,
+                limit: self.max_referenced_chunks,
+            });
+        }
+        let referenced_xorbs = shard.referenced_xorbs().count();
+        if referenced_xorbs > self.max_referenced_xorbs {
+            return Err(VerifyError::TooManyXorbs {
+                referenced_xorbs,
+                limit: self.max_referenced_xorbs,
+            });
+        }
+        Ok(())
+    }
+}
+
 /// One file's reconstruction as uploaded in a shard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShardFileEntry {
@@ -168,12 +208,20 @@ pub struct Segment {
 /// Why an upload shard's file or segment fails verification against the
 /// stored xorb chunk hashes. The client must rebuild the shard from the xorbs
 /// it uploaded.
+///
+/// `Display` is the form to send a client (ruling M1-R23): it names the
+/// rule broken and what the client sent (file and xorb hashes, the chunk
+/// range it claimed), never a value the server derived from its stored
+/// chunks. Verification is the proof that the uploader holds the chunks;
+/// echoing an expected hash, length or chunk count would let a client
+/// without them correct its shard until it passes. [`VerifyError::detail`]
+/// adds those values, for the server's log.
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyError {
     /// The segment's chunk range is empty or runs past the xorb's last chunk.
     #[error(
-        "segment {xorb}[{start}..{end}] is out of bounds: the xorb has {xorb_chunks} chunks and \
-         a segment must cover at least one of them"
+        "segment {xorb}[{start}..{end}] is out of bounds: a segment must cover at least one of \
+         the xorb's chunks; rebuild the shard from the xorbs you uploaded"
     )]
     OutOfBounds {
         /// The segment's xorb.
@@ -188,7 +236,8 @@ pub enum VerifyError {
     /// The shard has no verification entry for the segment.
     #[error(
         "segment {xorb}[{start}..{end}] has no verification entry; upload shards must carry one \
-         per segment (https://huggingface.co/docs/xet/shard#fileverificationentry-optional)"
+         per segment (https://huggingface.co/docs/xet/shard#fileverificationentry-optional), so \
+         rebuild the shard from the xorbs you uploaded"
     )]
     MissingVerification {
         /// The segment's xorb.
@@ -200,8 +249,9 @@ pub enum VerifyError {
     },
     /// The segment's verification hash doesn't match the stored chunks.
     #[error(
-        "segment {xorb}[{start}..{end}] verification hash is {actual}, expected {expected} from \
-         the xorb's chunks (https://huggingface.co/docs/xet/hashing#term-verification-hashes)"
+        "segment {xorb}[{start}..{end}] verification hash {actual} doesn't match the xorb's \
+         chunks (https://huggingface.co/docs/xet/hashing#term-verification-hashes); rebuild the \
+         shard from the xorbs you uploaded"
     )]
     RangeHashMismatch {
         /// The segment's xorb.
@@ -217,8 +267,8 @@ pub enum VerifyError {
     },
     /// The segment's `unpacked_segment_bytes` doesn't match the stored chunks.
     #[error(
-        "segment {xorb}[{start}..{end}] claims {actual} unpacked bytes, but its chunks hold \
-         {expected}"
+        "segment {xorb}[{start}..{end}] claims {actual} unpacked bytes, which doesn't match its \
+         chunks; rebuild the shard from the xorbs you uploaded"
     )]
     LengthMismatch {
         /// The segment's xorb.
@@ -245,8 +295,9 @@ pub enum VerifyError {
     },
     /// The file hash doesn't match the chunks its segments reference.
     #[error(
-        "file hash is {actual}, expected {expected} from the chunks its segments reference \
-         (https://huggingface.co/docs/xet/hashing#file-hashes)"
+        "file {actual} doesn't hash to the chunks its segments reference \
+         (https://huggingface.co/docs/xet/hashing#file-hashes); rebuild the shard from the xorbs \
+         you uploaded"
     )]
     FileHashMismatch {
         /// The file hash computed from the referenced chunks.
@@ -297,6 +348,37 @@ pub enum VerifyError {
         /// The limit applied.
         limit: usize,
     },
+}
+
+impl VerifyError {
+    /// The full reason, with the values the server derived from its stored
+    /// chunks (expected hashes, lengths, chunk counts), for the server's log
+    /// only. Sent to a client, they would let it pass verification without
+    /// holding the chunks (ruling M1-R23); [`Display`](std::fmt::Display) is
+    /// the form to send.
+    #[must_use]
+    pub fn detail(&self) -> String {
+        match self {
+            Self::OutOfBounds { xorb_chunks, .. } => {
+                format!("{self} (the xorb has {xorb_chunks} chunks)")
+            }
+            Self::RangeHashMismatch {
+                expected, actual, ..
+            } => format!("{self} (sent {actual}, the stored chunks give {expected})"),
+            Self::LengthMismatch {
+                expected, actual, ..
+            } => format!("{self} (sent {actual}, the stored chunks hold {expected})"),
+            Self::FileHashMismatch { expected, .. } => {
+                format!("{self} (the referenced chunks give {expected})")
+            }
+            Self::MissingVerification { .. }
+            | Self::UnknownXorb { .. }
+            | Self::EmptyFileSha256 { .. }
+            | Self::ConflictingFileSha256 { .. }
+            | Self::TooMuchWork { .. }
+            | Self::TooManyXorbs { .. } => self.to_string(),
+        }
+    }
 }
 
 /// Parses a shard upload body (`POST /v1/shards`, `/v2/shards`).
@@ -695,8 +777,8 @@ fn verify_segment_with<'a>(
 /// Verifies an upload shard: the only public entry point for verification,
 /// so the work bounds can't be bypassed.
 ///
-/// First the shard must stay within `limits` ([`VerifyLimits::default`] is
-/// the default), before any lookup. Then, for every file:
+/// First the shard must stay within `limits` ([`VerifyLimits::check`];
+/// [`VerifyLimits::default`] is the default), before any lookup. Then, for every file:
 /// - every segment's xorb is stored and the segment passes
 ///   [`verify_segment`] against its stored chunks
 /// - the file hash recomputed from the referenced chunks, in order, equals
@@ -727,27 +809,7 @@ pub fn verify_shard(
     lookup: &impl XorbChunkLookup,
     limits: VerifyLimits,
 ) -> Result<(), VerifyError> {
-    // Each term is at most u32::MAX chunks and a 64 MiB shard holds well under
-    // 2^32 terms, so the sum fits in u64; saturate anyway rather than trust it.
-    let referenced_chunks = shard
-        .files
-        .iter()
-        .flat_map(|file| &file.segments)
-        .map(|seg| u64::from(seg.chunk_end.saturating_sub(seg.chunk_start)))
-        .fold(0u64, u64::saturating_add);
-    if referenced_chunks > limits.max_referenced_chunks {
-        return Err(VerifyError::TooMuchWork {
-            referenced_chunks,
-            limit: limits.max_referenced_chunks,
-        });
-    }
-    let referenced_xorbs = shard.referenced_xorbs().count();
-    if referenced_xorbs > limits.max_referenced_xorbs {
-        return Err(VerifyError::TooManyXorbs {
-            referenced_xorbs,
-            limit: limits.max_referenced_xorbs,
-        });
-    }
+    limits.check(shard)?;
     check_duplicate_sha256(&shard.files)?;
     shard
         .files

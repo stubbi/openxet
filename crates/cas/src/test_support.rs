@@ -26,6 +26,7 @@ pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {
             public_url: Url::parse("http://127.0.0.1:8080").unwrap(),
             visibility: Visibility::Global,
             verify_limits: VerifyLimits::default(),
+            heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
         },
     )
 }

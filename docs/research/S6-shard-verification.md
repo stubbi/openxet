@@ -54,8 +54,12 @@ demonstrate.
 | 12 | Stock clients' shards pass all of the above. | | `every_reference_segment_verifies_against_the_reference_xorb`, `hf_xet_upload_shard_verifies_against_its_xorb`, `hf_xet_upload_shard_names_its_files_and_xorb` |
 | 13 | Entries repeating a file hash don't disagree on its SHA-256 (both present and different is a conflict). Checked before any xorb lookup, so `stored_shard` never meets a conflict after a successful verification. | none (spec silent; see "Gaps") | `verify_shard_rejects_duplicate_files_with_conflicting_sha256` |
 
-Every `VerifyError` names the xorb and chunk range (or the file), and the
-expected and actual values, so a client author can see which term is wrong.
+Every `VerifyError` names the rule, file, xorb and claimed range, so a
+client author can see which term is wrong; expected values are logged, never
+returned (M1-R23). Its `Display` carries only what the client sent, and
+`VerifyError::detail` adds the values derived from stored chunks (expected
+hashes, lengths, chunk counts) for the server's log. Verification is the
+proof that the uploader holds the chunks, so those values stay server-side.
 `verify_segment` checks in this order: bounds, verification present, range
 hash, length. `verify_shard` is the entry point for untrusted shards: it
 applies rules 10 and 10b, then rule 13, then rules 5 to 9 and 11 to each file. It is the
