@@ -1,7 +1,9 @@
 use axum::Router;
 use axum::body::Body;
 use axum::body::HttpBody as _;
-use axum::http::StatusCode;
+use axum::http::header::CONNECTION;
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::{IntoResponse as _, Response};
 use axum::routing::post;
 use http_body_util::BodyExt as _;
 
@@ -20,24 +22,21 @@ pub(crate) fn routes() -> Router<AppState> {
 /// telemetry). The body is never stored or logged.
 ///
 /// - A declared `Content-Length` over [`TELEMETRY_BODY_LIMIT`] answers `413`
-///   before any byte is read.
+///   before any byte is read, with `Connection: close`.
 /// - Otherwise the body is read and discarded frame by frame, so the
 ///   connection stays reusable: closing it with unread bytes can reset it
 ///   before the client reads the `204`.
 /// - A body that can't be read in full (the client stopped short of its
 ///   `Content-Length`) answers `400`, never a `204`.
-async fn telemetry(_: ReadAccess, mut body: Body) -> Result<StatusCode, CasError> {
+async fn telemetry(_: ReadAccess, mut body: Body) -> Result<StatusCode, Response> {
     let limit = TELEMETRY_BODY_LIMIT as u64;
-    let too_large = || CasError::PayloadTooLarge {
-        limit: TELEMETRY_BODY_LIMIT,
-    };
     // hyper's size hint is exact when the request declares a Content-Length.
     if body.size_hint().lower() > limit {
         return Err(too_large());
     }
     let mut read = 0u64;
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|_| CasError::UnreadableBody)?;
+        let frame = frame.map_err(|_| CasError::UnreadableBody.into_response())?;
         if let Some(data) = frame.data_ref() {
             read = read.saturating_add(data.len() as u64);
             if read > limit {
@@ -46,4 +45,17 @@ async fn telemetry(_: ReadAccess, mut body: Body) -> Result<StatusCode, CasError
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `413` for a body left unread. It closes the connection: the unread bytes
+/// would otherwise be parsed as the next request on a pooled connection.
+fn too_large() -> Response {
+    let mut response = CasError::PayloadTooLarge {
+        limit: TELEMETRY_BODY_LIMIT,
+    }
+    .into_response();
+    response
+        .headers_mut()
+        .insert(CONNECTION, HeaderValue::from_static("close"));
+    response
 }

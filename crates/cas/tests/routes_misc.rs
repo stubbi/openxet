@@ -87,6 +87,25 @@ async fn telemetry_with_an_oversized_content_length_is_413_before_reading() {
 }
 
 #[tokio::test]
+async fn an_early_413_closes_the_connection_so_the_next_request_succeeds() {
+    let server = TestServer::start_default().await;
+    let telemetry = |body: Vec<u8>| {
+        server
+            .request(Method::POST, "/v1/telemetry")
+            .header(AUTHORIZATION, bearer(&server.read_token))
+            .body(body)
+    };
+
+    // One pooled client: the 413 is sent before the body is read, so the
+    // connection must not be reused with the unread bytes still on it.
+    let refused = Reply::of(telemetry(vec![b'{'; TELEMETRY_BODY_LIMIT + 1])).await;
+    refused.assert_error(413, "payload_too_large");
+    assert_eq!(refused.headers["connection"], "close");
+    let next = Reply::of(telemetry(b"{}".to_vec())).await;
+    assert_eq!(next.status, 204, "{}", next.body);
+}
+
+#[tokio::test]
 async fn telemetry_with_a_truncated_body_is_400() {
     let server = TestServer::start_default().await;
     let head = format!(
