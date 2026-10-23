@@ -142,7 +142,11 @@ pub trait Index: Send + Sync + 'static {
 
 /// Errors from the index. Messages name no credentials or secrets; scopes
 /// and hashes are not secret.
+///
+/// Non-exhaustive, so a variant that exists only in some builds (the
+/// `fault-injection` one) never changes which matches compile.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum IndexError {
     /// The database could not be opened, read or written.
     #[error(
@@ -153,14 +157,17 @@ pub enum IndexError {
     /// The schema could not be brought up to date.
     #[error(
         "could not migrate the index schema; the database may be from a newer openxet, so run \
-         that version or move the index aside and rebuild it from the bucket"
+         that version. The bucket is unaffected; rebuilding the index from it is tracked in \
+         https://github.com/stubbi/openxet/issues/26"
     )]
     Migrate(#[source] sqlx::migrate::MigrateError),
     /// A stored row doesn't decode. The bucket is the source of truth, so
-    /// the index can be rebuilt from it.
+    /// the index can be rebuilt from it once `reindex` exists
+    /// (<https://github.com/stubbi/openxet/issues/26>).
     #[error(
-        "the index holds a corrupt entry ({0}); the bucket is unaffected, so rebuild the index \
-         from it, and please report this as a bug"
+        "the index holds a corrupt entry ({0}); the bucket is unaffected. Please report this at \
+         https://github.com/stubbi/openxet/issues; rebuilding the index from the bucket is \
+         tracked in https://github.com/stubbi/openxet/issues/26"
     )]
     Corrupt(String),
     /// A shard's file names a xorb that isn't visible to the caller's scope:
