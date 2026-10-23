@@ -14,6 +14,13 @@ A hosted version will be available at [openxet.com](https://openxet.com).
 > [`docs/superpowers/specs/2026-10-23-openxet-design.md`](docs/superpowers/specs/2026-10-23-openxet-design.md).
 > Contributor and agent guidance is in [`AGENTS.md`](AGENTS.md).
 
+## Project
+
+- [Contributing](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md) for agents
+- [Governance](GOVERNANCE.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
+
 ## License
 
 [Apache-2.0](LICENSE)

@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a change or addition
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what stops you? Say whether you are a self-hoster, a platform, or an openxet.com user.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Include how it should work for both humans and agents (for example `--json` output).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target
+      options:
+        - Self-hosted
+        - openxet.com
+        - Both
+    validations:
+      required: true
