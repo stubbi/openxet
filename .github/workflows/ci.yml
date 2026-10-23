@@ -106,3 +106,49 @@ jobs:
       - run: uv run --frozen --directory compat pytest -m agent
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+
+  # Not a required check: it needs the nightly toolchain, whose moving
+  # sanitizer and coverage flags make it non-hermetic (see GOVERNANCE.md).
+  fuzz-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Parser or fuzz targets changed
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(crates/protocol/|fuzz/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No change under crates/protocol/ or fuzz/; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        run: rustup toolchain install nightly --profile minimal
+      - if: steps.changed.outputs.run == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+      - if: steps.changed.outputs.run == 'true'
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-fuzz
+      - if: steps.changed.outputs.run == 'true'
+        run: scripts/fetch-reference-files.sh
+      - if: steps.changed.outputs.run == 'true'
+        run: fuzz/seed.sh
+      # cargo-fuzz has no --locked flag; this fails if fuzz/Cargo.lock is
+      # stale, and the build then uses the lock as is.
+      - if: steps.changed.outputs.run == 'true'
+        run: cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+      - if: steps.changed.outputs.run == 'true'
+        run: |
+          for target in xorb_upload xorb_chunks upload_shard verify_shard; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60
+          done

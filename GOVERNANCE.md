@@ -64,6 +64,10 @@ What branch protection enforces on `main` today:
 - A pull request is required; no direct pushes.
 - Required checks must pass: `rust (ubuntu-latest)`, `rust (macos-latest)`,
   `deny`, `compat (agent leg)` and `DCO`.
+- `fuzz-smoke` (a 60 s run of each parser fuzz target) is deliberately not
+  required: it needs the nightly toolchain, so a nightly change can fail it
+  without any change of ours, and a time-boxed run is not a proof. A failure
+  is still treated as a bug to fix before merging.
 - History is linear (squash merges only), and every review conversation
   must be resolved before merging.
 - **Zero required approving reviews**, and administrators are not bound by

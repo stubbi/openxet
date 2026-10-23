@@ -1,0 +1,45 @@
+[package]
+name = "openxet-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+
+# Its own workspace: libfuzzer-sys needs nightly and sanitizer flags that must
+# not leak into the main build (the root workspace excludes `fuzz`).
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+openxet-protocol = { path = "../crates/protocol" }
+
+[[bin]]
+name = "xorb_upload"
+path = "fuzz_targets/xorb_upload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xorb_chunks"
+path = "fuzz_targets/xorb_chunks.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upload_shard"
+path = "fuzz_targets/upload_shard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "verify_shard"
+path = "fuzz_targets/verify_shard.rs"
+test = false
+doc = false
+bench = false
