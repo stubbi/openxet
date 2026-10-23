@@ -17,6 +17,8 @@ allow = [
     "Zlib",
     "MPL-2.0",
 ]
+# The fuzz workspace (fuzz/Cargo.lock) is checked in the fuzz-smoke job.
+exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
 
 [bans]
 multiple-versions = "warn"

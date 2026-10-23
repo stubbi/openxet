@@ -11,11 +11,21 @@ for target in xorb_upload xorb_chunks upload_shard verify_shard; do
   mkdir -p "corpus/$target"
 done
 
+# The capture xorb is footer-less, the form xorb_chunks reads; the reference
+# xorb is not, so only xorb_upload gets it.
+cp "$capture"/*.xorb corpus/xorb_chunks/
 for xorb in "$capture"/*.xorb "$reference"/*.xorb; do
   [ -f "$xorb" ] || continue
   cp "$xorb" "corpus/xorb_upload/$(basename "$xorb")"
-  cp "$xorb" "corpus/xorb_chunks/$(basename "$xorb")"
 done
+
+# The reference shards: with footer, with verification entries, and the
+# footer-less upload form.
 for target in upload_shard verify_shard; do
   cp "$capture/upload.shard" "corpus/$target/hf-xet-capture.shard"
+  for shard in "$reference"/*.shard "$reference"/*.shard.verification \
+    "$reference"/*.shard.verification-no-footer; do
+    [ -f "$shard" ] || continue
+    cp "$shard" "corpus/$target/$(basename "$shard")"
+  done
 done

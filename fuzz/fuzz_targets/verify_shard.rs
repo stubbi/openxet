@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 
 use libfuzzer_sys::fuzz_target;
 use openxet_protocol::{
-    MerkleHash, ProtocolError, VerifyLimits, read_upload_shard, read_xorb_chunks, stored_shard,
+    MerkleHash, VerifyLimits, read_upload_shard, read_xorb_chunks, stored_shard,
     verify_shard, xorb_hash,
 };
 
@@ -36,12 +36,6 @@ fuzz_target!(|data: &[u8]| {
     if verify_shard(&shard, lookup, VerifyLimits::default()).is_err() {
         return;
     }
-    // Two entries for one file hash with different SHA-256 values pass
-    // verification and are rejected here; that is the documented contract.
-    let stored = match stored_shard(&shard, lookup) {
-        Ok(stored) => stored,
-        Err(ProtocolError::ShardFileSha256Conflict { .. }) => return,
-        Err(err) => panic!("a verified shard has a stored form: {err}"),
-    };
+    let stored = stored_shard(&shard, lookup).expect("a verified shard has a stored form");
     read_upload_shard(stored.as_slice()).expect("a stored shard parses");
 });

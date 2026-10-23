@@ -14,7 +14,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-openxet-protocol = { path = "../crates/protocol" }
+openxet-protocol = { path = "../crates/protocol", version = "0.0.0" }
 
 [[bin]]
 name = "xorb_upload"

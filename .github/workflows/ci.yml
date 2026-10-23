@@ -138,7 +138,12 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         with:
-          tool: cargo-fuzz
+          tool: cargo-fuzz@0.13.2
+      # fuzz/ is its own workspace, so the deny job doesn't see its lockfile.
+      - if: steps.changed.outputs.run == 'true'
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: fuzz/Cargo.toml
       - if: steps.changed.outputs.run == 'true'
         run: scripts/fetch-reference-files.sh
       - if: steps.changed.outputs.run == 'true'
