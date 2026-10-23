@@ -66,7 +66,7 @@ Each function or type the server needs:
 | Chunk, xorb and file hashes | `merklehash::{compute_data_hash, xorb_hash, file_hash, file_hash_with_salt}` | yes |
 | Range verification hash | `metadata_shard::chunk_verification::range_hash_from_chunks` | yes |
 | Validate a xorb upload (`POST /v1/xorbs`), footer optional, and build the stored form | `xorb_object::{deserialize_chunk_header, CompressionScheme::decompress_from_reader, XorbObjectInfoV1::deserialize}` to validate, then `reconstruct_xorb_with_footer` (`xorb_object/xorb_object_format.rs`) for the stored form; composed as `openxet_protocol::xorb_with_footer` | yes |
-| Parse a footer-less chunk sequence (no footer allowed) | `xorb_object::deserialize_chunks`, `deserialize_chunks_to_writer`, per-chunk `deserialize_chunk` (`xorb_object/xorb_chunk_format.rs`); wrapped as `openxet_protocol::read_xorb_chunks` | yes |
+| Parse a footer-less chunk sequence (no footer allowed) | `xorb_object::{deserialize_chunk_header, CompressionScheme::decompress_from_reader}`, the same bounded loop as uploads; composed as `openxet_protocol::read_xorb_chunks` | yes |
 | Async xorb parse | `deserialize_chunks_from_async_read`, `deserialize_chunks_from_stream` (`xorb_chunk_format/deserialize_async.rs`) | yes |
 | Read a stored xorb's footer for range reads | `XorbObject::deserialize`, `get_byte_offset` (`xorb_object/xorb_object_format.rs`) | yes |
 | Parse a footer-less shard upload | `metadata_shard::streaming_shard::MDBMinimalShard::from_reader`; `shard_in_memory::MDBInMemoryShard::from_reader` | yes |
@@ -108,8 +108,8 @@ reimplementing the format:
     the validated chunk section, with a footer computed from the chunks.
   - Other trailing bytes are rejected. The reference file's 4 bytes `XETB`
     fail with `UnexpectedEof`.
-  - `deserialize_chunks` (and so `read_xorb_chunks`) rejects a footer, so it
-    serves only footer-less contexts.
+  - `read_xorb_chunks` runs the same bounded loop but rejects a footer, so
+    it serves only footer-less contexts.
   - Clients send no footer: `xet-data` calls `from_xorb(xorb, false, …)`.
     The tolerance covers clients that serialize with `serialize_footer = true`.
   - The protocol crate's tests pin this: footer-less, client-footered and

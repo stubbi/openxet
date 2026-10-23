@@ -66,6 +66,16 @@ pub enum ProtocolError {
         /// The limit applied, [`MAX_XORB_CHUNKS`].
         limit: usize,
     },
+    /// A chunk header declares zero uncompressed bytes. Chunking never
+    /// produces an empty chunk, and an empty file has no chunks.
+    #[error(
+        "malformed xorb: chunk {chunk} declares 0 uncompressed bytes; chunks hold at least one \
+         byte (https://huggingface.co/docs/xet/chunking)"
+    )]
+    XorbChunkEmpty {
+        /// The chunk's index in the xorb.
+        chunk: usize,
+    },
     /// A chunk decompresses to more bytes than its header declares or than
     /// the largest chunk allowed. Decompression stops at the limit.
     #[error(

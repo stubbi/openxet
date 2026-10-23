@@ -235,3 +235,13 @@ fn read_xorb_chunks_applies_the_upload_limits() {
         Err(ProtocolError::XorbEmpty)
     ));
 }
+
+#[test]
+fn chunk_declaring_zero_bytes_is_rejected() {
+    let body = [chunk(&[1; 10]), raw_chunk(CompressionScheme::None, &[], 0)].concat();
+    let err = xorb_with_footer(&body).unwrap_err();
+    assert!(
+        matches!(err, ProtocolError::XorbChunkEmpty { chunk: 1 }),
+        "{err}"
+    );
+}

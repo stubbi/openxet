@@ -22,8 +22,11 @@ pub const MAX_CHUNK_BYTES: u64 = 128 * 1024;
 /// uploads always fit, and it bounds the per-xorb chunk table at 8192 entries.
 pub const MAX_XORB_CHUNKS: usize = 8192;
 
-/// The most chunk payload one uploaded xorb may hold, in bytes: the spec's
-/// 64 MiB xorb limit (<https://huggingface.co/docs/xet/xorb#collecting-chunks>).
+/// The spec's 64 MiB xorb limit
+/// (<https://huggingface.co/docs/xet/xorb#collecting-chunks>), on serialized
+/// size. It sets [`MAX_XORB_BODY_BYTES`]; no separate total is enforced on
+/// decompressed bytes, which [`MAX_XORB_CHUNKS`] × [`MAX_CHUNK_BYTES`] bound
+/// at 1 GiB.
 pub const MAX_XORB_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The largest xorb upload body accepted, in bytes: [`MAX_XORB_BYTES`] plus
@@ -159,6 +162,9 @@ fn validate_chunks(body: &[u8]) -> Result<(Vec<(MerkleHash, u64)>, usize), Proto
             return Err(ProtocolError::XorbTooManyChunks {
                 limit: MAX_XORB_CHUNKS,
             });
+        }
+        if header.get_uncompressed_length() == 0 {
+            return Err(ProtocolError::XorbChunkEmpty { chunk });
         }
         let compressed_len = header.get_compressed_length() as usize;
         let compressed = rest
