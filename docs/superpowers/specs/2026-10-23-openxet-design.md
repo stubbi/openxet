@@ -1503,7 +1503,7 @@ guilt/xet-server.
 | Architecture | Every decision recorded and reversible | ADRs for every significant choice; crate boundaries enforced (no cyclic or upward deps, checked in CI); bucket-as-truth and stateless invariants have dedicated tests |
 | Security | Secure by default, with a verifiable supply chain | The §5.9 requirements, each with its test; `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
 | Documentation | Every user finds the answer in under a minute | Diátaxis structure (tutorials, how-tos, reference, explanation); every example runs in CI; reference generated from code (CLI, config, OpenAPI); `llms.txt`; a docs feedback link on every page |
-| Governance | Trustworthy beyond one person | `GOVERNANCE.md` (roles, decision process, path to maintainer); every change merged via PR with at least one independent review (human, or an agent reviewer plus human sign-off), enforced by branch protection; an RFC process for big changes; DCO; code of conduct; a public roadmap |
+| Governance | Trustworthy beyond one person | `GOVERNANCE.md` (roles, decision process, path to maintainer); every change merged via PR with at least one independent review (human, or an agent reviewer plus human sign-off), required by process; branch protection enforces the PR, the required checks and linear history, but not the review (0 required approvals, `enforce_admins: false`) until a second maintainer exists (`GOVERNANCE.md`); an RFC process for big changes; DCO; code of conduct; a public roadmap |
 | Community | Contributors feel welcome and succeed | Labelled good-first issues; contributor guide tested by newcomers; first response to issues and PRs within two business days; credit in every release's notes |
 | Release engineering | Boring, predictable releases | SemVer; changelog generated from Conventional Commits; release train cadence; upgrade tests between consecutive versions; a stated support window |
 | UX (humans and agents) | Best on both (§7.1) | Time-to-first-upload measured per release; the agent leg of the suite; accessibility (WCAG 2.2 AA) checked for the web UI |
@@ -1511,3 +1511,19 @@ guilt/xet-server.
 
 Bus factor is a real risk while one person leads the project. Governance work
 starts at M0, not after 1.0.
+
+## 17. Rulings register
+
+Rulings are decisions made while building, numbered in the order they were
+made. Public docs cite them by number; this is what each cited one decides.
+
+| Ruling | Decision | Where |
+|---|---|---|
+| R19 | The HF pull-through mirror ingests verified chunks only, never fetches or serves gated or private content with another caller's credential, and is disabled on openxet.com. | §10.6, S8 |
+| R21 | Security issues found in third-party software are reported privately to its maintainers. | `AGENTS.md` |
+| R22 | Git reads and Hub reads by revision serve only objects reachable from a current ref, on every path; ref writers obey the same rule. | §5.9 req 8, ADR 0004 |
+| R24 | Objects a reindex can't place are persisted and protected, never discarded automatically, and never block repacks. | ADR 0004, S9 |
+| R25 | Xet reads by hash follow scope membership, not Git reachability; removing data takes GC or `openxet purge`. | §5.4 |
+| R26 | Public text never describes or hints at an unfixed third-party security weakness. | `AGENTS.md` |
+| R29 | Upload validation composes upstream primitives with openxet's own policy checks; format logic is never reimplemented. | ADR 0001, S5 |
+| R30 | Shard verification takes a synchronous chunk-table lookup, caps distinct referenced xorbs, and ignores unreferenced CAS-info xorbs. | S6 |

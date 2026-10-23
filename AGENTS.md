@@ -184,8 +184,7 @@ One logical change per commit. Every commit builds and passes tests.
 
 ## Current state
 
-M0 foundation in progress, following
-`docs/superpowers/plans/2026-10-23-m0-foundation.md`. The design is approved,
+M0 complete; M1 next per `docs/superpowers/plans/`. The design is approved,
 and ADR 0001 decides to build from scratch on `xet-core`'s crates (after
 evaluating existing Xet servers; see `docs/competitive-matrix.md`).
 

@@ -10,7 +10,9 @@ The goal: the official tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`,
 bucket, identity stays in your login system, and only changed chunks move.
 A hosted version will be available at [openxet.com](https://openxet.com).
 
-> **Status: design phase. There is no usable code yet.**
+> **Status: foundation in place, server not yet usable.** The protocol crate
+> (hashing, xorb and shard validation on `xet-core`'s crates) and the CI and
+> compatibility harness exist; the CAS server is next (milestone M1).
 > The approved design is in
 > [`docs/superpowers/specs/2026-10-23-openxet-design.md`](docs/superpowers/specs/2026-10-23-openxet-design.md).
 > Contributor and agent guidance is in [`AGENTS.md`](AGENTS.md).
