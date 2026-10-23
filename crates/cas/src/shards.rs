@@ -8,7 +8,8 @@
 //! 3. load the chunk tables of the referenced xorbs visible to the caller
 //! 4. verify the shard against them, then build its stored form and hash,
 //!    on a blocking thread
-//! 5. store the shard in the bucket, then register its files in the index
+//! 5. store the shard in the bucket, then register its files in the index,
+//!    holding a `commit` permit (ruling M1-R24)
 //!
 //! Bucket before index (design §5.3): the index never names a shard the
 //! bucket lacks. Ingest is idempotent, since `hf_xet` resends the whole
@@ -365,6 +366,15 @@ async fn ingest(
         total,
     });
 
+    // Held from the bucket write until registration ends (ruling M1-R24):
+    // it bounds how many uploads hold a stored shard and its files while
+    // waiting on storage, a v2 upload whose client left included. The
+    // validation permit is already returned, so slow storage never holds
+    // a CPU permit.
+    let _commit = Arc::clone(&state.commit)
+        .acquire_owned()
+        .await
+        .map_err(CasError::internal)?;
     progress.report(Event::Committing {
         stage: Stage::Uploading,
     });
@@ -509,6 +519,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use openxet_index::{ChunkTable, Index, IndexError, Visibility};
+    use openxet_storage::{Bucket, StorageError};
     use tokio::sync::Semaphore;
 
     use super::*;
@@ -620,6 +631,85 @@ mod tests {
         ) -> Result<Option<MerkleHash>, IndexError> {
             self.inner.dedup_xorb(chunk, scope, vis).await
         }
+    }
+
+    /// A bucket whose writes take 200 ms, recording the most writes in
+    /// flight at once.
+    struct SlowBucket {
+        inner: Arc<dyn Bucket>,
+        in_flight: AtomicUsize,
+        most: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Bucket for SlowBucket {
+        async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.most.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let out = self.inner.put(key, bytes).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            out
+        }
+
+        async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
+            self.inner.get_range(key, start, end).await
+        }
+
+        async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
+            self.inner.size(key).await
+        }
+    }
+
+    fn capture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/hf-xet-1.7.0-upload")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_commit_permit_bounds_uploads_between_bucket_write_and_registration() {
+        // Ruling M1-R24: with one commit permit, a second upload's bucket
+        // write waits until the first has registered, so slow storage can't
+        // pile up committing uploads (or their stored bytes) in memory.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![]).await;
+        state.commit = Arc::new(Semaphore::new(1));
+        let bucket = Arc::new(SlowBucket {
+            inner: Arc::clone(&state.bucket),
+            in_flight: AtomicUsize::new(0),
+            most: AtomicUsize::new(0),
+        });
+        state.bucket = Arc::clone(&bucket) as Arc<dyn Bucket>;
+        let xorb = openxet_protocol::xorb_with_footer(&capture(
+            "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c.xorb",
+        ))
+        .unwrap();
+        let table = ChunkTable {
+            hashes: xorb.chunks.hashes.into(),
+            offsets: xorb.chunk_offsets.into(),
+        };
+        for scope in ["a", "b"] {
+            state
+                .index
+                .put_xorb(&xorb.hash, xorb.bytes.len() as u64, &table, &[], scope)
+                .await
+                .unwrap();
+        }
+        let shard = Bytes::from(capture("upload.shard"));
+
+        let silent = Progress::none();
+        let (a, b) = tokio::join!(
+            ingest(&state, "a", shard.clone(), &silent),
+            ingest(&state, "b", shard, &silent),
+        );
+
+        assert!(a.unwrap() && b.unwrap());
+        assert_eq!(bucket.most.load(Ordering::SeqCst), 1);
+        assert_eq!(state.commit.available_permits(), 1);
     }
 
     #[tokio::test]

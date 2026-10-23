@@ -107,13 +107,28 @@ pub struct AppState {
     /// Bounds concurrent xorb validation, which decompresses up to 2 × the
     /// xorb's size, and shard parsing and verification (ruling M1-R8).
     pub validate: Arc<Semaphore>,
+    /// Bounds concurrent shard commits, from the bucket write to the end of
+    /// index registration (ruling M1-R24), including v2 uploads whose client
+    /// has left. Separate from `validate`, so slow storage never holds a
+    /// CPU permit.
+    ///
+    /// With both, shard ingest's memory per process is at most `validate`'s
+    /// permits × (a body of at most 64 MiB, its parsed form and
+    /// `max_referenced_xorbs` chunk tables of at most 320 KiB each), plus
+    /// `commit`'s permits × (a stored shard of at most 64 MiB and its
+    /// files). Uploads waiting for a permit hold only their body.
+    pub commit: Arc<Semaphore>,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,
 }
 
+/// Commit permits per available CPU (ruling M1-R24).
+const COMMITS_PER_CPU: usize = 4;
+
 impl AppState {
-    /// State with the system clock and one validation permit per available
-    /// CPU (ruling M1-R8).
+    /// State with the system clock, one validation permit per available
+    /// CPU (ruling M1-R8) and four commit permits per CPU (ruling M1-R24):
+    /// committing waits on I/O, not CPU, so more can run than validate.
     #[must_use]
     pub fn new(
         index: Arc<dyn Index>,
@@ -130,6 +145,7 @@ impl AppState {
             urls,
             cfg,
             validate: Arc::new(Semaphore::new(permits)),
+            commit: Arc::new(Semaphore::new(permits.saturating_mul(COMMITS_PER_CPU))),
             clock: Arc::new(SystemClock),
         }
     }

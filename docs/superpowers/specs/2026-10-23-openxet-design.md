@@ -1582,3 +1582,4 @@ made. Public docs cite them by number; this is what each cited one decides.
 | M1-R9 | The client version floor is `hf_xet` 1.7.0. | §11, S10 |
 | M1-R10 | The default bind is `127.0.0.1:8080`, which is also `hf_xet`'s default CAS endpoint. | S10 |
 | M1-R23 | Verification errors name the rule, the file, the xorb and the chunk range the client sent, and never a value derived from stored data (expected hashes, lengths, chunk counts); those are logged only. | §5.9 req 5, S6 |
+| M1-R24 | Shard commits (bucket write through index registration) are bounded per process by a commit semaphore of 4 permits per CPU, separate from the validation permits; ingest memory is at most validation permits × the verification limits plus commit permits × a stored shard and its files. | M1 plan |
