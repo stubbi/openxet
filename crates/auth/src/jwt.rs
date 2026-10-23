@@ -13,7 +13,9 @@
 //! - an Ed25519 signature over `header_b64.payload_b64` as received,
 //!   checked with `verify_strict` against the key named by `kid`;
 //! - claims `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and `iat`,
-//!   with `exp` exclusive and no leeway. Other claims are ignored.
+//!   plus optional `nbf`, and nothing else; `exp` is exclusive and `nbf`
+//!   inclusive, with no leeway; `sub` and `scope` pass
+//!   [`check_identity`](crate::check_identity).
 
 use std::fmt::{self, Write as _};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -225,8 +227,12 @@ struct Header {
     kid: String,
 }
 
-/// The claims openxet requires; others (`nbf`, `aud`, ...) are ignored.
+/// The claims openxet accepts (ADR 0007, ruling M1-R19). Anything else,
+/// such as `aud`, `iss` or `jti`, is rejected rather than ignored: openxet
+/// cannot honour an audience or issuer restriction, so a token that asks for
+/// one must not be accepted.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Claims {
     sub: String,
     scope: String,
@@ -234,6 +240,13 @@ struct Claims {
     exp: u64,
     #[allow(dead_code, reason = "required by ADR 0007 but carries no policy")]
     iat: u64,
+    #[serde(default, deserialize_with = "present_u64")]
+    nbf: Option<u64>,
+}
+
+/// An optional claim that, when present, must be a `u64` (not `null`).
+fn present_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(d).map(Some)
 }
 
 pub(crate) fn verify(keys: &[PublicKey], token: &str, now: u64) -> Result<Principal, AuthError> {
@@ -261,6 +274,10 @@ pub(crate) fn verify(keys: &[PublicKey], token: &str, now: u64) -> Result<Princi
     verify_signature(&key.key, header_b64, payload_b64, signature_b64)?;
 
     let claims: Claims = decode_json(payload_b64)?;
+    crate::check_identity(&claims.sub, &claims.scope).map_err(|_| AuthError::Invalid)?;
+    if claims.nbf.is_some_and(|nbf| now < nbf) {
+        return Err(AuthError::Invalid);
+    }
     if now >= claims.exp {
         return Err(AuthError::Expired);
     }

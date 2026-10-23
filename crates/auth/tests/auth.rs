@@ -306,6 +306,129 @@ fn jwt_rejects_bad_claims() {
     assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
 }
 
+fn auth_for_raw_tokens() -> (Authenticator, SigningKey, String) {
+    let (key, public_pem, kid) = raw_keypair();
+    let auth = Authenticator::new(
+        vec![],
+        vec![PublicKey::from_pem(&public_pem).expect("parse")],
+    );
+    let header = b64(&serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid }).to_string());
+    (auth, key, header)
+}
+
+fn with_claim(field: &str, value: serde_json::Value) -> serde_json::Value {
+    let mut claims = valid_claims();
+    claims[field] = value;
+    claims
+}
+
+#[test]
+fn jwt_rejects_future_nbf() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    for nbf in [NOW + 1, NOW + 3600, u64::MAX] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("nbf", nbf.into()).to_string()),
+        );
+        assert_eq!(
+            auth.authenticate(&token, NOW),
+            Err(AuthError::Invalid),
+            "{nbf}"
+        );
+    }
+    for nbf in [
+        serde_json::json!("0"),
+        serde_json::json!(-1),
+        serde_json::json!(null),
+    ] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("nbf", nbf.clone()).to_string()),
+        );
+        assert_eq!(
+            auth.authenticate(&token, NOW),
+            Err(AuthError::Invalid),
+            "{nbf}"
+        );
+    }
+}
+
+#[test]
+fn jwt_accepts_past_nbf() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    for nbf in [0, NOW - 60, NOW] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("nbf", nbf.into()).to_string()),
+        );
+        assert!(auth.authenticate(&token, NOW).is_ok(), "{nbf}");
+    }
+}
+
+#[test]
+fn jwt_rejects_unknown_claims() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    for field in ["aud", "iss", "jti", "revision", "scopes", "Sub", "pad"] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim(field, "x".into()).to_string()),
+        );
+        assert_eq!(
+            auth.authenticate(&token, NOW),
+            Err(AuthError::Invalid),
+            "{field}"
+        );
+    }
+    let aud_list = with_claim("aud", serde_json::json!(["openxet"]));
+    let token = sign_raw(&key, &header, &b64(&aud_list.to_string()));
+    assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
+}
+
+#[test]
+fn jwt_rejects_empty_or_malformed_subject_and_scope() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    let long_scope = "s".repeat(1025);
+    let rejected = [
+        ("sub", ""),
+        ("sub", "alice\n"),
+        ("scope", ""),
+        ("scope", "org/model\n"),
+        ("scope", "org/\u{0}model"),
+        ("scope", "org/model\u{7f}"),
+        ("scope", "org/model\u{85}"),
+        ("scope", long_scope.as_str()),
+    ];
+    for (field, value) in rejected {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim(field, value.into()).to_string()),
+        );
+        assert_eq!(
+            auth.authenticate(&token, NOW),
+            Err(AuthError::Invalid),
+            "{field}={value:?}"
+        );
+    }
+    let max_scope = "s".repeat(1024);
+    for (field, value) in [
+        ("scope", max_scope.as_str()),
+        ("scope", "org/model with space"),
+        ("sub", "a"),
+    ] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim(field, value.into()).to_string()),
+        );
+        assert!(auth.authenticate(&token, NOW).is_ok(), "{field}={value:?}");
+    }
+}
+
 #[test]
 fn jwt_rejects_oversized_token() {
     let (key, public_pem, _) = raw_keypair();
@@ -321,10 +444,10 @@ fn jwt_rejects_oversized_token() {
 
     let sized = |len: usize| {
         let mut claims = valid_claims();
-        claims["pad"] = serde_json::json!("");
+        claims["sub"] = serde_json::json!("");
         let base = sign_raw(&key, &header, &b64(&claims.to_string())).len();
-        // Each 3 bytes of padding add 4 base64url characters.
-        claims["pad"] = serde_json::json!("x".repeat((len - base) / 4 * 3));
+        // Each 3 bytes of `sub` add 4 base64url characters.
+        claims["sub"] = serde_json::json!("x".repeat((len - base) / 4 * 3));
         sign_raw(&key, &header, &b64(&claims.to_string()))
     };
     let at_cap = sized(MAX_TOKEN_BYTES);

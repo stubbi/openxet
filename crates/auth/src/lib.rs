@@ -103,3 +103,28 @@ impl Authenticator {
         jwt::verify(&self.jwt_keys, bearer, now)
     }
 }
+
+/// The longest accepted scope, in bytes.
+pub const MAX_SCOPE_BYTES: usize = 1024;
+
+/// Checks a principal's subject and scope (ruling M1-R19): both non-empty
+/// and free of control characters, so neither can widen a scope match or
+/// forge lines in logs, and the scope at most [`MAX_SCOPE_BYTES`].
+pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static str> {
+    if subject.is_empty() {
+        return Err("the subject is empty");
+    }
+    if subject.chars().any(char::is_control) {
+        return Err("the subject contains control characters");
+    }
+    if scope.is_empty() {
+        return Err("the scope is empty");
+    }
+    if scope.len() > MAX_SCOPE_BYTES {
+        return Err("the scope is longer than 1024 bytes");
+    }
+    if scope.chars().any(char::is_control) {
+        return Err("the scope contains control characters");
+    }
+    Ok(())
+}
