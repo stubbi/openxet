@@ -468,6 +468,15 @@ Rules for this endpoint:
 - The exact download handshake (how `git-xet` gets the Xet hash for a
   pointer) is pinned by spike S7 and the compatibility suite.
 
+**Xet-native clients** (chunk first, oids later) use the LFS-scoped token
+routes `GET {lfs-url}/xet-read-token` and `GET {lfs-url}/xet-write-token`.
+They return the Hub token shape `{accessToken, exp, casUrl}`, and tokens are
+scoped to (scope, read|write), never to objects. A shard upload registers
+each file's xet hash and its sha256 to the scope, and a read token allows
+reconstruction of any file registered to it. Pointers are always the
+canonical 3-key form. The full contract is
+[ADR 0005](../../adr/0005-xet-native-client-contract.md).
+
 ## 7. Operability and user experience
 
 - **Zero-config dev mode:** `openxet serve` runs with SQLite and a local
@@ -567,7 +576,9 @@ server, and fails on any prompt, unparseable output or unstable schema.
   - Postgres with MinIO
 
   It covers upload, re-upload dedup, range download, branch workflows and
-  token refresh. A nightly job against latest upstream catches protocol drift
+  token refresh.
+  A "third-party Xet client" leg replays the expectations of jj-xet's
+  `tests/openxet.rs` mock against openxet (ADR 0005). A nightly job against latest upstream catches protocol drift
   early.
 - **Fault injection:** object store errors, DB failover, killed nodes
   mid-upload.
