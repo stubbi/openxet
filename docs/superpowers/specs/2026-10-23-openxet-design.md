@@ -573,10 +573,14 @@ compatibility matrix, and tested as the "oldest" leg of the suite.
 
 ## 12. Milestones (v1 = all of them)
 
-Release cut *(builder-check call)*: M0–M3 ship as a public alpha (`0.x`) to
-start the feedback loop early; M4–M5 complete `1.0`. The work is built by
-the user with coding agents, so the plan sequences milestones but sets no
-calendar dates.
+Release cut *(decided by the user)*: build straight through M0–M5 to `1.0`,
+with no pause between milestones to wait for outside feedback. Real-world
+feedback takes time to arrive, so waiting on it would only stall the work.
+Until `1.0`, the compatibility suite, benchmarks and the measured
+time-to-first-upload stand in for users. The repo is public while it is
+built, so anyone can try it early, but no milestone waits on that. The work
+is built by the user with coding agents, so the plan sequences milestones
+but sets no calendar dates.
 
 
 - **M0:**
