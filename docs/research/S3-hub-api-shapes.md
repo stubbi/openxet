@@ -648,6 +648,6 @@ can't create elsewhere, and unauthorized requests get a clean 403 that
   the API (404 on each, and an empty listing).
 - **Redaction:** a scratch script produced the fixtures. Its rules are in
   `compat/fixtures/hub/README.md`.
-  `compat/tests/test_fixture_redaction.py` scans every fixture. It fails
+  `compat/tests/test_fixture_redaction.py` scans every fixture and every research note. It fails
   on the raw capture (337 hits across 9 secret kinds) and passes on the
   redacted one.

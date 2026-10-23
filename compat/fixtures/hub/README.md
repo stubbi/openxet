@@ -35,13 +35,18 @@ every exchange with its step, role, method, URL and status.
   so duplicates and order stay visible.
   - Lowercase request headers come from `hf_xet`.
   - Capitalised ones come from `huggingface_hub`.
-- `body.size` is the byte length on the wire, after decoding any
-  `Content-Encoding`. The body itself is stored as one of:
-  - `json`: the body was compact JSON. Re-serialising it with
-    `separators=(",", ":")` and `ensure_ascii=False` gives back the exact
-    bytes.
-  - `text`: the exact text, used for everything else. For NDJSON there is
-    also `ndjson`, with each line parsed.
+- `body.size` is the body's length on the wire **before** decoding any
+  `Content-Encoding`. For a gzip response it is the compressed length.
+- Both `body.size` and the `Content-Length` header describe the original,
+  unredacted body. Where redaction or placeholdering changed a body (token
+  responses, account identity, step 57), neither matches the stored body.
+- The body itself is stored decoded, as one of:
+  - `json`: the decoded body was compact JSON. Re-serialising it with
+    `separators=(",", ":")` and `ensure_ascii=False` gives back the stored
+    text. That equals the wire bytes only when the body had no
+    `Content-Encoding` and nothing in it was redacted.
+  - `text`: the decoded text, redacted, used for everything else. For
+    NDJSON there is also `ndjson`, with each line parsed.
   - `omitted`: binary bodies (xorbs, shards), and bodies over 8 MiB that
     the proxy streamed without recording.
 
@@ -89,8 +94,15 @@ Everything is byte-exact except these, replaced as listed:
     `000…00b` and `000…00c`
   - avatar file names become `openxet-compat-avatar.<ext>`
 
-  Repo object IDs (`_id`), commit SHAs, xet hashes and request IDs are not
-  personal and are kept.
+- Pre-existing resources: `57-list-buckets--01-…` also listed a private
+  bucket the account already owned (`openxet-compat/test`). Its `_id`
+  became `000000000000000000000003`, and its `createdAt` and `updatedAt`
+  became `2000-01-01T00:00:00.000Z`, because a stable ID would link the
+  fixture back to the real account.
+
+Kept as captured, because they identify nothing that outlives the spike:
+- the object IDs (`_id`) of the throwaway repos, which were deleted
+- commit SHAs, xet hashes and per-request IDs
 
 `compat/tests/test_fixture_redaction.py` fails if a token or a signed-URL
-secret appears anywhere under `compat/fixtures/`.
+secret appears anywhere under `compat/fixtures/` or `docs/research/`.
