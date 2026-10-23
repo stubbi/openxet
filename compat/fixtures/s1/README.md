@@ -23,6 +23,10 @@ Where the exchanges came from:
   `127.0.0.1:9000` for MinIO.
 - `huggingface-co-reference.json` is the same flow against huggingface.co,
   as a shape reference: resolve HEAD, read token and v2 reconstruction.
+- `cloud-multirange.txt` has the exact `curl` commands, with status and
+  header lines, for multi-range vs single-range GETs on public AWS S3, GCS
+  and Azure objects. These are anonymous GETs, not presigned URLs and not
+  `hf_xet`.
 
 Redaction:
 - Every secret value is replaced by the literal string `REDACTED`. That

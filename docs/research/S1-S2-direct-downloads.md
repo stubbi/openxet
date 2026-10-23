@@ -28,14 +28,18 @@
   - with four fetch entries of one range each
   - with each URL **bound to its exact `Range` header**
     (`X-Amz-SignedHeaders=host;range`)
-- **Multi-range against S3 fails, but only when a client opts in.** In
+- **Multi-range against object stores fails, but only when a client opts
+  in.** In
   1.7.0, `HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING` defaults to `false`.
   By default `hf_xet` splits a multi-range fetch entry into separate
   single-range GETs on the same URL. That worked against MinIO. With the
   flag on, it sends `Range: bytes=a-b,c-d`. MinIO answered `200` with the
   whole object, and the download failed after about 120 s of retries.
-  Public AWS S3 and Azure objects also answered a multi-range GET with
-  `200` and the whole object; GCS answered `400`.
+  That was observed on MinIO. AWS S3, GCS and Azure were checked only
+  through anonymous GETs of public objects: AWS S3 and Azure answered `200`
+  with the whole object, and GCS answered `400`
+  (`compat/fixtures/s1/cloud-multirange.txt`). Their presigned behaviour
+  is unverified.
 - **v1 fallback works.** When `/v2` returned 404, the client fell back to
   `/v1/reconstructions` and the download succeeded.
 - **Expired URLs are refreshed.** On a `403`, `hf_xet` re-requests the
@@ -47,10 +51,19 @@
 - **S2: HTTPS with a private CA depends on the platform.**
   - On Linux, `SSL_CERT_FILE=<ca.pem>` is honoured by both
     `huggingface_hub` and `hf_xet`.
-  - On macOS, `hf_xet` ignores `SSL_CERT_FILE`. It verifies through the
-    system trust store (`rustls-platform-verifier`) and failed with
-    `UnknownIssuer`, while `huggingface_hub` accepted the same CA.
+  - On macOS, `hf_xet` failed with `UnknownIssuer` despite
+    `SSL_CERT_FILE` (observed), while `huggingface_hub` accepted the same
+    CA. The mechanism is inferred from source: verification goes through
+    the system trust store (`rustls-platform-verifier`), which ignores
+    `SSL_CERT_FILE`.
   - So the local quickstart should default to `http://` on loopback.
+- **S2: the presign endpoint must be reachable from the client.** A
+  presigned URL carries, and SigV4 signs, the store host that openxet
+  presigned with. The client then connects to exactly that host. In the
+  Linux runs the client shared MinIO's network namespace, so the stub
+  presigned with `127.0.0.1:9000`; from the macOS host it was
+  `127.0.0.1:19000`. In a compose quickstart, openxet must presign with
+  the store's client-facing address, not the in-network service name.
 
 ## Method
 
@@ -171,13 +184,17 @@ Verbatim errors:
 
 Pitfall seen while running **d**: a first attempt used a 1 s expiry with
 only the first answer delayed. It also failed, because the refreshed URLs
-expired too:
-- `hf_xet` retries a 403 only after its backoff (`retry_base_delay` 3 s,
-  `retry_max_attempts` 5).
-- The VM clock ran about 2 s ahead of the host.
+expired too (observed). The reasons, from source and measurement:
+- On a 403, `hf_xet` refreshes **before** it sleeps
+  (`remote_client.rs:633-638`). It then sleeps a pre-jitter 3, 9, 27, 81
+  and 243 s for attempts 1–5, each capped at `retry_max_duration` (6 min).
+  Jitter only shortens a sleep (`retry_wrapper.rs:272`, `485-497`; the
+  upstream test `test_exponential_retry_strategy` pins 3/9/27/81/243 s).
+- The VM clock ran about 2 s ahead of the host (measured).
 
-**URL lifetimes must exceed retry backoff plus clock skew.** A 1 s URL is
-unusable even when refreshed.
+So a refreshed URL must outlive the next sleep, up to 243 s with defaults,
+plus the skew. On top of that, URLs for prefetched blocks wait before
+their first GET. ADR 0002 derives the lifetime floor from these terms.
 
 ### Range-bound native URLs
 
@@ -216,6 +233,9 @@ These were anonymous GETs of public objects, not presigned URLs and not
 | Azure Blob (`azureopendatastorage`, also with `x-ms-version: 2021-08-06`) | `200`, full object | `206` |
 | MinIO (presigned) | `200`, full object | `206` |
 
+The exact commands and status/header lines are in
+`compat/fixtures/s1/cloud-multirange.txt`, re-run on 2026-10-23.
+
 ## Why the client behaves this way (xet-core v1.7.0)
 
 - **URLs are opaque.**
@@ -246,15 +266,19 @@ These were anonymous GETs of public objects, not presigned URLs and not
   - Any term may overshoot the requested end; the client trims the last
     one (`file_term.rs:303-313`).
 - **403 handling:** `s3::get_range` runs with `with_retry_on_403`. On a 403
-  it calls `refresh_url()`, which re-requests the whole block's
-  reconstruction once per acquisition (`retrieval_urls.rs:63-134`), and
-  retries after the normal backoff.
+  it calls `refresh_url()` (`remote_client.rs:633-638`), which re-requests
+  the whole block's reconstruction once per acquisition
+  (`retrieval_urls.rs:63-134`). It then retries after the backoff sleep,
+  3, 9, 27, 81 and 243 s pre-jitter.
 - **TLS:**
   - The wheels build `reqwest` 0.13 with rustls and
     `rustls-platform-verifier` (`Cargo.lock`).
-  - On macOS that is Security.framework trust evaluation, which ignores
-    `SSL_CERT_FILE`. On Linux it honours the OpenSSL-style env vars, which
-    matches what was observed.
+  - Inferred from source and not traced at runtime: on macOS that is
+    Security.framework trust evaluation, which ignores `SSL_CERT_FILE`; on
+    Linux it honours the OpenSSL-style env vars. The observed failures
+    (macOS `UnknownIssuer`, logged by
+    `rustls_platform_verifier::verification::apple`) and successes (Linux)
+    match.
   - `huggingface_hub`'s `httpx2` used the system store on macOS when
     `SSL_CERT_FILE` was unset and OpenSSL with the file when set. This is
     inferred from the two different error texts.
