@@ -41,6 +41,8 @@ pub(crate) struct PlannedTerm {
     /// The sum of the chunks' uncompressed lengths, which the client checks
     /// against what it decodes (S10 §1).
     pub(crate) unpacked_length: u32,
+    /// The index in [`Plan::fetches`] of the descriptor holding the term.
+    pub(crate) fetch: usize,
 }
 
 /// One fetch descriptor: chunks `chunks.0..chunks.1` of `xorb`, stored at
@@ -207,11 +209,6 @@ pub(crate) fn plan(
             term.chunk_start + first as u32,
             term.chunk_start + kept_end as u32,
         );
-        out.terms.push(PlannedTerm {
-            xorb: term.xorb,
-            chunks: kept,
-            unpacked_length,
-        });
         let bytes = stored_bytes(file, term, table, kept)?;
         match out.fetches.last_mut() {
             // The previous term's descriptor is always the last one.
@@ -225,6 +222,12 @@ pub(crate) fn plan(
                 bytes,
             }),
         }
+        out.terms.push(PlannedTerm {
+            xorb: term.xorb,
+            chunks: kept,
+            unpacked_length,
+            fetch: out.fetches.len() - 1,
+        });
         term_at += u64::from(term.unpacked_bytes);
     }
     Ok(out)
@@ -397,15 +400,13 @@ mod tests {
         }
         let mut out = Vec::new();
         for term in &plan.terms {
-            let fetch = plan
-                .fetches
-                .iter()
-                .find(|f| {
-                    f.xorb == term.xorb
-                        && f.chunks.0 <= term.chunks.0
-                        && term.chunks.1 <= f.chunks.1
-                })
-                .expect("every term lies inside one descriptor of its xorb");
+            let fetch = &plan.fetches[term.fetch];
+            assert!(
+                fetch.xorb == term.xorb
+                    && fetch.chunks.0 <= term.chunks.0
+                    && term.chunks.1 <= fetch.chunks.1,
+                "every term lies inside the descriptor it names"
+            );
             let xorb = by_hash[&term.xorb];
             let (s, e) = fetch.bytes;
             let payloads = decode(&xorb.stored[s as usize..=e as usize]);

@@ -33,13 +33,12 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_index::ChunkLayout;
 use openxet_protocol::{MerkleHash, hash_to_hex};
-use serde::ser::{SerializeStruct as _, Serializer};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::OwnedSemaphorePermit;
-use url::Url;
 
+use crate::answer::{self, Signer, Version};
 use crate::blocking::blocking;
-use crate::plan::{self, Fetch, Plan, PlanError, PlannedTerm};
+use crate::plan::{self, PlanError};
 use crate::routes::{Routes, on};
 use crate::{AppState, CasError, ReadAccess, body, path};
 
@@ -89,15 +88,6 @@ impl FromRequestParts<AppState> for FilePath {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, CasError> {
         path::hash(parts, state).await.map(Self)
     }
-}
-
-/// Which answer shape a single-file reconstruction takes (S10 §1).
-#[derive(Debug, Clone, Copy)]
-enum Version {
-    /// `xorbs`: a list of `{url, ranges: [descriptor]}` per xorb.
-    V2,
-    /// `fetch_info`: a list of `{range, url, url_range}` per xorb.
-    V1,
 }
 
 /// `GET /v2/reconstructions/{file}`, the route `hf_xet` prefers.
@@ -151,15 +141,7 @@ async fn single(
     let signer = Signer::new(state);
     let body = render(permit, move || {
         let plan = plan::plan(&record, &tables, range).map_err(planning_failed)?;
-        let mut catalog = Catalog::default();
-        catalog.add(&plan.fetches);
-        catalog.sign(&signer)?;
-        let answer = Single {
-            plan: &plan,
-            catalog: &catalog,
-            version,
-        };
-        serde_json::to_vec(&answer).map_err(CasError::internal)
+        answer::single(&plan, version, &signer)
     })
     .await?;
     tracing::debug!(file = %hash_to_hex(&file), "reconstruction answered");
@@ -275,16 +257,7 @@ async fn batch(
                     .map_err(planning_failed)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut catalog = Catalog::default();
-        for (_, plan) in &plans {
-            catalog.add(&plan.fetches);
-        }
-        catalog.sign(&signer)?;
-        serde_json::to_vec(&Batch {
-            plans: &plans,
-            catalog: &catalog,
-        })
-        .map_err(CasError::internal)
+        answer::batch(&plans, &signer)
     })
     .await?;
     tracing::debug!(files = files.len(), "batch reconstruction answered");
@@ -441,273 +414,6 @@ async fn render(
 
 fn json(body: Vec<u8>) -> Response {
     ([(CONTENT_TYPE, "application/json")], body).into_response()
-}
-
-/// What signing a transfer URL needs, owned for a blocking thread.
-struct Signer {
-    urls: Arc<openxet_auth::UrlSigner>,
-    base: Url,
-    now: u64,
-}
-
-impl Signer {
-    fn new(state: &AppState) -> Self {
-        Self {
-            urls: Arc::clone(&state.urls),
-            base: state.cfg.public_url.clone(),
-            now: state.clock.now(),
-        }
-    }
-}
-
-/// The fetch descriptors of one answer, each signed once, grouped by xorb.
-/// A descriptor two terms or two files share is listed once.
-#[derive(Default)]
-struct Catalog {
-    /// The distinct xorbs, in order of first use, and their hex names.
-    xorbs: Vec<(MerkleHash, String)>,
-    /// Where each xorb is in `xorbs`.
-    index: HashMap<MerkleHash, usize>,
-    /// Per entry of `xorbs`, its descriptors' indices in `fetches`.
-    groups: Vec<Vec<usize>>,
-    fetches: Vec<Fetch>,
-    /// The signed URL of each of `fetches`.
-    urls: Vec<String>,
-    seen: HashSet<(MerkleHash, (u32, u32))>,
-}
-
-impl Catalog {
-    fn add(&mut self, fetches: &[Fetch]) {
-        for fetch in fetches {
-            if !self.seen.insert((fetch.xorb, fetch.chunks)) {
-                continue;
-            }
-            let xorb = self.xorb(&fetch.xorb);
-            self.groups[xorb].push(self.fetches.len());
-            self.fetches.push(*fetch);
-        }
-    }
-
-    fn xorb(&mut self, xorb: &MerkleHash) -> usize {
-        *self.index.entry(*xorb).or_insert_with(|| {
-            self.xorbs.push((*xorb, hash_to_hex(xorb)));
-            self.groups.push(Vec::new());
-            self.xorbs.len() - 1
-        })
-    }
-
-    /// The hex name of `xorb`, which a term of an added plan names.
-    fn name(&self, xorb: &MerkleHash) -> &str {
-        &self.xorbs[self.index[xorb]].1
-    }
-
-    /// Signs one URL per descriptor, for exactly its byte range (ADR 0002),
-    /// one xorb's descriptors at a time so each xorb's part of the MAC is
-    /// computed once.
-    fn sign(&mut self, signer: &Signer) -> Result<(), CasError> {
-        let urls = signer.urls.transfer_urls(&signer.base, signer.now);
-        self.urls = vec![String::new(); self.fetches.len()];
-        for ((xorb, _), group) in self.xorbs.iter().zip(&self.groups) {
-            let xorb = urls.xorb(xorb);
-            for &i in group {
-                let (start, end) = self.fetches[i].bytes;
-                xorb.push_signed(start, end, &mut self.urls[i])?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// A `{start, end}` range: chunk indices (end-exclusive) or bytes
-/// (end-inclusive), as S10 §1 types each.
-#[derive(Serialize)]
-struct Span<T> {
-    start: T,
-    end: T,
-}
-
-/// One term: `{hash, unpacked_length, range}`.
-#[derive(Serialize)]
-struct TermJson<'a> {
-    hash: &'a str,
-    unpacked_length: u32,
-    range: Span<u32>,
-}
-
-/// One v2 descriptor: `{chunks, bytes}`.
-#[derive(Serialize)]
-struct Descriptor {
-    chunks: Span<u32>,
-    bytes: Span<u64>,
-}
-
-/// One v2 fetch entry, always of a single descriptor (ADR 0002 §1).
-#[derive(Serialize)]
-struct EntryV2<'a> {
-    url: &'a str,
-    ranges: [Descriptor; 1],
-}
-
-/// One v1 `fetch_info` entry.
-#[derive(Serialize)]
-struct EntryV1<'a> {
-    range: Span<u32>,
-    url: &'a str,
-    url_range: Span<u64>,
-}
-
-/// A plan's terms, as a JSON list.
-struct Terms<'a> {
-    terms: &'a [PlannedTerm],
-    catalog: &'a Catalog,
-}
-
-impl Serialize for Terms<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_seq(self.terms.iter().map(|t| TermJson {
-            hash: self.catalog.name(&t.xorb),
-            unpacked_length: t.unpacked_length,
-            range: Span {
-                start: t.chunks.0,
-                end: t.chunks.1,
-            },
-        }))
-    }
-}
-
-/// The catalog's entries per xorb: v2's `xorbs` or v1's `fetch_info`.
-struct Entries<'a> {
-    catalog: &'a Catalog,
-    version: Version,
-}
-
-impl Serialize for Entries<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let catalog = self.catalog;
-        s.collect_map(
-            catalog
-                .xorbs
-                .iter()
-                .zip(&catalog.groups)
-                .map(|((_, name), fetches)| {
-                    (
-                        name,
-                        Group {
-                            catalog,
-                            fetches,
-                            version: self.version,
-                        },
-                    )
-                }),
-        )
-    }
-}
-
-/// One xorb's entries.
-struct Group<'a> {
-    catalog: &'a Catalog,
-    fetches: &'a [usize],
-    version: Version,
-}
-
-impl Serialize for Group<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let spans = |i: usize| {
-            let fetch = &self.catalog.fetches[i];
-            (
-                self.catalog.urls[i].as_str(),
-                Span {
-                    start: fetch.chunks.0,
-                    end: fetch.chunks.1,
-                },
-                Span {
-                    start: fetch.bytes.0,
-                    end: fetch.bytes.1,
-                },
-            )
-        };
-        let entries = self.fetches.iter().map(|&i| spans(i));
-        match self.version {
-            Version::V2 => s.collect_seq(entries.map(|(url, chunks, bytes)| EntryV2 {
-                url,
-                ranges: [Descriptor { chunks, bytes }],
-            })),
-            Version::V1 => s.collect_seq(entries.map(|(url, range, url_range)| EntryV1 {
-                range,
-                url,
-                url_range,
-            })),
-        }
-    }
-}
-
-/// A single-file answer: v2's `{offset_into_first_range, terms, xorbs}` or
-/// v1's `{offset_into_first_range, terms, fetch_info}` (S10 §1).
-struct Single<'a> {
-    plan: &'a Plan,
-    catalog: &'a Catalog,
-    version: Version,
-}
-
-impl Serialize for Single<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("Reconstruction", 3)?;
-        out.serialize_field(
-            "offset_into_first_range",
-            &self.plan.offset_into_first_range,
-        )?;
-        out.serialize_field(
-            "terms",
-            &Terms {
-                terms: &self.plan.terms,
-                catalog: self.catalog,
-            },
-        )?;
-        let entries = Entries {
-            catalog: self.catalog,
-            version: self.version,
-        };
-        match self.version {
-            Version::V2 => out.serialize_field("xorbs", &entries)?,
-            Version::V1 => out.serialize_field("fetch_info", &entries)?,
-        }
-        out.end()
-    }
-}
-
-/// A batch answer: `{files, fetch_info}` (S10 §1).
-struct Batch<'a> {
-    plans: &'a [(MerkleHash, Plan)],
-    catalog: &'a Catalog,
-}
-
-impl Serialize for Batch<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        struct Files<'a>(&'a Batch<'a>);
-        impl Serialize for Files<'_> {
-            fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                s.collect_map(self.0.plans.iter().map(|(file, plan)| {
-                    (
-                        hash_to_hex(file),
-                        Terms {
-                            terms: &plan.terms,
-                            catalog: self.0.catalog,
-                        },
-                    )
-                }))
-            }
-        }
-        let mut out = s.serialize_struct("BatchReconstruction", 2)?;
-        out.serialize_field("files", &Files(self))?;
-        out.serialize_field(
-            "fetch_info",
-            &Entries {
-                catalog: self.catalog,
-                version: Version::V1,
-            },
-        )?;
-        out.end()
-    }
 }
 
 #[cfg(test)]
