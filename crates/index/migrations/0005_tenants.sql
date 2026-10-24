@@ -48,17 +48,21 @@ DROP TABLE shard_scopes;
 -- Orders the newest-registration lookup of dedup answers.
 CREATE INDEX shard_registrations_registered_seq ON shard_registrations (registered_seq);
 
--- The sequence number of the registration a file's row came from. Of two
--- registrations of one file to one scope, the lower number's row is kept,
--- whichever committed first, so the row is the one a rebuild from the
--- bucket picks.
+-- The sequence number and tenant of the registration a file's row came
+-- from. Of two registrations of one file to one scope, the row of the
+-- lowest (registered_seq, shard, registered_tenant) is kept, whichever
+-- committed first, so the row is the one a rebuild from the bucket picks.
+-- Numbers can repeat after an index is lost, hence the tie-breaks.
 ALTER TABLE file_scopes ADD COLUMN registered_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE file_scopes ADD COLUMN registered_tenant TEXT NOT NULL DEFAULT '';
 
-UPDATE file_scopes SET registered_seq = COALESCE(
-    (SELECT r.registered_seq FROM shard_registrations r
-     WHERE r.shard = file_scopes.shard AND r.scope = file_scopes.scope),
-    0
-);
+UPDATE file_scopes SET
+    registered_seq = COALESCE(
+        (SELECT r.registered_seq FROM shard_registrations r
+         WHERE r.shard = file_scopes.shard AND r.scope = file_scopes.scope),
+        0
+    ),
+    registered_tenant = 'scope:' || scope;
 
 -- The last registration sequence number handed out: one row, id 0.
 CREATE TABLE registration_seq (

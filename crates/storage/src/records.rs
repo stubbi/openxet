@@ -20,8 +20,8 @@ const VERSION: u32 = 1;
 ///
 /// The files it registers are those of the stored shard
 /// (`shards/{shard hex}`), each kept as the scope's reconstruction unless a
-/// registration with a lower `seq` already registered that file to the
-/// scope. The xorbs the shard's files reference are owned by the tenant
+/// registration with a lower `(seq, shard bytes, tenant)` already
+/// registered that file to the scope. The xorbs the shard's files reference are owned by the tenant
 /// from then on (ruling M1-R39). The record is written once and never
 /// changed: a registration repeated after a failure reuses it, sequence
 /// number included.

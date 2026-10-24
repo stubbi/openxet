@@ -6,9 +6,9 @@
 //!
 //! The rebuild reads:
 //! - every `xorb-owners/` record: a tenant uploaded a xorb;
-//! - every `registrations/` record, in sequence order, with the stored
-//!   shard it names: the shard's files are registered to the record's
-//!   scope (the lowest number's row is kept per file and scope), its
+//! - every `registrations/` record, in `(seq, shard bytes, tenant)` order,
+//!   with the stored shard it names: the shard's files are registered to
+//!   the record's scope (the first such row is kept per file and scope), its
 //!   xorbs are owned by the record's tenant (ruling M1-R39), and its term
 //!   order is the shard's;
 //! - the stored xorbs the files name, for each term's byte range.
@@ -41,6 +41,8 @@ pub struct FileRow {
     pub term_bytes: Option<TermBytes>,
     /// The number of the registration the row comes from.
     pub registered_seq: u64,
+    /// The tenant of the registration the row comes from.
+    pub registered_tenant: String,
 }
 
 /// The index's scope tables, as comparable rows.
@@ -76,7 +78,11 @@ pub async fn rebuild_scope_tables(bucket: &dyn Bucket) -> Result<ScopeTables, Re
     for key in bucket.list(KeyKind::Registration).await? {
         registrations.push(Registration::from_bytes(&key, &read(bucket, &key).await?)?);
     }
-    registrations.sort_by_key(|r| r.seq);
+    // The index breaks ties on the number the same way (`register_shard`):
+    // numbers repeat only after an index was lost.
+    registrations.sort_by(|a, b| {
+        (a.seq, a.shard.as_bytes(), &a.tenant).cmp(&(b.seq, b.shard.as_bytes(), &b.tenant))
+    });
 
     let mut offsets: HashMap<MerkleHash, Vec<u32>> = HashMap::new();
     for record in registrations {
@@ -123,6 +129,7 @@ pub async fn rebuild_scope_tables(bucket: &dyn Bucket) -> Result<ScopeTables, Re
                     shard: record.shard,
                     term_bytes: Some(term_bytes),
                     registered_seq: record.seq,
+                    registered_tenant: record.tenant.clone(),
                 });
         }
     }
@@ -146,8 +153,8 @@ impl SqliteIndex {
     pub async fn scope_tables(&self) -> Result<ScopeTables, RebuildError> {
         let mut tables = ScopeTables::default();
         let rows = sqlx::query(
-            "SELECT file, scope, size, terms, sha256, shard, term_bytes, registered_seq \
-             FROM file_scopes",
+            "SELECT file, scope, size, terms, sha256, shard, term_bytes, registered_seq, \
+             registered_tenant FROM file_scopes",
         )
         .fetch_all(&self.reader)
         .await?;
@@ -170,6 +177,7 @@ impl SqliteIndex {
                     shard: hash_from(row.try_get(5)?)?,
                     term_bytes,
                     registered_seq: u64::try_from(row.try_get::<i64, _>(7)?)?,
+                    registered_tenant: row.try_get(8)?,
                 },
             );
         }

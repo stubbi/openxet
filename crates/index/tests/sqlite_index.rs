@@ -1201,6 +1201,87 @@ async fn lowest_numbered_registration_of_a_file_wins() {
     );
 }
 
+/// Sequence numbers can repeat once an index is lost or restored from an
+/// older backup and its counter starts below the bucket's records. A tie
+/// then breaks on the shard's bytes, then the tenant, in either commit
+/// order, as a rebuild from the bucket breaks it (F-A review m-3).
+#[tokio::test]
+async fn ties_on_the_number_break_on_shard_then_tenant() {
+    let (s1, s2) = (h("shard-1"), h("shard-2"));
+    let (low, high) = if s1.as_bytes() < s2.as_bytes() {
+        (s1, s2)
+    } else {
+        (s2, s1)
+    };
+    for (first, second) in [(low, high), (high, low)] {
+        for (tenant_first, tenant_second) in [("t1", "t2"), ("t2", "t1")] {
+            let dir = ok(TempDir::new());
+            let index = open(&dir).await;
+            let (x1, _) = put(&index, "x1", 2, "t1").await;
+            let (x2, _) = put(&index, "x2", 2, "t1").await;
+            ok(index.put_xorb(&x1, 1300, &table("x1", 2), &[], "t2").await);
+            ok(index.put_xorb(&x2, 1300, &table("x2", 2), &[], "t2").await);
+            let over = |shard| file_over("f", &[(if shard == low { x1 } else { x2 }, 2)]);
+            // Same shard and number, two tenants: the lower tenant's row.
+            let by = |tenant| Registrant {
+                scope: A,
+                tenant,
+                seq: 5,
+            };
+            ok(index
+                .register_shard(&first, &[over(first)], by(tenant_first), Visibility::Global)
+                .await);
+            ok(index
+                .register_shard(
+                    &second,
+                    &[over(second)],
+                    by(tenant_second),
+                    Visibility::Global,
+                )
+                .await);
+            let file = h("file/f");
+            assert_eq!(
+                ok(index.file(&file, A).await),
+                Some(over(low).record),
+                "the lower shard wins a tie on the number"
+            );
+        }
+    }
+    for order in [["t2", "t1"], ["t1", "t2"]] {
+        let dir = ok(TempDir::new());
+        let path = dir.path().join("index.sqlite");
+        let index = open_at(&path).await;
+        let (x, _) = put(&index, "x", 2, "t1").await;
+        ok(index.put_xorb(&x, 1300, &table("x", 2), &[], "t2").await);
+        for tenant in order {
+            ok(index
+                .register_shard(
+                    &low,
+                    &[file_over("g", &[(x, 2)])],
+                    Registrant {
+                        scope: A,
+                        tenant,
+                        seq: 5,
+                    },
+                    Visibility::Global,
+                )
+                .await);
+        }
+        let db = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+        let tenant: String = ok(sqlx::query_scalar(
+            "SELECT registered_tenant FROM file_scopes WHERE scope = ?",
+        )
+        .bind(A)
+        .fetch_one(&db)
+        .await);
+        assert_eq!(
+            tenant, "t1",
+            "the lower tenant wins a tie on number and shard"
+        );
+        db.close().await;
+    }
+}
+
 /// Migration 0005 carries a database written before tenants existed: each
 /// scope becomes its own tenant, `scope:` and its name (ruling M1-R43),
 /// owning the xorbs it uploaded and those its registered shards reference (ruling M1-R39), and registration numbers

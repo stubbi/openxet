@@ -134,8 +134,9 @@ pub trait Index: Send + Sync + 'static {
     ///   M1-R16): the same file hash may be stored over different xorbs in
     ///   different scopes, and each scope reads back only its own.
     /// - Of several registrations of one file to one scope, the one with
-    ///   the lowest `seq` is kept, whichever committed first, as a rebuild
-    ///   from the bucket's records keeps it; all describe the same bytes.
+    ///   the lowest `(seq, shard bytes, tenant)` is kept, whichever
+    ///   committed first, as a rebuild from the bucket's records keeps it;
+    ///   all describe the same bytes.
     /// - Each file's `first_chunk` becomes a dedup candidate for its first
     ///   term's xorb.
     /// - The shard's distinct term xorbs are recorded in term order (the

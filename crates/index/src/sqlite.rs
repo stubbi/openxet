@@ -587,8 +587,9 @@ impl Index for SqliteIndex {
             let bytes = encode_term_bytes(&term_bytes(&record.terms, &layouts)?);
             let inserted = sqlx::query(
                 "INSERT INTO file_scopes \
-                 (file, scope, size, terms, sha256, shard, term_bytes, registered_seq) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                 (file, scope, size, terms, sha256, shard, term_bytes, registered_seq, \
+                 registered_tenant) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             )
             .bind(record.hash.as_bytes())
             .bind(scope)
@@ -598,19 +599,21 @@ impl Index for SqliteIndex {
             .bind(shard.as_bytes())
             .bind(&bytes)
             .bind(seq)
+            .bind(tenant)
             .execute(&mut *tx)
             .await?
             .rows_affected()
                 > 0;
             if !inserted {
-                // Registered already. The lower-numbered registration's row
-                // is kept whichever committed first, as a rebuild from the
-                // bucket keeps it (ruling M1-R37); both describe the same
-                // bytes.
+                // Registered already. The row of the lowest (number, shard,
+                // tenant) is kept whichever committed first, as a rebuild from
+                // the bucket keeps it (ruling M1-R37); all describe the same
+                // bytes. Numbers repeat only after an index was lost.
                 sqlx::query(
                     "UPDATE file_scopes SET size = ?, terms = ?, sha256 = ?, shard = ?, \
-                     term_bytes = ?, registered_seq = ? \
-                     WHERE file = ? AND scope = ? AND registered_seq > ?",
+                     term_bytes = ?, registered_seq = ?, registered_tenant = ? \
+                     WHERE file = ? AND scope = ? \
+                     AND (registered_seq, shard, registered_tenant) > (?, ?, ?)",
                 )
                 .bind(size)
                 .bind(&terms)
@@ -618,9 +621,12 @@ impl Index for SqliteIndex {
                 .bind(shard.as_bytes())
                 .bind(&bytes)
                 .bind(seq)
+                .bind(tenant)
                 .bind(record.hash.as_bytes())
                 .bind(scope)
                 .bind(seq)
+                .bind(shard.as_bytes())
+                .bind(tenant)
                 .execute(&mut *tx)
                 .await?;
             }
