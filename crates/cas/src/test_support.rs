@@ -31,6 +31,7 @@ pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {
             verify_limits: VerifyLimits::default(),
             heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
             body_deadline: crate::BodyDeadline::DEFAULT,
+            dedup_send: crate::SendDeadline::DEFAULT,
         },
     )
 }

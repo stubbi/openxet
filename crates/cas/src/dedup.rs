@@ -39,9 +39,9 @@
 //! their answer (S11, "Answer cost").
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
-use axum::body::Bytes;
 use axum::extract::{FromRequestParts, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
@@ -51,10 +51,10 @@ use openxet_index::Visibility;
 use openxet_protocol::{
     DEDUP_ANSWER_BUDGET, MerkleHash, dedup_answer_xorb_bytes, dedup_shard, hash_to_hex,
 };
-use tokio::sync::OwnedSemaphorePermit;
 
 use crate::blocking::blocking;
 use crate::cache::private;
+use crate::dedup_body::answer_body;
 use crate::{AppState, CasError, ReadAccess, path};
 
 /// The prefixes served: `default`, which `hf_xet` sends, and
@@ -71,6 +71,14 @@ const KEY_LIFETIME: u64 = 7 * 24 * 60 * 60;
 /// large enough that a 10 GB file's shard (about 160 xorbs) takes five
 /// reads.
 const TABLES_PER_LOAD: usize = 32;
+
+/// How long a query waits for a `dedup` permit before answering `429
+/// dedup_busy` (ruling M1-R33). Short, because the client waits for its
+/// block's queries before it goes on: a query that waited for a permit
+/// held by a stalled client would stall the upload for up to `hf_xet`'s
+/// 300 s read timeout, while a `429` costs only this dedup match (S10 §2).
+/// One second covers a full answer's build (about 80 ms, S11) many times.
+const PERMIT_WAIT: Duration = Duration::from_secs(1);
 
 /// `GET /v1/chunks/{prefix}/{hash}` (S10 §2).
 pub(crate) fn routes() -> Router<AppState> {
@@ -112,9 +120,9 @@ async fn query(
     // From the table load until the body is gone, the answer holds a
     // `dedup` permit (ruling M1-R32), so its memory is bounded per process
     // and dedup can never take a permit xorb or shard validation needs.
-    let permit = Arc::clone(&state.dedup)
-        .acquire_owned()
+    let permit = tokio::time::timeout(PERMIT_WAIT, Arc::clone(&state.dedup).acquire_owned())
         .await
+        .map_err(|_| CasError::DedupBusy)?
         .map_err(CasError::internal)?;
     let tables = load_tables(&state, &order, scope, vis).await?;
     if tables.first().is_none_or(|(first, _)| *first != xorb) {
@@ -143,27 +151,9 @@ async fn query(
         bytes = body.len(),
         "dedup match offered"
     );
-    let body = Bytes::from_owner(PermittedBody {
-        body,
-        _permit: permit,
-    });
+    let deadline = state.cfg.dedup_send.for_len(body.len() as u64);
+    let body = answer_body(body, permit, deadline);
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
-}
-
-/// An answer's body with the `dedup` permit it was built under. `Bytes`
-/// drops its owner with the last view of the buffer, once the server has
-/// written the whole body or dropped it unsent, and the permit is
-/// returned only then: a client that never reads keeps its permit, so it
-/// can't make the server hold more bodies than there are permits.
-struct PermittedBody {
-    body: Vec<u8>,
-    _permit: OwnedSemaphorePermit,
-}
-
-impl AsRef<[u8]> for PermittedBody {
-    fn as_ref(&self) -> &[u8] {
-        &self.body
-    }
 }
 
 /// The xorbs to offer for a match in `matched`, in priority order: the
@@ -226,8 +216,6 @@ fn fresh_key() -> Result<MerkleHash, CasError> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::time::Duration;
-
     use axum::body::Body;
     use axum::http::header::AUTHORIZATION;
     use axum::http::{Request, StatusCode};
@@ -238,6 +226,7 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
+    use crate::SendDeadline;
     use crate::test_support::PermitProbe;
     use crate::{router, test_support};
 
@@ -389,6 +378,49 @@ mod tests {
         drop(unread);
         assert_eq!(state.dedup.available_permits(), 1);
         assert_eq!(state.validate.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_full_pool_answers_429_dedup_busy_within_the_wait() {
+        // Ruling M1-R33: a query never waits long for a permit; `hf_xet`
+        // reads a `429` from `/v1/chunks` as "no match" without retrying
+        // (S10 §2), so the upload goes on at once.
+        let dir = tempfile::tempdir().unwrap();
+        let (state, chunk) = one_xorb_state(dir.path()).await;
+        let _held = Arc::clone(&state.dedup).acquire_owned().await.unwrap();
+
+        let start = std::time::Instant::now();
+        let response = router(state.clone())
+            .oneshot(dedup_query(&chunk))
+            .await
+            .unwrap();
+        let waited = start.elapsed();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()["retry-after"], "1");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(waited >= PERMIT_WAIT, "{waited:?}");
+        assert!(waited < Duration::from_millis(1500), "{waited:?}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["schema"], "openxet.error.v1");
+        assert_eq!(json["code"], "dedup_busy");
+    }
+
+    #[test]
+    fn the_send_deadline_allows_the_base_plus_the_minimum_rate() {
+        // 30 s, plus 16 s for a full 16 MiB answer at 1 MiB/s.
+        assert_eq!(
+            SendDeadline::DEFAULT.for_len(16 << 20),
+            Duration::from_secs(46)
+        );
+        assert_eq!(SendDeadline::DEFAULT.for_len(0), Duration::from_secs(30));
+        let quick = SendDeadline::new(Duration::from_millis(100), 1000).unwrap();
+        assert_eq!(quick.for_len(500), Duration::from_millis(600));
+        assert!(SendDeadline::new(Duration::ZERO, 1).is_none());
+        assert!(SendDeadline::new(Duration::from_secs(1), 0).is_none());
     }
 
     #[test]

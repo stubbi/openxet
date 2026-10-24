@@ -476,6 +476,7 @@ async fn a_starting_server_is_live_but_not_ready() {
 async fn an_idle_upload_body_is_cut_off_with_408() {
     let cfg = CasConfig {
         body_deadline: BodyDeadline::new(Duration::from_millis(300), 1).unwrap(),
+        dedup_send: openxet_cas::SendDeadline::DEFAULT,
         ..config(Visibility::Global)
     };
     let server = TestServer::start(cfg).await;
@@ -501,6 +502,7 @@ async fn a_refused_body_drain_is_bounded_by_the_deadline() {
     // stops sending from holding the connection.
     let cfg = CasConfig {
         body_deadline: BodyDeadline::new(Duration::from_millis(300), 1).unwrap(),
+        dedup_send: openxet_cas::SendDeadline::DEFAULT,
         ..config(Visibility::Global)
     };
     let server = TestServer::start(cfg).await;

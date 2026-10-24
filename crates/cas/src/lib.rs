@@ -19,6 +19,7 @@ mod body;
 mod cache;
 mod deadline;
 mod dedup;
+mod dedup_body;
 mod error;
 mod health;
 mod misc;
@@ -51,7 +52,7 @@ use tower_http::trace::TraceLayer;
 use url::Url;
 
 pub use auth::{ReadAccess, WriteAccess};
-pub use deadline::BodyDeadline;
+pub use deadline::{BodyDeadline, SendDeadline};
 pub use error::CasError;
 pub use health::starting_router;
 pub use misc::TELEMETRY_BODY_LIMIT;
@@ -75,6 +76,8 @@ pub struct CasConfig {
     pub heartbeat_interval: Duration,
     /// The pace every request body must keep.
     pub body_deadline: BodyDeadline,
+    /// How long sending a dedup answer may take (ruling M1-R33).
+    pub dedup_send: SendDeadline,
 }
 
 impl CasConfig {
