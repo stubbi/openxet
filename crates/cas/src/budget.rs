@@ -97,14 +97,24 @@ impl MemoryBudget {
                 .await
                 .map_err(|_| CasError::MemoryBusy)?
                 .map_err(CasError::internal)?;
-        Ok(Reservation { _units: permit })
+        Ok(Reservation(permit))
     }
 }
 
 /// Bytes reserved from a [`MemoryBudget`], returned to it when dropped.
 #[derive(Debug)]
-pub(crate) struct Reservation {
-    _units: OwnedSemaphorePermit,
+pub(crate) struct Reservation(OwnedSemaphorePermit);
+
+impl Reservation {
+    /// Returns what is reserved beyond `bytes` to the budget. Never grows
+    /// the reservation.
+    pub(crate) fn shrink_to(&mut self, bytes: u64) {
+        let keep = to_usize(bytes.div_ceil(UNIT));
+        let held = self.0.num_permits();
+        if keep < held {
+            drop(self.0.split(held - keep));
+        }
+    }
 }
 
 /// `n` units, which [`MemoryBudget::new`] keeps within `u32`, as a count.
@@ -167,5 +177,17 @@ mod tests {
         );
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(budget.reserve(u64::MAX).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shrinking_returns_the_excess_and_never_grows() {
+        let budget = MemoryBudget::new(4 * MIB, Duration::from_secs(5));
+        let mut held = budget.reserve(3 * MIB).await.unwrap();
+        held.shrink_to(MIB + 1);
+        assert_eq!(budget.available(), 4 * MIB - (MIB + UNIT));
+        held.shrink_to(3 * MIB);
+        assert_eq!(budget.available(), 4 * MIB - (MIB + UNIT));
+        drop(held);
+        assert_eq!(budget.available(), 4 * MIB);
     }
 }

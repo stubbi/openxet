@@ -21,7 +21,6 @@ mod budget;
 mod cache;
 mod deadline;
 mod dedup;
-mod dedup_body;
 mod error;
 mod health;
 mod misc;
@@ -30,6 +29,7 @@ mod plan;
 mod reconstruction;
 mod request_id;
 mod routes;
+mod send_body;
 mod shards;
 #[cfg(test)]
 mod test_support;

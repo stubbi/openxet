@@ -16,25 +16,30 @@
 //! the serialized answer, and planning, signing and serialization run on a
 //! blocking thread, as other CPU-bound request work does (rulings M1-R8,
 //! M1-R25): a file of 100k terms signs 100k URLs. A batch is capped at
-//! [`MAX_BATCH_FILES`] files and [`MAX_BATCH_TERMS`] terms.
+//! [`MAX_BATCH_FILES`] files and [`MAX_BATCH_TERMS`] terms, checked from
+//! the stored term counts before any file is loaded.
+//!
+//! Memory (ruling M1-R40): before the permit, an answer reserves from the
+//! memory budget the bound its buffers are allocated to
+//! ([`answer::bound`], about 600 bytes a term), waiting at most the
+//! budget's wait, then `503 memory_busy`. Once built, the reservation
+//! shrinks to the answer's size and is held until the answer has been
+//! sent, dropped, or overrun its send deadline, so a client that never
+//! reads holds its answer for at most that long.
 //!
 //! Every answer, errors included, is `Cache-Control: no-store`: it depends
 //! on the caller's scope and carries URLs that act as credentials (design
 //! §5.9 req 3).
 
-use std::collections::{HashSet, VecDeque};
-use std::convert::Infallible;
-use std::pin::Pin;
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
-use axum::body::{Body, Bytes};
+use axum::body::Bytes;
 use axum::extract::{FromRequestParts, RawQuery, Request, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use http_body::{Frame, SizeHint};
 use openxet_index::ChunkLayout;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::Deserialize;
@@ -42,8 +47,10 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use crate::answer::{self, Signer, Version};
 use crate::blocking::blocking;
+use crate::budget::Reservation;
 use crate::plan::{self, PlanError, XorbMap, XorbSet};
 use crate::routes::{Routes, on};
+use crate::send_body::send_body;
 use crate::{AppState, CasError, ReadAccess, body, path};
 
 /// The most distinct files one batch reconstruction may name; a batch over
@@ -145,6 +152,10 @@ async fn single(
             .collect(),
         (Some(w), None) => distinct_xorbs(&record.terms[w.terms.clone()]),
     };
+    let reserved = state
+        .budget
+        .reserve(answer::bound(terms, 1, &state.cfg.public_url))
+        .await?;
     let permit = validation_permit(state).await?;
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
@@ -155,7 +166,7 @@ async fn single(
     })
     .await?;
     tracing::debug!(file = %hash_to_hex(&file), "reconstruction answered");
-    Ok(json(body))
+    Ok(json(state, body, reserved))
 }
 
 /// One key of a `POST /v1/reconstructions` body
@@ -244,8 +255,13 @@ async fn batch(
     }
     // The cap is checked from the stored term counts before any file is
     // loaded, so a batch over it costs no decoding (ruling M1-R40).
-    let stored = state.index.term_count(&files, scope).await?;
-    check_batch_terms(usize::try_from(stored).unwrap_or(usize::MAX))?;
+    let stored =
+        usize::try_from(state.index.term_count(&files, scope).await?).unwrap_or(usize::MAX);
+    check_batch_terms(stored)?;
+    let reserved = state
+        .budget
+        .reserve(answer::bound(stored, files.len(), &state.cfg.public_url))
+        .await?;
     let mut found = state.index.files(&files, scope).await?;
     let records: Vec<_> = files.iter().filter_map(|f| found.remove(f)).collect();
     let terms: usize = records.iter().map(|r| r.terms.len()).sum();
@@ -270,7 +286,7 @@ async fn batch(
     })
     .await?;
     tracing::debug!(files = files.len(), "batch reconstruction answered");
-    Ok(json(body))
+    Ok(json(state, body, reserved))
 }
 
 /// `400 batch_too_large` for a batch of more than [`MAX_BATCH_TERMS`]
@@ -463,37 +479,20 @@ async fn render(
     .1
 }
 
-/// A JSON answer sent as `parts`, with their total as its Content-Length.
-fn json(parts: Vec<Bytes>) -> Response {
+/// The JSON answer `parts`, with their total as its Content-Length, sent
+/// under the send deadline ([`crate::send_body`]) and holding `reserved`
+/// until then, shrunk to the bytes the parts hold (ruling M1-R40). The
+/// buffers were allocated to the bound reserved, but pages never written
+/// are never resident.
+fn json(state: &AppState, parts: Vec<Bytes>, mut reserved: Reservation) -> Response {
+    let len: u64 = parts.iter().map(|part| part.len() as u64).sum();
+    reserved.shrink_to(len);
+    let deadline = state.cfg.send_deadline.for_len(len);
     (
         [(CONTENT_TYPE, "application/json")],
-        Body::new(Frames(parts.into())),
+        send_body(parts, reserved, deadline),
     )
         .into_response()
-}
-
-/// A body of the given frames, of an exact size known up front, so the
-/// server sends a Content-Length as for one buffer.
-struct Frames(VecDeque<Bytes>);
-
-impl http_body::Body for Frames {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
-        Poll::Ready(self.0.pop_front().map(|part| Ok(Frame::data(part))))
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(self.0.iter().map(|part| part.len() as u64).sum())
-    }
 }
 
 #[cfg(test)]
@@ -515,7 +514,7 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
-    use crate::{router, test_support};
+    use crate::{SendDeadline, router, test_support};
 
     // The scheme is a constant so the repository's secret scanner, which
     // flags any literal bearer value, can tell this test token from leaks.
@@ -759,6 +758,123 @@ mod tests {
             0,
             "a file was loaded"
         );
+    }
+
+    /// State over an index holding one file of one term, registered to
+    /// `s`, which the `READ` token reads; and the file's v2 request.
+    async fn one_file(dir: &std::path::Path) -> (AppState, Request) {
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let state = test_support::state(dir, vec![token]).await;
+        let xorb = openxet_protocol::chunk_hash(b"xorb");
+        let table = ChunkTable {
+            hashes: vec![(openxet_protocol::chunk_hash(b"c"), 1)].into(),
+            offsets: vec![0, 9].into(),
+        };
+        state
+            .index
+            .put_xorb(&xorb, 9, &table, &[], "s")
+            .await
+            .unwrap();
+        let record = FileRecord {
+            hash: openxet_protocol::chunk_hash(b"file"),
+            size: 1,
+            terms: vec![Term {
+                xorb,
+                chunk_start: 0,
+                chunk_end: 1,
+                unpacked_bytes: 1,
+            }],
+        };
+        let request = Request::get(format!("/v2/reconstructions/{}", hash_to_hex(&record.hash)))
+            .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+            .body(Body::empty())
+            .unwrap();
+        let new = NewFile {
+            record,
+            sha256: None,
+            first_chunk: None,
+        };
+        state
+            .index
+            .register_shard(&xorb, &[new], "s", Visibility::Global)
+            .await
+            .unwrap();
+        (state, request)
+    }
+
+    #[tokio::test]
+    async fn an_answer_holds_its_memory_until_it_is_sent_or_dropped() {
+        // Ruling M1-R40 (review finding I3): a built answer keeps its bytes
+        // reserved from the budget while it waits for its client.
+        let dir = tempfile::tempdir().unwrap();
+        let (state, request) = one_file(dir.path()).await;
+        let whole = state.budget.bytes();
+        let (_, again) = one_file(tempfile::tempdir().unwrap().path()).await;
+        let again = Request::get(again.uri().clone())
+            .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let len = http_body::Body::size_hint(response.body()).exact().unwrap();
+        assert_eq!(whole - state.budget.available(), len.div_ceil(1024) * 1024);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.len() as u64, len);
+        assert_eq!(state.budget.available(), whole, "sent");
+
+        let unread = router(state.clone()).oneshot(again).await.unwrap();
+        assert!(state.budget.available() < whole);
+        drop(unread);
+        assert_eq!(state.budget.available(), whole, "dropped");
+    }
+
+    #[tokio::test]
+    async fn an_unread_answer_releases_its_memory_at_the_send_deadline() {
+        // Ruling M1-R40: a client that never reads loses the answer, and
+        // its reservation, once the send deadline passes.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, request) = one_file(dir.path()).await;
+        state.cfg.send_deadline = SendDeadline::new(Duration::from_millis(200), 1 << 20).unwrap();
+        let whole = state.budget.bytes();
+
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert!(state.budget.available() < whole);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(state.budget.available(), whole, "held past the deadline");
+        assert!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_budget_answers_503_memory_busy_after_the_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, request) = one_file(dir.path()).await;
+        let wait = Duration::from_millis(300);
+        state.budget = crate::MemoryBudget::new(1 << 20, wait);
+        let _full = state.budget.reserve(1 << 20).await.unwrap();
+
+        let started = std::time::Instant::now();
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert!(started.elapsed() >= wait);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "1");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "memory_busy", "{json}");
     }
 
     /// The writer threads `render` grants a 100k-term answer when `held`

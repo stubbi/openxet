@@ -1,14 +1,15 @@
-//! The body of a dedup answer, which holds its `dedup` permit until it has
-//! been sent, dropped, or overrun its send deadline (rulings M1-R32,
-//! M1-R33).
+//! The body of a built answer, which holds what bounds it (a dedup permit,
+//! a memory reservation) until it has been sent, dropped, or overrun its
+//! send deadline (rulings M1-R32, M1-R33, M1-R40).
 //!
 //! The answer is handed to the server in copies of at most
 //! [`FRAME_BYTES`], so what the server buffers for a slow client never
-//! references the answer's buffer. A timer task frees the buffer and the
-//! permit when the deadline passes, even if the server never polls the
+//! references the answer's buffers. A timer task frees the buffers and
+//! the guard when the deadline passes, even if the server never polls the
 //! body again (it doesn't while the client's socket is full); the next
 //! poll then fails the body, which closes the connection.
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
@@ -16,22 +17,31 @@ use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use http_body::{Frame, SizeHint};
-use tokio::sync::OwnedSemaphorePermit;
 use tokio::task::JoinHandle;
 
 /// The largest frame copied out of an answer: small enough that a stalled
 /// client holds only a few frames in the server's buffers.
 const FRAME_BYTES: usize = 64 * 1024;
 
-/// `body` as a response body holding `permit`, which is released when
-/// the body has been sent, is dropped, or `deadline` passes.
-pub(crate) fn answer_body(body: Vec<u8>, permit: OwnedSemaphorePermit, deadline: Duration) -> Body {
-    let len = body.len() as u64;
-    let state = Arc::new(Mutex::new(State::Sending {
-        body,
-        sent: 0,
-        _permit: permit,
-    }));
+/// `parts`, in order, as a response body holding `guard`, which is dropped
+/// with the parts when the body has been sent, is dropped, or `deadline`
+/// passes.
+pub(crate) fn send_body<G: Send + 'static>(
+    parts: Vec<Bytes>,
+    guard: G,
+    deadline: Duration,
+) -> Body {
+    let len = parts.iter().map(|part| part.len() as u64).sum();
+    let parts: VecDeque<Bytes> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+    let state = if parts.is_empty() {
+        State::Done
+    } else {
+        State::Sending {
+            parts,
+            _guard: guard,
+        }
+    };
+    let state = Arc::new(Mutex::new(state));
     let weak = Arc::downgrade(&state);
     let timer = tokio::spawn(async move {
         tokio::time::sleep(deadline).await;
@@ -39,30 +49,30 @@ pub(crate) fn answer_body(body: Vec<u8>, permit: OwnedSemaphorePermit, deadline:
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
             if matches!(*state, State::Sending { .. }) {
                 *state = State::Expired;
-                tracing::debug!("a dedup answer missed its send deadline; its permit is released");
+                tracing::debug!("an answer missed its send deadline; its memory is released");
             }
         }
     });
-    Body::new(AnswerBody { state, len, timer })
+    Body::new(SendBody { state, len, timer })
 }
 
-enum State {
+enum State<G> {
     Sending {
-        body: Vec<u8>,
-        sent: usize,
-        _permit: OwnedSemaphorePermit,
+        /// What is left to send, none of it empty.
+        parts: VecDeque<Bytes>,
+        _guard: G,
     },
     Done,
     Expired,
 }
 
-struct AnswerBody {
-    state: Arc<Mutex<State>>,
+struct SendBody<G> {
+    state: Arc<Mutex<State<G>>>,
     len: u64,
     timer: JoinHandle<()>,
 }
 
-impl Drop for AnswerBody {
+impl<G> Drop for SendBody<G> {
     fn drop(&mut self) {
         self.timer.abort();
     }
@@ -74,13 +84,13 @@ struct SendTimedOut;
 
 impl std::fmt::Display for SendTimedOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("the dedup answer was not sent within its deadline")
+        f.write_str("the answer was not sent within its deadline")
     }
 }
 
 impl std::error::Error for SendTimedOut {}
 
-impl http_body::Body for AnswerBody {
+impl<G: Send + 'static> http_body::Body for SendBody<G> {
     type Data = Bytes;
     type Error = SendTimedOut;
 
@@ -90,11 +100,17 @@ impl http_body::Body for AnswerBody {
     ) -> Poll<Option<Result<Frame<Bytes>, SendTimedOut>>> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let frame = match &mut *state {
-            State::Sending { body, sent, .. } => {
-                let end = body.len().min(*sent + FRAME_BYTES);
-                let frame = Bytes::copy_from_slice(&body[*sent..end]);
-                *sent = end;
-                if end == body.len() {
+            State::Sending { parts, .. } => {
+                let Some(part) = parts.front_mut() else {
+                    unreachable!("a sending answer has a part left");
+                };
+                let n = part.len().min(FRAME_BYTES);
+                let frame = Bytes::copy_from_slice(&part[..n]);
+                *part = part.slice(n..);
+                if part.is_empty() {
+                    parts.pop_front();
+                }
+                if parts.is_empty() {
                     *state = State::Done;
                 }
                 frame
@@ -128,30 +144,41 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn an_unsent_answer_releases_its_permit_at_the_deadline() {
-        // Ruling M1-R33: a client that never reads loses its permit, and the
-        // body's memory, when the send deadline passes, whether or not the
-        // server polls the body again; the body then ends with an error.
+    async fn an_unsent_answer_releases_its_guard_at_the_deadline() {
+        // Rulings M1-R33, M1-R40: a client that never reads loses the
+        // guard, and the body's memory, when the send deadline passes,
+        // whether or not the server polls the body again; the body then
+        // ends with an error.
         let pool = Arc::new(Semaphore::new(1));
         let permit = Arc::clone(&pool).acquire_owned().await.unwrap();
-        let body = answer_body(vec![7; 300_000], permit, Duration::from_millis(200));
+        let body = send_body(
+            vec![Bytes::from(vec![7; 300_000])],
+            permit,
+            Duration::from_millis(200),
+        );
         assert_eq!(pool.available_permits(), 0);
 
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert_eq!(
             pool.available_permits(),
             1,
-            "the permit outlived the deadline"
+            "the guard outlived the deadline"
         );
         assert!(axum::body::to_bytes(body, usize::MAX).await.is_err());
     }
 
     #[tokio::test]
-    async fn a_sent_answer_releases_its_permit_when_it_ends_or_is_dropped() {
+    async fn a_sent_answer_releases_its_guard_when_it_ends_or_is_dropped() {
         let pool = Arc::new(Semaphore::new(1));
         let data: Vec<u8> = (0..300_000u32).map(|i| i.to_le_bytes()[0]).collect();
+        let parts = vec![
+            Bytes::copy_from_slice(&data[..100]),
+            Bytes::new(),
+            Bytes::copy_from_slice(&data[100..200_000]),
+            Bytes::copy_from_slice(&data[200_000..]),
+        ];
         let permit = Arc::clone(&pool).acquire_owned().await.unwrap();
-        let body = answer_body(data.clone(), permit, Duration::from_mins(1));
+        let body = send_body(parts.clone(), permit, Duration::from_mins(1));
         assert_eq!(
             http_body::Body::size_hint(&body).exact(),
             Some(data.len() as u64)
@@ -161,7 +188,21 @@ mod tests {
         assert_eq!(pool.available_permits(), 1);
 
         let permit = Arc::clone(&pool).acquire_owned().await.unwrap();
-        drop(answer_body(data, permit, Duration::from_mins(1)));
+        drop(send_body(parts, permit, Duration::from_mins(1)));
         assert_eq!(pool.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_empty_answer_is_done_at_once() {
+        let pool = Arc::new(Semaphore::new(1));
+        let permit = Arc::clone(&pool).acquire_owned().await.unwrap();
+        let body = send_body(Vec::new(), permit, Duration::from_mins(1));
+        assert_eq!(pool.available_permits(), 1);
+        assert!(
+            axum::body::to_bytes(body, usize::MAX)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
