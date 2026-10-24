@@ -17,8 +17,9 @@ Four legs:
   PyJWT as a platform would.
 - **Docs leg** (`-m docs`, `tests/test_docs_quickstart.py`): runs every
   `bash` and `python` block of `docs/quickstart-storage-only.md`, in order,
-  as one script in an empty directory, and fails if it takes 2 minutes
-  (design §5.8). Blocks fenced as `bash install` are skipped: the built
+  as one script in an empty directory, and fails if it takes 2 minutes.
+  The end-to-end time to first upload, install included (design §5.8), is
+  measured per release. Blocks fenced as `bash install` are skipped: the built
   `openxet` and this environment's `hf_xet` stand in for them.
 
 Client version floor: `hf_xet==1.7.0`. It is the oldest `hf_xet` openxet

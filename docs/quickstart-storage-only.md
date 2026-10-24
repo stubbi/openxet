@@ -6,16 +6,19 @@ command line. This is the storage layer on its own, the way a platform
 embeds it. The Hub API arrives in milestone M2, and with it `hf upload`,
 `huggingface_hub` and Git.
 
-Every `bash` and `python` block on this page runs in CI, in order, exactly
-as written (`compat/tests/test_docs_quickstart.py`). Run them in one
-terminal, in an empty directory.
+Every `bash` and `python` block on this page except the install block
+runs in CI, in order, exactly as written
+(`compat/tests/test_docs_quickstart.py`); CI provides what the install
+block installs. Run them in one terminal, in an empty directory.
 
 **Time to first upload: 1 min 43 s** on a machine with only Rust and
 Python installed (Apple M3, 8 cores, measured 2026-10-24): 99 s to
 download and build `openxet` with an empty Cargo cache, 3 s to install
-`hf_xet`, and 0.5 s for steps 2 to 5 together. CI fails if steps 2 to 5
-take longer than 2 minutes, the target of
+`hf_xet`, and 0.5 s for steps 2 to 5 together. This end-to-end figure,
+install included, is measured by hand per release, against the 2-minute
+target of
 [design §5.8](superpowers/specs/2026-10-23-openxet-design.md#58-scale-targets-initial-validated-by-benchmarks-revised-with-data).
+CI times only steps 2 to 5, and fails them past the same 2 minutes.
 
 ## 1. Install
 

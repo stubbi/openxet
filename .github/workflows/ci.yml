@@ -153,8 +153,9 @@ jobs:
       - run: uv run --frozen --directory compat pytest -m storage_only
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
-      # docs/quickstart-storage-only.md runs as written, within design §5.8's
-      # 2 minutes.
+      # docs/quickstart-storage-only.md runs as written, install block
+      # excepted, and steps 2 to 5 fail past 2 minutes. The end-to-end time
+      # to first upload (design §5.8) is measured per release.
       - run: uv run --frozen --directory compat pytest -m docs
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet

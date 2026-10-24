@@ -248,7 +248,7 @@ Files are always visible only in the scope they were uploaded to.
   One dedup match offers the client every xorb of the latest upload
   (shard) that stored the matched chunk, up to 16 MiB of answer. So a
   client with an empty cache that re-uploads an edited file sends little
-  more than the edit: about 1.2 MB for a 1 MiB edit of a 100 MiB file.
+  more than the edit: about 1.1 MB for a 1 MiB edit of a 100 MiB file.
   The price is what one matching chunk reveals: anyone who holds one
   chunk of an upload learns that upload's xorb hashes, chunk counts and
   chunk lengths (never its data or raw chunk hashes); choose `per-scope`
@@ -267,8 +267,8 @@ least one answer at a time). A query that waits 1 s for its turn answers
 sends those chunks. An answer not sent within its deadline (30 s plus 1 s
 per MiB) is cut off and its turn freed. At `log_level = "debug"` both are
 logged, the first as `request refused` with code `dedup_busy`, the second
-as `a dedup answer missed its send deadline`. Frequent `dedup_busy` means the server needs
-more CPUs.
+as `a dedup answer missed its send deadline`. Frequent `dedup_busy`
+means the server needs more CPUs.
 
 ## Stale client caches
 

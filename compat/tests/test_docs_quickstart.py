@@ -26,8 +26,9 @@ pytestmark = pytest.mark.docs
 
 QUICKSTART = Path(__file__).resolve().parents[2] / "docs" / "quickstart-storage-only.md"
 
-# Design §5.8: under 2 minutes to the first upload. The whole quickstart,
-# install excepted, must fit in it.
+# A cap on steps 2 to 5, the walkthrough without the install. Design §5.8's
+# 2 minutes to first upload counts the install too; that end-to-end figure
+# is measured per release, not here.
 TARGET_SECONDS = 120
 
 FENCE = re.compile(r"^```([^\n`]*)\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)

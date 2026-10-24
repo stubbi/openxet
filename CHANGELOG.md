@@ -7,7 +7,7 @@ What changes for users and operators, newest first. The format follows
 
 The storage-only Xet CAS (milestone M1). Stock `hf_xet` 1.7.0 and newer
 upload to and download from it directly; the
-[quickstart](docs/quickstart-storage-only.md) runs it in under a minute
+[quickstart](docs/quickstart-storage-only.md) runs it in under a second
 once built.
 
 ### Added

@@ -22,7 +22,8 @@ The Hub API (`/api/...`), Git and LFS routes arrive in M2.
   own scope's files. The probes need no credential, and the transfer route
   takes its signed URL as the credential instead.
 - **Hashes in paths** are exactly 64 lowercase hex characters, in Xet byte
-  order. `{prefix}` is `default`.
+  order. `{prefix}` is `default`; the dedup route also takes
+  `default-merkledb`.
 - **Order of checks.** The path is checked before the credential, and both
   before any body is read. A refused upload's body is read and discarded
   first, so the client sees the answer, not a reset connection; a body
@@ -30,9 +31,11 @@ The Hub API (`/api/...`), Git and LFS routes arrive in M2.
   not read, and the answer closes the connection.
 - **`X-Request-Id`** is on every answer, success or error. The server
   assigns it and logs the request under it; a client-sent one is ignored.
-- **`Cache-Control: no-store`** is on every answer of a route that depends
-  on the caller's credential, errors included (marked *private* below), so
-  no cache or proxy can serve one caller's answer to another.
+- **`Cache-Control: no-store`** is on every answer of the routes marked
+  *private* below, errors included: their answers depend on the caller's
+  credential, so no cache or proxy may serve one caller's answer to
+  another. `/v2/shards` streams are `no-cache`; the probes and
+  `POST /v1/telemetry` send no `Cache-Control`.
 - **`HEAD`** on a `GET` route runs the `GET` route's checks and answers
   without a body, except on the transfer route, where it is `405`.
 - **Bodies** are never compressed.
@@ -73,8 +76,8 @@ These answers can come from any route:
 | --------------- | ---------- | ---- |
 | `GET /healthz` | none | Liveness |
 | `GET /readyz` | none | Readiness |
-| `POST /v1/xorbs/default/{hash}` | write | Upload a xorb |
-| `HEAD /v1/xorbs/default/{hash}` | read | Whether a xorb is stored, and its size |
+| `POST /v1/xorbs/default/{hash}` | write, private | Upload a xorb |
+| `HEAD /v1/xorbs/default/{hash}` | read, private | Whether a xorb is stored, and its size |
 | `POST /v2/shards` | write | Register files, streaming progress (preferred by `hf_xet`) |
 | `POST /v1/shards` | write | Register files |
 | `GET /v1/chunks/{prefix}/{hash}` | read, private | Global dedup query |
@@ -260,7 +263,7 @@ and without one `200` with no terms
 | Status | `code` | Meaning |
 | ------ | ------ | ------- |
 | `404` | `not_found` | No file with this hash is registered to the caller's scope. Another scope's file reads the same as one never stored. On v2, `hf_xet` then tries v1 once. |
-| `416` | `range_not_satisfiable` | The range starts at or past the end of the file. `Content-Range: bytes */{size}`. `hf_xet` reads it as the end of the file, not an error. |
+| `416` | `range_not_satisfiable` | The range starts at or past the end of the file, or is the empty suffix `bytes=-0` (on any file). `Content-Range: bytes */{size}`. `hf_xet` reads it as the end of the file, not an error. |
 | `400` | `invalid_range` | `Range` is not one byte range of the `bytes` unit, or its start is after its end. |
 
 ### `POST /v1/reconstructions` and `GET /v1/reconstructions?file_id=…`
