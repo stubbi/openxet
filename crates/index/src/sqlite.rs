@@ -7,15 +7,19 @@ use std::time::Duration;
 
 use openxet_protocol::MerkleHash;
 use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+    SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
+    SqliteSynchronous,
 };
 use sqlx::{AssertSqlSafe, Row, Sqlite, Transaction};
 
 use crate::types::{
-    decode_chunk_layout, decode_chunk_table, decode_layout_of_chunk_table, decode_terms,
-    encode_chunk_layout, encode_chunk_table, encode_terms, hash_from,
+    decode_chunk_layout, decode_chunk_table, decode_layout_of_chunk_table, decode_term_bytes,
+    decode_terms, encode_chunk_layout, encode_chunk_table, encode_term_bytes, encode_terms,
+    hash_from,
 };
-use crate::{ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Visibility};
+use crate::{
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+};
 
 /// With the `fault-injection` feature, `register_shard` for this scope fails
 /// after writing its first file, so tests can check the transaction rolls
@@ -259,6 +263,81 @@ fn unknown_xorb_on_fk_violation(e: IndexError, xorb: MerkleHash) -> IndexError {
     }
 }
 
+/// The layouts of `xorbs` visible to `scope` under `vis`, read on `conn`,
+/// as [`Index::chunk_layouts`] answers them.
+async fn layouts_in(
+    conn: &mut SqliteConnection,
+    xorbs: &[MerkleHash],
+    scope: &str,
+    vis: Visibility,
+) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+    let unique: Vec<&MerkleHash> = {
+        let mut seen = HashSet::with_capacity(xorbs.len());
+        xorbs.iter().filter(|h| seen.insert(**h)).collect()
+    };
+    let mut layouts = HashMap::with_capacity(unique.len());
+    for batch in unique.chunks(HASHES_PER_QUERY) {
+        // `chunk_table` is read only for a xorb stored before
+        // `xorb_layouts` existed.
+        let mut query = sqlx::query(with_placeholders(
+            "SELECT x.hash, x.chunk_count, l.chunk_layout, \
+             CASE WHEN l.chunk_layout IS NULL THEN x.chunk_table END \
+             FROM xorbs x LEFT JOIN xorb_layouts l ON l.xorb = x.hash WHERE x.hash IN (",
+            "?",
+            batch.len(),
+            concat!(") AND ", visible!()),
+        ));
+        for hash in batch {
+            query = query.bind(hash.as_bytes());
+        }
+        let rows = query
+            .bind(vis == Visibility::Global)
+            .bind(scope)
+            .fetch_all(&mut *conn)
+            .await?;
+        for row in rows {
+            let hash = hash_from(row.try_get::<&[u8], _>(0)?)?;
+            let count = to_usize(row.try_get(1)?, "chunk count")?;
+            let layout = match row.try_get::<Option<&[u8]>, _>(2)? {
+                Some(layout) => decode_chunk_layout(layout, count)?,
+                None => decode_layout_of_chunk_table(row.try_get::<&[u8], _>(3)?, count)?,
+            };
+            layouts.insert(hash, layout);
+        }
+    }
+    Ok(layouts)
+}
+
+/// Each term's stored bytes, `[offsets[chunk_start], offsets[chunk_end])`
+/// in its xorb, from `layouts`, which hold every xorb `terms` name.
+fn term_bytes(
+    terms: &[Term],
+    layouts: &HashMap<MerkleHash, ChunkLayout>,
+) -> Result<Vec<(u32, u32)>, IndexError> {
+    terms
+        .iter()
+        .map(|t| {
+            let offsets = &layouts
+                .get(&t.xorb)
+                .ok_or(IndexError::UnknownXorb { xorb: t.xorb })?
+                .offsets;
+            match (
+                offsets.get(t.chunk_start as usize),
+                offsets.get(t.chunk_end as usize),
+            ) {
+                (Some(&start), Some(&end)) if start < end => Ok((start, end)),
+                _ => Err(IndexError::InvalidInput(format!(
+                    "a term names chunks {}..{} of xorb {}, which has {} chunks",
+                    t.chunk_start,
+                    t.chunk_end,
+                    t.xorb,
+                    offsets.len().saturating_sub(1)
+                ))),
+            }
+        })
+        .collect()
+}
+
 /// Inserts `(chunk, xorb)` dedup candidates, skipping ones already present.
 async fn insert_dedup(
     tx: &mut Transaction<'_, Sqlite>,
@@ -421,41 +500,8 @@ impl Index for SqliteIndex {
         scope: &str,
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
-        let unique: Vec<&MerkleHash> = {
-            let mut seen = HashSet::with_capacity(xorbs.len());
-            xorbs.iter().filter(|h| seen.insert(**h)).collect()
-        };
-        let mut layouts = HashMap::with_capacity(unique.len());
-        for batch in unique.chunks(HASHES_PER_QUERY) {
-            // `chunk_table` is read only for a xorb stored before
-            // `xorb_layouts` existed.
-            let mut query = sqlx::query(with_placeholders(
-                "SELECT x.hash, x.chunk_count, l.chunk_layout, \
-                 CASE WHEN l.chunk_layout IS NULL THEN x.chunk_table END \
-                 FROM xorbs x LEFT JOIN xorb_layouts l ON l.xorb = x.hash WHERE x.hash IN (",
-                "?",
-                batch.len(),
-                concat!(") AND ", visible!()),
-            ));
-            for hash in batch {
-                query = query.bind(hash.as_bytes());
-            }
-            let rows = query
-                .bind(vis == Visibility::Global)
-                .bind(scope)
-                .fetch_all(&self.reader)
-                .await?;
-            for row in rows {
-                let hash = hash_from(row.try_get::<&[u8], _>(0)?)?;
-                let count = to_usize(row.try_get(1)?, "chunk count")?;
-                let layout = match row.try_get::<Option<&[u8]>, _>(2)? {
-                    Some(layout) => decode_chunk_layout(layout, count)?,
-                    None => decode_layout_of_chunk_table(row.try_get::<&[u8], _>(3)?, count)?,
-                };
-                layouts.insert(hash, layout);
-            }
-        }
-        Ok(layouts)
+        let mut conn = self.reader.acquire().await?;
+        layouts_in(&mut conn, xorbs, scope, vis).await
     }
 
     async fn register_shard(
@@ -490,11 +536,14 @@ impl Index for SqliteIndex {
         .rows_affected()
             > 0;
         insert_shard_xorbs(&mut tx, shard, &referenced).await?;
+        // Every term xorb is visible (checked above), so every layout is
+        // found.
+        let layouts = layouts_in(&mut tx, &referenced, scope, vis).await?;
         for (i, (file, size)) in files.iter().zip(sizes).enumerate() {
             let record = &file.record;
             new_for_scope |= sqlx::query(
-                "INSERT INTO file_scopes (file, scope, size, terms, sha256, shard) \
-                 VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                "INSERT INTO file_scopes (file, scope, size, terms, sha256, shard, term_bytes) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             )
             .bind(record.hash.as_bytes())
             .bind(scope)
@@ -502,6 +551,7 @@ impl Index for SqliteIndex {
             .bind(encode_terms(&record.terms))
             .bind(file.sha256.as_ref().map(<[u8; 32]>::as_slice))
             .bind(shard.as_bytes())
+            .bind(encode_term_bytes(&term_bytes(&record.terms, &layouts)?))
             .execute(&mut *tx)
             .await?
             .rows_affected()
@@ -515,6 +565,33 @@ impl Index for SqliteIndex {
         }
         tx.commit().await?;
         Ok(new_for_scope)
+    }
+
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+        let row = sqlx::query(
+            "SELECT size, terms, term_bytes FROM file_scopes WHERE file = ? AND scope = ?",
+        )
+        .bind(file.as_bytes())
+        .bind(scope)
+        .fetch_optional(&self.reader)
+        .await?;
+        row.map(|row| {
+            let record = FileRecord {
+                hash: *file,
+                size: to_u64(row.try_get(0)?, "file size")?,
+                terms: decode_terms(row.try_get::<&[u8], _>(1)?)?,
+            };
+            let bytes = row
+                .try_get::<Option<&[u8]>, _>(2)?
+                .map(|b| decode_term_bytes(b, record.terms.len()))
+                .transpose()?;
+            Ok((record, bytes))
+        })
+        .transpose()
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {

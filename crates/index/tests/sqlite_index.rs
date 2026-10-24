@@ -547,6 +547,81 @@ async fn chunk_layouts_of_xorbs_stored_before_layouts_come_from_their_tables() {
 }
 
 #[tokio::test]
+async fn registration_records_where_each_term_is_stored() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    let index = open_at(&path).await;
+    let (xa, ta) = (h("xorb/a"), uneven_table("a", 7));
+    let (xb, tb) = (h("xorb/b"), uneven_table("b", 3));
+    ok(index.put_xorb(&xa, 9000, &ta, &[], A).await);
+    ok(index.put_xorb(&xb, 9000, &tb, &[], A).await);
+    let terms = [(xa, 0, 2), (xb, 1, 3), (xa, 2, 7), (xa, 0, 1)];
+    let record = FileRecord {
+        hash: h("file/bytes"),
+        size: 0,
+        terms: terms
+            .iter()
+            .map(|&(xorb, chunk_start, chunk_end)| Term {
+                xorb,
+                chunk_start,
+                chunk_end,
+                unpacked_bytes: 1,
+            })
+            .collect(),
+    };
+    let new = NewFile {
+        record: record.clone(),
+        sha256: None,
+        first_chunk: None,
+    };
+    ok(index
+        .register_shard(&h("shard/bytes"), &[new], A, Visibility::PerScope)
+        .await);
+    let expected: Vec<(u32, u32)> = terms
+        .iter()
+        .map(|&(xorb, start, end)| {
+            let offsets = if xorb == xa { &ta.offsets } else { &tb.offsets };
+            (offsets[start as usize], offsets[end as usize])
+        })
+        .collect();
+    assert_eq!(
+        ok(index.file_with_bytes(&record.hash, A).await),
+        Some((record.clone(), Some(expected)))
+    );
+    assert_eq!(ok(index.file_with_bytes(&record.hash, B).await), None);
+    drop(index);
+
+    // As a database written before migration 0004 holds it.
+    let db = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+    ok(sqlx::query("UPDATE file_scopes SET term_bytes = NULL")
+        .execute(&db)
+        .await);
+    db.close().await;
+    let index = open_at(&path).await;
+    assert_eq!(
+        ok(index.file_with_bytes(&record.hash, A).await),
+        Some((record, None))
+    );
+}
+
+#[tokio::test]
+async fn a_term_past_its_xorbs_chunks_is_refused_at_registration() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xorb, _) = put(&index, "x", 3, A).await;
+    let mut f = file("past", xorb, 3);
+    f.record.terms[0].chunk_end = 4;
+    let refused = index
+        .register_shard(&h("shard/past"), &[f.clone()], A, Visibility::PerScope)
+        .await;
+    assert!(
+        matches!(refused, Err(IndexError::InvalidInput(_))),
+        "{refused:?}"
+    );
+    assert_eq!(ok(index.file(&f.record.hash, A).await), None);
+}
+
+#[tokio::test]
 async fn register_shard_is_atomic() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;

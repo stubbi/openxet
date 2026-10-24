@@ -18,7 +18,7 @@ use common::{
 };
 use openxet_cas::Clock as _;
 use openxet_index::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
 };
 use openxet_protocol::{
     DedupAnswer, MerkleHash, chunk_hash, hash_to_hex, is_dedup_eligible, read_dedup_answer,
@@ -478,6 +478,14 @@ impl Index for BrokenIndex {
         scope: &str,
     ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
         self.inner.files(files, scope).await
+    }
+
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+        self.inner.file_with_bytes(file, scope).await
     }
 
     async fn dedup_xorb(

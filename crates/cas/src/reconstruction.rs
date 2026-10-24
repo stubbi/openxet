@@ -132,21 +132,31 @@ async fn single(
     version: Version,
 ) -> Result<Response, CasError> {
     let requested = requested_range(headers)?;
-    let record = state
+    let (record, bytes) = state
         .index
-        .file(&file, scope)
+        .file_with_bytes(&file, scope)
         .await?
         .ok_or(CasError::FileNotFound)?;
     let range = resolve(requested, record.size)?;
     let window = plan::window(&record, range).map_err(planning_failed)?;
     let terms = window.as_ref().map_or(0, |w| w.terms.len());
-    let xorbs = window.map_or_else(Vec::new, |w| distinct_xorbs(&record.terms[w.terms]));
+    // With the terms' recorded bytes, only the terms trimmed to the range
+    // need their xorbs' layouts.
+    let xorbs = match (&window, &bytes) {
+        (None, _) => Vec::new(),
+        (Some(w), Some(_)) => w
+            .trimmed(&record)
+            .iter()
+            .map(|&t| record.terms[t].xorb)
+            .collect(),
+        (Some(w), None) => distinct_xorbs(&record.terms[w.terms.clone()]),
+    };
     let permit = validation_permit(state).await?;
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
     let body = render(state, permit, terms, move |workers| {
-        let plan = plan::plan(&record, &tables, range).map_err(planning_failed)?;
+        let plan = plan::plan(&record, bytes.as_ref(), &tables, range).map_err(planning_failed)?;
         answer::single(&plan, version, &signer, workers)
     })
     .await?;
@@ -254,7 +264,7 @@ async fn batch(
         let plans = records
             .iter()
             .map(|record| {
-                plan::plan(record, &tables, None)
+                plan::plan(record, None, &tables, None)
                     .map(|plan| (record.hash, plan))
                     .map_err(planning_failed)
             })
@@ -489,7 +499,9 @@ mod tests {
     use axum::http::HeaderValue;
     use axum::http::header::AUTHORIZATION;
     use openxet_auth::{Mode, StaticToken};
-    use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility};
+    use openxet_index::{
+        ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+    };
     use tokio::sync::Semaphore;
     use tower::ServiceExt as _;
 
@@ -575,6 +587,14 @@ mod tests {
             scope: &str,
         ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
             self.inner.files(files, scope).await
+        }
+
+        async fn file_with_bytes(
+            &self,
+            file: &MerkleHash,
+            scope: &str,
+        ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+            self.inner.file_with_bytes(file, scope).await
         }
 
         async fn dedup_xorb(

@@ -19,7 +19,7 @@ use openxet_protocol::MerkleHash;
 #[cfg(feature = "fault-injection")]
 pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;
-pub use types::{ChunkLayout, ChunkTable, FileRecord, NewFile, Scope, Term, Visibility};
+pub use types::{ChunkLayout, ChunkTable, FileRecord, NewFile, Scope, Term, TermBytes, Visibility};
 
 /// The index's operations. Every write is idempotent: content is addressed by
 /// hash, so repeating a call with the same arguments changes nothing and
@@ -142,6 +142,18 @@ pub trait Index: Send + Sync + 'static {
     ///
     /// [`IndexError::Database`] or [`IndexError::Corrupt`].
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError>;
+
+    /// [`Index::file`], with the [`TermBytes`] recorded when `scope`
+    /// registered it: `None` for a file registered before they were kept.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError>;
 
     /// The reconstructions `scope` registered for `files`, as
     /// [`Index::file`] answers each, in a few queries rather than one per

@@ -38,6 +38,13 @@ pub struct ChunkLayout {
     pub offsets: Arc<[u32]>,
 }
 
+/// Where each term of a file is stored: `(start, end)` per term, the bytes
+/// `start..end` of its xorb holding its chunks' headers and payloads, that
+/// is `offsets[chunk_start]..offsets[chunk_end]` of the xorb's
+/// [`ChunkLayout`]. Recorded at registration, so reconstruction needs no
+/// layout for a term it serves whole.
+pub type TermBytes = Vec<(u32, u32)>;
+
 /// One term of a file reconstruction: chunks `[chunk_start, chunk_end)` of
 /// `xorb`, which unpack to `unpacked_bytes` bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +97,7 @@ const HASH_LEN: usize = 32;
 const CHUNK_ENTRY_LEN: usize = HASH_LEN + 4 + 4;
 const TERM_LEN: usize = HASH_LEN + 4 + 4 + 4;
 const LAYOUT_ENTRY_LEN: usize = 4 + 4;
+const TERM_BYTES_LEN: usize = 4 + 4;
 
 pub(crate) fn hash_from(bytes: &[u8]) -> Result<MerkleHash, IndexError> {
     let raw: [u8; HASH_LEN] = bytes
@@ -233,6 +241,40 @@ pub(crate) fn decode_layout_of_chunk_table(
     })
 }
 
+/// Encodes [`TermBytes`] as `(start u32 LE, end u32 LE)` per term.
+pub(crate) fn encode_term_bytes(bytes: &[(u32, u32)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() * TERM_BYTES_LEN);
+    for (start, end) in bytes {
+        out.extend_from_slice(&start.to_le_bytes());
+        out.extend_from_slice(&end.to_le_bytes());
+    }
+    out
+}
+
+/// Decodes [`encode_term_bytes`]'s output for a file of `terms` terms.
+///
+/// # Errors
+///
+/// [`IndexError::Corrupt`] if the length doesn't match, or a range is
+/// empty or reversed.
+pub(crate) fn decode_term_bytes(bytes: &[u8], terms: usize) -> Result<TermBytes, IndexError> {
+    if terms.checked_mul(TERM_BYTES_LEN) != Some(bytes.len()) {
+        return Err(IndexError::Corrupt(format!(
+            "the byte ranges of {terms} terms are {} bytes",
+            bytes.len()
+        )));
+    }
+    bytes
+        .chunks_exact(TERM_BYTES_LEN)
+        .map(|e| match (u32_at(e, 0), u32_at(e, 4)) {
+            (start, end) if start < end => Ok((start, end)),
+            (start, end) => Err(IndexError::Corrupt(format!(
+                "a term's stored bytes are {start}..{end}"
+            ))),
+        })
+        .collect()
+}
+
 /// Encodes terms as `(xorb, chunk start u32 LE, chunk end u32 LE, unpacked
 /// bytes u32 LE)` each.
 pub(crate) fn encode_terms(terms: &[Term]) -> Vec<u8> {
@@ -337,6 +379,26 @@ mod tests {
         ] {
             assert!(matches!(
                 decode_chunk_layout(bytes, count),
+                Err(IndexError::Corrupt(_))
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn term_bytes_round_trip_and_reject_bad_entries() -> Result<(), IndexError> {
+        let bytes = vec![(0, 17), (17, 70_000), (5, u32::MAX)];
+        assert_eq!(decode_term_bytes(&encode_term_bytes(&bytes), 3)?, bytes);
+        assert_eq!(decode_term_bytes(&[], 0)?, Vec::new());
+        let encoded = encode_term_bytes(&bytes);
+        for (bad, terms) in [
+            (encoded.clone(), 2),
+            (encoded[..encoded.len() - 1].to_vec(), 3),
+            (encode_term_bytes(&[(9, 9)]), 1),
+            (encode_term_bytes(&[(9, 3)]), 1),
+        ] {
+            assert!(matches!(
+                decode_term_bytes(&bad, terms),
                 Err(IndexError::Corrupt(_))
             ));
         }
