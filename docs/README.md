@@ -1,10 +1,18 @@
 # openxet docs
 
-openxet is the open-source server and client for the
-[Xet protocol](https://huggingface.co/docs/xet), Hugging Face's
-chunk-deduplicated storage for large, versioned files. The official Hugging
-Face clients work against it unmodified. openxet is an independent project,
-not affiliated with or endorsed by Hugging Face.
+openxet stores large files and reuses their unchanged parts when you upload
+another version. It is an open-source server and client for the
+[Xet protocol](https://huggingface.co/docs/xet).
+
+**What works today:** the storage-only server runs on local disk with SQLite.
+You can upload and download with stock `hf_xet` or the `openxet` command line.
+There is no release yet; the quickstart builds from source. The Hub API for
+`hf upload` and `huggingface_hub`, Git and LFS support, cloud storage, external
+identity providers, the web UI, and MCP are planned. Hosted sign-ups are not
+open yet.
+
+openxet is an independent project, not affiliated with or endorsed by
+Hugging Face.
 
 - **Run it:** start with the [storage-only quickstart](quickstart-storage-only.md),
   then [configure the server](reference/config.md).
@@ -50,3 +58,9 @@ job runs it, then checks every link and anchor in the built site and in
 lychee --offline --include-fragments --root-dir "$PWD/target/site/public" \
   --exclude-path docs/SUMMARY.md target/site/public docs
 ```
+
+The build also adds each page's canonical URL, social metadata, and Markdown
+link. Its description comes from a `<!-- description: ... -->` comment, or the
+opening prose paragraph. A missing description fails the build. Indexable
+marketing pages need a canonical URL matching their published path; all such
+pages enter the sitemap. Pages marked `noindex` stay out.
