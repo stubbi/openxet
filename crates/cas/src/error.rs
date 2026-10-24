@@ -1,7 +1,7 @@
 use std::error::Error as StdError;
 
 use axum::Json;
-use axum::http::header::{CONNECTION, CONTENT_RANGE, WWW_AUTHENTICATE};
+use axum::http::header::{CONNECTION, CONTENT_RANGE, RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{AuthError, ForbiddenReason};
@@ -9,6 +9,8 @@ use openxet_index::IndexError;
 use openxet_protocol::{MerkleHash, ProtocolError, VerifyError, hash_to_hex};
 use openxet_storage::StorageError;
 use serde::Serialize;
+
+use crate::BodyDeadline;
 
 /// The schema of every CAS error body.
 const SCHEMA: &str = "openxet.error.v1";
@@ -225,6 +227,22 @@ pub enum CasError {
     /// was malformed. `400 bad_request`.
     #[error("the request body could not be read in full")]
     UnreadableBody,
+
+    /// The request body stalled or fell below the server's minimum rate
+    /// ([`crate::BodyDeadline`]). `408 body_timeout`, closing the
+    /// connection.
+    #[error(
+        "the request body arrived too slowly: this server ends a body that sends nothing for \
+         {:?} or averages under {} bytes per second",
+        .0.idle(),
+        .0.min_rate()
+    )]
+    BodyTimeout(BodyDeadline),
+
+    /// The server is starting: its index and bucket are not open yet.
+    /// `503 not_ready` with `Retry-After: 1`, which clients retry.
+    #[error("the server is starting and not ready to serve requests yet")]
+    NotReady,
 
     /// The request body exceeds the route's limit. `413 payload_too_large`.
     #[error("the request body is larger than this route accepts ({limit} bytes)")]
@@ -514,6 +532,18 @@ impl CasError {
                 "bad_request",
                 "Resend the request with a body exactly as long as its `Content-Length`.",
             ),
+            Self::BodyTimeout(_) => (
+                StatusCode::REQUEST_TIMEOUT,
+                "body_timeout",
+                "Send the body without long pauses. On a slow or congested link, upload fewer \
+                 files at once; the operator can lower `server.body_min_rate`.",
+            ),
+            Self::NotReady => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not_ready",
+                "Retry in a moment; stock clients do so automatically. `GET /readyz` answers \
+                 `200` once the server is ready.",
+            ),
             Self::PayloadTooLarge { .. } => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
@@ -554,7 +584,7 @@ impl CasError {
     /// Whether a retry may succeed: the index or the bucket was
     /// unavailable. A request's fault or a server bug stays on retry.
     pub(crate) fn is_retryable(&self) -> bool {
-        matches!(self, Self::Unavailable { .. })
+        matches!(self, Self::Unavailable { .. } | Self::NotReady)
     }
 
     /// Logs the failure inside the request's span, so under its request id:
@@ -599,6 +629,11 @@ impl IntoResponse for CasError {
             .into_response();
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
+        }
+        if let Self::NotReady = self {
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from_static("1"));
         }
         if let Self::RangeNotSatisfiable { size } = self {
             // RFC 9110 §15.5.17: a `416` names the current length.
@@ -690,6 +725,34 @@ mod tests {
         for detail in details {
             assert!(!text.contains(detail), "leaked {detail}: {text}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_slow_body_is_408_naming_the_bounds() {
+        let deadline = BodyDeadline::new(Duration::from_secs(7), 512).unwrap();
+        let reply = assert_maps(
+            CasError::BodyTimeout(deadline),
+            StatusCode::REQUEST_TIMEOUT,
+            "body_timeout",
+        )
+        .await;
+        let message = reply.body["message"].as_str().unwrap();
+        assert!(
+            message.contains("7s") && message.contains("512"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn not_ready_is_a_retryable_503_with_retry_after() {
+        let reply = assert_maps(
+            CasError::NotReady,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not_ready",
+        )
+        .await;
+        assert_eq!(reply.headers[RETRY_AFTER], "1");
+        assert!(CasError::NotReady.is_retryable());
     }
 
     #[tokio::test]

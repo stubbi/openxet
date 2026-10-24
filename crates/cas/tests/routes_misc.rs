@@ -8,14 +8,21 @@ mod common;
 
 use std::collections::HashSet;
 
+use std::time::{Duration, Instant};
+
+use axum::body::Body;
+use axum::http::Request;
+use common::xorb::HF_XET_XORB;
 use common::{
-    Access, FILE_CHUNK_HASHES_PATH, ROUTES, Reply, SCOPE_A, TRANSFER_PATH, TestServer, UNSERVED,
-    XORB_GRANT_PATH, bearer,
+    Access, FILE_CHUNK_HASHES_PATH, PROBE_BODIES, ROUTES, Reply, SCOPE_A, TRANSFER_PATH,
+    TestServer, UNAUTHENTICATED, UNSERVED, XORB_GRANT_PATH, bearer, config,
 };
 use openxet_auth::Mode;
-use openxet_cas::TELEMETRY_BODY_LIMIT;
+use openxet_cas::{BodyDeadline, CasConfig, TELEMETRY_BODY_LIMIT, starting_router};
+use openxet_index::Visibility;
 use reqwest::Method;
 use reqwest::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+use tower::ServiceExt as _;
 
 #[tokio::test]
 async fn telemetry_is_accepted_and_dropped() {
@@ -406,4 +413,106 @@ async fn error_hint_present() {
             "the hint repeats the message"
         );
     }
+}
+
+#[tokio::test]
+async fn probes_need_no_credential_and_name_no_data() {
+    let server = TestServer::start_default().await;
+    for (path, body) in UNAUTHENTICATED.iter().zip(PROBE_BODIES) {
+        for method in [Method::GET, Method::HEAD] {
+            let reply = Reply::of(server.request(method.clone(), path)).await;
+            assert_eq!(reply.status, 200, "{method} {path}");
+            assert!(reply.headers.contains_key("x-request-id"));
+            if method == Method::GET {
+                assert_eq!(reply.body, *body, "{path}");
+            }
+        }
+        // A credential changes nothing, valid or not.
+        let reply = Reply::of(
+            server
+                .request(Method::GET, path)
+                .header(AUTHORIZATION, bearer("oxt_not-a-token")),
+        )
+        .await;
+        assert_eq!(reply.status, 200);
+    }
+}
+
+async fn starting(path: &str) -> (u16, Option<String>, String) {
+    let response = starting_router()
+        .oneshot(Request::get(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let retry = response
+        .headers()
+        .get("retry-after")
+        .map(|v| v.to_str().unwrap().to_owned());
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, retry, String::from_utf8(body.to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn a_starting_server_is_live_but_not_ready() {
+    let (status, _, body) = starting("/healthz").await;
+    assert_eq!((status, body.as_str()), (200, PROBE_BODIES[0]));
+
+    for path in [
+        "/readyz",
+        "/v1/files/0000000000000000000000000000000000000000000000000000000000000000",
+    ] {
+        let (status, retry, body) = starting(path).await;
+        assert_eq!(status, 503, "{path}");
+        assert_eq!(retry.as_deref(), Some("1"), "{path}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["schema"], "openxet.error.v1");
+        assert_eq!(json["code"], "not_ready");
+    }
+}
+
+#[tokio::test]
+async fn an_idle_upload_body_is_cut_off_with_408() {
+    let cfg = CasConfig {
+        body_deadline: BodyDeadline::new(Duration::from_millis(300), 1).unwrap(),
+        ..config(Visibility::Global)
+    };
+    let server = TestServer::start(cfg).await;
+    let head = format!(
+        "POST /v1/xorbs/default/{HF_XET_XORB} HTTP/1.1\r\nAuthorization: {}\r\nContent-Length: 1000",
+        bearer(&server.write_token)
+    );
+
+    let started = Instant::now();
+    let answer = server.raw(&head, &[0; 10], false).await;
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+    assert!(answer.contains("\"code\":\"body_timeout\""), "{answer}");
+    assert!(
+        answer.to_ascii_lowercase().contains("connection: close"),
+        "{answer}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[tokio::test]
+async fn a_refused_body_drain_is_bounded_by_the_deadline() {
+    // Ruling M1-R22 drains a refused body; the deadline keeps a client that
+    // stops sending from holding the connection.
+    let cfg = CasConfig {
+        body_deadline: BodyDeadline::new(Duration::from_millis(300), 1).unwrap(),
+        ..config(Visibility::Global)
+    };
+    let server = TestServer::start(cfg).await;
+    let head = format!("POST /v1/xorbs/default/{HF_XET_XORB} HTTP/1.1\r\nContent-Length: 1000");
+
+    let answer = server.raw(&head, &[0; 10], false).await;
+    assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
+}
+
+#[test]
+fn body_deadline_rejects_zero() {
+    assert!(BodyDeadline::new(Duration::ZERO, 1).is_none());
+    assert!(BodyDeadline::new(Duration::from_secs(1), 0).is_none());
+    assert!(BodyDeadline::new(Duration::from_secs(1), 1).is_some());
 }

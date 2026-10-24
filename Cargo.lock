@@ -1581,6 +1581,7 @@ dependencies = [
  "axum",
  "futures-core",
  "getrandom",
+ "http-body",
  "http-body-util",
  "openxet-auth",
  "openxet-index",

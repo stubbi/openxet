@@ -2,10 +2,11 @@ use axum::Router;
 use axum::body::Body;
 use axum::body::HttpBody as _;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse as _, Response};
+use axum::response::Response;
 use axum::routing::post;
 use http_body_util::BodyExt as _;
 
+use crate::body;
 use crate::error::closing;
 use crate::{AppState, CasError, ReadAccess};
 
@@ -36,7 +37,7 @@ async fn telemetry(_: ReadAccess, mut body: Body) -> Result<StatusCode, Response
     }
     let mut read = 0u64;
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|_| CasError::UnreadableBody.into_response())?;
+        let frame = frame.map_err(|err| body::unreadable(&err))?;
         if let Some(data) = frame.data_ref() {
             read = read.saturating_add(data.len() as u64);
             if read > limit {
