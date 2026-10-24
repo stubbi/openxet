@@ -533,6 +533,40 @@ impl Index for SqliteIndex {
         .transpose()
     }
 
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        let unique: Vec<&MerkleHash> = {
+            let mut seen = HashSet::with_capacity(files.len());
+            files.iter().filter(|h| seen.insert(**h)).collect()
+        };
+        let mut records = HashMap::with_capacity(unique.len());
+        for batch in unique.chunks(HASHES_PER_QUERY) {
+            let mut query = sqlx::query(with_placeholders(
+                "SELECT file, size, terms FROM file_scopes WHERE scope = ? AND file IN (",
+                "?",
+                batch.len(),
+                ")",
+            ))
+            .bind(scope);
+            for hash in batch {
+                query = query.bind(hash.as_bytes());
+            }
+            for row in query.fetch_all(&self.reader).await? {
+                let hash = hash_from(row.try_get::<&[u8], _>(0)?)?;
+                let record = FileRecord {
+                    hash,
+                    size: to_u64(row.try_get(1)?, "file size")?,
+                    terms: decode_terms(row.try_get::<&[u8], _>(2)?)?,
+                };
+                records.insert(hash, record);
+            }
+        }
+        Ok(records)
+    }
+
     async fn dedup_xorb(
         &self,
         chunk: &MerkleHash,

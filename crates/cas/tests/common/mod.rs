@@ -745,6 +745,14 @@ impl Index for SlowIndex {
         self.inner.file(file, scope).await
     }
 
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        self.inner.files(files, scope).await
+    }
+
     async fn dedup_xorb(
         &self,
         chunk: &MerkleHash,
@@ -833,6 +841,14 @@ impl Index for TablelessIndex {
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
         self.inner.file(file, scope).await
+    }
+
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        self.inner.files(files, scope).await
     }
 
     async fn dedup_xorb(

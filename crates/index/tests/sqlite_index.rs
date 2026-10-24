@@ -175,6 +175,73 @@ async fn file_only_readable_in_registered_scope() {
 }
 
 #[tokio::test]
+async fn files_answer_each_scopes_own_registrations_in_one_call() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, _) = put(&index, "a", 3, A).await;
+    let (xb, _) = put(&index, "b", 2, B).await;
+    let fa = file("a", xa, 3);
+    let fa2 = file("a2", xa, 1);
+    // The same file hash, registered in B over B's own xorb.
+    let mut fb = file("a", xb, 2);
+    fb.first_chunk = None;
+    let only_b = file("only-b", xb, 2);
+    let registered = [fa.clone(), fa2.clone()];
+    ok(index
+        .register_shard(&h("shard-a"), &registered, A, Visibility::PerScope)
+        .await);
+    ok(index
+        .register_shard(
+            &h("shard-b"),
+            &[fb.clone(), only_b.clone()],
+            B,
+            Visibility::PerScope,
+        )
+        .await);
+    let unknown = h("file/unknown");
+    let asked = [
+        fa.record.hash,
+        unknown,
+        only_b.record.hash,
+        fa2.record.hash,
+        fa.record.hash,
+    ];
+
+    assert_eq!(
+        ok(index.files(&asked, A).await),
+        HashMap::from([
+            (fa.record.hash, fa.record.clone()),
+            (fa2.record.hash, fa2.record.clone()),
+        ])
+    );
+    assert_eq!(
+        ok(index.files(&asked, B).await),
+        HashMap::from([
+            (fb.record.hash, fb.record.clone()),
+            (only_b.record.hash, only_b.record.clone()),
+        ])
+    );
+    assert!(ok(index.files(&[], A).await).is_empty());
+}
+
+#[tokio::test]
+async fn files_handles_more_files_than_one_query_binds() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xorb, _) = put(&index, "x", 1, A).await;
+    let files: Vec<NewFile> = (0..1200).map(|i| file(&format!("f{i}"), xorb, 1)).collect();
+    ok(index
+        .register_shard(&h("shard"), &files, A, Visibility::PerScope)
+        .await);
+    let asked: Vec<MerkleHash> = files.iter().map(|f| f.record.hash).collect();
+    let records = ok(index.files(&asked, A).await);
+    assert_eq!(records.len(), 1200);
+    for f in &files {
+        assert_eq!(records.get(&f.record.hash), Some(&f.record));
+    }
+}
+
+#[tokio::test]
 async fn same_file_two_scopes_keeps_each_scopes_terms() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;

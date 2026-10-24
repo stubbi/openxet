@@ -143,6 +143,20 @@ pub trait Index: Send + Sync + 'static {
     /// [`IndexError::Database`] or [`IndexError::Corrupt`].
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError>;
 
+    /// The reconstructions `scope` registered for `files`, as
+    /// [`Index::file`] answers each, in a few queries rather than one per
+    /// file. A file not registered to `scope` is absent from the map;
+    /// duplicates in `files` are answered once.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError>;
+
     /// The xorb to offer for a global dedup query on `chunk`: of the visible
     /// xorbs that list `chunk` as a dedup candidate, the one first ingested
     /// most recently. `None` if there is none.

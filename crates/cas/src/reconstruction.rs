@@ -230,12 +230,8 @@ async fn batch(
             limit: MAX_BATCH_FILES,
         });
     }
-    let mut records = Vec::new();
-    for file in &files {
-        if let Some(record) = state.index.file(file, scope).await? {
-            records.push(record);
-        }
-    }
+    let mut found = state.index.files(&files, scope).await?;
+    let records: Vec<_> = files.iter().filter_map(|f| found.remove(f)).collect();
     let terms: usize = records.iter().map(|r| r.terms.len()).sum();
     if terms > MAX_BATCH_TERMS {
         return Err(CasError::BatchTooManyTerms {
@@ -506,6 +502,14 @@ mod tests {
             scope: &str,
         ) -> Result<Option<FileRecord>, IndexError> {
             self.inner.file(file, scope).await
+        }
+
+        async fn files(
+            &self,
+            files: &[MerkleHash],
+            scope: &str,
+        ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+            self.inner.files(files, scope).await
         }
 
         async fn dedup_xorb(

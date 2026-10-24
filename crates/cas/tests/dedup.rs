@@ -472,6 +472,14 @@ impl Index for BrokenIndex {
         self.inner.file(file, scope).await
     }
 
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        self.inner.files(files, scope).await
+    }
+
     async fn dedup_xorb(
         &self,
         chunk: &MerkleHash,
