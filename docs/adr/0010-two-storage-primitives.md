@@ -93,8 +93,9 @@ The owner decided on 2026-10-24 that openxet has two storage primitives.
    bucket. Where the two could be confused, docs say "object-store
    bucket" or "bucket primitive".
 
-An S3-compatible API over buckets is under evaluation in spike S12
-(draft PR #60) and awaits the owner's decision. This ADR does not
+An S3-compatible API over buckets is under evaluation in
+[spike S12](../research/S12-s3-api-and-dedup-economics.md) and awaits the
+owner's decision. This ADR does not
 schedule it.
 
 ## Consequences

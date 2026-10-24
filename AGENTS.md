@@ -92,7 +92,7 @@ change would lower any of those measures, it isn't done.
    match the Xet spec and `xet-core` byte for byte. Data written by openxet is
    readable by stock clients and huggingface.co tooling, and vice versa. Any
    divergence is a release blocker.
-2. **The bucket is the source of truth.** The database is a rebuildable
+2. **The object-store bucket is the source of truth.** The database is a rebuildable
    index. Losing the database must never lose data.
 3. **Nothing is deleted outside garbage collection,** which is explicit,
    logged, and has a grace period.

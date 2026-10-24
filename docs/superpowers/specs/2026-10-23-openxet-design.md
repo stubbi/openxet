@@ -85,8 +85,8 @@ skip very short matches (§1a).
   permissions (§5.4), with metering for their own billing (§5.7).
 
 Where dedup doesn't help, openxet still gives Hub and Git compatibility,
-the user's own bucket and identity, and honest numbers: every repo page
-shows logical and stored bytes (§10.10).
+the user's own object-store bucket and identity, and honest numbers:
+every repository and bucket page shows logical and stored bytes (§10.10).
 
 ### What success looks like
 
@@ -139,19 +139,19 @@ release benchmark rig or as a release check.
 | Speed | Uploads, downloads and listings never wait on openxet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | At 1,000 requests/s per node, against an index of 10⁷ files and 10⁷ xorbs: reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8). ≥ 9 Gbit/s sustained xorb ingest on one node | Release rig |
 | Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up with stock `hf_xet`, also from a second machine with an empty cache; ≤ 2 MB down with our client when the previous revision is in the local Xet chunk cache (§10.8 can seed it from an existing LFS checkout); storage overhead over unique compressed data ≤ 5% | Per-PR CI |
 | Compatibility | The tools they already use just work, in both directions with huggingface.co | Byte-exact formats on `xet-core`'s crates (ADR 0001); the Hub and LFS surfaces of §6 | 100% of the compatibility suite passes for the oldest supported, pinned and latest clients; zero divergence on the golden vectors | Per-PR CI; latest clients also nightly |
-| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the bucket alone restores every file, with refs at most 60 s stale (RPO); `verify` has zero false positives and exits non-zero on real corruption | Per-PR CI |
+| Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The object-store bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the object-store bucket alone restores every file, with refs at most 60 s stale (RPO); `verify` has zero false positives and exits non-zero on real corruption | Per-PR CI |
 | Time to value | Working in minutes, with nothing to learn first | One binary, zero-config dev mode (§7), copy-ready commands | First `hf upload` of a ≥ 1 GiB file < 2 min from a clean machine self-hosted, < 60 s from the landing page on openxet.com (§15) | Release check (rig for self-hosted, the hosted service for openxet.com) |
-| Control and sovereignty | Their bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse | Per-PR CI |
+| Control and sovereignty | Their object-store bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own object-store bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse | Per-PR CI |
 | Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) | Per-PR CI; Scorecard as a release check |
 | Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) | Release check (upgrade tests) |
-| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-tenant` tenants; savings shown on every repo page | Per-PR CI |
+| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of object-store bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-tenant` tenants; savings shown on every repository and bucket page | Per-PR CI |
 | Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks | Per-PR CI |
 
 **Where openxet beats huggingface.co:**
 - Dedup for every client. Our client fetches only missing chunks on
   `git clone` / `git pull` (§6.1), and server-side chunking dedups uploads
   from clients that don't speak Xet (§10.3).
-- Your own bucket and region, plus caches near your GPUs (§10.5, §10.7).
+- Your own object-store bucket and region, plus caches near your GPUs (§10.5, §10.7).
 - Mount and stream any revision (§10.8).
 - Savings shown to the user, in bytes and money (§10.10, §15).
 
@@ -184,7 +184,7 @@ release benchmark rig or as a release check.
 4. **Horizontal scalability from day one.**
 5. **Fast.** Speed is a measured target, with benchmarks gating CI.
 6. **Easy to operate.** One binary, one config file, sane defaults, metrics,
-   and recovery from the bucket alone.
+   and recovery from the object-store bucket alone.
 
 ### Non-goals (v1)
 
@@ -440,7 +440,7 @@ from:
 - an optional cache tier
 - a fast index
 
-**The bucket is the source of truth.** Xorbs, uploaded shards, Hub-layer
+**The object-store bucket is the source of truth.** Xorbs, uploaded shards, Hub-layer
 commit objects and storage-only pins are written to the bucket, and so is
 who may read what *(ruling M1-R37)*:
 - a **registration record** per shard registered to a scope
@@ -1247,12 +1247,11 @@ Cost: one extra object-store PUT per request, next to the xorb, shard and
 registration writes the upload already makes, so small objects stay
 fast. M5 measures it (§12).
 
-"The bucket is the source of truth" (§5.3) means the object-store
-bucket. Where the two could be confused, say "object-store bucket" or
-"bucket primitive".
+Where the bucket primitive and an object-store bucket could be confused,
+say "object-store bucket" or "bucket primitive".
 
-An S3-compatible API over buckets is under evaluation in spike S12 (draft
-PR #60), pending the owner's decision; it is not scheduled.
+An S3-compatible API over buckets is under evaluation in
+[spike S12](../../research/S12-s3-api-and-dedup-economics.md), pending the owner's decision; it is not scheduled.
 
 ### 10.5 Cache tier
 
@@ -1528,7 +1527,7 @@ binary.
 - Browse repositories, branches, commits and files, and buckets and their
   keys; download files; copy clone,
   `hf` and `openxet` commands.
-- See storage usage per repo and tenant: logical bytes, stored bytes, and the
+- See storage usage per repository, bucket and tenant: logical bytes, stored bytes, and the
   dedup savings ratio.
 - Admin view (for operator-designated groups): health, GC status and dry-run
   reports, pools, mirror status.
@@ -1541,9 +1540,10 @@ own UI and leave this role off.
 
 ## 11. Spikes (verify, don't assume)
 
-All ten spikes are answered: S1–S9 in M0, S10 for M1. Each note records
-versions, method and
-what was observed versus inferred.
+S1–S11 are answered: S1–S9 in M0, S10 and S11 for M1. S12 and S13 are
+open: their measurements are a record, and their recommendations await
+the owner's decision. Each note records versions, method and what was
+observed versus inferred.
 
 - **S1** *(answered: yes, on MinIO;
   [S1–S2](../../research/S1-S2-direct-downloads.md), ADR 0002)*: `hf_xet`
@@ -1619,6 +1619,19 @@ what was observed versus inferred.
   [S10](../../research/S10-cas-wire-contract.md))*: the exact CAS wire
   contract that stock clients rely on, and the `xet-data` API our own
   client calls (ADR 0006).
+- **S11** *(answered: a dedup answer offers every xorb of the newest
+  visible shard that references the matched xorb, as `xet-core` and
+  huggingface.co do; a 1 MiB edit of a 1 GiB file then sends about
+  1.2 MB with an empty cache; ruling M1-R30;
+  [S11](../../research/S11-global-dedup-response.md))*: what a global
+  dedup answer should offer.
+- **S12** *(open: measurements recorded, recommendation pending;
+  [S12](../../research/S12-s3-api-and-dedup-economics.md))*: whether an S3-compatible API over buckets is feasible,
+  what dedup saves on multi-tenant data, and the cost and billing
+  consequences.
+- **S13** *(open: draft PR #59, pending the owner's approval of pricing
+  and positioning)*: hosted openxet.com's features, pricing and
+  first-visit journey (M8).
 
 **Client version floor** *(builder-check call)*: the oldest `huggingface_hub`,
 `hf_xet` and `huggingface.js` versions that use the v2 reconstruction and
@@ -1714,8 +1727,8 @@ release of the open-source build: it runs the released build (§15).
   - A key-rotation drill for CAS token keys and the transfer key, under
     load (ADR 0011, issue [#65](https://github.com/stubbi/openxet/issues/65)).
 - **M4:** operational completeness.
-  - GC, `reindex` from bucket, `verify`.
-  - Readiness that checks the index and the bucket (issue #49).
+  - GC, `reindex` from the object-store bucket, `verify`.
+  - Readiness that checks the index and the object-store bucket (issue #49).
   - Metrics, tracing, and the rest of the HTTP read gateway.
   - Metering (§5.7) and the admin API that exposes it.
   - The audit log, attributing each action to a human, or to an agent on
@@ -1838,7 +1851,7 @@ it once the owner approves pricing and positioning. These requirements are fixed
 - A free tier with no time limit, and no card needed to start.
 - Every page shows what the user gains: stored vs. uploaded bytes and the dedup
   savings, in money where possible.
-- Bring your own bucket as a headline option: we operate openxet, and the data
+- Bring your own object-store bucket as a headline option: we operate openxet, and the data
   stays in the customer's S3/GCS/Azure account. An EU region is available from
   day one.
 - Git hosting, `git-xet`, `hf`, our client and the web UI all work on
@@ -1898,7 +1911,7 @@ guilt/xet-server.
 | Dimension | Bar | Proof |
 |---|---|---|
 | Protocol correctness | Byte-exact with `xet-core`; every spec MUST implemented and tested | Reference-file golden tests; real-client suite (pinned, latest, oldest supported); nightly against huggingface.co; spec-section traceability (each MUST maps to a test) |
-| Performance | Fastest Xet server on upload, download, dedup ratio and metadata latency | Public benchmark suite run in CI against competitors on identical hardware; regressions fail CI; results published per release; the load test suite (`loadtest/`, issue [#55](https://github.com/stubbi/openxet/issues/55)) runs in full on the release rig for every release and briefly every night, and a regression past its threshold fails the release |
+| Performance | Fastest Xet server on upload, download, dedup ratio and metadata latency | Public benchmark suite run in CI against competitors on identical hardware; regressions fail CI; results published per release; the load test suite (`loadtest/`, issue [#55](https://github.com/stubbi/openxet/issues/55)) runs in full on the release rig for every release and briefly every night, and a regression past its threshold fails the release; the harness defines the thresholds, and they are recorded in [benchmarks](../../reference/benchmarks.md) |
 | Code quality | Small, readable, reviewed code with no slop | Strict clippy and `forbid(unsafe)`; mutation testing (`cargo-mutants`) on core crates; fuzzing continuously (OSS-Fuzz once eligible); lines of code tracked as a cost, not a goal |
 | Architecture | Every decision recorded and reversible | ADRs for every significant choice; crate boundaries enforced (no cyclic or upward deps, checked in CI); bucket-as-truth and stateless invariants have dedicated tests |
 | Security | Secure by default, with a verifiable supply chain | The §5.9 requirements, each with its test; `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
