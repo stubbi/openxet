@@ -1,0 +1,29 @@
+[package]
+name = "openxet-client"
+version = "0.0.0"
+description = "Upload and download over the Xet protocol, on Hugging Face's xet-data client core"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+http = "1"
+reqwest = { version = "0.13.5", default-features = false }
+reqwest-middleware = "0.5.2"
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1.54.1", features = ["net", "rt", "time"] }
+uuid = { version = "1.29.0", features = ["v7"] }
+# The client core (ADR 0006): only this crate may depend on these three,
+# pinned in lockstep with xet-core-structures (`deny.toml` [bans]).
+xet-client = "=1.7.0"
+xet-data = "=1.7.0"
+xet-runtime = "=1.7.0"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
