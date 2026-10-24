@@ -35,7 +35,7 @@ pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {
     )
 }
 
-/// An index that records how many `validate` permits are free whenever
+/// An index that records how many permits of a semaphore are free whenever
 /// chunk tables are loaded, for tests that the load holds a permit.
 pub(crate) struct PermitProbe {
     inner: Arc<dyn Index>,
@@ -44,11 +44,11 @@ pub(crate) struct PermitProbe {
 }
 
 impl PermitProbe {
-    /// Wraps `state`'s index, probing its `validate` semaphore.
-    pub(crate) fn install(state: &mut AppState) -> Arc<Self> {
+    /// Wraps `state`'s index, probing `permits`.
+    pub(crate) fn install(state: &mut AppState, permits: &Arc<Semaphore>) -> Arc<Self> {
         let probe = Arc::new(Self {
             inner: Arc::clone(&state.index),
-            validate: Arc::clone(&state.validate),
+            validate: Arc::clone(permits),
             free_at_load: AtomicUsize::new(usize::MAX),
         });
         state.index = Arc::clone(&probe) as Arc<dyn Index>;

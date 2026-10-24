@@ -604,7 +604,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut state = test_support::state(dir.path(), vec![]).await;
         state.validate = Arc::new(Semaphore::new(1));
-        let probe = PermitProbe::install(&mut state);
+        let validate = Arc::clone(&state.validate);
+        let probe = PermitProbe::install(&mut state, &validate);
         let shard = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../testdata/hf-xet-1.7.0-upload/upload.shard"),

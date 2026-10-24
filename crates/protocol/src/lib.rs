@@ -18,9 +18,11 @@ mod xorb;
 /// The Xet protocol spec version openxet implements (design section 1).
 pub const PROTOCOL_SPEC: &str = "1.1.0";
 
+pub use dedup::{
+    DEDUP_ANSWER_BUDGET, UnkeyedDedupShard, dedup_answer_xorb_bytes, dedup_shard, is_dedup_eligible,
+};
 #[cfg(feature = "test-support")]
 pub use dedup::{DedupAnswer, read_dedup_answer};
-pub use dedup::{MAX_DEDUP_ANSWER_BYTES, dedup_answer_xorb_bytes, dedup_shard, is_dedup_eligible};
 pub use hash::{MerkleHash, chunk_hash, file_hash, hash_from_hex, hash_to_hex, range_hash};
 pub use shard::{
     MAX_REFERENCED_CHUNKS, MAX_REFERENCED_XORBS, MAX_UPLOAD_SHARD_BYTES, Segment, ShardFileEntry,

@@ -8,7 +8,7 @@
 //!    at the matched xorb and wrapping round, or the matched xorb alone if
 //!    no shard references it yet (ruling M1-R30, S11)
 //! 3. their chunk tables are loaded, only as many as fit
-//!    [`MAX_DEDUP_ANSWER_BYTES`]
+//!    [`DEDUP_ANSWER_BUDGET`]
 //! 4. `dedup_shard` builds a footered shard of them, its chunk hashes keyed
 //!    with a fresh random key that expires in [`KEY_LIFETIME`], within that
 //!    budget
@@ -22,14 +22,26 @@
 //! the caller's authorization, and a `200` is keyed per request (§5.9
 //! req 3).
 //!
-//! Loading the tables and building the shard hold a `validate` permit, the
-//! build on a blocking thread (ruling M1-R25), so concurrent dedup work and
-//! its memory are bounded by the same CPU-sized permit set as xorb and
-//! shard validation.
+//! Each answer holds one `dedup` permit (ruling M1-R32) from loading its
+//! tables until its body has been sent or dropped; the build runs on a
+//! blocking thread (ruling M1-R25). The `dedup` permits are their own pool,
+//! a quarter of the CPUs, so dedup queries can never take a permit xorb or
+//! shard validation needs (review I2 of Task 10b).
+//!
+//! Memory: a full answer (a 16 MiB body) peaks at about 55 MB while upstream
+//! serializes it (the in-memory shard with its chunk index, and the
+//! serialization), then holds the serialization and the keyed output, then
+//! the body alone until it is sent. Per process, dedup memory is therefore
+//! at most the `dedup` permits × about 100 MB including allocator slack,
+//! however many clients ask or never read. Measured (release, Apple M3, 8
+//! CPUs, so 2 permits; answers of 16.5 MB): 150 to 200 MB over idle with 8
+//! or 16 concurrent queries and with 32 or 64 connections that never read
+//! their answer (S11, "Answer cost").
 
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Bytes;
 use axum::extract::{FromRequestParts, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
@@ -37,8 +49,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use openxet_index::Visibility;
 use openxet_protocol::{
-    MAX_DEDUP_ANSWER_BYTES, MerkleHash, dedup_answer_xorb_bytes, dedup_shard, hash_to_hex,
+    DEDUP_ANSWER_BUDGET, MerkleHash, dedup_answer_xorb_bytes, dedup_shard, hash_to_hex,
 };
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::blocking::blocking;
 use crate::cache::private;
@@ -54,9 +67,10 @@ const PREFIXES: &[&str] = &["default", "default-merkledb"];
 const KEY_LIFETIME: u64 = 7 * 24 * 60 * 60;
 
 /// Xorbs whose chunk tables one index read loads. Small enough that a read
-/// past the budget loads little to discard, large enough that a 10 GB
-/// file's shard (about 160 xorbs) takes three reads.
-const TABLES_PER_LOAD: usize = 64;
+/// past the budget loads little to discard (at most about 10 MB of tables),
+/// large enough that a 10 GB file's shard (about 160 xorbs) takes five
+/// reads.
+const TABLES_PER_LOAD: usize = 32;
 
 /// `GET /v1/chunks/{prefix}/{hash}` (S10 §2).
 pub(crate) fn routes() -> Router<AppState> {
@@ -95,11 +109,10 @@ async fn query(
     );
     let key = fresh_key()?;
     let expiry = state.clock.now().saturating_add(KEY_LIFETIME);
-    // The tables are the answer's memory, up to about `MAX_DEDUP_ANSWER_BYTES`,
-    // so they are loaded under the permit the build then uses. Building and
-    // keying a full `MAX_XORB_CHUNKS` table takes about 1 ms in a release
-    // build (measured on an Apple M3); a full answer, about 170 such tables.
-    let permit = Arc::clone(&state.validate)
+    // From the table load until the body is gone, the answer holds a
+    // `dedup` permit (ruling M1-R32), so its memory is bounded per process
+    // and dedup can never take a permit xorb or shard validation needs.
+    let permit = Arc::clone(&state.dedup)
         .acquire_owned()
         .await
         .map_err(CasError::internal)?;
@@ -113,12 +126,14 @@ async fn query(
         );
         return Err(CasError::NoDedupMatch);
     }
-    // Every failure is a server bug: stored tables within the format's
-    // counts and a non-zero key always serialize.
-    let (_, built) = blocking(permit, move || {
-        let refs: Vec<(MerkleHash, &[(MerkleHash, u64)])> =
-            tables.iter().map(|(x, t)| (*x, &t[..])).collect();
-        dedup_shard(&refs, MAX_DEDUP_ANSWER_BYTES, key, expiry)
+    // `dedup_shard` drops each table once copied and the in-memory shard
+    // once serialized, so the keyed export runs with only the serialization
+    // and its output alive. Every failure is a server bug: stored tables
+    // within the format's counts and a non-zero key always serialize.
+    let (permit, built) = blocking(permit, move || {
+        let unkeyed = dedup_shard(tables, DEDUP_ANSWER_BUDGET)?;
+        let offered = unkeyed.covered();
+        Ok::<_, openxet_protocol::ProtocolError>((unkeyed.keyed(key, expiry)?, offered))
     })
     .await?;
     let (body, offered) = built.map_err(CasError::internal)?;
@@ -128,7 +143,27 @@ async fn query(
         bytes = body.len(),
         "dedup match offered"
     );
+    let body = Bytes::from_owner(PermittedBody {
+        body,
+        _permit: permit,
+    });
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
+}
+
+/// An answer's body with the `dedup` permit it was built under. `Bytes`
+/// drops its owner with the last view of the buffer, once the server has
+/// written the whole body or dropped it unsent, and the permit is
+/// returned only then: a client that never reads keeps its permit, so it
+/// can't make the server hold more bodies than there are permits.
+struct PermittedBody {
+    body: Vec<u8>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for PermittedBody {
+    fn as_ref(&self) -> &[u8] {
+        &self.body
+    }
 }
 
 /// The xorbs to offer for a match in `matched`, in priority order: the
@@ -148,9 +183,9 @@ fn offer_order(shard: Option<Vec<MerkleHash>>, matched: MerkleHash) -> Vec<Merkl
 }
 
 /// The chunk tables of `order`'s xorbs that are stored and visible, in
-/// order, loading [`TABLES_PER_LOAD`] at a time and stopping once the
-/// loaded ones fill [`MAX_DEDUP_ANSWER_BYTES`]; `dedup_shard` makes the
-/// exact cut.
+/// order, loading [`TABLES_PER_LOAD`] at a time and stopping at the first
+/// table that fills [`DEDUP_ANSWER_BUDGET`]; `dedup_shard` makes the exact
+/// cut.
 async fn load_tables(
     state: &AppState,
     order: &[MerkleHash],
@@ -165,10 +200,10 @@ async fn load_tables(
             if let Some(table) = loaded.remove(xorb) {
                 bytes += dedup_answer_xorb_bytes(table.hashes.len());
                 tables.push((*xorb, table.hashes));
+                if bytes >= DEDUP_ANSWER_BUDGET {
+                    return Ok(tables);
+                }
             }
-        }
-        if bytes >= MAX_DEDUP_ANSWER_BYTES {
-            break;
         }
     }
     Ok(tables)
@@ -223,21 +258,24 @@ mod tests {
         (framed, chunk_hash(&data))
     }
 
-    #[tokio::test]
-    async fn building_the_answer_takes_a_validation_permit() {
-        // Ruling M1-R25: dedup work is bounded by the CPU-sized `validate`
-        // permits, so a flood of queries can't grow the blocking pool, and
-        // the chunk tables, the answer's memory, are loaded under one.
-        let dir = tempfile::tempdir().unwrap();
-        let token = StaticToken {
-            sha256: StaticToken::digest(READ),
+    const WRITE: &str = "oxt_unit_write";
+
+    fn token(secret: &str, mode: Mode) -> StaticToken {
+        StaticToken {
+            sha256: StaticToken::digest(secret),
             scope: "s".to_owned(),
-            mode: Mode::Read,
+            mode,
             subject: "unit".to_owned(),
-        };
-        let mut state = test_support::state(dir.path(), vec![token]).await;
+        }
+    }
+
+    /// State over a fresh index holding one xorb with an eligible chunk,
+    /// with one dedup and one validation permit, and that chunk.
+    async fn one_xorb_state(dir: &std::path::Path) -> (AppState, MerkleHash) {
+        let tokens = vec![token(READ, Mode::Read), token(WRITE, Mode::Write)];
+        let mut state = test_support::state(dir, tokens).await;
         state.validate = Arc::new(Semaphore::new(1));
-        let probe = PermitProbe::install(&mut state);
+        state.dedup = Arc::new(Semaphore::new(1));
         let (body, chunk) = eligible_chunk();
         let xorb = xorb_with_footer(&body).unwrap();
         let table = ChunkTable {
@@ -249,17 +287,28 @@ mod tests {
             .put_xorb(&xorb.hash, 1, &table, &[chunk], "s")
             .await
             .unwrap();
-        let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
-        let app = router(state.clone());
+        (state, chunk)
+    }
 
-        let answer = tokio::spawn(
-            app.oneshot(
-                Request::get(format!("/v1/chunks/default/{}", hash_to_hex(&chunk)))
-                    .header(AUTHORIZATION, format!("{BEARER} {READ}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            ),
-        );
+    fn dedup_query(chunk: &MerkleHash) -> Request<Body> {
+        Request::get(format!("/v1/chunks/default/{}", hash_to_hex(chunk)))
+            .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn building_the_answer_takes_a_dedup_permit() {
+        // Rulings M1-R25, M1-R32: dedup work is bounded by its own permits,
+        // so a flood of queries can't grow the blocking pool, and the chunk
+        // tables, the answer's memory, are loaded under one.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, chunk) = one_xorb_state(dir.path()).await;
+        let dedup = Arc::clone(&state.dedup);
+        let probe = PermitProbe::install(&mut state, &dedup);
+        let held = Arc::clone(&state.dedup).acquire_owned().await.unwrap();
+
+        let answer = tokio::spawn(router(state.clone()).oneshot(dedup_query(&chunk)));
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!answer.is_finished(), "answered without a permit");
 
@@ -271,6 +320,74 @@ mod tests {
             Some(0),
             "tables loaded without a permit"
         );
+        drop(response);
+        assert_eq!(state.dedup.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn dedup_never_starves_validation() {
+        // Review I2: with every dedup permit taken, xorb validation still
+        // runs, because dedup never holds a `validate` permit.
+        let dir = tempfile::tempdir().unwrap();
+        let (state, chunk) = one_xorb_state(dir.path()).await;
+        let held = Arc::clone(&state.dedup).acquire_owned().await.unwrap();
+        let waiting = tokio::spawn(router(state.clone()).oneshot(dedup_query(&chunk)));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!waiting.is_finished());
+
+        let mut body = vec![0, 4, 0, 0, 0, 4, 0, 0];
+        body.extend_from_slice(b"new!");
+        let xorb = xorb_with_footer(&body).unwrap().hash;
+        let upload = router(state.clone())
+            .oneshot(
+                Request::post(format!("/v1/xorbs/default/{}", hash_to_hex(&xorb)))
+                    .header(AUTHORIZATION, format!("{BEARER} {WRITE}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upload.status(), StatusCode::OK);
+        assert!(
+            !waiting.is_finished(),
+            "the dedup query ran without a permit"
+        );
+        drop(held);
+        assert_eq!(waiting.await.unwrap().unwrap().status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_dedup_permit_lives_until_the_body_is_gone() {
+        // Review I1: an answer's body counts against the dedup permits
+        // until it has been sent or dropped, so clients that never read
+        // can't pile up bodies.
+        let dir = tempfile::tempdir().unwrap();
+        let (state, chunk) = one_xorb_state(dir.path()).await;
+
+        let response = router(state.clone())
+            .oneshot(dedup_query(&chunk))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            state.dedup.available_permits(),
+            0,
+            "the body outlives its permit"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!body.is_empty());
+        drop(body);
+        assert_eq!(state.dedup.available_permits(), 1);
+
+        let unread = router(state.clone())
+            .oneshot(dedup_query(&chunk))
+            .await
+            .unwrap();
+        assert_eq!(state.dedup.available_permits(), 0);
+        drop(unread);
+        assert_eq!(state.dedup.available_permits(), 1);
         assert_eq!(state.validate.available_permits(), 1);
     }
 
