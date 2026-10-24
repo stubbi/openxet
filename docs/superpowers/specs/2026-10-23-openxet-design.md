@@ -465,7 +465,7 @@ Xorbs remain globally content-addressed and shared.
   `openxet purge <file-hash>` (M2+). Purge unregisters the file from every
   scope at once and logs it. New reconstructions stop immediately;
   already-issued URLs expire within their lifetime (at most 60 min,
-  ADR 0002). Purge also evicts the file's ranges from the cache tier. The
+  ADR 0002, ruling M1-R42). Purge also evicts the file's ranges from the cache tier. The
   bytes then leave storage through GC (§5.6), once no other file
   references their xorbs. Removing a reader from the scope revokes their access once their
   current CAS token expires.
@@ -537,7 +537,8 @@ already stored writes nothing new. Test:
   URLs; otherwise it falls back to (b) and logs why. This applies to every
   backend (S3, R2, Garage, MinIO, and GCS or Azure once their signers can
   bind a range). CI runs the probe against MinIO. URL lifetime defaults to
-  60 min with a 30 min minimum, as derived in ADR 0002. v1 reconstruction
+  60 min, with a 30 min minimum as derived in ADR 0002 and a 60 min maximum
+  (ruling M1-R42). v1 reconstruction
   is served too, for older clients.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`
@@ -618,7 +619,7 @@ step.
 | # | Requirement | Tests |
 |---|---|---|
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
-| 2 | **Credentials are repo-scoped.** CAS tokens, signed URLs and capability `href`s are scoped to one repo; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
+| 2 | **Credentials are repo-scoped.** CAS tokens and capability `href`s are scoped to one repo; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's repo check; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_scope_dedup_isolates_tenants`, `per_scope_multi_xorb_answer_hides_foreign_xorbs`, `per_scope_existence_checks_hide_other_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
@@ -1425,14 +1426,22 @@ but sets no calendar dates.
   - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
     `basic` download `href`s point at it (ADR 0003).
   - `openxet purge <file-hash>` (§5.4).
+  - One router: the CAS and Hub routes composed at the builder level under
+    a single fallback, since axum can't merge two routers that each carry
+    one (issue #46).
 - **M3:** production backends.
   - Postgres; S3, GCS and Azure; presigned downloads.
   - The range-binding probe against real AWS S3, R2, Garage, GCS and
     Azure, and the presigned-URL signing benchmarks (ADR 0002).
   - OIDC and webhook auth.
   - A multi-node scale test.
+  - A migration compatibility policy, so nodes of two adjacent versions
+    share one database through a rolling upgrade (issue #47).
+  - Index round trips outside the CPU permits, once the index is
+    networked (issue #48).
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
+  - Readiness that checks the index and the bucket (issue #49).
   - Metrics, tracing, and the rest of the HTTP read gateway.
   - Metering (§5.7) and the admin API that exposes it.
   - Server-side chunking for non-Xet clients.
@@ -1522,6 +1531,8 @@ self-hosting better too.
 - Hard multi-tenant isolation (per-scope dedup visibility, pools per tenant,
   noisy-neighbour limits).
 - Enforced quotas and per-tenant rate limits.
+- Bounds on how much one writer's registrations shape the dedup answers
+  other tenants get under `global` visibility (issue #50).
 - Metering accurate enough to bill.
 - Self-service sign-up via the web UI.
 - Admin tooling for abuse and takedowns.
@@ -1570,7 +1581,8 @@ starts at M0, not after 1.0.
 ## 17. Rulings register
 
 Rulings are decisions made while building, numbered in the order they were
-made. Public docs cite them by number; this is what each cited one decides.
+made. Public code and docs cite them by number; this is what each one
+decides, with superseded parts marked.
 
 | Ruling | Decision | Where |
 |---|---|---|
@@ -1592,8 +1604,31 @@ made. Public docs cite them by number; this is what each cited one decides.
 | M1-R8 | Xorb validation runs on blocking threads bounded by one permit per CPU; double decompression on accept is kept and benchmarked. | M1 plan |
 | M1-R9 | The client version floor is `hf_xet` 1.7.0. | §11, S10 |
 | M1-R10 | The default bind is `127.0.0.1:8080`, which is also `hf_xet`'s default CAS endpoint. | S10 |
+| M1-R11 | CAS tokens carry a scope, a mode and an expiry, never a Git revision: Xet reads follow scope membership (R25), so a revision binding would enforce nothing. Hub routes still accept a revision in the URL for compatibility. | §5.4, ADR 0007 |
+| M1-R12 | Stored shards and dedup shards are built by composing `xet-core`'s serializers (truncating at the file lookup section, rewriting the header or footer through them), never by writing format bytes by hand. | ADR 0001 |
+| M1-R13 | An upload shard listing one file hash twice with different SHA-256 values is rejected; for identical duplicates the first entry is kept, and the CAS info lists only kept references. | S6 |
+| M1-R14 | Shard verification itself rejects duplicate file hashes with conflicting SHA-256 values, so registration never meets a content error after verification passed. | S6 |
+| M1-R15 | New dependencies take their latest stable release unless a ruling pins one; the index uses sqlx 0.9 (amends M1-R1). | M1 plan |
+| M1-R16 | A file's size and terms are stored per (file, scope), and a scope reads only its own record; another scope's file reads exactly as one never stored. | §5.4 |
+| M1-R17 | Registration rejects terms naming a xorb that is missing or not visible to the caller, with one error that doesn't tell the two apart, so registration is no existence probe. | §5.4, §5.9 req 4 |
+| M1-R18 | CAS tokens are checked by openxet's own EdDSA-only compact JWS verifier on `ed25519-dalek`'s strict verification, with a strict header and a size cap, tested against RFC 8037 appendix A.4. The dependency tree carries no ignored security advisory. | ADR 0007 |
+| M1-R19 | CAS-token claims are `sub`, `scope`, `mode`, `exp`, `iat` and an optional, enforced `nbf`; any other claim is rejected, so a restriction openxet can't honour never fails open. Token lifetime is capped (24 h by default), `iat` may lie at most 5 min ahead, and a `sub` or `scope` that is empty, only whitespace or holds control characters is rejected, as is a `scope` over 1024 bytes. Its 24 h signed-URL cap is superseded by M1-R42. | §5.4, ADR 0007 |
+| M1-R20 | Logs and spans record the matched route template, never the raw path or query, so no URL segment can leak a credential; a request is traced by its request id. | §5.9 req 6 |
+| M1-R21 | An object the index names but the bucket lacks answers `500` with an integrity log, not a retryable `503`: object stores are read-after-write consistent, so it means data loss or a bug, and a retry would hide it. | §5.3 |
+| M1-R22 | A refused request's body is drained up to the route's size limit before the answer, as a lingering close does, so a client sees the final `401` or `403` instead of a connection reset it would retry; the body read deadline bounds the cost. | §5.9 req 1, routes reference |
 | M1-R23 | Verification errors name the rule, the file, the xorb and the chunk range the client sent, and never a value derived from stored data (expected hashes, lengths, chunk counts); those are logged only. | §5.9 req 5, S6 |
 | M1-R24 | Shard commits (bucket write through index registration) are bounded per process by a commit semaphore of 4 permits per CPU, separate from the validation permits; ingest memory is at most validation permits × the verification limits plus commit permits × a stored shard and its files. | M1 plan |
+| M1-R25 | Blocking work (validation, verification, reconstruction rendering, dedup builds) takes its permit inside the blocking closure, so a client disconnecting can't release a permit while its work still runs. Dedup's use of the `validate` pool is superseded by M1-R32's own pool. | M1 plan |
+| M1-R26 | Reconstruction trims the first and last kept terms to the chunks covering the requested range, as `xet-core`'s reference server does, so fewer bytes are transferred. | S10 |
+| M1-R27 | Ranged bucket reads are validated before the `206` and then streamed in 1 MiB blocks, so a transfer holds one block of its range at a time. | §5.5 |
+| M1-R28 | Generated secrets are `oxt_` followed by 43 base64url characters encoding 32 bytes from the operating system's CSPRNG; the fixed prefix makes leaked secrets findable by secret scanners. | §5.4 |
+| M1-R29 | In a configured server, a transfer key missing at its default path is generated with a warning, and one missing at an explicitly configured path is an error; remote buckets (M3) will require a configured key, since every node behind one endpoint needs the same one. | §5.5 |
 | M1-R30 | A dedup answer offers every xorb of the newest shard that references the matched xorb and is visible to the caller, in the shard's term order from the matched xorb, wrapping round, up to the answer budget of M1-R32 and without lookup tables; with no such shard, the matched xorb alone. | §5.4, S11 |
+| M1-R31 | Independent tasks run in parallel, each in its own worktree, with review gates unchanged; from M2 on, plans give a dependency graph with file ownership. | §8 |
 | M1-R32 | Dedup answers are at most 16 MiB (about 350 typical xorbs, about 22 GB of file) and hold a `dedup` permit, a pool of a quarter of the CPUs separate from `validate`, from loading their chunk tables until their body has been sent or dropped; dedup memory per process is at most those permits × about 150 MB (measured: about 120 MB for one answer, about 300 MB with 2 permits busy). | §5.4, S11 |
 | M1-R33 | A dedup query waits at most 1 s for a `dedup` permit, then answers `429 dedup_busy` with `Retry-After: 1`, which clients read as "no match"; sending an answer has a deadline of 30 s plus its length at 1 MiB/s, after which the body fails and its permit and memory are released. | §5.4, S10, S11 |
+| M1-R34 | A reconstruction renders with extra blocking threads up to half of the free `validate` permits, counting the request's own permit, so one large answer never starves uploads. | benchmarks reference |
+| M1-R35 | A required CI gate must pass 10 of 10 runs before it merges; a flaky gate is fixed, never loosened. | §8, benchmarks reference |
+| M1-R36 | The documentation site is rendered from `docs/` with a pinned mdBook at deploy time, and nothing generated is committed; `llms.txt` and per-page Markdown are generated, and CI builds and link-checks the site and requires every reference page in its navigation. | §7.1 |
+| M1-R41 | This register lists every ruling that tracked code or docs cite. | §17 |
+| M1-R42 | Signed transfer URLs live 30 to 60 minutes (60 by default), so a leaked URL, or one issued before a purge, stops working within the hour; supersedes M1-R19's 24 h URL cap. | §5.4, §5.5, ADR 0002 |

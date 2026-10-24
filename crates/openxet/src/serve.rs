@@ -20,8 +20,9 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
 use openxet_cas::{AppState, router, starting_router};
+use openxet_client::STATIC_TOKEN_EXP;
 use openxet_index::SqliteIndex;
-use openxet_storage::LocalBucket;
+use openxet_storage::{LocalBucket, create_private_dir_all};
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -35,10 +36,10 @@ use crate::logging;
 use crate::output::{HumanDisplay, Output};
 use crate::{preflight, secret};
 
-/// The dev token's scope and the `exp` to hand `hf_xet` for it: static
-/// tokens never expire, and `hf_xet` requires an integer (S10 "Auth").
+/// The dev token's scope. Its `exp` for `hf_xet` is [`STATIC_TOKEN_EXP`]:
+/// static tokens never expire, and `hf_xet` requires an integer (S10
+/// "Auth").
 pub const DEV_SCOPE: &str = "default";
-pub const DEV_TOKEN_EXP: u64 = 1 << 62;
 const DEV_SUBJECT: &str = "dev";
 
 /// How long blocking work (an index or bucket call) may run on after the
@@ -376,7 +377,7 @@ fn prepare_data_dir(dir: &Path) -> Result<(), CliError> {
         }
         secret::sweep_stale_temps(dir);
     } else {
-        secret::create_private_dir_all(dir).map_err(unwritable)?;
+        create_private_dir_all(dir).map_err(unwritable)?;
     }
     match secret::create_new_file(&dir.join(INDEX_FILE), 0o600) {
         Ok(_) => Ok(()),
@@ -470,7 +471,7 @@ fn announce(output: Output, config: &Config, endpoint: &str, dev_token: Option<&
         scope: dev_token.map(|_| DEV_SCOPE),
         mode: dev_token.map(|_| "write"),
         token: dev_token,
-        token_exp: dev_token.map(|_| DEV_TOKEN_EXP),
+        token_exp: dev_token.map(|_| STATIC_TOKEN_EXP),
     };
     if let Err(err) = output.emit(&ready).and_then(|()| io::stdout().flush()) {
         tracing::warn!(error = %err, "could not print the ready line on stdout");

@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime};
 use bytes::Bytes;
 use openxet_protocol::hash_to_hex;
 
-use crate::{Bucket, Key, RangeStream, STREAM_BLOCK_BYTES, StorageError};
+use crate::{Bucket, Key, RangeStream, STREAM_BLOCK_BYTES, StorageError, create_private_dir_all};
 
 const TMP_DIR: &str = ".tmp";
 /// Temp files older than this are leftovers from a crash; no healthy write
@@ -104,18 +104,6 @@ impl LocalBucket {
         let hex = hash_to_hex(hash);
         dir.join(&hex[..2]).join(hex)
     }
-}
-
-/// Creates `dir` and its missing parents, each mode `0700` on unix.
-fn create_private_dir_all(dir: &Path) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
 }
 
 /// Creates the new file `path`, mode `0600` on unix.

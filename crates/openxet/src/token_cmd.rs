@@ -304,7 +304,7 @@ fn mint(
                 "invalid_claims",
                 err.to_string(),
                 "Give a non-empty --scope and --subject without control characters (scope at \
-                 most 1024 bytes).",
+                 most 1024 bytes, the whole token at most 8 KiB).",
             )
         })?;
     if output == Output::Human && ttl > Authenticator::DEFAULT_MAX_TOKEN_LIFETIME {

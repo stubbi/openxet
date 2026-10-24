@@ -90,18 +90,6 @@ fn io_error(what: &str, path: &Path, err: &io::Error, hint: &'static str) -> Cli
     )
 }
 
-/// Creates `dir` and its missing parents, each mode `0700` on unix.
-pub fn create_private_dir_all(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
-}
-
 /// Creates the new file `path` with `mode` on unix.
 pub fn create_new_file(path: &Path, mode: u32) -> io::Result<File> {
     let mut options = OpenOptions::new();
@@ -169,7 +157,7 @@ fn create_linked(
 ) -> Result<(), CliError> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(parent) = parent {
-        create_private_dir_all(parent).map_err(|err| {
+        openxet_storage::create_private_dir_all(parent).map_err(|err| {
             io_error(
                 "create the directory",
                 parent,

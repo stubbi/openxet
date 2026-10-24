@@ -216,15 +216,15 @@ cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)'
 cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate)
 cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
+cargo bench -p openxet-cas --bench commit_throughput      # durable shard and index commits per second on local disk
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans (CI gate)
 scripts/check-client-core-ban.sh                           # the ADR 0006 ban rejects xet-data & co. in a server crate (CI gate)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
-fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
-cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: each of xorb_upload, xorb_chunks, upload_shard, verify_shard)
+fuzz/seed.sh                                               # fill fuzz/corpus and rewrite fuzz/Cargo.lock from Cargo.lock (before fuzzing; commit the lock; needs the reference files)
+cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: every target in fuzz/Cargo.toml)
 cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace's own dependencies (CI, with the fuzz job)
-cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null # fuzz/Cargo.lock is current (CI, with the fuzz job)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)

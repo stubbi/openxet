@@ -113,7 +113,9 @@ That includes whether they can bind a range.
    returns fresh URLs with the **same terms and the same per-entry ranges**.
    The client itself only checks that the refreshed block covers the same
    byte range (`retrieval_urls.rs:103-108`).
-5. **URL lifetime: default 60 min, minimum 30 min, from this derivation.**
+5. **URL lifetime: default 60 min, minimum 30 min, from this derivation;
+   maximum 60 min.** *Amended (M1-R42):* the maximum bounds how long a
+   leaked URL, or one issued before a purge (design §5.4), stays usable.
 
    `floor = (URL age at first use) + (largest sleep after a refresh) + (clock skew)`
 
@@ -164,8 +166,8 @@ That includes whether they can bind a range.
   - No fetch entry ever has more than one range.
   - No URL is wider than one xorb range.
   - Direct URLs only come from pools whose probe passed.
-  - URL lifetime is at least 30 min. If `hf_xet` changes its prefetch or
-    retry defaults, re-derive the floor.
+  - URL lifetime is at least 30 min and at most 60 min. If `hf_xet`
+    changes its prefetch or retry defaults, re-derive the floor.
 - **Tests that enforce this:**
   - **Range-binding probe:**
     - a unit test of the three checks and the fallback decision, with a

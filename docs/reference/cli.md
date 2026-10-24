@@ -60,7 +60,7 @@ creates one empty file named `.openxet-check-<16 hex>` there with
 ```json
 {"schema":"openxet.config-check.v1","valid":false,"file":"openxet.toml","dev_mode":null,
  "problems":[{"key":"cas.url_lifetime","value":"5m","source":"file openxet.toml",
-              "rule":"must be a whole number followed by s, m, h or d, such as 30s, 60m, 24h or 30d, from 30m to 24h inclusive",
+              "rule":"must be a whole number followed by s, m, h or d, such as 30s, 60m, 24h or 30d, from 30m to 60m inclusive",
               "hint":"Use 60m unless you need otherwise. …"}],
  "warnings":[],
  "settings":[{"key":"server.bind","value":"127.0.0.1:8080","source":"default"}, …]}
@@ -247,9 +247,11 @@ written.
   `User-Agent: openxet/<version>`.
 - **Output.** With `--json`, stdout has the result and stderr nothing but
   an `openxet.error.v1` object on failure. Without it, a progress line is
-  drawn on stderr when stderr is a terminal. The token is never printed,
-  and server text (an upload rejection's reason) is printed without
-  control characters.
+  drawn on stderr when stderr is a terminal, and a `warning:` line says so
+  when the token would cross a network unencrypted: a plain `http://`
+  endpoint other than `localhost`, `127.0.0.0/8` or `::1`. The token is
+  never printed, and server text (an upload rejection's reason) is printed
+  without control characters.
 - **Interrupts.** `SIGINT` (Ctrl-C) or `SIGTERM` stops the transfer, removes
   a partial download, and exits 130 with error code `interrupted`. An
   interrupted download wrote nothing to its output. An interrupted upload

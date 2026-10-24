@@ -17,7 +17,8 @@ allow = [
     "Zlib",
     "MPL-2.0",
 ]
-# The fuzz workspace (fuzz/Cargo.lock) is checked in the fuzz-smoke job.
+# The fuzz workspace (fuzz/Cargo.lock, which fuzz/seed.sh derives from
+# Cargo.lock) is checked in the fuzz-smoke job.
 # webpki-root-certs is Mozilla's CA bundle as data, under the permissive
 # CDLA-Permissive-2.0; the client core's TLS stack (reqwest, rustls) needs it.
 exceptions = [
@@ -38,9 +39,10 @@ deny = [
     { crate = "xet-runtime", wrappers = ["openxet-client", "xet-client", "xet-data", "xet-core-structures"], reason = "ADR 0006: only openxet-client uses the client core" },
 ]
 skip = [
-    # The CAS server uses tower-http 0.7; 0.6 is pulled by reqwest via
-    # xet-runtime on the client side (openxet-protocol's xet-core-structures).
-    { crate = "tower-http@0.6", reason = "pulled by reqwest via xet-runtime on the client side" },
+    # The CAS server uses tower-http 0.7; 0.6 comes with reqwest. Server
+    # crates compile it too, through openxet-protocol's xet-core-structures
+    # and xet-runtime, though no server code calls it (ADR 0006).
+    { crate = "tower-http@0.6", reason = "pulled by reqwest via xet-runtime, into server crates through xet-core-structures (ADR 0006)" },
 ]
 
 [sources]

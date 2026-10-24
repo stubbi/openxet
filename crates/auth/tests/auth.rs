@@ -190,7 +190,13 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
     let s = signer();
     let day = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
     let long_scope = "s".repeat(1025);
+    // Found by fuzz/cas_token: within every claim rule, yet the token would
+    // be longer than MAX_TOKEN_BYTES (a backslash is escaped in JSON).
+    let long_subject = "a".repeat(MAX_TOKEN_BYTES);
+    let escaped_subject = "\\".repeat(MAX_TOKEN_BYTES * 2 / 5);
     let refused = [
+        (long_subject.as_str(), "org/model", NOW + 60),
+        (escaped_subject.as_str(), "org/model", NOW + 60),
         ("", "org/model", NOW + 60),
         ("alice\n", "org/model", NOW + 60),
         ("alice", "", NOW + 60),
@@ -223,6 +229,22 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
             .expect("valid claims");
         assert!(auth.authenticate(&token, NOW).is_ok(), "{exp}");
     }
+    // The signer's size cap is the verifier's: the longest subject it
+    // signs makes a token the verifier accepts, within 3 bytes (one
+    // base64url quantum) of MAX_TOKEN_BYTES, and one byte more is refused.
+    let sign_len = |len: usize| s.sign(&"a".repeat(len), "org/model", Mode::Read, NOW + 60, NOW);
+    let longest = (5000..MAX_TOKEN_BYTES)
+        .take_while(|&len| sign_len(len).is_ok())
+        .last()
+        .expect("a 5000-byte subject signs");
+    let token = sign_len(longest).expect("the longest subject signs");
+    assert!(token.len() <= MAX_TOKEN_BYTES, "{}", token.len());
+    assert!(token.len() > MAX_TOKEN_BYTES - 4, "{}", token.len());
+    assert!(auth.authenticate(&token, NOW).is_ok());
+    assert!(matches!(
+        sign_len(longest + 1),
+        Err(AuthError::InvalidClaims { .. })
+    ));
 
     let hourly = signer()
         .with_max_token_lifetime(Duration::from_hours(1))
@@ -1048,7 +1070,7 @@ fn url_lifetime_floor() {
     let floor_error = UrlSigner::new([1; 32], Duration::from_mins(29)).unwrap_err();
     assert_eq!(
         floor_error.to_string(),
-        "the signed-URL lifetime 1740s is outside 1800s to 86400s inclusive; configure a value in that range"
+        "the signed-URL lifetime 1740s is outside 1800s to 3600s inclusive; configure a value in that range"
     );
     let just_under = Duration::from_mins(30) - Duration::from_nanos(1);
     let error = UrlSigner::new([1; 32], just_under).unwrap_err();
@@ -1061,12 +1083,15 @@ fn url_lifetime_floor() {
 
 #[test]
 fn url_lifetime_ceiling() {
-    assert_eq!(UrlSigner::MAX_LIFETIME, Duration::from_hours(24));
-    assert!(UrlSigner::new([1; 32], Duration::from_hours(24)).is_ok());
+    // Ruling M1-R42: at most 60 minutes, so a purge (design §5.4) leaves no
+    // issued URL usable for longer than ADR 0002 promises.
+    assert_eq!(UrlSigner::MAX_LIFETIME, Duration::from_hours(1));
+    assert!(UrlSigner::new([1; 32], Duration::from_hours(1)).is_ok());
     for lifetime in [
-        Duration::from_hours(24) + Duration::from_nanos(1),
-        Duration::from_secs(24 * 3600 + 1),
-        Duration::from_hours(48),
+        Duration::from_hours(1) + Duration::from_nanos(1),
+        Duration::from_secs(3600 + 1),
+        Duration::from_hours(2),
+        Duration::from_hours(24),
         Duration::MAX,
     ] {
         let error = UrlSigner::new([1; 32], lifetime).expect_err("above the ceiling");
@@ -1083,16 +1108,16 @@ fn url_lifetime_ceiling() {
         );
     }
     let error =
-        UrlSigner::new([1; 32], Duration::from_hours(24) + Duration::from_nanos(1)).unwrap_err();
-    assert!(error.to_string().contains("86400.000000001s"), "{error}");
+        UrlSigner::new([1; 32], Duration::from_hours(1) + Duration::from_nanos(1)).unwrap_err();
+    assert!(error.to_string().contains("3600.000000001s"), "{error}");
 }
 
 #[test]
 fn signed_url_rejects_expiry_beyond_lifetime() {
     // A URL minted under a longer configuration, or with a forged far `exp`
     // under a leaked key, is refused by a signer with a shorter lifetime.
-    let long = UrlSigner::new([9; 32], Duration::from_hours(24)).expect("valid");
-    let short = UrlSigner::new([9; 32], Duration::from_hours(1)).expect("valid");
+    let long = UrlSigner::new([9; 32], Duration::from_hours(1)).expect("valid");
+    let short = UrlSigner::new([9; 32], Duration::from_mins(30)).expect("valid");
     let base = Url::parse("https://cas.example").expect("url");
     let x = xorb(10);
 

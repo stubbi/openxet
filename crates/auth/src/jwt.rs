@@ -39,6 +39,9 @@ use crate::{AuthError, Mode, Principal};
 /// bytes; the cap bounds decoding work for hostile input.
 pub const MAX_TOKEN_BYTES: usize = 8 * 1024;
 
+/// An Ed25519 signature (64 bytes) in unpadded base64url.
+const SIGNATURE_B64_LEN: usize = 86;
+
 /// An Ed25519 public key trusted to sign CAS tokens.
 #[derive(Clone)]
 pub struct PublicKey {
@@ -152,8 +155,9 @@ impl TokenSigner {
     ///
     /// [`AuthError::InvalidClaims`] for a token the verifier would reject:
     /// an empty or control-character `subject` or `scope`, a `scope` over
-    /// [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES), `exp <= now`, or `exp`
-    /// more than this signer's lifetime limit after `now`.
+    /// [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES), `exp <= now`, `exp`
+    /// more than this signer's lifetime limit after `now`, or claims that
+    /// make the token longer than [`MAX_TOKEN_BYTES`].
     pub fn sign(
         &self,
         subject: &str,
@@ -183,6 +187,11 @@ impl TokenSigner {
             URL_SAFE_NO_PAD.encode(header.to_string()),
             URL_SAFE_NO_PAD.encode(claims.to_string()),
         );
+        if token.len() + 1 + SIGNATURE_B64_LEN > MAX_TOKEN_BYTES {
+            return Err(AuthError::InvalidClaims {
+                reason: "the subject and scope make the token longer than 8 KiB, which verifiers refuse; shorten them",
+            });
+        }
         let signature = self.key.sign(token.as_bytes());
         token.push('.');
         token.push_str(&URL_SAFE_NO_PAD.encode(signature.to_bytes()));

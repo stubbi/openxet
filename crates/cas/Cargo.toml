@@ -12,6 +12,10 @@ repository.workspace = true
 # the tests can check every route is in their credential and echo matrices.
 # Never enable it in a shipped build.
 test-support = []
+# Fuzz-only: `reconstruction_range()`, the `Range` parser of the
+# reconstruction routes, for the target in `fuzz/`. Never enable it in a
+# shipped build.
+fuzzing = []
 
 [dependencies]
 axum = "0.8.9"
@@ -57,4 +61,8 @@ harness = false
 
 [[bench]]
 name = "xorb_ingest"
+harness = false
+
+[[bench]]
+name = "commit_throughput"
 harness = false

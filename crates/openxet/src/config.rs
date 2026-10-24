@@ -1137,7 +1137,7 @@ mod tests {
     fn every_problem_is_reported_at_once() {
         let loaded = load_toml(
             "[server]\nbind = \"localhost\"\nbody_min_rate = 0\n[cas]\nheartbeat_interval = \"0s\"\n\
-             url_lifetime = \"25h\"\n[nope]\nx = 1\n",
+             url_lifetime = \"61m\"\n[nope]\nx = 1\n",
             &[("OPENXET_CAS__TYPO", "1")],
         );
         assert_eq!(
