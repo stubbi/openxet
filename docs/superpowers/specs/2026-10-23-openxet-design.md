@@ -47,6 +47,44 @@ artefact taxonomy.
   datasets (aqora is a likely first user), and want Xet storage under their
   own product, with their own naming, permissions and UI.
 
+### What people store with it
+
+Dedup saves bytes only where versions share content. These numbers are
+from spike S12 (draft PR #60, chunk-level with `xet-data` 1.7.0's
+chunker) unless marked as published by Hugging Face. They are upper
+bounds, since stock clients skip very short matches (§1a).
+
+- **ML models and datasets.** Hub compatibility means `hf`,
+  `huggingface_hub` and `git-xet` work unchanged. Model families save
+  about half: 29 GGUF quantizations of one model stored 191 GB in about
+  97 GB (published by HF), and fine-tunes dedup where they keep base
+  weights unchanged.
+- **Checkpoints from training runs.** Consecutive dense checkpoints dedup
+  about 0%, because every weight changes (Pythia-70m, two steps apart).
+  Compression saves about 15% on fp16. What helps is resuming, re-uploads
+  and partially frozen weights, not the next step.
+- **Dataset versions and Parquet appends.** An appended log's second
+  version adds about 10% new bytes, so about 90% of it dedups. Small
+  Parquet files dedup less: an append added about 46% new bytes with
+  content-defined chunking and 52% without, on 5 MB files.
+- **Artefacts and binaries from CI.** Uncompressed builds and tarballs
+  share chunks across versions: a CPython point release shared 23% of its
+  `.tar`. Compressed artefacts (`.tar.gz`, `.tar.xz`) dedup about 0%.
+- **Backups and logs.** Append-only logs and uncompressed snapshots dedup
+  well, as above. Compressed or client-side encrypted backups (restic,
+  Borg) dedup about 0%; for those openxet is plain storage.
+- **Agent-generated outputs.** Agents re-run, retry and rewrite. Outputs
+  that repeat content dedup like any version series; S12 measured no
+  agent workload, so we claim no number. The agent surfaces of §7.1 let
+  them store without a human in the loop.
+- **Platforms embedding storage** (aqora first). Storage-only mode and the
+  authorizer webhook put Xet storage under their own naming and
+  permissions (§5.4), with metering for their own billing (§5.7).
+
+Where dedup doesn't help, openxet still gives Hub and Git compatibility,
+the user's own bucket and identity, and honest numbers: every repo page
+shows logical and stored bytes (§10.10).
+
 ### What success looks like
 
 - From zero to a working `hf upload` against openxet in under two minutes:
