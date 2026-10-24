@@ -4,16 +4,19 @@ Nothing here reads or writes the developer's real ~/.cache/huggingface: every
 client run gets an isolated HF_HOME and HF_XET_CACHE under pytest's tmp_path.
 """
 
+import contextlib
 import hashlib
 import importlib.metadata
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import pytest
 
 DEFAULT_ENDPOINT = "https://huggingface.co"
@@ -139,8 +142,39 @@ def target() -> Target:
     return _target_from_env()
 
 
-def build_hf_env(target: Target, root: Path) -> dict[str, str]:
-    """Environment for a client subprocess: anonymous, isolated, aimed at the target.
+# The only HF_XET_*, HF_HUB_* and OPENXET_* variables a child process sees:
+# the ones the harness sets itself. Any other one in the developer's shell
+# (HF_XET_HIGH_PERFORMANCE, HF_XET_CLIENT_READ_TIMEOUT, HF_HUB_OFFLINE,
+# OPENXET_AUTH__JWT_PUBLIC_KEYS, ...) could change chunking, caching,
+# timeouts or the server's configuration, so it never reaches a child.
+HARNESS_ENV = frozenset(
+    {
+        "HF_HUB_CACHE",
+        "HF_HUB_DISABLE_TELEMETRY",
+        "HF_XET_CACHE",
+        "OPENXET_COMPAT_TOKEN",
+        "OPENXET_COMPAT_TOKEN_EXP",
+        "OPENXET_COMPAT_XET_CALLS",
+        "OPENXET_ENDPOINT",
+        "OPENXET_SERVER__LOG_LEVEL",
+        "OPENXET_TOKEN",
+    }
+)
+SCRUBBED_PREFIXES = ("HF_XET_", "HF_HUB_", "OPENXET_")
+
+
+def assert_scrubbed(env: dict[str, str]) -> None:
+    leaked = sorted(
+        k for k in env if k.startswith(SCRUBBED_PREFIXES) and k not in HARNESS_ENV
+    )
+    assert not leaked, (
+        f"the child environment inherits {leaked}; only variables the harness "
+        "sets itself belong in HARNESS_ENV"
+    )
+
+
+def isolated_env(root: Path, **harness: str) -> dict[str, str]:
+    """Environment for a child process: anonymous, with every cache under `root`.
 
     Built from an allowlist, not by filtering os.environ: huggingface_hub also
     honours legacy names (HUGGINGFACE_HUB_CACHE, HUGGING_FACE_HUB_TOKEN,
@@ -154,11 +188,20 @@ def build_hf_env(target: Target, root: Path) -> dict[str, str]:
         HF_HOME=str(root / "hf"),
         HF_HUB_CACHE=str(root / "hf" / "hub"),
         HF_XET_CACHE=str(root / "xet"),
-        HF_ENDPOINT=target.endpoint,
         HF_HUB_DISABLE_TELEMETRY="1",
+    )
+    env.update(harness)
+    assert_scrubbed(env)
+    return env
+
+
+def build_hf_env(target: Target, root: Path) -> dict[str, str]:
+    """Environment for a huggingface_hub run aimed at the target."""
+    return isolated_env(
+        root,
+        HF_ENDPOINT=target.endpoint,
         OPENXET_COMPAT_XET_CALLS=str(root / "xet-calls.jsonl"),
     )
-    return env
 
 
 @pytest.fixture
@@ -187,9 +230,187 @@ def openxet_bin() -> str:
 
 
 @pytest.fixture(autouse=True)
-def _agent_tests_need_binary(request):
-    if request.node.get_closest_marker("agent"):
+def _openxet_tests_need_binary(request):
+    if request.node.get_closest_marker("agent") or request.node.get_closest_marker(
+        "storage_only"
+    ):
         request.getfixturevalue("openxet_bin")
+
+
+# Debug-log routes (axum route templates) that tests count.
+XORB_ROUTE = "/v1/xorbs/{prefix}/{hash}"
+DEDUP_ROUTE = "/v1/chunks/{prefix}/{hash}"
+RECONSTRUCTION_ROUTE = "/v2/reconstructions/{hash}"
+
+SERVE_PATIENCE = 120.0
+
+
+class OpenxetServer:
+    """A running `openxet serve` and its JSON debug log.
+
+    `server.log_level = "debug"` logs a `started processing request` and a
+    `finished processing request` line (with `status`) per request, under a
+    span naming the method and the matched route, so requests are counted
+    from the server's own log, with no endpoint that exists only for tests.
+    """
+
+    def __init__(self, proc: subprocess.Popen, ready: dict, data_dir: Path, lines: list):
+        self.proc = proc
+        self.endpoint: str = ready["endpoint"]
+        self.token: str | None = ready["token"]
+        self.token_exp: int | None = ready["token_exp"]
+        self.scope: str | None = ready["scope"]
+        self.data_dir = data_dir
+        self._lines = lines
+
+    def log(self) -> list[dict]:
+        entries = []
+        for line in list(self._lines):
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return entries
+
+    def mark(self) -> int:
+        """A position in the log, for counting only what happens after it."""
+        self.settle()
+        return len(self.log())
+
+    def _requests(self, message: str, method: str, route: str, since: int) -> list[dict]:
+        return [
+            entry
+            for entry in self.log()[since:]
+            if entry.get("fields", {}).get("message") == message
+            and entry.get("span", {}).get("method") == method
+            and entry.get("span", {}).get("route") == route
+        ]
+
+    def requests(self, method: str, route: str, since: int = 0) -> int:
+        return len(self._requests("started processing request", method, route, since))
+
+    def statuses(self, method: str, route: str, since: int = 0) -> list[int]:
+        return [
+            entry["fields"]["status"]
+            for entry in self._requests("finished processing request", method, route, since)
+        ]
+
+    def settle(self) -> None:
+        """Waits until every request the server started has been answered."""
+        deadline = time.monotonic() + SERVE_PATIENCE
+        while True:
+            messages = [entry.get("fields", {}).get("message") for entry in self.log()]
+            if messages.count("finished processing request") >= messages.count(
+                "started processing request"
+            ):
+                return
+            assert time.monotonic() < deadline, "the server log never settled"
+            time.sleep(0.02)
+
+    def xorb_bytes_accepted(self, since: int) -> int:
+        """Stored size of every xorb accepted after `since`: the bodies the
+        clients sent plus each stored footer, so never less than the wire."""
+        xorbs = self.data_dir / "bucket" / "xorbs" / "default"
+        return sum(
+            (xorbs / entry["fields"]["xorb"][:2] / entry["fields"]["xorb"]).stat().st_size
+            for entry in self.log()[since:]
+            if entry.get("fields", {}).get("message") == "xorb upload accepted"
+        )
+
+
+def _first_line(pipe, patience: float) -> bytes:
+    """The first line of `pipe`, then keeps draining it so the child never blocks."""
+    first: list[bytes] = []
+    got = threading.Event()
+
+    def read():
+        first.append(pipe.readline())
+        got.set()
+        for _ in pipe:
+            pass
+
+    threading.Thread(target=read, daemon=True).start()
+    got.wait(patience)
+    return first[0] if first else b""
+
+
+@contextlib.contextmanager
+def openxet_serve(openxet_bin: str, root: Path, config: Path | None = None):
+    """Runs `openxet serve` with its data under `root` until the block exits."""
+    data_dir = root / "data"
+    args = [openxet_bin, "serve", "--data-dir", str(data_dir), "--port", "0"]
+    args += ["--json", "--log-format", "json"]
+    if config is not None:
+        args += ["--config", str(config)]
+    proc = subprocess.Popen(
+        args,
+        env=isolated_env(root / "env", OPENXET_SERVER__LOG_LEVEL="debug"),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    lines: list[str] = []
+
+    def drain():
+        for raw in proc.stderr:
+            lines.append(raw.decode("utf-8", errors="replace"))
+
+    drainer = threading.Thread(target=drain, daemon=True)
+    drainer.start()
+    try:
+        line = _first_line(proc.stdout, SERVE_PATIENCE)
+        try:
+            ready = json.loads(line)
+        except json.JSONDecodeError:
+            proc.kill()
+            proc.wait()
+            drainer.join(5)
+            # The server's log never holds a credential (docs/reference/config.md).
+            pytest.fail(
+                f"openxet serve printed no ready line (exit code {proc.returncode}); "
+                "stderr:\n" + "".join(lines),
+                pytrace=False,
+            )
+        assert ready["schema"] == "openxet.serve.v1", ready["schema"]
+        deadline = time.monotonic() + SERVE_PATIENCE
+        while httpx.get(f"{ready['endpoint']}/readyz", timeout=5).status_code != 200:
+            assert time.monotonic() < deadline, "openxet serve never became ready"
+            time.sleep(0.05)
+        yield OpenxetServer(proc, ready, data_dir, lines)
+    finally:
+        proc.kill()
+        proc.wait()
+        drainer.join(5)
+
+
+@pytest.fixture
+def openxet_server(openxet_bin, tmp_path):
+    """A dev-mode `openxet serve`: one static write token for scope `default`."""
+    with openxet_serve(openxet_bin, tmp_path / "server") as server:
+        yield server
+
+
+_MEASUREMENTS = pytest.StashKey[list[str]]()
+
+
+@pytest.fixture
+def record_measurement(request):
+    """Records a number for the terminal summary, without asserting it."""
+
+    def record(name: str, value: int, unit: str) -> None:
+        request.config.stash.setdefault(_MEASUREMENTS, []).append(
+            f"{request.node.nodeid}: {name} = {value:,} {unit}"
+        )
+
+    return record
+
+
+def pytest_terminal_summary(terminalreporter, config):
+    lines = config.stash.get(_MEASUREMENTS, [])
+    if lines:
+        terminalreporter.section("measurements (informational)")
+        for line in lines:
+            terminalreporter.write_line(line)
 
 
 def run_hub_download(target: Target, hf_env: dict[str, str], file: HubFile) -> Path:
