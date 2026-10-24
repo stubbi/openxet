@@ -178,15 +178,21 @@ docs(adr): 0003 use xet-core-structures for xorb and shard parsing
 ```
 
 Scopes: `protocol`, `cas`, `index`, `storage`, `transfer`, `hub`, `git`,
-`ssh`, `auth`, `gc`, `web`, `client`, `server`, `hosted`, `site`, `ci`,
-`docs`, `adr`, `deps`. `web` is the self-service web UI; `site` is the
-openxet.com landing page in `website/`.
+`ssh`, `auth`, `gc`, `web`, `client`, `server`, `hosted`, `site`, `compat`,
+`ci`, `docs`, `adr`, `deps`. `web` is the self-service web UI; `site` is the
+openxet.com landing page in `website/`; `compat` is the compatibility suite
+in `compat/`.
 
 One logical change per commit. Every commit builds and passes tests.
 
 ## Current state
 
-M0 complete; M1 next per `docs/superpowers/plans/`. The design is approved,
+M1 complete: the storage-only CAS (`openxet serve`, `upload`, `download`;
+`docs/quickstart-storage-only.md`), with the compatibility suite's agent,
+storage-only and docs legs and the reconstruction latency gate in CI
+(`docs/reference/benchmarks.md`), and every CAS route in
+`docs/reference/routes.md`. M2 next: the Hub API, Git and LFS, per
+`docs/superpowers/plans/` once its plan is written. The design is approved,
 and ADR 0001 decides to build from scratch on `xet-core`'s crates (after
 evaluating existing Xet servers; see `docs/competitive-matrix.md`).
 
@@ -211,14 +217,20 @@ cargo bench -p openxet-cas --bench reconstruction          # reconstruction and 
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
-cargo deny check                                           # licenses, advisories, bans
+cargo deny check                                           # licenses, advisories, bans (CI gate)
 scripts/check-client-core-ban.sh                           # the ADR 0006 ban rejects xet-data & co. in a server crate (CI gate)
-fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
-cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser (targets: xorb_upload, xorb_chunks, upload_shard, verify_shard)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
+fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
+cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: each of xorb_upload, xorb_chunks, upload_shard, verify_shard)
+cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace's own dependencies (CI, with the fuzz job)
+cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null # fuzz/Cargo.lock is current (CI, with the fuzz job)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
-OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest # compatibility suite (needs uv; CI gates: -m agent, -m storage_only)
-cargo nextest list --workspace --message-format json > /tmp/tests.json && scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the tests that run (CI gate; also --pytest, see docs/reference/security-tests.md)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # docs/quickstart-storage-only.md runs as written (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it, plus the HF baseline against huggingface.co (nightly)
+cargo nextest list --workspace --message-format json > /tmp/tests.json && python3 -I scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the Rust tests that run (CI gate)
+uv run --frozen --directory compat pytest --collect-only -q > /tmp/compat-tests.txt && python3 -I scripts/check-security-tests-map.py --pytest /tmp/compat-tests.txt # the same for the compat tests (CI gate)
 python3 -m http.server -d website 8000                    # preview the openxet.com site; main deploys it (.github/workflows/pages.yml)
 ```
 

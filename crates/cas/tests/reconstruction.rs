@@ -823,6 +823,7 @@ async fn head_file_size() {
         .await;
         assert_eq!(reply.status, 200);
         assert_eq!(reply.headers[CONTENT_LENGTH], bytes.len().to_string());
+        assert_eq!(reply.headers[CACHE_CONTROL], "no-store");
         assert!(reply.body.is_empty());
     }
     // The capture's empty file is the all-zero hash, so another one.
@@ -834,6 +835,7 @@ async fn head_file_size() {
     )
     .await;
     missing.assert_error(404, "not_found");
+    assert_eq!(missing.headers[CACHE_CONTROL], "no-store");
 }
 
 #[tokio::test]

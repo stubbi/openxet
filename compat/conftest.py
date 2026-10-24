@@ -231,9 +231,7 @@ def openxet_bin() -> str:
 
 @pytest.fixture(autouse=True)
 def _openxet_tests_need_binary(request):
-    if request.node.get_closest_marker("agent") or request.node.get_closest_marker(
-        "storage_only"
-    ):
+    if any(request.node.get_closest_marker(m) for m in ("agent", "storage_only", "docs")):
         request.getfixturevalue("openxet_bin")
 
 

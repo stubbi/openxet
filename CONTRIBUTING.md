@@ -20,21 +20,37 @@ Install Rust through [rustup](https://rustup.rs); the toolchain is pinned in
 The compatibility suite needs [uv](https://docs.astral.sh/uv/), which
 installs the pinned Python and HF clients from `compat/uv.lock`.
 Run from the repository root. CI runs these same commands
-(`.github/workflows/ci.yml`), so green locally means green there.
+(`.github/workflows/ci.yml`), so green locally means green there, except
+for the latency gate: timed, it needs a quiet machine, and a p99 failure
+with steady p50s on a busy host is load, not a regression. The criterion
+benchmarks are for humans, not CI gates: record their results, with the
+machine, in [`docs/reference/benchmarks.md`](docs/reference/benchmarks.md).
 
 ```bash
 cargo build                                                # build the workspace
 scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
 cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
+cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate)
+cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
+cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
-cargo deny check                                           # licenses, advisories, bans
-fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
-cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser (targets: xorb_upload, xorb_chunks, upload_shard, verify_shard)
+cargo deny check                                           # licenses, advisories, bans (CI gate)
+scripts/check-client-core-ban.sh                           # the ADR 0006 ban rejects xet-data & co. in a server crate (CI gate)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
+fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
+cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: each of xorb_upload, xorb_chunks, upload_shard, verify_shard)
+cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace's own dependencies (CI, with the fuzz job)
+cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null # fuzz/Cargo.lock is current (CI, with the fuzz job)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
-OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent # agent leg (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # docs/quickstart-storage-only.md runs as written (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it, plus the HF baseline against huggingface.co (nightly)
+cargo nextest list --workspace --message-format json > /tmp/tests.json && python3 -I scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the Rust tests that run (CI gate)
+uv run --frozen --directory compat pytest --collect-only -q > /tmp/compat-tests.txt && python3 -I scripts/check-security-tests-map.py --pytest /tmp/compat-tests.txt # the same for the compat tests (CI gate)
+python3 -m http.server -d website 8000                    # preview the openxet.com site; main deploys it (.github/workflows/pages.yml)
 ```
 
 Fuzzing needs the nightly toolchain (`rustup toolchain install nightly`) and
@@ -46,8 +62,10 @@ CI use the default. A crash input becomes a regression test in
 `crates/protocol/tests/` together with its fix. CI's `fuzz-smoke` job runs
 each target for 60 s on PRs that touch `crates/protocol/` or `fuzz/`.
 
-The full compatibility suite (`pytest` without `-m agent`) talks to
-huggingface.co, and CI runs it nightly.
+The legs marked `agent`, `storage_only` and `docs` need only the built
+`openxet`. The rest of the compatibility suite talks to huggingface.co, and
+CI runs it nightly (`.github/workflows/compat-nightly.yml`) with the pinned
+and the newest client releases.
 
 ## Before you start
 

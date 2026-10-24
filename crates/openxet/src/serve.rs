@@ -440,7 +440,10 @@ impl HumanDisplay for Ready<'_> {
              \n  token     {token}\
              \n            scope \"{DEV_SCOPE}\" (write), kept in {data_dir}/dev-token\n\
              \nUpload with hf_xet (once: pip install hf_xet):\
-             \n  python3 -c 'import hf_xet; print(hf_xet.upload_files([\"model.bin\"], \"{endpoint}\", (\"{token}\", 2**62), None, None, None))'\n\
+             \n  python3 -c 'import hf_xet; c = hf_xet.XetSession().new_upload_commit(\
+             endpoint=\"{endpoint}\", token=\"{token}\", token_expiry_unix_secs=2**62); \
+             u = c.start_upload_file(\"model.bin\"); c.wait_to_finish(); \
+             print(u.result().xet_info.hash)'\n\
              \nUpload with openxet:\
              \n  export OPENXET_ENDPOINT={endpoint} OPENXET_TOKEN={token}\
              \n  openxet upload model.bin\n\

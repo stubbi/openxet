@@ -413,8 +413,10 @@ def test_version_floor_recorded():
 
 def test_fresh_cache_edit_bytes_recorded(openxet_server, clients, tmp_path, record_measurement):
     # Design §1a: a 1 MiB edit in the middle of a 100 MiB file, re-uploaded
-    # by stock hf_xet with an empty cache. Recorded, not asserted, here:
-    # Task 10b adds the assertion of the bound.
+    # by stock hf_xet with an empty cache. Recorded, not asserted, here: the
+    # bound (at most 2 MiB) is asserted with the openxet client, on the same
+    # client core, by `fresh_cache_edit_dedups_against_the_server` in
+    # crates/openxet/tests/transfer_cmd.rs.
     size, edit = 100 * MiB, MiB
     original = write_noise(tmp_path / "original.bin", size, 12)
     edited = tmp_path / "edited.bin"
@@ -436,3 +438,66 @@ def test_fresh_cache_edit_bytes_recorded(openxet_server, clients, tmp_path, reco
     dest = tmp_path / "edited.out"
     clients.hf_xet_download(openxet_server, dest, info)
     assert sha256(dest) == sha256(edited)
+
+
+def _messages(server) -> list[str]:
+    return [entry.get("fields", {}).get("message", "") for entry in server.log()]
+
+
+@pytest.mark.parametrize("killed", ["server", "client"])
+def test_sigkill_mid_upload_never_blocks_reupload(openxet_bin, tmp_path, killed):
+    # Lesson L10 (docs/competitive-matrix.md): a SIGKILL at any point in an
+    # upload never blocks re-uploading the same content. Stock hf_xet
+    # uploads a file of several xorbs. Once the server has accepted the
+    # first xorb, and before any shard is registered, the server or the
+    # client is SIGKILLed. On a restarted server, the same client with the
+    # same Xet cache uploads the file again, and a fresh client downloads it.
+    path = write_noise(tmp_path / "big.bin", 512 * MiB, 14)
+    request = {"op": "upload", "paths": [str(path)]}
+
+    def start_upload(server) -> subprocess.Popen:
+        server.uses_credential(server.token)
+        env = isolated_env(
+            tmp_path / "client",
+            OPENXET_COMPAT_TOKEN=server.token,
+            OPENXET_COMPAT_TOKEN_EXP=str(server.token_exp),
+        )
+        return subprocess.Popen(
+            [sys.executable, "-c", _HF_XET, json.dumps({**request, "endpoint": server.endpoint})],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    root = tmp_path / "server"
+    with openxet_serve(openxet_bin, root) as server:
+        client = start_upload(server)
+        try:
+            deadline = time.monotonic() + CLIENT_PATIENCE
+            while "xorb upload accepted" not in _messages(server):
+                assert client.poll() is None, "the upload ended before the server took a xorb"
+                assert time.monotonic() < deadline, "the server never accepted a xorb"
+                time.sleep(0.01)
+            # A killed client leaves a xorb body half sent, so the log can't
+            # settle; what it holds by now decides whether the kill was
+            # mid-upload, since a dead client registers nothing later.
+            (server.proc if killed == "server" else client).kill()
+        finally:
+            client.kill()
+            client.communicate()
+        assert "shard registered" not in _messages(server), (
+            "the upload finished before the kill, so the kill was not mid-upload"
+        )
+
+    with openxet_serve(openxet_bin, root) as server:
+        client = start_upload(server)
+        out, err = client.communicate(timeout=CLIENT_PATIENCE)
+        assert client.returncode == 0, err.replace(server.token, "REDACTED")
+        [info] = json.loads(out)
+        dest = tmp_path / "big.out"
+        Clients(openxet_bin, tmp_path / "fresh").hf_xet_download(server, dest, info)
+
+    assert info["size"] == path.stat().st_size
+    assert sha256(dest) == sha256(path)

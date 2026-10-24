@@ -3,9 +3,9 @@ name: compat-nightly
 # Real HF clients against huggingface.co, anonymously. The "latest" leg runs
 # the newest HF client releases (httpx and pytest stay pinned) to catch
 # upstream drift before it reaches users (design section 8). The storage-only
-# legs run the newest hf-xet release and pre-release against openxet serve.
-# The agent leg and the pinned storage-only leg run on every PR, so they are
-# excluded here.
+# legs run the newest hf-xet release and pre-release against openxet serve,
+# through the storage-only tests and the quickstart. The agent, docs and
+# pinned storage-only legs run on every PR, so they are excluded here.
 on:
   schedule:
     - cron: "0 4 * * *"
@@ -56,13 +56,13 @@ jobs:
           version: "0.9.8"
       - name: Run suite with the locked client versions
         if: matrix.clients == 'pinned'
-        run: uv run --frozen pytest -m "not agent and not storage_only" | tee report.txt
+        run: uv run --frozen pytest -m "not agent and not storage_only and not docs" | tee report.txt
       - name: Run suite with the latest HF client releases
         if: matrix.clients == 'latest'
         run: >
           uv run --no-project --with huggingface_hub --with hf_xet
           --with httpx==0.28.1 --with pytest==9.1.1
-          pytest -m "not agent and not storage_only and not pinned" | tee report.txt
+          pytest -m "not agent and not storage_only and not docs and not pinned" | tee report.txt
       - name: Keep the version header
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -107,12 +107,15 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/clients" --prerelease "$PRERELEASE" \
             hf-xet httpx==0.28.1 pytest==9.1.1 pyjwt==2.15.1 cryptography==50.0.2
           uv pip list --python "$RUNNER_TEMP/clients" | grep -i '^hf-xet '
-      - name: Run the storage-only leg
+      # The quickstart tells readers to install `hf_xet>=1.7.0`, so it runs
+      # with the newest release too.
+      - name: Run the storage-only leg and the quickstart
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
         run: >
           "$RUNNER_TEMP/clients/bin/python" -m pytest tests/test_storage_only.py
-          -m "storage_only and not pinned" | tee report.txt
+          tests/test_docs_quickstart.py -m "(storage_only or docs) and not pinned"
+          | tee report.txt
       - name: Keep the version header and measurements
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
