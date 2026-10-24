@@ -13,11 +13,11 @@ use std::sync::Arc;
 use common::shard::hf_xet_shard;
 use common::xorb::{HF_XET_XORB, chunk_data, hf_xet_xorb, stored, xorb_of, xorb_path};
 use common::{
-    DEDUP_MERKLEDB_PATH, DEDUP_PATH, OTHER_PREFIX_DEDUP_PATH, Reply, TestServer, WrapIndex, bearer,
-    config,
+    DEDUP_MERKLEDB_PATH, DEDUP_PATH, OTHER_PREFIX_DEDUP_PATH, Reply, SCOPE_A, TestServer,
+    WrapIndex, bearer, config,
 };
 use openxet_cas::Clock as _;
-use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, Visibility};
+use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility};
 use openxet_protocol::{
     DedupAnswer, MerkleHash, chunk_hash, hash_to_hex, is_dedup_eligible, read_dedup_answer,
     read_upload_shard,
@@ -513,4 +513,221 @@ async fn index_failure_is_503() {
     let answer = get(&server, DEDUP_PATH, Some(&server.read_token)).await;
 
     reply(&answer).assert_error(503, "unavailable");
+}
+
+/// A xorb of `chunks` distinct uncompressed chunks labelled `label`; with
+/// `eligible`, its last chunk is the one dedup-eligible chunk
+/// [`chunk_data`] finds.
+fn labelled_xorb(label: &str, chunks: usize, eligible: bool) -> Vec<u8> {
+    let mut data: Vec<Vec<u8>> = (0..chunks)
+        .map(|i| format!("{label}/chunk{i}").into_bytes())
+        .collect();
+    if eligible {
+        data.push(chunk_data(true));
+    }
+    let refs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+    xorb_of(&refs)
+}
+
+/// Registers to `scope`, straight in the index, a one-file shard whose
+/// terms cover `xorbs` whole in order, as a verified upload would; the
+/// file's first chunk becomes a dedup candidate. Returns that chunk.
+async fn register_file(
+    server: &TestServer,
+    label: &str,
+    xorbs: &[MerkleHash],
+    scope: &'static str,
+    vis: Visibility,
+) -> MerkleHash {
+    let index = Arc::clone(&server.index);
+    let xorbs = xorbs.to_vec();
+    let shard = chunk_hash(format!("shard/{label}").as_bytes());
+    let file = chunk_hash(format!("file/{label}").as_bytes());
+    server
+        .on_server(async move {
+            let tables = index
+                .chunk_tables(&xorbs, scope, Visibility::Global)
+                .await
+                .unwrap();
+            let terms: Vec<Term> = xorbs
+                .iter()
+                .map(|x| {
+                    let n = tables[x].hashes.len();
+                    Term {
+                        xorb: *x,
+                        chunk_start: 0,
+                        chunk_end: u32::try_from(n).unwrap(),
+                        unpacked_bytes: tables[x]
+                            .hashes
+                            .iter()
+                            .map(|(_, l)| u32::try_from(*l).unwrap())
+                            .sum(),
+                    }
+                })
+                .collect();
+            let first = tables[&xorbs[0]].hashes[0].0;
+            let record = FileRecord {
+                hash: file,
+                size: terms.iter().map(|t| u64::from(t.unpacked_bytes)).sum(),
+                terms,
+            };
+            let new = NewFile {
+                record,
+                sha256: None,
+                first_chunk: Some(first),
+            };
+            index
+                .register_shard(&shard, &[new], scope, vis)
+                .await
+                .unwrap();
+            first
+        })
+        .await
+}
+
+/// The sorted xorbs `answer` offers, read as the client reads it.
+fn offered(answer: &Answer, chunk: &MerkleHash) -> DedupAnswer {
+    assert_eq!(
+        answer.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    let mut read = read_dedup_answer(&answer.body, chunk).unwrap();
+    read.xorbs.sort();
+    read
+}
+
+fn sorted(xorbs: &[MerkleHash]) -> Vec<MerkleHash> {
+    let mut xorbs = xorbs.to_vec();
+    xorbs.sort();
+    xorbs
+}
+
+#[tokio::test]
+async fn dedup_answer_offers_the_shards_xorbs() {
+    // Ruling M1-R30: a hit on a file's first chunk offers every xorb of the
+    // shard that registered the file, so a client with an empty cache
+    // dedups the whole file from one answer (S11).
+    let server = TestServer::start_default().await;
+    let mut xorbs = Vec::new();
+    for (i, eligible) in [false, true, false].into_iter().enumerate() {
+        let body = labelled_xorb(&format!("x{i}"), 3, eligible);
+        xorbs.push(upload_xorb(&server, body, &server.write_token).await);
+    }
+    let first = register_file(&server, "f", &xorbs, SCOPE_A, Visibility::Global).await;
+
+    let read = offered(&query(&server, &first, &server.read_token).await, &first);
+    assert_eq!(read.xorbs, sorted(&xorbs));
+    assert_eq!(read.matched, Some((xorbs[0], 0)));
+    assert_eq!(read.files, 0);
+
+    // A hit in the middle xorb offers them all too, matched there.
+    let eligible = chunk_hash(&chunk_data(true));
+    let read = offered(
+        &query(&server, &eligible, &server.read_token).await,
+        &eligible,
+    );
+    assert_eq!(read.xorbs, sorted(&xorbs));
+    assert_eq!(read.matched, Some((xorbs[1], 3)));
+}
+
+#[tokio::test]
+async fn dedup_answer_falls_back_without_a_shard() {
+    // A xorb no registered shard references yet is offered alone, as
+    // before ruling M1-R30; so is one only another file's shard names.
+    let server = TestServer::start_default().await;
+    let (body, eligible, _) = mixed_xorb();
+    let xorb = upload_xorb(&server, body, &server.write_token).await;
+    assert_offers(
+        &query(&server, &eligible, &server.read_token).await,
+        &eligible,
+        &xorb,
+    );
+
+    let other = upload_xorb(
+        &server,
+        labelled_xorb("other", 2, false),
+        &server.write_token,
+    )
+    .await;
+    register_file(&server, "other", &[other], SCOPE_A, Visibility::Global).await;
+    assert_offers(
+        &query(&server, &eligible, &server.read_token).await,
+        &eligible,
+        &xorb,
+    );
+}
+
+#[tokio::test]
+async fn per_scope_multi_xorb_answer_hides_foreign_xorbs() {
+    // §5.9 req 4 under `PerScope`: a shard registered while visibility was
+    // `Global` may reference another scope's xorb. Read under `PerScope`,
+    // the answer offers only the caller's xorbs and names no other.
+    let server = TestServer::start(config(Visibility::PerScope)).await;
+    let mine = upload_xorb(
+        &server,
+        labelled_xorb("mine", 3, false),
+        &server.write_token,
+    )
+    .await;
+    let foreign_body = labelled_xorb("foreign", 3, false);
+    let foreign_chunks = stored(&foreign_body).chunks.hashes;
+    let foreign = upload_xorb(&server, foreign_body, &server.other_scope_token).await;
+    let first = register_file(
+        &server,
+        "mixed",
+        &[mine, foreign],
+        SCOPE_A,
+        Visibility::Global,
+    )
+    .await;
+
+    let answer = query(&server, &first, &server.read_token).await;
+    let read = offered(&answer, &first);
+    assert_eq!(read.xorbs, vec![mine]);
+    assert!(
+        !answer.body.windows(32).any(|w| w == foreign.as_bytes()),
+        "the answer names another scope's xorb"
+    );
+    for (chunk, _) in &*foreign_chunks {
+        assert!(!reveals(&answer.body, chunk));
+    }
+
+    // Another scope's chunk is still exactly a "never stored".
+    let foreign_query = query(&server, &first, &server.other_scope_read_token).await;
+    let never = query(
+        &server,
+        &MerkleHash::default(),
+        &server.other_scope_read_token,
+    )
+    .await;
+    assert_no_match(&foreign_query);
+    assert_eq!(foreign_query.body, never.body);
+}
+
+#[tokio::test]
+async fn dedup_answer_never_contains_raw_hashes_or_file_info() {
+    // §5.9 req 4 for multi-xorb answers: every chunk hash of every offered
+    // xorb is keyed, none appears raw or truncated, and no file is named.
+    let server = TestServer::start_default().await;
+    let mut xorbs = Vec::new();
+    let mut chunks = Vec::new();
+    for i in 0..4 {
+        let body = labelled_xorb(&format!("x{i}"), 5, false);
+        chunks.extend(stored(&body).chunks.hashes.iter().map(|(c, _)| *c));
+        xorbs.push(upload_xorb(&server, body, &server.write_token).await);
+    }
+    let first = register_file(&server, "f", &xorbs, SCOPE_A, Visibility::Global).await;
+
+    let answer = query(&server, &first, &server.read_token).await;
+    let read = offered(&answer, &first);
+    assert_eq!(read.xorbs, sorted(&xorbs));
+    assert_eq!(read.files, 0);
+    for chunk in &chunks {
+        assert!(!reveals(&answer.body, chunk), "raw chunk hash {chunk} sent");
+    }
+    let file = chunk_hash(b"file/f");
+    assert!(!answer.body.windows(32).any(|w| w == file.as_bytes()));
+    assert_eq!(answer.headers[CACHE_CONTROL], "no-store");
 }

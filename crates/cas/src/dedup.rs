@@ -1,12 +1,18 @@
 //! `GET /v1/chunks/{prefix}/{hash}`, global dedup (S10 §2; spec
 //! <https://huggingface.co/docs/xet/api#2-query-chunk-deduplication-global-deduplication>).
 //!
-//! 1. the index names the xorb to offer for the raw chunk hash, among the
-//!    xorbs visible to the caller, or the answer is `404`
-//! 2. the index loads that xorb's chunk table
-//! 3. `dedup_shard` builds a footered shard of it, its chunk hashes keyed
-//!    with a fresh random key that expires in [`KEY_LIFETIME`]
-//! 4. the answer is `200 application/octet-stream`
+//! 1. the index names the xorb holding the raw chunk hash, among the xorbs
+//!    visible to the caller, or the answer is `404`
+//! 2. the index names the xorbs of the newest visible shard that references
+//!    that xorb, in the shard's term order; the answer offers them starting
+//!    at the matched xorb and wrapping round, or the matched xorb alone if
+//!    no shard references it yet (ruling M1-R30, S11)
+//! 3. their chunk tables are loaded, only as many as fit
+//!    [`MAX_DEDUP_ANSWER_BYTES`]
+//! 4. `dedup_shard` builds a footered shard of them, its chunk hashes keyed
+//!    with a fresh random key that expires in [`KEY_LIFETIME`], within that
+//!    budget
+//! 5. the answer is `200 application/octet-stream`
 //!
 //! Keying hides the raw chunk hashes, so an answer tells the caller nothing
 //! about chunks it doesn't hold (design §5.9 req 4). The key is new per
@@ -16,9 +22,10 @@
 //! the caller's authorization, and a `200` is keyed per request (§5.9
 //! req 3).
 //!
-//! The shard is built on a blocking thread holding a `validate` permit
-//! (ruling M1-R25), so concurrent dedup work is bounded by the same
-//! CPU-sized permit set as xorb and shard validation.
+//! Loading the tables and building the shard hold a `validate` permit, the
+//! build on a blocking thread (ruling M1-R25), so concurrent dedup work and
+//! its memory are bounded by the same CPU-sized permit set as xorb and
+//! shard validation.
 
 use std::sync::Arc;
 
@@ -28,7 +35,10 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use openxet_protocol::{MAX_DEDUP_ANSWER_BYTES, MerkleHash, dedup_shard, hash_to_hex};
+use openxet_index::Visibility;
+use openxet_protocol::{
+    MAX_DEDUP_ANSWER_BYTES, MerkleHash, dedup_answer_xorb_bytes, dedup_shard, hash_to_hex,
+};
 
 use crate::blocking::blocking;
 use crate::cache::private;
@@ -42,6 +52,11 @@ const PREFIXES: &[&str] = &["default", "default-merkledb"];
 /// The client skips an expired shard in its cache on later sessions (S10
 /// §2), so this bounds how long a cached answer is reused.
 const KEY_LIFETIME: u64 = 7 * 24 * 60 * 60;
+
+/// Xorbs whose chunk tables one index read loads. Small enough that a read
+/// past the budget loads little to discard, large enough that a 10 GB
+/// file's shard (about 160 xorbs) takes three reads.
+const TABLES_PER_LOAD: usize = 64;
 
 /// `GET /v1/chunks/{prefix}/{hash}` (S10 §2).
 pub(crate) fn routes() -> Router<AppState> {
@@ -59,7 +74,7 @@ impl FromRequestParts<AppState> for ChunkPath {
     }
 }
 
-/// Answers with the shard offering the xorb the index names for `chunk`,
+/// Answers with the shard offering the xorbs the index names for `chunk`,
 /// or `404 not_found`. A missing chunk, an ineligible one (the index holds
 /// only eligible and first chunks) and, under `PerScope`, another scope's
 /// all answer alike.
@@ -68,18 +83,28 @@ async fn query(
     ReadAccess(principal): ReadAccess,
     State(state): State<AppState>,
 ) -> Result<Response, CasError> {
-    let (scope, vis) = (&principal.scope, state.cfg.visibility);
+    let (scope, vis) = (principal.scope.as_str(), state.cfg.visibility);
     let xorb = state
         .index
         .dedup_xorb(&chunk, scope, vis)
         .await?
         .ok_or(CasError::NoDedupMatch)?;
-    let Some(table) = state
-        .index
-        .chunk_tables(&[xorb], scope, vis)
-        .await?
-        .remove(&xorb)
-    else {
+    let order = offer_order(
+        state.index.dedup_shard_xorbs(&xorb, scope, vis).await?,
+        xorb,
+    );
+    let key = fresh_key()?;
+    let expiry = state.clock.now().saturating_add(KEY_LIFETIME);
+    // The tables are the answer's memory, up to about `MAX_DEDUP_ANSWER_BYTES`,
+    // so they are loaded under the permit the build then uses. Building and
+    // keying a full `MAX_XORB_CHUNKS` table takes about 1 ms in a release
+    // build (measured on an Apple M3); a full answer, about 170 such tables.
+    let permit = Arc::clone(&state.validate)
+        .acquire_owned()
+        .await
+        .map_err(CasError::internal)?;
+    let tables = load_tables(&state, &order, scope, vis).await?;
+    if tables.first().is_none_or(|(first, _)| *first != xorb) {
         // Nothing deletes a xorb in M1, so the dedup row and the chunk table
         // disagree. The client loses only this dedup match.
         tracing::warn!(
@@ -87,31 +112,66 @@ async fn query(
             "integrity anomaly: the index offers a dedup xorb whose chunk table it lacks"
         );
         return Err(CasError::NoDedupMatch);
-    };
-    let key = fresh_key()?;
-    let expiry = state.clock.now().saturating_add(KEY_LIFETIME);
-    // A full `MAX_XORB_CHUNKS` table builds and keys in about 1 ms in a
-    // release build (measured on an Apple M3). Cheap, but a flood of
-    // queries would otherwise grow the blocking pool without bound, so the
-    // work holds a `validate` permit (ruling M1-R25). Every failure is a
-    // server bug: a stored table within the format's counts and a non-zero
-    // key always serialize.
-    let permit = Arc::clone(&state.validate)
-        .acquire_owned()
-        .await
-        .map_err(CasError::internal)?;
-    let (_, body) = blocking(permit, move || {
-        dedup_shard(
-            &[(xorb, &table.hashes[..])],
-            MAX_DEDUP_ANSWER_BYTES,
-            key,
-            expiry,
-        )
+    }
+    // Every failure is a server bug: stored tables within the format's
+    // counts and a non-zero key always serialize.
+    let (_, built) = blocking(permit, move || {
+        let refs: Vec<(MerkleHash, &[(MerkleHash, u64)])> =
+            tables.iter().map(|(x, t)| (*x, &t[..])).collect();
+        dedup_shard(&refs, MAX_DEDUP_ANSWER_BYTES, key, expiry)
     })
     .await?;
-    let (body, _) = body.map_err(CasError::internal)?;
-    tracing::debug!(xorb = %hash_to_hex(&xorb), "dedup match offered");
+    let (body, offered) = built.map_err(CasError::internal)?;
+    tracing::debug!(
+        xorb = %hash_to_hex(&xorb),
+        offered,
+        bytes = body.len(),
+        "dedup match offered"
+    );
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
+}
+
+/// The xorbs to offer for a match in `matched`, in priority order: the
+/// shard's xorbs from the matched one onwards, then the ones before it
+/// (ruling M1-R30). Without a shard listing it, the matched xorb alone.
+fn offer_order(shard: Option<Vec<MerkleHash>>, matched: MerkleHash) -> Vec<MerkleHash> {
+    match shard {
+        Some(mut xorbs) => match xorbs.iter().position(|x| *x == matched) {
+            Some(at) => {
+                xorbs.rotate_left(at);
+                xorbs
+            }
+            None => vec![matched],
+        },
+        None => vec![matched],
+    }
+}
+
+/// The chunk tables of `order`'s xorbs that are stored and visible, in
+/// order, loading [`TABLES_PER_LOAD`] at a time and stopping once the
+/// loaded ones fill [`MAX_DEDUP_ANSWER_BYTES`]; `dedup_shard` makes the
+/// exact cut.
+async fn load_tables(
+    state: &AppState,
+    order: &[MerkleHash],
+    scope: &str,
+    vis: Visibility,
+) -> Result<Vec<(MerkleHash, Arc<[(MerkleHash, u64)]>)>, CasError> {
+    let mut tables = Vec::with_capacity(order.len());
+    let mut bytes = 0;
+    for batch in order.chunks(TABLES_PER_LOAD) {
+        let mut loaded = state.index.chunk_tables(batch, scope, vis).await?;
+        for xorb in batch {
+            if let Some(table) = loaded.remove(xorb) {
+                bytes += dedup_answer_xorb_bytes(table.hashes.len());
+                tables.push((*xorb, table.hashes));
+            }
+        }
+        if bytes >= MAX_DEDUP_ANSWER_BYTES {
+            break;
+        }
+    }
+    Ok(tables)
 }
 
 /// A random 32-byte HMAC key from the operating system's CSPRNG. Upstream
@@ -143,6 +203,7 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
+    use crate::test_support::PermitProbe;
     use crate::{router, test_support};
 
     // The scheme is a constant so the repository's secret scanner, which
@@ -165,7 +226,8 @@ mod tests {
     #[tokio::test]
     async fn building_the_answer_takes_a_validation_permit() {
         // Ruling M1-R25: dedup work is bounded by the CPU-sized `validate`
-        // permits, so a flood of queries can't grow the blocking pool.
+        // permits, so a flood of queries can't grow the blocking pool, and
+        // the chunk tables, the answer's memory, are loaded under one.
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
@@ -175,6 +237,7 @@ mod tests {
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.validate = Arc::new(Semaphore::new(1));
+        let probe = PermitProbe::install(&mut state);
         let (body, chunk) = eligible_chunk();
         let xorb = xorb_with_footer(&body).unwrap();
         let table = ChunkTable {
@@ -203,6 +266,25 @@ mod tests {
         drop(held);
         let response = answer.await.unwrap().unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            probe.free_at_load(),
+            Some(0),
+            "tables loaded without a permit"
+        );
         assert_eq!(state.validate.available_permits(), 1);
+    }
+
+    #[test]
+    fn offers_start_at_the_matched_xorb_and_wrap_round() {
+        let x: Vec<MerkleHash> = (0..4).map(MerkleHash::random_from_seed).collect();
+        assert_eq!(
+            offer_order(Some(x.clone()), x[2]),
+            vec![x[2], x[3], x[0], x[1]]
+        );
+        assert_eq!(offer_order(Some(x.clone()), x[0]), x);
+        assert_eq!(offer_order(None, x[1]), vec![x[1]]);
+        // A shard list without the matched xorb (none visible to the caller
+        // contains it) offers the matched xorb alone.
+        assert_eq!(offer_order(Some(x[..2].to_vec()), x[3]), vec![x[3]]);
     }
 }

@@ -502,92 +502,12 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use openxet_index::{ChunkTable, Index, IndexError, Visibility};
+    use openxet_index::ChunkTable;
     use openxet_storage::{Bucket, StorageError};
     use tokio::sync::Semaphore;
 
     use super::*;
-    use crate::test_support;
-
-    /// An index that records how many `validate` permits are free whenever
-    /// chunk tables are loaded.
-    struct PermitProbe {
-        inner: Arc<dyn Index>,
-        validate: Arc<Semaphore>,
-        free_at_load: AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl Index for PermitProbe {
-        async fn put_xorb(
-            &self,
-            xorb: &MerkleHash,
-            size: u64,
-            table: &ChunkTable,
-            eligible: &[MerkleHash],
-            scope: &str,
-        ) -> Result<bool, IndexError> {
-            self.inner
-                .put_xorb(xorb, size, table, eligible, scope)
-                .await
-        }
-
-        async fn xorb_size(
-            &self,
-            xorb: &MerkleHash,
-            scope: &str,
-            vis: Visibility,
-        ) -> Result<Option<u64>, IndexError> {
-            self.inner.xorb_size(xorb, scope, vis).await
-        }
-
-        async fn chunk_tables(
-            &self,
-            xorbs: &[MerkleHash],
-            scope: &str,
-            vis: Visibility,
-        ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
-            self.free_at_load
-                .store(self.validate.available_permits(), Ordering::SeqCst);
-            self.inner.chunk_tables(xorbs, scope, vis).await
-        }
-
-        async fn register_shard(
-            &self,
-            shard: &MerkleHash,
-            files: &[NewFile],
-            scope: &str,
-            vis: Visibility,
-        ) -> Result<bool, IndexError> {
-            self.inner.register_shard(shard, files, scope, vis).await
-        }
-
-        async fn file(
-            &self,
-            file: &MerkleHash,
-            scope: &str,
-        ) -> Result<Option<FileRecord>, IndexError> {
-            self.inner.file(file, scope).await
-        }
-
-        async fn dedup_xorb(
-            &self,
-            chunk: &MerkleHash,
-            scope: &str,
-            vis: Visibility,
-        ) -> Result<Option<MerkleHash>, IndexError> {
-            self.inner.dedup_xorb(chunk, scope, vis).await
-        }
-
-        async fn dedup_shard_xorbs(
-            &self,
-            xorb: &MerkleHash,
-            scope: &str,
-            vis: Visibility,
-        ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
-            self.inner.dedup_shard_xorbs(xorb, scope, vis).await
-        }
-    }
+    use crate::test_support::{self, PermitProbe};
 
     /// A bucket whose writes take 200 ms, recording the most writes in
     /// flight at once.
@@ -684,12 +604,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut state = test_support::state(dir.path(), vec![]).await;
         state.validate = Arc::new(Semaphore::new(1));
-        let probe = Arc::new(PermitProbe {
-            inner: Arc::clone(&state.index),
-            validate: Arc::clone(&state.validate),
-            free_at_load: AtomicUsize::new(usize::MAX),
-        });
-        state.index = Arc::clone(&probe) as Arc<dyn Index>;
+        let probe = PermitProbe::install(&mut state);
         let shard = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../testdata/hf-xet-1.7.0-upload/upload.shard"),
@@ -704,7 +619,7 @@ mod tests {
             matches!(outcome, Err(CasError::UnknownXorb { .. })),
             "{outcome:?}"
         );
-        assert_eq!(probe.free_at_load.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.free_at_load(), Some(0));
         assert_eq!(state.validate.available_permits(), 1);
     }
 }

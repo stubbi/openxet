@@ -381,6 +381,80 @@ fn reupload_sends_no_xorb() {
     );
 }
 
+/// The stored bytes of the xorbs the server accepted after the first
+/// `since` lines of its log: what clients sent, plus each stored footer,
+/// so never less than the bodies on the wire.
+fn xorb_bytes_accepted(server: &Server, data_dir: &Path, since: usize) -> u64 {
+    let hashes: Vec<String> = server.log()[since..]
+        .iter()
+        .filter(|line| line["fields"]["message"] == "xorb upload accepted")
+        .map(|line| line["fields"]["xorb"].as_str().unwrap().to_owned())
+        .collect();
+    let mut sizes = std::collections::HashMap::new();
+    let mut dirs = vec![data_dir.to_owned()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.to_string_lossy().contains("xorbs") {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                sizes.insert(name, std::fs::metadata(&path).unwrap().len());
+            }
+        }
+    }
+    hashes
+        .iter()
+        .map(|h| {
+            sizes
+                .get(h)
+                .copied()
+                .unwrap_or_else(|| panic!("xorb {h} not stored"))
+        })
+        .sum()
+}
+
+#[test]
+fn fresh_cache_edit_dedups_against_the_server() {
+    // Design §1a: after a 1 MiB edit in the middle of a 100 MiB file, a
+    // client with an empty cache sends at most 2 MiB of xorbs, because
+    // one dedup answer offers every xorb of the first upload's shard
+    // (ruling M1-R30, S11). Before it, about 30 MB went.
+    const SIZE: usize = 100 << 20;
+    const EDIT: usize = 1 << 20;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let server = Server::start(&data);
+    let original = noise(SIZE, 30);
+    let mut edited = original.clone();
+    edited[SIZE / 2..SIZE / 2 + EDIT].copy_from_slice(&noise(EDIT, 32));
+    let (a, b) = (dir.path().join("a.bin"), dir.path().join("b.bin"));
+    std::fs::write(&a, &original).unwrap();
+    std::fs::write(&b, &edited).unwrap();
+    drop((original, edited));
+
+    upload_result(&server, &dir.path().join("cache-1"), &[&a]);
+    server.settle();
+    let mark = server.log().len();
+    let dedup_queries = server.requests("GET", "/v1/chunks/{prefix}/{hash}");
+
+    let second = upload_result(&server, &dir.path().join("cache-2"), &[&b]);
+    server.settle();
+    let sent = xorb_bytes_accepted(&server, &data, mark);
+    assert!(
+        sent <= 2 << 20,
+        "a 1 MiB edit sent {sent} bytes of xorbs with a fresh cache: {second}"
+    );
+    assert!(
+        server.requests("GET", "/v1/chunks/{prefix}/{hash}") > dedup_queries,
+        "the second upload never asked for global dedup"
+    );
+    assert!(
+        second["bytes_deduplicated"].as_u64().unwrap() >= (SIZE - 2 * EDIT) as u64,
+        "{second}"
+    );
+}
+
 #[test]
 fn no_telemetry_sent() {
     let dir = tempfile::tempdir().unwrap();
