@@ -516,14 +516,17 @@ mod tests {
     #[test]
     fn only_unsupported_links_fall_back_to_a_plain_write() {
         let dir = tempfile::tempdir().unwrap();
-        for code in [
+        // Linux defines ENOTSUP and EOPNOTSUPP as one code, so each case is
+        // named by its position.
+        let unsupported = [
             libc::EXDEV,
             libc::EPERM,
             libc::ENOTSUP,
             libc::EOPNOTSUPP,
             libc::EMLINK,
-        ] {
-            let path = dir.path().join(format!("fallback-{code}"));
+        ];
+        for (i, code) in unsupported.into_iter().enumerate() {
+            let path = dir.path().join(format!("fallback-{i}"));
             create_linked(&path, b"x", 0o600, |_, _| Err(os_error(code))).unwrap();
             assert_eq!(fs::read(&path).unwrap(), b"x", "errno {code}");
         }
