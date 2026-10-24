@@ -110,6 +110,9 @@ def main() -> None:
     parser.add_argument("--scenario", choices=["reconstruct", "upload"], required=True)
     parser.add_argument("--connections", type=int, default=16)
     parser.add_argument("--hold", type=float, default=20.0, help="seconds the attack lasts")
+    parser.add_argument(
+        "--memory-budget", help="server.memory_budget, such as 1GiB; the server's default if unset"
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -120,7 +123,11 @@ def main() -> None:
         with ready.open("w") as out, (work / "serve.log").open("w") as log:
             server = subprocess.Popen(
                 [args.openxet, "serve", "--data-dir", str(data), "--port", "0", "--json"],
-                env={"PATH": os.environ["PATH"], "HOME": str(work / "server-home")},
+                env={
+                    "PATH": os.environ["PATH"],
+                    "HOME": str(work / "server-home"),
+                    **({"OPENXET_SERVER__MEMORY_BUDGET": args.memory_budget} if args.memory_budget else {}),
+                },
                 stdout=out,
                 stderr=log,
                 stdin=subprocess.DEVNULL,
@@ -165,6 +172,7 @@ def main() -> None:
                     "machine": f"{platform.system()} {platform.machine()}, {os.cpu_count()} CPUs",
                     "scenario": args.scenario,
                     "connections": args.connections,
+                    "memory_budget": args.memory_budget or "default",
                     "hold_seconds": args.hold,
                     "server_peak_rss_mib": round(rss / MiB),
                     "server_peak_footprint_mib": footprint and round(footprint / MiB),
