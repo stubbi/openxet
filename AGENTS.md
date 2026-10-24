@@ -212,6 +212,7 @@ cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser (targ
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest # compatibility suite (needs uv; CI gates: -m agent, -m storage_only)
+cargo nextest list --workspace --message-format json > /tmp/tests.json && scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the tests that run (CI gate; also --pytest, see docs/reference/security-tests.md)
 python3 -m http.server -d website 8000                    # preview the openxet.com site; main deploys it (.github/workflows/pages.yml)
 ```
 

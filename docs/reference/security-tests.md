@@ -10,17 +10,30 @@ M1 for the CAS, M2 for the Hub and Git, M5 for caches and the mirror.
 Pending rows name tests that are not written yet; their surface does not
 exist yet either.
 
-`compat/tests/test_security_tests_map.py` checks this page in CI: every
-written test is defined in the file it names, exactly once, and every test
-name in design §5.9 is in the table below.
+`scripts/check-security-tests-map.py` checks this page in CI against the
+tests that actually run:
+- every mapped Rust test is listed by `cargo nextest list` exactly once,
+  from the file the page names, and is not ignored;
+- every mapped compatibility test is collected by pytest from its file;
+- every test name in design §5.9 is in the table below;
+- every M0 or M1 row names a file; only M2 and later rows are pending.
 
 Run them all with:
 
 ```bash
 cargo nextest run --workspace
 uv run --directory compat pytest tests/test_fixture_redaction.py
+OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m agent
 OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m storage_only
+# The map check, against the tests that run:
+cargo nextest list --workspace --message-format json > /tmp/tests.json
+uv run --directory compat pytest --collect-only -q > /tmp/compat-tests.txt
+scripts/check-security-tests-map.py --nextest /tmp/tests.json --pytest /tmp/compat-tests.txt
 ```
+
+`assert_no_credential_logged` runs at the teardown of every server started
+through the compatibility suite's `openxet_serve` fixture, which the
+`storage_only` leg uses; the `agent` leg's servers are not scanned.
 
 ## Requirements and their tests
 
@@ -69,8 +82,8 @@ Notes on what some tests cover:
 - `credentials_never_logged` runs a server at `trace` level through
   uploads, downloads and every kind of refusal, then scans its whole log
   for each credential, signature and key. The compatibility suite repeats
-  the scan for every server it starts (`assert_no_credential_logged`
-  below).
+  the scan for every server its `openxet_serve` fixture starts
+  (`assert_no_credential_logged` below).
 
 ## Supporting tests
 
@@ -87,4 +100,4 @@ requirement that the named tests don't.
 | 4 | `per_scope_shard_cannot_reference_foreign_xorb` | `crates/cas/tests/shards.rs` | Shard verification's xorb lookups under `per-scope`. |
 | 6 | `auth_errors_never_contain_the_credential` | `crates/auth/tests/auth.rs` | Credential errors never carry the credential. |
 | 6 | `signed_urls_are_never_logged` | `crates/cas/tests/reconstruction.rs` | A transfer URL's signature never reaches the log. |
-| 6 | `assert_no_credential_logged` | `compat/conftest.py` | Every compatibility-suite server's log is scanned for the credentials its clients sent. |
+| 6 | `assert_no_credential_logged` | `compat/conftest.py` | The log of every server the `openxet_serve` fixture starts is scanned for the credentials its clients sent. |
