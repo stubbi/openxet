@@ -796,6 +796,15 @@ mod tests {
         ) -> Result<Option<MerkleHash>, IndexError> {
             self.inner.dedup_xorb(chunk, scope, vis).await
         }
+
+        async fn dedup_shard_xorbs(
+            &self,
+            xorb: &MerkleHash,
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
+            self.inner.dedup_shard_xorbs(xorb, scope, vis).await
+        }
     }
 
     #[tokio::test]

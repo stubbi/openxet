@@ -98,6 +98,10 @@ pub trait Index: Send + Sync + 'static {
     ///   ignored.
     /// - Each file's `first_chunk` becomes a dedup candidate for its first
     ///   term's xorb.
+    /// - The shard's distinct term xorbs are recorded in term order (the
+    ///   order of first reference across its files), for
+    ///   [`Index::dedup_shard_xorbs`]. A shard newly registered to `scope`
+    ///   becomes the newest registration.
     ///
     /// Returns `true` if the shard or any of its files was newly registered
     /// to `scope`, `false` if all of it already was.
@@ -138,6 +142,25 @@ pub trait Index: Send + Sync + 'static {
         scope: &str,
         vis: Visibility,
     ) -> Result<Option<MerkleHash>, IndexError>;
+
+    /// The xorbs a global dedup answer offers alongside `xorb` (ruling
+    /// M1-R30): those of the newest registered shard whose files reference
+    /// `xorb`, in that shard's term order, as [`Index::register_shard`]
+    /// recorded them. Under [`Visibility::PerScope`] the shard must be
+    /// registered to `scope` and "newest" counts only `scope`'s
+    /// registrations; under [`Visibility::Global`] any scope's count. Only
+    /// xorbs visible to `scope` under `vis` are listed, so the answer names
+    /// no other xorb. `None` if no such shard lists a visible xorb.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn dedup_shard_xorbs(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<Vec<MerkleHash>>, IndexError>;
 }
 
 /// Errors from the index. Messages name no credentials or secrets; scopes

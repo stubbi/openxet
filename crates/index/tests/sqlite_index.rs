@@ -436,6 +436,11 @@ async fn register_shard_is_atomic() {
             None
         );
     }
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&xorb, A, Visibility::Global).await),
+        None,
+        "the shard_xorbs rows rolled back"
+    );
     // The shard_scopes row rolled back too: registering the shard again in
     // the same scope is new. No files means the fault point isn't reached.
     assert!(ok(index
@@ -545,4 +550,198 @@ async fn database_errors_carry_the_sqlite_cause() {
         .map(ToString::to_string)
         .unwrap_or_default();
     assert!(cause.contains("(code: 14)"), "cause was {cause:?}");
+}
+
+/// A file of one term per `(xorb, chunks)`, in order.
+fn file_over(label: &str, terms: &[(MerkleHash, u32)]) -> NewFile {
+    let terms: Vec<Term> = terms
+        .iter()
+        .map(|(xorb, chunks)| Term {
+            xorb: *xorb,
+            chunk_start: 0,
+            chunk_end: *chunks,
+            unpacked_bytes: chunks * 1000,
+        })
+        .collect();
+    NewFile {
+        record: FileRecord {
+            hash: h(&format!("file/{label}")),
+            size: terms.iter().map(|t| u64::from(t.unpacked_bytes)).sum(),
+            terms,
+        },
+        sha256: None,
+        first_chunk: Some(h(&format!("first/{label}"))),
+    }
+}
+
+#[tokio::test]
+async fn dedup_shard_xorbs_lists_the_shards_xorbs_in_term_order() {
+    // Ruling M1-R30: the order of first reference across the shard's files'
+    // terms, which is `UploadShard::referenced_xorbs` order.
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x1, _) = put(&index, "x1", 2, A).await;
+    let (x2, _) = put(&index, "x2", 2, A).await;
+    let (x3, _) = put(&index, "x3", 2, A).await;
+    let (x4, _) = put(&index, "x4", 2, A).await;
+    let files = [
+        file_over("f1", &[(x2, 1), (x1, 2), (x2, 2)]),
+        file_over("f2", &[(x3, 1), (x1, 1), (x4, 2)]),
+    ];
+    ok(index
+        .register_shard(&h("shard"), &files, A, Visibility::PerScope)
+        .await);
+
+    for xorb in [x1, x2, x3, x4] {
+        for vis in [Visibility::Global, Visibility::PerScope] {
+            assert_eq!(
+                ok(index.dedup_shard_xorbs(&xorb, A, vis).await),
+                Some(vec![x2, x1, x3, x4])
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn dedup_shard_xorbs_none_without_a_shard() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x1, _) = put(&index, "x1", 2, A).await;
+    let (x2, _) = put(&index, "x2", 2, A).await;
+    ok(index
+        .register_shard(
+            &h("shard"),
+            &[file_over("f", &[(x2, 2)])],
+            A,
+            Visibility::Global,
+        )
+        .await);
+
+    for vis in [Visibility::Global, Visibility::PerScope] {
+        assert_eq!(ok(index.dedup_shard_xorbs(&x1, A, vis).await), None);
+        assert_eq!(ok(index.dedup_shard_xorbs(&h("never"), A, vis).await), None);
+    }
+}
+
+#[tokio::test]
+async fn dedup_shard_xorbs_prefers_the_newest_shard() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x1, _) = put(&index, "x1", 2, A).await;
+    let (x2, _) = put(&index, "x2", 2, A).await;
+    let (x3, _) = put(&index, "x3", 2, A).await;
+    let old = [file_over("old", &[(x1, 2), (x2, 2)])];
+    let new = [file_over("new", &[(x3, 2), (x1, 2)])];
+    ok(index
+        .register_shard(&h("old"), &old, A, Visibility::PerScope)
+        .await);
+    ok(index
+        .register_shard(&h("new"), &new, A, Visibility::PerScope)
+        .await);
+    // Registering the older shard again changes nothing, so it stays older.
+    assert!(!ok(index
+        .register_shard(&h("old"), &old, A, Visibility::PerScope)
+        .await));
+
+    for vis in [Visibility::Global, Visibility::PerScope] {
+        assert_eq!(
+            ok(index.dedup_shard_xorbs(&x1, A, vis).await),
+            Some(vec![x3, x1])
+        );
+        assert_eq!(
+            ok(index.dedup_shard_xorbs(&x2, A, vis).await),
+            Some(vec![x1, x2])
+        );
+    }
+
+    // Under `PerScope` only the caller's registrations count: B registers
+    // the old shard later, which makes it the newest for B and, under
+    // `Global`, for everyone, but not for A under `PerScope`.
+    for x in [x1, x2] {
+        ok(index
+            .put_xorb(&x, 1300, &table(&format!("{x}"), 2), &[], B)
+            .await);
+    }
+    ok(index
+        .register_shard(&h("old"), &old, B, Visibility::PerScope)
+        .await);
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, B, Visibility::PerScope).await),
+        Some(vec![x1, x2])
+    );
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, A, Visibility::Global).await),
+        Some(vec![x1, x2])
+    );
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerScope).await),
+        Some(vec![x3, x1])
+    );
+}
+
+#[tokio::test]
+async fn dedup_shard_xorbs_respects_scope_and_visibility() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x1, _) = put(&index, "x1", 2, A).await;
+    let (x2, _) = put(&index, "x2", 2, B).await;
+
+    // Another scope's shard is never offered under `PerScope`, even when
+    // the caller holds the xorb itself.
+    ok(index
+        .register_shard(
+            &h("a-only"),
+            &[file_over("a", &[(x1, 2)])],
+            A,
+            Visibility::PerScope,
+        )
+        .await);
+    ok(index.put_xorb(&x1, 1300, &table("x1", 2), &[], B).await);
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, B, Visibility::PerScope).await),
+        None
+    );
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, B, Visibility::Global).await),
+        Some(vec![x1])
+    );
+
+    // A shard registered under `Global` may mix xorbs of several scopes;
+    // read under `PerScope` it lists only the caller's.
+    ok(index
+        .register_shard(
+            &h("mixed"),
+            &[file_over("m", &[(x2, 2), (x1, 2)])],
+            A,
+            Visibility::Global,
+        )
+        .await);
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerScope).await),
+        Some(vec![x1])
+    );
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x1, A, Visibility::Global).await),
+        Some(vec![x2, x1])
+    );
+}
+
+/// `register_shard` derives the next `registered_seq` from the current
+/// maximum under the write lock, like `ingested_seq`.
+#[tokio::test]
+async fn next_registered_seq_is_an_index_lookup() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    drop(open_at(&path).await);
+    let pool = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+    let plan: Vec<(i64, i64, i64, String)> = ok(sqlx::query_as(
+        "EXPLAIN QUERY PLAN SELECT COALESCE(MAX(registered_seq), 0) + 1 FROM shard_scopes WHERE true",
+    )
+    .fetch_all(&pool)
+    .await);
+    let details: Vec<&str> = plan.iter().map(|row| row.3.as_str()).collect();
+    assert!(
+        details.iter().any(|d| d.contains("USING COVERING INDEX")),
+        "plan visits every shard registration: {details:?}"
+    );
 }
