@@ -77,9 +77,25 @@ async fn upload_v1(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Registered>, Response> {
-    let (scope, shard, _reserved) = accept(&state, request).await?;
-    let inserted = ingest(&state, &scope, shard, &Progress::none())
+    let (scope, shard, reserved) = accept(&state, request).await?;
+    // Ingest runs in its own task, which owns the body's budget share, so
+    // it and the commit permit ingest takes are held until the work ends,
+    // even if the client leaves and drops this handler: its parsing and its
+    // put run on blocking threads that can't be cancelled (review I-1 of
+    // ruling M1-R40). The upload then completes, as a v2 upload does.
+    let work = tokio::spawn(
+        {
+            let state = state.clone();
+            async move {
+                let _reserved = reserved;
+                ingest(&state, &scope, shard, &Progress::none()).await
+            }
+        }
+        .instrument(tracing::Span::current()),
+    );
+    let inserted = work
         .await
+        .map_err(|e| CasError::internal(e).into_response())?
         .map_err(IntoResponse::into_response)?;
     Ok(Json(Registered {
         result: u8::from(inserted),
@@ -640,6 +656,66 @@ mod tests {
         })
         .await
         .expect("the share is returned when the work ends");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_v1_client_that_leaves_mid_put_releases_nothing_until_the_put_ends() {
+        // Review I-1 of M1-R40: a v1 upload's handler is dropped when its
+        // client leaves, but its shard's put can't be cancelled; the commit
+        // permit and the body's budget share stay taken until it ends.
+        use axum::http::header::AUTHORIZATION;
+        use openxet_auth::{Mode, StaticToken};
+        use tower::ServiceExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest("oxt_unit_write"),
+            scope: "s".to_owned(),
+            mode: Mode::Write,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.commit = Arc::new(Semaphore::new(2));
+        let xorb = openxet_protocol::xorb_with_footer(&capture(
+            "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c.xorb",
+        ))
+        .unwrap();
+        let table = ChunkTable {
+            hashes: xorb.chunks.hashes.into(),
+            offsets: xorb.chunk_offsets.into(),
+        };
+        state
+            .index
+            .put_xorb(&xorb.hash, xorb.bytes.len() as u64, &table, &[], "s")
+            .await
+            .unwrap();
+        let bucket = test_support::BlockingBucket::install(&mut state, Duration::from_secs(1));
+        let whole = state.budget.bytes();
+
+        let upload = tokio::spawn(
+            crate::router(state.clone()).oneshot(
+                Request::post("/v1/shards")
+                    .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
+                    .body(Body::from(capture("upload.shard")))
+                    .unwrap(),
+            ),
+        );
+        test_support::eventually("the put starts", || {
+            bucket.started.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        upload.abort();
+        assert!(upload.await.unwrap_err().is_cancelled());
+
+        assert_eq!(bucket.finished.load(Ordering::SeqCst), 0);
+        assert_eq!(state.commit.available_permits(), 1, "commit released early");
+        assert!(state.budget.available() < whole, "budget released early");
+        test_support::eventually("the put ends and releases both", || {
+            bucket.finished.load(Ordering::SeqCst) == 1
+                && state.commit.available_permits() == 2
+                && state.budget.available() == whole
+        })
+        .await;
     }
 
     #[tokio::test]

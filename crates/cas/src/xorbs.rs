@@ -15,6 +15,7 @@ use openxet_protocol::{
 };
 use openxet_storage::Key;
 use serde::Serialize;
+use tracing::Instrument as _;
 
 use crate::routes::{Routes, on};
 use crate::{AppState, CasError, ReadAccess, WriteAccess, body, path};
@@ -113,22 +114,33 @@ async fn store(
     scope: &str,
     request: Request,
 ) -> Result<bool, Response> {
-    // Held until the xorb is registered: the body's bytes live until the
-    // bucket put ends.
-    let (body, _reserved) =
+    let (body, reserved) =
         body::buffer(request, MAX_XORB_BODY_BYTES, too_large, &state.budget).await?;
-    let stored = validate(state, body)
-        .await
-        .map_err(IntoResponse::into_response)?;
-    if stored.hash != hash {
-        return Err(CasError::XorbHashMismatch {
-            path: hash,
-            computed: stored.hash,
+    // The work runs in its own task, which owns the body's budget share and
+    // takes the commit permit, so both are held until it ends (review I-1
+    // of ruling M1-R40). A client that disconnects drops this handler, but
+    // can't cancel the validation or the put on their blocking threads,
+    // which hold the body until they end; the upload then completes, and
+    // the client's retry finds it stored.
+    let work = tokio::spawn(
+        {
+            let (state, scope) = (state.clone(), scope.to_owned());
+            async move {
+                let _reserved = reserved;
+                let stored = validate(&state, body).await?;
+                if stored.hash != hash {
+                    return Err(CasError::XorbHashMismatch {
+                        path: hash,
+                        computed: stored.hash,
+                    });
+                }
+                register(&state, &scope, stored).await
+            }
         }
-        .into_response());
-    }
-    register(state, scope, stored)
-        .await
+        .instrument(tracing::Span::current()),
+    );
+    work.await
+        .map_err(|e| CasError::internal(e).into_response())?
         .map_err(IntoResponse::into_response)
 }
 
@@ -475,6 +487,52 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert!(state.bucket.size(&Key::Xorb(hash)).await.unwrap().is_some());
         assert_eq!(state.commit.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_client_that_leaves_mid_put_releases_nothing_until_the_put_ends() {
+        // Review I-1 of M1-R40: the handler is dropped when its client
+        // disconnects, but a put on a blocking thread can't be cancelled.
+        // Its commit permit and its body's share of the budget must stay
+        // taken until it ends, or puts pile up past both bounds.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![write_token()]).await;
+        state.commit = Arc::new(tokio::sync::Semaphore::new(2));
+        let bucket =
+            test_support::BlockingBucket::install(&mut state, std::time::Duration::from_secs(1));
+        let whole = state.budget.bytes();
+        let name = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
+        let body = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/hf-xet-1.7.0-upload")
+                .join(format!("{name}.xorb")),
+        )
+        .unwrap();
+
+        let upload = tokio::spawn(
+            router(state.clone()).oneshot(
+                Request::post(format!("/v1/xorbs/default/{name}"))
+                    .header(AUTHORIZATION, format!("{BEARER} {WRITE}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            ),
+        );
+        test_support::eventually("the put starts", || {
+            bucket.started.load(std::sync::atomic::Ordering::SeqCst) == 1
+        })
+        .await;
+        upload.abort();
+        assert!(upload.await.unwrap_err().is_cancelled());
+
+        assert_eq!(bucket.finished.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(state.commit.available_permits(), 1, "commit released early");
+        assert!(state.budget.available() < whole, "budget released early");
+        test_support::eventually("the put ends and releases both", || {
+            bucket.finished.load(std::sync::atomic::Ordering::SeqCst) == 1
+                && state.commit.available_permits() == 2
+                && state.budget.available() == whole
+        })
+        .await;
     }
 
     #[tokio::test]

@@ -19,7 +19,7 @@ use openxet_index::{
     Visibility,
 };
 use openxet_protocol::{MerkleHash, VerifyLimits};
-use openxet_storage::LocalBucket;
+use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
 use tokio::sync::Semaphore;
 use url::Url;
 
@@ -195,4 +195,75 @@ impl http_body::Body for Declared {
     fn size_hint(&self) -> SizeHint {
         SizeHint::with_exact(self.len)
     }
+}
+
+/// A bucket whose puts block a thread for `delay` first, as a slow disk
+/// does under `LocalBucket`'s `spawn_blocking`: a dropped caller can't
+/// cancel them. Counts the puts finished.
+pub(crate) struct BlockingBucket {
+    inner: Arc<dyn Bucket>,
+    delay: std::time::Duration,
+    pub(crate) started: AtomicUsize,
+    pub(crate) finished: Arc<AtomicUsize>,
+}
+
+impl BlockingBucket {
+    /// Wraps `state`'s bucket.
+    pub(crate) fn install(state: &mut AppState, delay: std::time::Duration) -> Arc<Self> {
+        let bucket = Arc::new(Self {
+            inner: Arc::clone(&state.bucket),
+            delay,
+            started: AtomicUsize::new(0),
+            finished: Arc::new(AtomicUsize::new(0)),
+        });
+        state.bucket = Arc::clone(&bucket) as Arc<dyn Bucket>;
+        bucket
+    }
+}
+
+#[async_trait::async_trait]
+impl Bucket for BlockingBucket {
+    async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let (delay, finished) = (self.delay, Arc::clone(&self.finished));
+        let inner = Arc::clone(&self.inner);
+        let key = *key;
+        let handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            std::thread::sleep(delay);
+            let out = handle.block_on(inner.put(&key, bytes));
+            finished.fetch_add(1, Ordering::SeqCst);
+            out
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
+        self.inner.get_range(key, start, end).await
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        start: u64,
+        end: u64,
+    ) -> Result<openxet_storage::RangeStream, StorageError> {
+        self.inner.get_range_stream(key, start, end).await
+    }
+
+    async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
+        self.inner.size(key).await
+    }
+}
+
+/// Polls `done` every 5 ms for up to 30 s.
+pub(crate) async fn eventually(what: &str, done: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !done() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
 }

@@ -160,7 +160,7 @@ async fn single(
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(state, permit, terms, move |workers| {
+    let (body, reserved) = render(state, permit, reserved, terms, move |workers| {
         let plan = plan::plan(&record, bytes.as_ref(), &tables, range).map_err(planning_failed)?;
         answer::single(&plan, version, &signer, workers)
     })
@@ -278,7 +278,7 @@ async fn batch(
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(state, permit, terms, move |workers| {
+    let (body, reserved) = render(state, permit, reserved, terms, move |workers| {
         let plans = records
             .iter()
             .map(|record| {
@@ -446,9 +446,13 @@ async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, Cas
         .map_err(CasError::internal)
 }
 
-/// Runs `work` on a blocking thread holding `permit` ([`blocking`]), for an
-/// answer of `terms` terms. `work` gets how many threads may write the
-/// answer: one, plus one per extra `validate` permit.
+/// Runs `work` on a blocking thread holding `permit` ([`blocking`]) and the
+/// answer's reservation, for an answer of `terms` terms, and returns the
+/// answer with the reservation. `work` gets how many threads may write the
+/// answer: one, plus one per extra `validate` permit. A client that leaves
+/// drops the caller, not the work, which holds the answer's buffers until
+/// it ends; so the reservation stays with the work (review I-1 of ruling
+/// M1-R40).
 ///
 /// Extra permits (ruling M1-R34):
 /// - are taken only if free right now, never waited for, so a reconstruction
@@ -466,9 +470,10 @@ async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, Cas
 async fn render(
     state: &AppState,
     permit: OwnedSemaphorePermit,
+    reserved: Reservation,
     terms: usize,
     work: impl FnOnce(usize) -> Result<Vec<Bytes>, CasError> + Send + 'static,
-) -> Result<Vec<Bytes>, CasError> {
+) -> Result<(Vec<Bytes>, Reservation), CasError> {
     let free = state.validate.available_permits() + 1;
     let wanted = (answer::workers_for(terms) - 1).min(free / 2);
     let extra = (1..=wanted).rev().find_map(|n| {
@@ -478,7 +483,7 @@ async fn render(
     });
     blocking(permit, move || {
         let (_held, workers) = extra.map_or((None, 1), |(permits, n)| (Some(permits), 1 + n));
-        work(workers)
+        work(workers).map(|parts| (parts, reserved))
     })
     .await?
     .1
@@ -928,6 +933,42 @@ mod tests {
         assert_eq!(index.file_loads.load(Ordering::SeqCst), 0);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_render_keeps_its_reservation_until_the_work_ends() {
+        // Review I-1 of M1-R40: a client that leaves drops the handler, but
+        // not the answer being written on a blocking thread, which holds
+        // its buffers until it ends; so it holds their reservation too.
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_support::state(dir.path(), vec![]).await;
+        let whole = state.budget.bytes();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task = tokio::spawn({
+            let (state, done) = (state.clone(), Arc::clone(&done));
+            async move {
+                let reserved = state.budget.reserve_answer(1 << 20).await.unwrap();
+                let permit = validation_permit(&state).await.unwrap();
+                render(&state, permit, reserved, 1, move |_| {
+                    std::thread::sleep(Duration::from_millis(500));
+                    done.store(true, Ordering::SeqCst);
+                    Ok(vec![Bytes::from_static(b"{}")])
+                })
+                .await
+                .map(|_| ())
+            }
+        });
+        test_support::eventually("the answer reserves", || state.budget.available() < whole).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+
+        assert!(!done.load(Ordering::SeqCst));
+        assert!(state.budget.available() < whole, "released while writing");
+        test_support::eventually("the work ends and releases", || {
+            done.load(Ordering::SeqCst) && state.budget.available() == whole
+        })
+        .await;
+    }
+
     /// The writer threads `render` grants a 100k-term answer when `held`
     /// of 8 `validate` permits are taken elsewhere, and the permits free
     /// while it writes; asserts every permit comes back after.
@@ -943,7 +984,8 @@ mod tests {
         let validate = Arc::clone(&state.validate);
         let seen = Arc::new(std::sync::Mutex::new((0, 0)));
         let record = Arc::clone(&seen);
-        let result = render(&state, permit, 100_000, move |workers| {
+        let reserved = state.budget.reserve_answer(1024).await.unwrap();
+        let result = render(&state, permit, reserved, 100_000, move |workers| {
             *record.lock().unwrap() = (workers, validate.available_permits());
             if fails {
                 return Err(CasError::internal("work failed"));
