@@ -149,8 +149,8 @@ pub const MAX_SCOPE_BYTES: usize = 1024;
 
 /// Checks a principal's subject and scope (ruling M1-R19): both must
 /// contain something other than whitespace, and neither may contain
-/// characters that can forge or disguise log lines or widen a scope match ([`is_disallowed`]). The scope is at most
-/// [`MAX_SCOPE_BYTES`].
+/// characters that can forge or disguise log lines or widen a scope match
+/// ([`is_disallowed`]). The scope is at most [`MAX_SCOPE_BYTES`].
 pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static str> {
     if subject.trim().is_empty() {
         return Err("the subject is empty or only whitespace");
