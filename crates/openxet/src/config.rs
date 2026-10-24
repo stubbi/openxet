@@ -149,6 +149,7 @@ impl Config {
             verify_limits: openxet_protocol::VerifyLimits::default(),
             heartbeat_interval: self.heartbeat_interval,
             body_deadline: self.body_deadline,
+            dedup_send: openxet_cas::SendDeadline::DEFAULT,
         }
     }
 }

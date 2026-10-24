@@ -19,6 +19,7 @@ mod body;
 mod cache;
 mod deadline;
 mod dedup;
+mod dedup_body;
 mod error;
 mod health;
 mod misc;
@@ -51,7 +52,7 @@ use tower_http::trace::TraceLayer;
 use url::Url;
 
 pub use auth::{ReadAccess, WriteAccess};
-pub use deadline::BodyDeadline;
+pub use deadline::{BodyDeadline, SendDeadline};
 pub use error::CasError;
 pub use health::starting_router;
 pub use misc::TELEMETRY_BODY_LIMIT;
@@ -75,6 +76,8 @@ pub struct CasConfig {
     pub heartbeat_interval: Duration,
     /// The pace every request body must keep.
     pub body_deadline: BodyDeadline,
+    /// How long sending a dedup answer may take (ruling M1-R33).
+    pub dedup_send: SendDeadline,
 }
 
 impl CasConfig {
@@ -132,6 +135,14 @@ pub struct AppState {
     /// `commit`'s permits × (a stored shard of at most 64 MiB and its
     /// files). Uploads waiting for a permit hold only their body.
     pub commit: Arc<Semaphore>,
+    /// Bounds concurrent global dedup answers, from loading their chunk
+    /// tables until their body has been sent, dropped or overrun its send
+    /// deadline (rulings M1-R32, M1-R33). Separate from `validate`, so
+    /// dedup queries can never starve xorb and shard validation; a quarter
+    /// of the CPUs, at least one. Dedup's memory per process is at most its
+    /// permits × about 150 MB (an answer of at most 16 MiB with its build;
+    /// measured in S11: about 120 MB for one, about 300 MB with 2 busy).
+    pub dedup: Arc<Semaphore>,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,
 }
@@ -139,10 +150,17 @@ pub struct AppState {
 /// Commit permits per available CPU (ruling M1-R24).
 const COMMITS_PER_CPU: usize = 4;
 
+/// Dedup permits for `cpus` available CPUs: a quarter, at least one
+/// (ruling M1-R32).
+fn dedup_permits(cpus: usize) -> usize {
+    (cpus / 4).max(1)
+}
+
 impl AppState {
     /// State with the system clock, one validation permit per available
-    /// CPU (ruling M1-R8) and four commit permits per CPU (ruling M1-R24):
-    /// committing waits on I/O, not CPU, so more can run than validate.
+    /// CPU (ruling M1-R8), four commit permits per CPU (ruling M1-R24):
+    /// committing waits on I/O, not CPU, so more can run than validate, and
+    /// a dedup permit per four CPUs (ruling M1-R32).
     #[must_use]
     pub fn new(
         index: Arc<dyn Index>,
@@ -160,6 +178,7 @@ impl AppState {
             cfg,
             validate: Arc::new(Semaphore::new(permits)),
             commit: Arc::new(Semaphore::new(permits.saturating_mul(COMMITS_PER_CPU))),
+            dedup: Arc::new(Semaphore::new(dedup_permits(permits))),
             clock: Arc::new(SystemClock),
         }
     }
@@ -262,5 +281,12 @@ mod tests {
         assert_eq!(json["schema"], "openxet.error.v1");
         assert_eq!(json["code"], "internal");
         assert!(!body.contains("panic-payload-marker"), "{body}");
+    }
+
+    #[test]
+    fn dedup_gets_a_quarter_of_the_cpus_and_at_least_one_permit() {
+        for (cpus, permits) in [(1, 1), (3, 1), (4, 1), (8, 2), (16, 4), (64, 16)] {
+            assert_eq!(dedup_permits(cpus), permits, "{cpus} CPUs");
+        }
     }
 }

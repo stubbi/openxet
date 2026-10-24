@@ -219,17 +219,32 @@ fn json_stderr(out: &Output) -> Value {
     error
 }
 
-/// Deterministic bytes that don't compress or dedup within themselves.
+/// Deterministic bytes that don't compress or dedup within themselves,
+/// distinct for every `seed`: splitmix64 (Steele, Lea and Flood, 2014),
+/// whose output is a bijection of its counter, so no two seeds share a
+/// stream.
 fn noise(len: usize, seed: u64) -> Vec<u8> {
-    let mut state = seed | 1;
-    (0..len)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state.to_le_bytes()[0]
-        })
-        .collect()
+    let mut state = seed;
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        out.extend_from_slice(&(z ^ (z >> 31)).to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
+#[test]
+fn noise_differs_for_every_seed() {
+    let streams: Vec<Vec<u8>> = (0..64).map(|seed| noise(64, seed)).collect();
+    for (i, a) in streams.iter().enumerate() {
+        for (j, b) in streams.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "seeds {i} and {j} give the same noise");
+        }
+    }
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -378,6 +393,80 @@ fn reupload_sends_no_xorb() {
     assert!(
         server.requests("GET", "/v1/chunks/{prefix}/{hash}") > 0,
         "the second upload never asked for global dedup"
+    );
+}
+
+/// The stored bytes of the xorbs the server accepted after the first
+/// `since` lines of its log: what clients sent, plus each stored footer,
+/// so never less than the bodies on the wire.
+fn xorb_bytes_accepted(server: &Server, data_dir: &Path, since: usize) -> u64 {
+    let hashes: Vec<String> = server.log()[since..]
+        .iter()
+        .filter(|line| line["fields"]["message"] == "xorb upload accepted")
+        .map(|line| line["fields"]["xorb"].as_str().unwrap().to_owned())
+        .collect();
+    let mut sizes = std::collections::HashMap::new();
+    let mut dirs = vec![data_dir.to_owned()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.to_string_lossy().contains("xorbs") {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                sizes.insert(name, std::fs::metadata(&path).unwrap().len());
+            }
+        }
+    }
+    hashes
+        .iter()
+        .map(|h| {
+            sizes
+                .get(h)
+                .copied()
+                .unwrap_or_else(|| panic!("xorb {h} not stored"))
+        })
+        .sum()
+}
+
+#[test]
+fn fresh_cache_edit_dedups_against_the_server() {
+    // Design §1a: after a 1 MiB edit in the middle of a 100 MiB file, a
+    // client with an empty cache sends at most 2 MiB of xorbs, because
+    // one dedup answer offers every xorb of the first upload's shard
+    // (ruling M1-R30, S11). Before it, about 30 MB went.
+    const SIZE: usize = 100 << 20;
+    const EDIT: usize = 1 << 20;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let server = Server::start(&data);
+    let original = noise(SIZE, 30);
+    let mut edited = original.clone();
+    edited[SIZE / 2..SIZE / 2 + EDIT].copy_from_slice(&noise(EDIT, 32));
+    let (a, b) = (dir.path().join("a.bin"), dir.path().join("b.bin"));
+    std::fs::write(&a, &original).unwrap();
+    std::fs::write(&b, &edited).unwrap();
+    drop((original, edited));
+
+    upload_result(&server, &dir.path().join("cache-1"), &[&a]);
+    server.settle();
+    let mark = server.log().len();
+    let dedup_queries = server.requests("GET", "/v1/chunks/{prefix}/{hash}");
+
+    let second = upload_result(&server, &dir.path().join("cache-2"), &[&b]);
+    server.settle();
+    let sent = xorb_bytes_accepted(&server, &data, mark);
+    assert!(
+        sent <= 2 << 20,
+        "a 1 MiB edit sent {sent} bytes of xorbs with a fresh cache: {second}"
+    );
+    assert!(
+        server.requests("GET", "/v1/chunks/{prefix}/{hash}") > dedup_queries,
+        "the second upload never asked for global dedup"
+    );
+    assert!(
+        second["bytes_deduplicated"].as_u64().unwrap() >= (SIZE - 2 * EDIT) as u64,
+        "{second}"
     );
 }
 

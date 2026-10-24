@@ -277,6 +277,37 @@ async fn insert_dedup(
     Ok(())
 }
 
+/// Records the distinct xorbs of `referenced` as `shard`'s, in order of
+/// first appearance. A shard's rows depend only on its content, so rows
+/// already present are kept.
+async fn insert_shard_xorbs(
+    tx: &mut Transaction<'_, Sqlite>,
+    shard: &MerkleHash,
+    referenced: &[MerkleHash],
+) -> Result<(), IndexError> {
+    let mut seen = HashSet::with_capacity(referenced.len());
+    let ordered: Vec<MerkleHash> = referenced
+        .iter()
+        .copied()
+        .filter(|x| seen.insert(*x))
+        .collect();
+    let mut pos: i64 = 0;
+    for batch in ordered.chunks(HASHES_PER_QUERY) {
+        let mut query = sqlx::query(with_placeholders(
+            "INSERT INTO shard_xorbs (shard, pos, xorb) VALUES ",
+            "(?, ?, ?)",
+            batch.len(),
+            " ON CONFLICT DO NOTHING",
+        ));
+        for xorb in batch {
+            query = query.bind(shard.as_bytes()).bind(pos).bind(xorb.as_bytes());
+            pos += 1;
+        }
+        query.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl Index for SqliteIndex {
     async fn put_xorb(
@@ -392,8 +423,11 @@ impl Index for SqliteIndex {
         if let Some(xorb) = first_invisible(&mut tx, &referenced, scope, vis).await? {
             return Err(IndexError::UnknownXorb { xorb });
         }
+        // `WHERE true` as in `put_xorb`.
         let mut new_for_scope = sqlx::query(
-            "INSERT INTO shard_scopes (shard, scope) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            "INSERT INTO shard_scopes (shard, scope, registered_seq) \
+             SELECT ?, ?, COALESCE(MAX(registered_seq), 0) + 1 FROM shard_scopes WHERE true \
+             ON CONFLICT DO NOTHING",
         )
         .bind(shard.as_bytes())
         .bind(scope)
@@ -401,6 +435,7 @@ impl Index for SqliteIndex {
         .await?
         .rows_affected()
             > 0;
+        insert_shard_xorbs(&mut tx, shard, &referenced).await?;
         for (i, (file, size)) in files.iter().zip(sizes).enumerate() {
             let record = &file.record;
             new_for_scope |= sqlx::query(
@@ -461,5 +496,40 @@ impl Index for SqliteIndex {
         .fetch_optional(&self.reader)
         .await?;
         xorb.as_deref().map(hash_from).transpose()
+    }
+
+    async fn dedup_shard_xorbs(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
+        let global = vis == Visibility::Global;
+        // One statement, so the shard and its xorbs come from one snapshot.
+        let rows: Vec<Vec<u8>> = sqlx::query_scalar(concat!(
+            "SELECT x.hash FROM shard_xorbs sx JOIN xorbs x ON x.hash = sx.xorb \
+             WHERE sx.shard = (\
+                 SELECT ss.shard FROM shard_xorbs m \
+                 JOIN shard_scopes ss ON ss.shard = m.shard \
+                 WHERE m.xorb = ? AND (? OR ss.scope = ?) \
+                 ORDER BY ss.registered_seq DESC LIMIT 1\
+             ) AND ",
+            visible!(),
+            " ORDER BY sx.pos"
+        ))
+        .bind(xorb.as_bytes())
+        .bind(global)
+        .bind(scope)
+        .bind(global)
+        .bind(scope)
+        .fetch_all(&self.reader)
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        rows.iter()
+            .map(|row| hash_from(row))
+            .collect::<Result<_, _>>()
+            .map(Some)
     }
 }

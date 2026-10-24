@@ -269,6 +269,7 @@ pub fn config(visibility: Visibility) -> CasConfig {
         verify_limits: VerifyLimits::default(),
         heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
         body_deadline: BodyDeadline::DEFAULT,
+        dedup_send: openxet_cas::SendDeadline::DEFAULT,
     }
 }
 
@@ -739,6 +740,15 @@ impl Index for SlowIndex {
     ) -> Result<Option<MerkleHash>, IndexError> {
         self.inner.dedup_xorb(chunk, scope, vis).await
     }
+
+    async fn dedup_shard_xorbs(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
+        self.inner.dedup_shard_xorbs(xorb, scope, vis).await
+    }
 }
 
 /// An index that answers `chunk_tables` with nothing, as an index that
@@ -810,6 +820,15 @@ impl Index for TablelessIndex {
         vis: Visibility,
     ) -> Result<Option<MerkleHash>, IndexError> {
         self.inner.dedup_xorb(chunk, scope, vis).await
+    }
+
+    async fn dedup_shard_xorbs(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
+        self.inner.dedup_shard_xorbs(xorb, scope, vis).await
     }
 }
 

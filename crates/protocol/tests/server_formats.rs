@@ -12,9 +12,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use openxet_protocol::{
-    MerkleHash, ProtocolError, Segment, ShardFileEntry, StoredXorb, UploadShard, VerifyError,
-    VerifyLimits, dedup_shard, hash_to_hex, is_dedup_eligible, read_dedup_answer,
-    read_upload_shard, read_xorb_chunks, shard_hash, stored_shard, verify_shard, xorb_with_footer,
+    DEDUP_ANSWER_BUDGET, MerkleHash, ProtocolError, Segment, ShardFileEntry, StoredXorb,
+    UploadShard, VerifyError, VerifyLimits, dedup_shard, hash_to_hex, is_dedup_eligible,
+    read_dedup_answer, read_upload_shard, read_xorb_chunks, shard_hash, stored_shard, verify_shard,
+    xorb_with_footer,
 };
 // Only to read the produced shards back with upstream's own parsers.
 use xet_core_structures::metadata_shard::MDBShardInfo;
@@ -178,14 +179,22 @@ fn dedup_shard_hides_raw_chunk_hashes() {
     let xorb = capture_xorb();
     let key = MerkleHash::random_from_seed(42);
     let expiry = 1_900_000_000;
-    let bytes = dedup_shard(&xorb.hash, &xorb.chunks.hashes, key, expiry).unwrap();
+    let (bytes, offered) = build_answer(
+        &[(xorb.hash, &xorb.chunks.hashes[..])],
+        DEDUP_ANSWER_BUDGET,
+        key,
+        expiry,
+    )
+    .unwrap();
+    assert_eq!(offered, 1);
 
     for (chunk, _) in &xorb.chunks.hashes {
         assert!(
             !bytes.windows(32).any(|window| window == chunk.as_bytes()),
             "raw chunk hash {chunk} appears in the dedup shard"
         );
-        // The lookup tables hold hashes truncated to their first 8 bytes.
+        // Upstream's lookup tables would hold hashes truncated to their
+        // first 8 bytes; the answer has none, but no window may hold one.
         assert!(
             !bytes
                 .windows(8)
@@ -197,6 +206,11 @@ fn dedup_shard_hides_raw_chunk_hashes() {
     let info = MDBShardInfo::load_from_reader(&mut Cursor::new(&bytes)).unwrap();
     assert_eq!(info.metadata.chunk_hash_hmac_key, key);
     assert_eq!(info.metadata.shard_key_expiry, expiry);
+    // Ruling M1-R30: no lookup tables, as in the spec's reference answer;
+    // the client rebuilds its index from the xorb section.
+    assert_eq!(info.metadata.xorb_lookup_num_entry, 0);
+    assert_eq!(info.metadata.chunk_lookup_num_entry, 0);
+    assert_eq!(info.metadata.file_lookup_num_entry, 0);
 
     let shard = MDBMinimalShard::from_reader(&mut bytes.as_slice(), true, true).unwrap();
     assert_eq!(shard.num_files(), 0);
@@ -219,7 +233,13 @@ fn dedup_shard_hides_raw_chunk_hashes() {
 fn read_dedup_answer_finds_every_offered_chunk_as_the_client_does() {
     let xorb = capture_xorb();
     let key = MerkleHash::random_from_seed(7);
-    let bytes = dedup_shard(&xorb.hash, &xorb.chunks.hashes, key, 1_900_000_000).unwrap();
+    let (bytes, _) = build_answer(
+        &[(xorb.hash, &xorb.chunks.hashes[..])],
+        DEDUP_ANSWER_BUDGET,
+        key,
+        1_900_000_000,
+    )
+    .unwrap();
 
     for (chunk, _) in &xorb.chunks.hashes {
         let answer = read_dedup_answer(&bytes, chunk).unwrap();
@@ -245,13 +265,145 @@ fn read_dedup_answer_finds_every_offered_chunk_as_the_client_does() {
 #[test]
 fn dedup_shard_rejects_the_zero_key() {
     let xorb = capture_xorb();
-    let result = dedup_shard(
-        &xorb.hash,
-        &xorb.chunks.hashes,
+    let result = build_answer(
+        &[(xorb.hash, &xorb.chunks.hashes[..])],
+        DEDUP_ANSWER_BUDGET,
         MerkleHash::default(),
         1_900_000_000,
     );
     assert!(matches!(result, Err(ProtocolError::DedupKeyZero)));
+}
+
+/// The keyed answer `dedup_shard` builds, and how many entries it covers.
+fn build_answer(
+    xorbs: &[(MerkleHash, &[(MerkleHash, u64)])],
+    budget: u64,
+    key: MerkleHash,
+    expiry: u64,
+) -> Result<(Vec<u8>, usize), ProtocolError> {
+    let unkeyed = dedup_shard(xorbs.iter().copied(), budget)?;
+    let (covered, len) = (unkeyed.covered(), unkeyed.len());
+    let body = unkeyed.keyed(key, expiry)?;
+    assert_eq!(u64::try_from(body.len()).unwrap(), len);
+    Ok((body, covered))
+}
+
+/// `count` synthetic chunk tables of `chunks` chunks each, distinct per
+/// `seed`, as the index stores them.
+fn synthetic_xorbs(
+    seed: u64,
+    count: usize,
+    chunks: usize,
+) -> Vec<(MerkleHash, Vec<(MerkleHash, u64)>)> {
+    (0..count as u64)
+        .map(|x| {
+            let base = seed * 1_000_000 + x * 10_000;
+            let table = (0..chunks as u64)
+                .map(|c| (MerkleHash::random_from_seed(base + c + 1), 60_000 + c))
+                .collect();
+            (MerkleHash::random_from_seed(base), table)
+        })
+        .collect()
+}
+
+fn as_refs(
+    xorbs: &[(MerkleHash, Vec<(MerkleHash, u64)>)],
+) -> Vec<(MerkleHash, &[(MerkleHash, u64)])> {
+    xorbs.iter().map(|(x, t)| (*x, t.as_slice())).collect()
+}
+
+#[test]
+fn dedup_answer_offers_every_xorb_given_and_finds_each_chunk() {
+    // Ruling M1-R30: the answer offers several xorbs; the client finds every
+    // chunk of every one of them through the keyed index it rebuilds from
+    // the xorb section.
+    let xorbs = synthetic_xorbs(1, 4, 50);
+    let key = MerkleHash::random_from_seed(77);
+    let (bytes, offered) =
+        build_answer(&as_refs(&xorbs), DEDUP_ANSWER_BUDGET, key, 1_900_000_000).unwrap();
+    assert_eq!(offered, 4);
+
+    let mut expected: Vec<MerkleHash> = xorbs.iter().map(|(x, _)| *x).collect();
+    for (xorb, table) in &xorbs {
+        for (index, (chunk, _)) in table.iter().enumerate() {
+            let answer = read_dedup_answer(&bytes, chunk).unwrap();
+            assert_eq!(answer.files, 0);
+            let mut got = answer.xorbs.clone();
+            got.sort();
+            expected.sort();
+            assert_eq!(got, expected);
+            assert_eq!(answer.matched, Some((*xorb, u32::try_from(index).unwrap())));
+            assert!(!bytes.windows(32).any(|w| w == chunk.as_bytes()));
+            assert!(!bytes.windows(8).any(|w| w == &chunk.as_bytes()[..8]));
+        }
+    }
+}
+
+#[test]
+fn dedup_answer_respects_the_size_budget() {
+    // Ruling M1-R30: the answer stops at the budget, at a xorb boundary,
+    // counting its exact serialized size, and still parses.
+    let xorbs = synthetic_xorbs(2, 5, 20);
+    let refs = as_refs(&xorbs);
+    let key = MerkleHash::random_from_seed(78);
+    let (full, all) = build_answer(&refs, DEDUP_ANSWER_BUDGET, key, 0).unwrap();
+    assert_eq!(all, 5);
+    let full_len = u64::try_from(full.len()).unwrap();
+    let (exact, fit) = build_answer(&refs, full_len, key, 0).unwrap();
+    assert_eq!((exact.len(), fit), (full.len(), 5));
+
+    let (cut, fit) = build_answer(&refs, full_len - 1, key, 0).unwrap();
+    assert_eq!(fit, 4);
+    assert!(u64::try_from(cut.len()).unwrap() < full_len - 1);
+    let answer = read_dedup_answer(&cut, &xorbs[0].1[0].0).unwrap();
+    let mut got = answer.xorbs;
+    got.sort();
+    let mut want: Vec<MerkleHash> = xorbs[..4].iter().map(|(x, _)| *x).collect();
+    want.sort();
+    assert_eq!(got, want);
+    let last = &xorbs[4].1[0].0;
+    assert_eq!(read_dedup_answer(&cut, last).unwrap().matched, None);
+
+    // The first xorb is always offered, however small the budget.
+    let (tiny, fit) = build_answer(&refs, 1, key, 0).unwrap();
+    assert_eq!(fit, 1);
+    assert_eq!(
+        read_dedup_answer(&tiny, &xorbs[0].1[0].0).unwrap().xorbs,
+        vec![xorbs[0].0]
+    );
+
+    // A xorb given twice is offered once and counts as covered.
+    let twice = [refs[0], refs[1], refs[0]];
+    let (_, fit) = build_answer(&twice, DEDUP_ANSWER_BUDGET, key, 0).unwrap();
+    assert_eq!(fit, 3);
+}
+
+#[test]
+fn dedup_answer_budget_is_16_mib_and_holds_350_typical_xorbs() {
+    // Ruling M1-R32: 16 MiB, which still offers about 350 xorbs of the
+    // typical density (about 980 chunks each), about 22 GB of file.
+    assert_eq!(DEDUP_ANSWER_BUDGET, 16 << 20);
+    let xorbs = synthetic_xorbs(4, 351, 980);
+    let unkeyed = dedup_shard(as_refs(&xorbs), DEDUP_ANSWER_BUDGET).unwrap();
+    assert_eq!(unkeyed.covered(), 351);
+    assert!(unkeyed.len() <= DEDUP_ANSWER_BUDGET);
+    let more = synthetic_xorbs(5, 400, 980);
+    let cut = dedup_shard(as_refs(&more), DEDUP_ANSWER_BUDGET).unwrap();
+    assert!(cut.covered() < 400);
+    assert!(cut.len() <= DEDUP_ANSWER_BUDGET);
+}
+
+#[test]
+fn dedup_answer_xorb_bytes_matches_the_serialized_growth() {
+    let key = MerkleHash::random_from_seed(79);
+    let one = synthetic_xorbs(3, 1, 10);
+    let two = synthetic_xorbs(3, 2, 10);
+    let (a, _) = build_answer(&as_refs(&one), DEDUP_ANSWER_BUDGET, key, 0).unwrap();
+    let (b, _) = build_answer(&as_refs(&two), DEDUP_ANSWER_BUDGET, key, 0).unwrap();
+    assert_eq!(
+        u64::try_from(b.len() - a.len()).unwrap(),
+        openxet_protocol::dedup_answer_xorb_bytes(10)
+    );
 }
 
 #[test]
@@ -298,7 +450,13 @@ fn chunk_tables_over_the_shard_formats_counts_are_rejected() {
     let too_large = |err: &ProtocolError| matches!(err, ProtocolError::XorbTableTooLarge { xorb: x } if *x == xorb);
     let err = stored_shard(&shard, &lookup).unwrap_err();
     assert!(too_large(&err), "{err}");
-    let err = dedup_shard(&xorb, &table, MerkleHash::random_from_seed(12), 0).unwrap_err();
+    let err = build_answer(
+        &[(xorb, &table[..])],
+        DEDUP_ANSWER_BUDGET,
+        MerkleHash::random_from_seed(12),
+        0,
+    )
+    .unwrap_err();
     assert!(too_large(&err), "{err}");
 }
 

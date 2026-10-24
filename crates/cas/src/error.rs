@@ -173,6 +173,13 @@ pub enum CasError {
     #[error("no xorb on this server offers the chunk for deduplication")]
     NoDedupMatch,
 
+    /// Every dedup permit stayed taken for the whole permit wait (ruling
+    /// M1-R33). `429 dedup_busy` with `Retry-After: 1`; `hf_xet` reads a
+    /// `429` from `/v1/chunks` as "no match" without retrying (S10 §2), so
+    /// the upload continues without this dedup answer.
+    #[error("the server is busy answering other dedup queries")]
+    DedupBusy,
+
     /// An uploaded xorb's content hash is not the hash in its path.
     /// `400 xorb_hash_mismatch`, final.
     #[error(
@@ -507,6 +514,12 @@ impl CasError {
                  and continue the upload \
                  (https://huggingface.co/docs/xet/api#2-query-chunk-deduplication-global-deduplication).",
             ),
+            Self::DedupBusy => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "dedup_busy",
+                "Nothing to fix: clients treat this as no match and continue the upload. If it \
+                 persists, the server needs more CPUs for dedup answers.",
+            ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,
                 "xorb_hash_mismatch",
@@ -630,7 +643,7 @@ impl IntoResponse for CasError {
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
-        if let Self::NotReady = self {
+        if let Self::NotReady | Self::DedupBusy = self {
             response
                 .headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
