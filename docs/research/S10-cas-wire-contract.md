@@ -250,9 +250,12 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
   `xet_data/src/deduplication/file_deduplication.rs:155-170`): on the first
   pass over a file, for the file's first chunk and for chunks whose hash
   is eligible (`hash_is_global_dedup_eligible`, last 8 bytes as LE u64
-  `% 1024 == 0`), and at most once per 256 chunks
-  (`min_spacing_between_global_dedup_queries`, `data.rs:14`). Queries run
-  in the background while chunking continues.
+  `% 1024 == 0`), every such chunk not already matched. The config value
+  `min_spacing_between_global_dedup_queries` (256 chunks,
+  `xet_runtime/src/config/groups/data.rs:14`) is never applied at 1.7.0:
+  the deduper's field starts at 0 (`file_deduplication.rs:74`) and nothing
+  sets it, so no spacing holds (source; corrected by Task 10b, see S11).
+  Queries run in the background while chunking continues.
 - **Response `200`, `application/octet-stream`:** a shard in the form a
   server builds with `MDBShardInfo::export_as_keyed_shard_streaming`
   (`xet_core_structures/src/metadata_shard/shard_format.rs:966`), given a
@@ -262,7 +265,9 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
     false`. The spec requires this ([shard#global-deduplication](https://huggingface.co/docs/xet/shard#global-deduplication)).
     The client ignores file entries here, so they would only expose other
     files' reconstructions.
-  - **Xorb-info section:** the offered xorbs. Xorb hashes are plain;
+  - **Xorb-info section:** the offered xorbs. openxet offers every xorb
+    of the newest visible shard that references the matched xorb, up to
+    64 MiB of answer (ruling M1-R30, S11). Xorb hashes are plain;
     every chunk hash is `HMAC(chunk_hash, key)` (`keyed_chunk_hash`,
     `shard_format.rs:603-611`).
   - **Footer: required.** The client reads the last 200 bytes and checks
@@ -274,7 +279,8 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
     (`shard_file_handle.rs:216`). The spec reference shard uses 21 days.
   - **Lookup tables:** optional. Without them the client rebuilds its
     chunk index from the xorb section (`read_all_truncated_hashes`,
-    `shard_format.rs:761-790`). Both forms deduped (observed).
+    `shard_format.rs:761-790`). Both forms deduped (observed). openxet
+    omits them (ruling M1-R30), as the spec's reference answer does.
 - **How the client uses it:** it stores the shard in its cache directory,
   indexes it by the keyed truncated hash, and matches its own chunks by
   computing `HMAC(chunk_hash, key)` (`shard_file_manager.rs:451-457`).

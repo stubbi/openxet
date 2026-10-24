@@ -241,10 +241,16 @@ Files are always visible only in the scope they were uploaded to.
 - `global` (the default): every stored xorb is visible to every scope. An
   upload skips any chunk stored by anyone, which saves the most space and
   bandwidth.
+
+  One dedup match offers the client every xorb of the latest upload
+  (shard) that stored the matched chunk, up to 64 MiB of answer. So a
+  client with an empty cache that re-uploads an edited file sends little
+  more than the edit: about 1.2 MB for a 1 MiB edit of a 100 MiB file.
 - `per-scope`: a scope sees only xorbs uploaded with its own credentials.
   To any other scope, another scope's xorb reads as absent: `HEAD` of it
   answers `404`, dedup queries find no match in it, and a shard that
-  references it is refused with `unknown_xorb`. So no scope can learn what
+  references it is refused with `unknown_xorb`. A dedup answer offers only
+  xorbs of the scope's own uploads. So no scope can learn what
   another has stored, and each scope uploads its own copy of shared data
   (stored once in the bucket, all the same).
 

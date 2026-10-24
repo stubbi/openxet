@@ -473,6 +473,12 @@ Xorbs remain globally content-addressed and shared.
 - `per-scope` is for multi-tenant hosting, where revealing whether a chunk
   already exists across tenants is unacceptable.
 
+A dedup answer offers every xorb of the newest visible shard that
+references the matched xorb, up to 64 MiB, so one hit lets a client with an
+empty cache dedup a whole earlier upload (ruling M1-R30, S11); under
+`per-scope` that shard must be registered to the caller's scope and only
+the caller's xorbs are offered.
+
 **Existence checks in `per-scope` mode** answer per scope too, or they
 would reveal what dedup answers hide. Every check that says whether
 something exists is filtered by the caller's scope:
@@ -610,7 +616,7 @@ its test.
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
 | 2 | **Credentials are repo-scoped.** CAS tokens, signed URLs and capability `href`s are scoped to one repo; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
-| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `per_scope_dedup_isolates_tenants`, `per_scope_existence_checks_hide_other_tenants` |
+| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_scope_dedup_isolates_tenants`, `per_scope_multi_xorb_answer_hides_foreign_xorbs`, `per_scope_existence_checks_hide_other_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
 | 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
 | 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_write_is_visible`, `acked_write_survives_sigkill` |
@@ -1460,9 +1466,10 @@ but sets no calendar dates.
 - Exact crate layout and names, HTTP framework, DB access library.
   Decided in M1: axum, sqlx (M1-R1); EdDSA JWT tokens (ADR 0007).
 - Small-file threshold, cache design, partitioning scheme details.
-- Global-dedup response shards are decided (M1-R4): synthesized from the
-  newest visible xorb containing the queried chunk, with a fresh random HMAC
-  key and a `shard_key_expiry` of now + 7 days.
+- Global-dedup response shards are decided (M1-R4, M1-R30): synthesized
+  from the xorbs of the newest visible shard that references the xorb
+  holding the queried chunk, with a fresh random HMAC key and a
+  `shard_key_expiry` of now + 7 days.
 - Docs site tooling.
 
 ## 14. Name
@@ -1574,7 +1581,7 @@ made. Public docs cite them by number; this is what each cited one decides.
 | M1-R1 | The CAS is axum on tokio, the index is sqlx (SQLite now, Postgres in M3), and the local-disk store is openxet's own fsynced module; `object_store` serves S3, GCS and Azure from M3. | M1 plan |
 | M1-R2 | CAS tokens are EdDSA JWTs verified against a public key set; static tokens are compared by SHA-256 in constant time. | §5.4, ADR 0007 |
 | M1-R3 | Signed transfer URLs bind xorb, range and expiry in an HMAC; a missing `Range` is `400`, any mismatch `403`. | §5.5, ADR 0002 |
-| M1-R4 | Dedup responses are synthesized from the newest visible xorb containing the chunk, keyed with a fresh random HMAC key and a 7-day `shard_key_expiry`. | §13, §5.6 |
+| M1-R4 | Dedup responses are synthesized from the newest visible xorb containing the chunk, keyed with a fresh random HMAC key and a 7-day `shard_key_expiry`. The single-xorb part is superseded by M1-R30. | §13, §5.6 |
 | M1-R5 | The GC grace defaults to 30 days and is never below 28 (21-day client shard cache + 7-day dedup key). | §5.6, S10 |
 | M1-R6 | `GET /v2/file-chunk-hashes` is built in M6 and answers `404` until then. | §12, ADR 0006 |
 | M1-R7 | Metering ships in M4 with the admin API. | §5.7, §12 |
@@ -1583,3 +1590,4 @@ made. Public docs cite them by number; this is what each cited one decides.
 | M1-R10 | The default bind is `127.0.0.1:8080`, which is also `hf_xet`'s default CAS endpoint. | S10 |
 | M1-R23 | Verification errors name the rule, the file, the xorb and the chunk range the client sent, and never a value derived from stored data (expected hashes, lengths, chunk counts); those are logged only. | §5.9 req 5, S6 |
 | M1-R24 | Shard commits (bucket write through index registration) are bounded per process by a commit semaphore of 4 permits per CPU, separate from the validation permits; ingest memory is at most validation permits × the verification limits plus commit permits × a stored shard and its files. | M1 plan |
+| M1-R30 | A dedup answer offers every xorb of the newest shard that references the matched xorb and is visible to the caller, in the shard's term order from the matched xorb, wrapping round, up to 64 MiB of serialized answer and without lookup tables; with no such shard, the matched xorb alone. | §5.4, S11 |
