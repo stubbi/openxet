@@ -58,7 +58,8 @@ fn with_placeholders(
 }
 
 /// The index in one SQLite database file, in WAL mode with `synchronous=FULL`
-/// so a committed write survives a crash or power loss (design §5.9 req 7).
+/// and `fullfsync` so a committed write survives a crash or power loss
+/// (design §5.9 req 7), on macOS too.
 /// Several processes may open the same file; writers serialize on SQLite's
 /// write lock.
 ///
@@ -96,6 +97,10 @@ impl SqliteIndex {
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Full)
+            // On macOS `fsync` stops at the drive's cache; only `F_FULLFSYNC`
+            // makes a commit survive power loss. Ignored where unsupported
+            // (https://sqlite.org/pragma.html#pragma_fullfsync).
+            .pragma("fullfsync", "ON")
             .foreign_keys(true)
             .busy_timeout(BUSY_TIMEOUT);
         let writer = SqlitePoolOptions::new()
@@ -696,5 +701,33 @@ impl Index for SqliteIndex {
             .map(|row| hash_from(row))
             .collect::<Result<_, _>>()
             .map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// Every connection, writer and reader, syncs a commit to stable
+    /// storage: `synchronous=FULL` (2), and `fullfsync` so that on macOS the
+    /// sync is `F_FULLFSYNC` rather than an `fsync` that only reaches the
+    /// drive's cache (<https://sqlite.org/pragma.html#pragma_fullfsync>).
+    #[tokio::test]
+    async fn every_connection_syncs_commits_durably() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = SqliteIndex::open(&dir.path().join("index.sqlite"))
+            .await
+            .unwrap();
+        for pool in [&index.writer, &index.reader] {
+            for (pragma, expected) in [("synchronous", 2), ("fullfsync", 1)] {
+                let value: i64 = sqlx::query_scalar(AssertSqlSafe(format!("PRAGMA {pragma}")))
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+                assert_eq!(value, expected, "{pragma}");
+            }
+        }
     }
 }

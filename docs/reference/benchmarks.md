@@ -218,6 +218,32 @@ bounds is memory, which ruling M1-R24 sets it for. A remote bucket's
 slower puts overlap under the same permits, so the number stays right
 until a bucket's latency makes 32 concurrent puts the limit.
 
+## SQLite `fullfsync` on macOS
+
+On macOS, `fsync` returns once the bytes reach the drive's cache, so a
+commit acknowledged under `synchronous=FULL` alone could be lost on power
+loss. The index therefore also sets `PRAGMA fullfsync=ON`, which makes
+SQLite sync with `F_FULLFSYNC`, as the bucket's `sync_all` already does.
+Linux ignores the pragma, so CI and Linux servers pay nothing.
+
+Measured on the local machine with a scripted run: 200 index commit pairs
+(a `put_xorb` and a `register_shard` of 4 files, each its own durable
+transaction) one after another, then 200 pairs concurrently, three rounds
+on a fresh index each, with and without the pragma (debug build with
+optimised dependencies; the time is in the sync, not in openxet's code):
+
+| | Sequential, per pair | Sequential pairs/s | Concurrent pairs/s |
+|---|---|---|---|
+| `synchronous=FULL` | 0.34–0.50 ms | 2,013–2,927 | 2,179–3,027 |
+| plus `fullfsync=ON` | 5.0–6.4 ms | 156–199 | 155–221 |
+
+About 2.5–3 ms per durable commit, a tenth of the throughput. For a whole
+upload this costs less than the table suggests: each object the bucket
+stores already pays an `F_FULLFSYNC` for the file and one for its
+directory, which is why shard commits level off at about 200 per second
+(above). Durability of an acknowledged write (design §5.9 req 7) comes
+first, and servers on Linux are unaffected.
+
 ## Stock client behaviour that sizes the server
 
 - **`hf_xet` 1.7.0 retries a `408`.** Its retry policy classes `408`, like
