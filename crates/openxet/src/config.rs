@@ -708,6 +708,11 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "On SIGTERM or SIGINT, in-flight requests get this long to finish.",
     );
 
+    // `per-scope` was renamed before any release (ruling M1-R38).
+    let renamed = matches!(
+        c.raw.values.get("cas.dedup_visibility"),
+        Some((toml::Value::String(text), _)) if text == "per-scope"
+    );
     let visibility = c.parsed(
         "cas.dedup_visibility",
         (Visibility::Global, "global"),
@@ -717,8 +722,14 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
             _ => None,
         },
         "must be `global` or `per-tenant`",
-        "`global` deduplicates across tenants; `per-tenant` keeps each tenant's xorbs invisible \
-         to the others.",
+        if renamed {
+            "`per-scope` was renamed to `per-tenant`, which isolates tenants; with no tenant on \
+             your tokens each scope is its own tenant, as before. Set dedup_visibility = \
+             \"per-tenant\"."
+        } else {
+            "`global` deduplicates across tenants; `per-tenant` keeps each tenant's xorbs \
+             invisible to the others."
+        },
     );
     let url_lifetime = c.duration(
         "cas.url_lifetime",
@@ -1375,6 +1386,16 @@ mod tests {
 
     /// A static token may name its tenant (ruling M1-R38); one that isn't a
     /// valid tenant is refused like a bad scope.
+    #[test]
+    fn the_renamed_per_scope_value_says_what_replaced_it() {
+        let loaded = load_toml("[cas]\ndedup_visibility = \"per-scope\"\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["cas.dedup_visibility"]);
+        let hint = &loaded.problems[0].hint;
+        assert!(hint.contains("renamed to `per-tenant`"), "{hint}");
+        let loaded = load_toml("[cas]\ndedup_visibility = \"tenants\"\n", &[]);
+        assert!(!loaded.problems[0].hint.contains("renamed"));
+    }
+
     #[test]
     fn a_static_token_may_name_its_tenant() {
         let entry = |tenant: &str| {
