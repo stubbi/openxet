@@ -11,7 +11,9 @@ can rely on them.
 | 130  | `INTERRUPTED` | `upload` or `download` was stopped by `SIGINT` (Ctrl-C) or `SIGTERM`. A partial download was removed. |
 
 Every failure is reported on stderr. With `--json`, it is a single JSON
-object with a stable `code` and a `hint` naming the next action:
+object, on the last line of stderr, with a stable `code` and a `hint`
+naming the next action. Only `serve` writes anything before it: its log
+lines.
 
 ```json
 {"schema":"openxet.error.v1","code":"usage","message":"unrecognized subcommand 'nope'","hint":"Run `openxet --help` to list commands and options."}
