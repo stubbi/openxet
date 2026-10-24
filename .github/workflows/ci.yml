@@ -106,6 +106,8 @@ jobs:
           cache-dependency-glob: compat/uv.lock
       - name: Tracked files carry no secrets
         run: uv run --frozen --directory compat pytest tests/test_fixture_redaction.py
+      - name: Security test map matches the code and design §5.9
+        run: uv run --frozen --directory compat pytest tests/test_security_tests_map.py
       # Needs no network: checks the harness isolates client env and caches.
       - name: Harness isolation
         run: uv run --frozen --directory compat pytest tests/test_harness.py -m "not pinned"

@@ -609,7 +609,9 @@ API and metrics, because platforms need them for quotas and billing.
 Each requirement is a release blocker and has a named test. The tests are
 planned for the milestone that builds the surface (M1 for CAS, M2 for Hub
 and Git, later for caches and the mirror); a surface doesn't ship without
-its test.
+its test. [Security tests](../../reference/security-tests.md) maps each
+test to its file and milestone, and CI keeps that map and this table in
+step.
 
 | # | Requirement | Tests |
 |---|---|---|
@@ -619,7 +621,7 @@ its test.
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_scope_dedup_isolates_tenants`, `per_scope_multi_xorb_answer_hides_foreign_xorbs`, `per_scope_existence_checks_hide_other_tenants` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
 | 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
-| 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_write_is_visible`, `acked_write_survives_sigkill` |
+| 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_xorb_write_is_visible`, `acknowledged_shard_write_is_visible`, `acked_write_survives_sigkill` |
 | 8 | **Git reads check reachability on every path** (R22), and **every ref writer is fenced** (ADR 0004). | ADR 0004's `v2_want_unreachable_refused`, `hub_read_by_sha_obeys_r22`, `writer_cannot_make_unreachable_reachable`, `hub_ref_write_fenced`, `ref_log_in_cas_transaction` |
 
 Xet reads by hash follow scope membership (R25, §5.4); that is by design,
