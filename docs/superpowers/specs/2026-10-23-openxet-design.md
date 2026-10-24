@@ -516,7 +516,10 @@ membership (R25) and a revision would enforce nothing. The Hub token route
 still accepts a revision in its URL for compatibility (M2). Every node
 verifies them statelessly against a key set of public keys, so keys rotate
 without downtime, and a platform can sign them itself. `exp` is honoured
-exactly.
+exactly. Verification is algorithm-agile: each key is bound to one `alg`,
+and a token's header must match its key's, so ML-DSA (RFC 9964) can be
+added by rotation when platforms can sign with it
+([ADR 0011](../../adr/0011-post-quantum-readiness.md)).
 
 **Storage-only mode:** a platform with its own naming layer gets CAS tokens
 for its users either through an admin endpoint or by signing them itself
@@ -1082,6 +1085,8 @@ says which spec version and client versions are supported.
   public keys bound to an external identity, the same way access tokens are
   (§5.4). Keys are registered via `openxet login` or the admin API. No
   passwords and no users are stored.
+- **Post-quantum key exchange first:** `mlkem768x25519-sha256`, the
+  default since OpenSSH 10.0, then `curve25519-sha256` (ADR 0011).
 - **`git-lfs-authenticate`:** returns `{href, header.Authorization,
   expires_in}`, all three always. The LFS spec makes them optional, but
   `git-xet` 0.2.1 fails without `href` or `expires_in` (S7: Gitea omits
@@ -1605,13 +1610,19 @@ release of the open-source build: it runs the released build (§15).
     share one database through a rolling upgrade (issue #47).
   - Index round trips outside the CPU permits, once the index is
     networked (issue #48).
+  - Hybrid post-quantum TLS key exchange preferred in every rustls client
+    openxet builds, with a test of the negotiated group (ADR 0011, issue
+    [#66](https://github.com/stubbi/openxet/issues/66)).
+  - A key-rotation drill for CAS token keys and the transfer key, under
+    load (ADR 0011, issue [#65](https://github.com/stubbi/openxet/issues/65)).
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
   - Readiness that checks the index and the bucket (issue #49).
   - Metrics, tracing, and the rest of the HTTP read gateway.
   - Metering (§5.7) and the admin API that exposes it.
   - Server-side chunking for non-Xet clients.
-  - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`).
+  - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`), with
+    post-quantum key exchange first (ADR 0011, issue [#67](https://github.com/stubbi/openxet/issues/67)).
   - The `git-xet` setup of §10.2: the server-side capability route, plus
     the upstream `git-xet` contributions listed there.
   - Upstream: Xet download support in `git-xet` (§6.1). This is contributed

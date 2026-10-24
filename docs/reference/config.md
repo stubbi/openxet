@@ -407,6 +407,11 @@ again.
   limits come with rate limiting in M3.
 - The server speaks HTTP/1.1, which is what stock clients use. Put TLS in
   front of it with a proxy, and set `public_url` to the proxy's URL.
+  Choose a proxy that negotiates the hybrid post-quantum key exchange
+  `X25519MLKEM768` ([ADR 0011](../adr/0011-post-quantum-readiness.md)):
+  one built on OpenSSL 3.5 or later, or on Go 1.24 or later, does by
+  default unless its config overrides the key exchange groups (for
+  nginx, `ssl_ecdh_curve`).
 
 ## Example
 
