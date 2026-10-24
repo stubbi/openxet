@@ -609,12 +609,13 @@ API and metrics, because platforms need them for quotas and billing.
 - **Memory per node is bounded, whatever clients do** (ruling M1-R40).
   Buffered upload bodies and built reconstruction answers reserve their
   bytes from one process-wide budget (`server.memory_budget`, a quarter
-  of the host's memory, at least 1 GiB, by default) before they are
-  buffered, and hold them until the request ends or the answer has been
-  sent. Uploads past the budget queue, unread, for up to 120 s, so a stock
-  client's 64 concurrent xorbs never turn into retries; answers wait 5 s.
-  Then the request gets `503 memory_busy`, which clients retry; one over
-  the whole budget gets a final `413 exceeds_memory_budget`. Answers are sent
+  of the host's memory by default) before they are buffered, and hold
+  them until the work they serve has ended or the answer has been sent.
+  Uploads past the budget queue, unread, for up to 120 s, so a stock
+  client's 64 concurrent xorbs never turn into retries; answers that fit
+  pass the queue, and others wait 5 s. Then the request gets
+  `503 memory_busy`, which clients retry. One answer may hold at most an
+  eighth of the budget, else a final `413 answer_too_large`. Answers are sent
   under a deadline of 30 s plus 1 s per MiB. CPU work is bounded by the
   `validate`, `commit` and `dedup` permits (M1-R8, M1-R24, M1-R32), and
   connections by `server.max_connections`. Measured peaks are in
@@ -1643,6 +1644,6 @@ decides, with superseded parts marked.
 | M1-R34 | A reconstruction renders with extra blocking threads up to half of the free `validate` permits, counting the request's own permit, so one large answer never starves uploads. | benchmarks reference |
 | M1-R35 | A required CI gate must pass 10 of 10 runs before it merges; a flaky gate is fixed, never loosened. | §8, benchmarks reference |
 | M1-R36 | The documentation site is rendered from `docs/` with a pinned mdBook at deploy time, and nothing generated is committed; `llms.txt` and per-page Markdown are generated, and CI builds and link-checks the site and requires every reference page in its navigation. | §7.1 |
-| M1-R40 | One process-wide memory budget bounds buffered request bodies and built reconstruction answers: `server.memory_budget`, by default a quarter of the host's memory (the cgroup limit on Linux if lower), at least 1 GiB, configurable from 256 MiB to 1 TiB. Uploads reserve their `Content-Length` (the route's limit if none) before a byte is read, until the request ends, a detached `/v2/shards` upload until its work ends; past the budget they queue, unread and in arrival order, for up to 120 s, so a stock client's concurrent xorbs never turn into retries. Reconstruction answers reserve their buffers' bound before they are built, waiting up to 5 s, then their size until sent, under a send deadline of 30 s plus 1 s per MiB. After its wait a request gets `503 memory_busy` with `Retry-After: 1`; one larger than the whole budget gets a final `413 exceeds_memory_budget`. Batch reconstruction checks its term cap from stored term counts before decoding; the count runs before any permit, not under the validation permit (accepted deviation: the reservation sized from it must precede the permit, the one order every request takes them in). Xorb commits take a `commit` permit. `accept` is capped by `server.max_connections` (default 4096); further connections wait in the listen backlog. | §5.8, S10 |
+| M1-R40 | One process-wide memory budget bounds buffered request bodies and built reconstruction answers: `server.memory_budget`, by default a quarter of the memory the process may use (on Linux the smallest cgroup limit over it, if lower), from 256 MiB to 1 TiB, and 1 GiB where memory can't be read; a budget over half the memory is warned about. Reservations and the `commit` permit are held by the work they guard, so they outlive a client that leaves while uncancellable work runs. Uploads reserve their `Content-Length` (the route's limit if none, never more than declared) before a byte is read, until stored and registered; they queue in arrival order, unread, up to 120 s. A reconstruction reserves its decoded record from the stored term count before loading it, then its answer's bound, then its size until sent, under a send deadline of 30 s plus 1 s per MiB; an answer that fits takes free bytes at once, past queued uploads, and one that doesn't waits up to 5 s. After its wait a request gets `503 memory_busy` with `Retry-After: 1`. One answer may reserve at most an eighth of the budget, else a final `413 answer_too_large`; an upload over the whole budget gets a final `413 exceeds_memory_budget`. A batch holds at most 100,000 terms, checked from stored term counts before decoding; the count runs before any permit, not under the validation permit (accepted deviation: the reservation sized from it must precede the permit, the one order every request takes them in). Xorb commits take a `commit` permit. `accept` is capped by `server.max_connections` (default 4096); further connections wait in the listen backlog. Per-credential budget shares and connection limits are M3's, with rate limiting. | §5.8, S10 |
 | M1-R41 | This register lists every ruling that tracked code or docs cite. | §17 |
 | M1-R42 | Signed transfer URLs live 30 to 60 minutes (60 by default), so a leaked URL, or one issued before a purge, stops working within the hour; supersedes M1-R19's 24 h URL cap. | §5.4, §5.5, ADR 0002 |

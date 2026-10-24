@@ -68,8 +68,9 @@ These answers can come from any route:
 | `408` | `body_timeout` | The body stalled for `server.body_read_timeout`, or fell below `server.body_min_rate` ([config](config.md#server)). The answer closes the connection. Clients retry. |
 | `503` | `not_ready` | The server is starting; the index and bucket are not open yet. `Retry-After: 1`; clients retry. |
 | `503` | `unavailable` | The index or bucket failed in a way a retry may fix. Clients retry. |
-| `503` | `memory_busy` | The server's memory budget stayed full for the request's wait: 120 s for an upload, 5 s for a reconstruction ([config](config.md#memory)). `Retry-After: 1`; clients retry. A refused upload's body is not read, and the answer closes the connection. |
-| `413` | `exceeds_memory_budget` | The request needs more memory than the server's whole budget, such as a batch reconstruction of very many terms. Final: split the batch, or reconstruct large files alone or by range; the operator can raise `server.memory_budget`. |
+| `503` | `memory_busy` | The server's memory budget stayed full for the request's wait: 120 s for an upload, 5 s for a reconstruction that doesn't fit at once ([config](config.md#memory)). `Retry-After: 1`; clients retry. A refused upload's body is not read, and the answer closes the connection. |
+| `413` | `answer_too_large` | One reconstruction answer would hold more than an eighth of the server's memory budget. Final: ask for the file by range, as `hf_xet` does, or put fewer files in a batch; the operator can raise `server.memory_budget`. |
+| `413` | `exceeds_memory_budget` | An upload larger than the server's whole memory budget. Final; stock clients' uploads never are. |
 | `500` | `internal` | A server bug or an inconsistency between the index and the bucket, logged under the request id. |
 
 ## Routes
@@ -287,7 +288,7 @@ left out, the same as one never stored.
 
 | Status | `code` | Meaning |
 | ------ | ------ | ------- |
-| `400` | `batch_too_large` | More than 1000 distinct files, or files with more than 1,000,000 terms in total. Split the batch. |
+| `400` | `batch_too_large` | More than 1000 distinct files, or files with more than 100,000 terms in total. Split the batch. |
 | `400` | `invalid_batch` | The `POST` body is not a JSON list of `{"prefix": "default", "hash": …}` keys. The body is never echoed. |
 | `400` | `invalid_hash` | A hash is not 64 lowercase hex characters. |
 | `413` | `payload_too_large` | The `POST` body is over 256 KiB. |
