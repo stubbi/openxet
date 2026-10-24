@@ -12,7 +12,7 @@
 //! ruling M1-R16); for any other caller it reads as never stored, `404`.
 //! Each answer is planned by [`crate::plan`] and every fetch descriptor gets
 //! its own URL to the transfer route, signed for exactly its byte range
-//! (ADR 0002). A `validate` permit is held from loading the chunk tables to
+//! (ADR 0002). A `validate` permit is held from loading the chunk layouts to
 //! the serialized answer, and planning, signing and serialization run on a
 //! blocking thread, as other CPU-bound request work does (rulings M1-R8,
 //! M1-R25): a file of 100k terms signs 100k URLs. A batch is capped at
@@ -31,7 +31,7 @@ use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use openxet_index::ChunkTable;
+use openxet_index::ChunkLayout;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::ser::{SerializeStruct as _, Serializer};
 use serde::{Deserialize, Serialize};
@@ -50,7 +50,7 @@ pub const MAX_BATCH_FILES: usize = 1000;
 
 /// The most terms one batch reconstruction may plan, over all the files it
 /// is answered for; a batch over it is `400 batch_too_large`. With
-/// [`MAX_BATCH_FILES`], it bounds one batch's chunk tables, signing and
+/// [`MAX_BATCH_FILES`], it bounds one batch's chunk layouts, signing and
 /// answer, whatever the files hold.
 pub const MAX_BATCH_TERMS: usize = 1_000_000;
 
@@ -127,7 +127,7 @@ async fn v1(
 ///   the empty file has no satisfiable range, and without a `Range` it is
 ///   an answer with no terms (S10 §1)
 /// - `400 invalid_range` for a `Range` that isn't one byte range
-/// - `500` if the index's record disagrees with its chunk tables, never a
+/// - `500` if the index's record disagrees with its chunk layouts, never a
 ///   partial plan
 async fn single(
     state: &AppState,
@@ -146,7 +146,7 @@ async fn single(
     let window = plan::window(&record, range).map_err(planning_failed)?;
     let xorbs = window.map_or_else(Vec::new, |w| distinct_xorbs(&record.terms[w.terms]));
     let permit = validation_permit(state).await?;
-    let tables = chunk_tables(state, scope, xorbs).await?;
+    let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
     let body = render(permit, move || {
@@ -263,7 +263,7 @@ async fn batch(
     }
     let xorbs = distinct_xorbs(records.iter().flat_map(|r| &r.terms));
     let permit = validation_permit(state).await?;
-    let tables = chunk_tables(state, scope, xorbs).await?;
+    let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
     let body = render(permit, move || {
@@ -386,22 +386,22 @@ fn distinct_xorbs<'a>(terms: impl IntoIterator<Item = &'a openxet_index::Term>) 
         .collect()
 }
 
-/// The chunk tables of `xorbs`, every one of which a file registered to
+/// The chunk layouts of `xorbs`, every one of which a file registered to
 /// `scope` names. Registration checked each was visible to `scope` (ruling
 /// M1-R17), so a missing one is an index fault: `500`, logged as an
 /// integrity anomaly.
-async fn chunk_tables(
+async fn chunk_layouts(
     state: &AppState,
     scope: &str,
     xorbs: Vec<MerkleHash>,
-) -> Result<HashMap<MerkleHash, ChunkTable>, CasError> {
+) -> Result<HashMap<MerkleHash, ChunkLayout>, CasError> {
     let tables = state
         .index
-        .chunk_tables(&xorbs, scope, state.cfg.visibility)
+        .chunk_layouts(&xorbs, scope, state.cfg.visibility)
         .await?;
     if let Some(missing) = xorbs.iter().find(|x| !tables.contains_key(x)) {
         return Err(CasError::internal(format!(
-            "integrity anomaly: a registered file names xorb {}, whose chunk table the index \
+            "integrity anomaly: a registered file names xorb {}, whose chunk layout the index \
              doesn't hold",
             hash_to_hex(missing)
         )));
@@ -420,8 +420,8 @@ fn planning_failed(e: PlanError) -> CasError {
     }
 }
 
-/// A `validate` permit, taken before a plan's chunk tables are loaded and
-/// held until its answer is serialized: the tables are most of a large
+/// A `validate` permit, taken before a plan's chunk layouts are loaded and
+/// held until its answer is serialized: the layouts are much of a large
 /// plan's memory, and planning, signing and serializing its CPU (rulings
 /// M1-R8, M1-R25).
 async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, CasError> {
@@ -721,7 +721,7 @@ mod tests {
     use axum::http::HeaderValue;
     use axum::http::header::AUTHORIZATION;
     use openxet_auth::{Mode, StaticToken};
-    use openxet_index::{FileRecord, Index, IndexError, NewFile, Term, Visibility};
+    use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility};
     use tokio::sync::Semaphore;
     use tower::ServiceExt as _;
 
@@ -733,7 +733,7 @@ mod tests {
     const BEARER: &str = "Bearer";
     const READ: &str = "oxt_unit_read";
 
-    /// An index counting its `chunk_tables` calls.
+    /// An index counting its `chunk_tables` and `chunk_layouts` calls.
     struct CountingIndex {
         inner: Arc<dyn Index>,
         table_loads: Arc<AtomicUsize>,
@@ -771,6 +771,16 @@ mod tests {
         ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
             self.table_loads.fetch_add(1, Ordering::SeqCst);
             self.inner.chunk_tables(xorbs, scope, vis).await
+        }
+
+        async fn chunk_layouts(
+            &self,
+            xorbs: &[MerkleHash],
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+            self.table_loads.fetch_add(1, Ordering::SeqCst);
+            self.inner.chunk_layouts(xorbs, scope, vis).await
         }
 
         async fn register_shard(

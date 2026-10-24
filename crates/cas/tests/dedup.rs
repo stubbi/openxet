@@ -17,7 +17,9 @@ use common::{
     WrapIndex, bearer, config,
 };
 use openxet_cas::Clock as _;
-use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility};
+use openxet_index::{
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility,
+};
 use openxet_protocol::{
     DedupAnswer, MerkleHash, chunk_hash, hash_to_hex, is_dedup_eligible, read_dedup_answer,
     read_upload_shard,
@@ -445,6 +447,15 @@ impl Index for BrokenIndex {
         _: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
         Ok(HashMap::new())
+    }
+
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
     async fn register_shard(

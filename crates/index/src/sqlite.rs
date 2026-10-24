@@ -11,8 +11,11 @@ use sqlx::sqlite::{
 };
 use sqlx::{AssertSqlSafe, Row, Sqlite, Transaction};
 
-use crate::types::{decode_chunk_table, decode_terms, encode_chunk_table, encode_terms, hash_from};
-use crate::{ChunkTable, FileRecord, Index, IndexError, NewFile, Visibility};
+use crate::types::{
+    decode_chunk_layout, decode_chunk_table, decode_layout_of_chunk_table, decode_terms,
+    encode_chunk_layout, encode_chunk_table, encode_terms, hash_from,
+};
+use crate::{ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Visibility};
 
 /// With the `fault-injection` feature, `register_shard` for this scope fails
 /// after writing its first file, so tests can check the transaction rolls
@@ -319,6 +322,7 @@ impl Index for SqliteIndex {
         scope: &str,
     ) -> Result<bool, IndexError> {
         let blob = encode_chunk_table(table)?;
+        let layout = encode_chunk_layout(table);
         let size = to_i64(size, "xorb size")?;
         let count = i64::try_from(table.hashes.len())
             .map_err(|_| IndexError::InvalidInput("chunk count is over i64::MAX".to_owned()))?;
@@ -334,6 +338,13 @@ impl Index for SqliteIndex {
         .bind(size)
         .bind(count)
         .bind(blob)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO xorb_layouts (xorb, chunk_layout) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        )
+        .bind(xorb.as_bytes())
+        .bind(layout)
         .execute(&mut *tx)
         .await?;
         let new_for_scope = sqlx::query(
@@ -402,6 +413,49 @@ impl Index for SqliteIndex {
             }
         }
         Ok(tables)
+    }
+
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        let unique: Vec<&MerkleHash> = {
+            let mut seen = HashSet::with_capacity(xorbs.len());
+            xorbs.iter().filter(|h| seen.insert(**h)).collect()
+        };
+        let mut layouts = HashMap::with_capacity(unique.len());
+        for batch in unique.chunks(HASHES_PER_QUERY) {
+            // `chunk_table` is read only for a xorb stored before
+            // `xorb_layouts` existed.
+            let mut query = sqlx::query(with_placeholders(
+                "SELECT x.hash, x.chunk_count, l.chunk_layout, \
+                 CASE WHEN l.chunk_layout IS NULL THEN x.chunk_table END \
+                 FROM xorbs x LEFT JOIN xorb_layouts l ON l.xorb = x.hash WHERE x.hash IN (",
+                "?",
+                batch.len(),
+                concat!(") AND ", visible!()),
+            ));
+            for hash in batch {
+                query = query.bind(hash.as_bytes());
+            }
+            let rows = query
+                .bind(vis == Visibility::Global)
+                .bind(scope)
+                .fetch_all(&self.reader)
+                .await?;
+            for row in rows {
+                let hash = hash_from(row.try_get::<&[u8], _>(0)?)?;
+                let count = to_usize(row.try_get(1)?, "chunk count")?;
+                let layout = match row.try_get::<Option<&[u8]>, _>(2)? {
+                    Some(layout) => decode_chunk_layout(layout, count)?,
+                    None => decode_layout_of_chunk_table(row.try_get::<&[u8], _>(3)?, count)?,
+                };
+                layouts.insert(hash, layout);
+            }
+        }
+        Ok(layouts)
     }
 
     async fn register_shard(

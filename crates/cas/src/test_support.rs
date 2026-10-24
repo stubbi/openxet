@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use openxet_auth::{Authenticator, StaticToken, UrlSigner};
-use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
+use openxet_index::{
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility,
+};
 use openxet_protocol::{MerkleHash, VerifyLimits};
 use openxet_storage::LocalBucket;
 use tokio::sync::Semaphore;
@@ -95,6 +97,15 @@ impl Index for PermitProbe {
         self.free_at_load
             .store(self.validate.available_permits(), Ordering::SeqCst);
         self.inner.chunk_tables(xorbs, scope, vis).await
+    }
+
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
     async fn register_shard(

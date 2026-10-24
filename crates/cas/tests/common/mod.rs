@@ -32,7 +32,9 @@ use axum::body::Bytes;
 use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
-use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
+use openxet_index::{
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility,
+};
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
 use openxet_storage::{Bucket, Key, LocalBucket, RangeStream, StorageError};
@@ -720,6 +722,15 @@ impl Index for SlowIndex {
         self.inner.chunk_tables(xorbs, scope, vis).await
     }
 
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        self.inner.chunk_layouts(xorbs, scope, vis).await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
@@ -753,9 +764,9 @@ impl Index for SlowIndex {
     }
 }
 
-/// An index that answers `chunk_tables` with nothing, as an index that
-/// lost rows would, for tests of the integrity checks on reads. Everything
-/// else is the wrapped index's.
+/// An index that answers `chunk_tables` and `chunk_layouts` with nothing,
+/// as an index that lost rows would, for tests of the integrity checks on
+/// reads. Everything else is the wrapped index's.
 pub struct TablelessIndex {
     /// The index answering every other call.
     pub inner: Arc<dyn Index>,
@@ -798,6 +809,15 @@ impl Index for TablelessIndex {
         _: &str,
         _: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
+        Ok(HashMap::new())
+    }
+
+    async fn chunk_layouts(
+        &self,
+        _: &[MerkleHash],
+        _: &str,
+        _: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
         Ok(HashMap::new())
     }
 

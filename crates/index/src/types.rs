@@ -25,6 +25,19 @@ pub struct ChunkTable {
     pub offsets: Arc<[u32]>,
 }
 
+/// Where one xorb's chunks are stored and how long each unpacks: a
+/// [`ChunkTable`] without the chunk hashes, which is what reconstruction
+/// planning reads.
+///
+/// Invariant: `offsets.len() == lengths.len() + 1`, as in [`ChunkTable`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkLayout {
+    /// Each chunk's uncompressed length, in xorb order.
+    pub lengths: Arc<[u32]>,
+    /// The `n + 1` chunk offsets in the stored xorb.
+    pub offsets: Arc<[u32]>,
+}
+
 /// One term of a file reconstruction: chunks `[chunk_start, chunk_end)` of
 /// `xorb`, which unpack to `unpacked_bytes` bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +89,7 @@ pub enum Visibility {
 const HASH_LEN: usize = 32;
 const CHUNK_ENTRY_LEN: usize = HASH_LEN + 4 + 4;
 const TERM_LEN: usize = HASH_LEN + 4 + 4 + 4;
+const LAYOUT_ENTRY_LEN: usize = 4 + 4;
 
 pub(crate) fn hash_from(bytes: &[u8]) -> Result<MerkleHash, IndexError> {
     let raw: [u8; HASH_LEN] = bytes
@@ -151,6 +165,71 @@ pub(crate) fn decode_chunk_table(
     Ok(ChunkTable {
         hashes: hashes.into(),
         offsets: offsets.into(),
+    })
+}
+
+/// Encodes a chunk table's [`ChunkLayout`] as `(uncompressed length u32 LE,
+/// offset u32 LE)` per chunk, then the final offset. Called after
+/// [`encode_chunk_table`] accepted the table, so every length fits `u32`.
+pub(crate) fn encode_chunk_layout(table: &ChunkTable) -> Vec<u8> {
+    let n = table.hashes.len();
+    let mut out = Vec::with_capacity(n * LAYOUT_ENTRY_LEN + 4);
+    for ((_, len), offset) in table.hashes.iter().zip(table.offsets.iter()) {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "encode_chunk_table rejected lengths over u32::MAX"
+        )]
+        out.extend_from_slice(&(*len as u32).to_le_bytes());
+        out.extend_from_slice(&offset.to_le_bytes());
+    }
+    out.extend_from_slice(&table.offsets[n].to_le_bytes());
+    out
+}
+
+/// Decodes [`encode_chunk_layout`]'s output, checking it holds exactly
+/// `chunk_count` chunks.
+///
+/// # Errors
+///
+/// [`IndexError::Corrupt`] if the length doesn't match.
+pub(crate) fn decode_chunk_layout(
+    bytes: &[u8],
+    chunk_count: usize,
+) -> Result<ChunkLayout, IndexError> {
+    let expected = chunk_count
+        .checked_mul(LAYOUT_ENTRY_LEN)
+        .and_then(|l| l.checked_add(4));
+    if expected != Some(bytes.len()) {
+        return Err(IndexError::Corrupt(format!(
+            "a chunk layout of {chunk_count} chunks is {} bytes",
+            bytes.len()
+        )));
+    }
+    let entries = bytes[..bytes.len() - 4].chunks_exact(LAYOUT_ENTRY_LEN);
+    let lengths = entries.clone().map(|e| u32_at(e, 0)).collect();
+    let offsets = entries
+        .map(|e| u32_at(e, 4))
+        .chain([u32_at(bytes, bytes.len() - 4)])
+        .collect();
+    Ok(ChunkLayout { lengths, offsets })
+}
+
+/// The [`ChunkLayout`] of an [`encode_chunk_table`] output, for xorbs
+/// stored before layouts were kept on their own.
+///
+/// # Errors
+///
+/// [`IndexError::Corrupt`] if the length doesn't match `chunk_count`.
+pub(crate) fn decode_layout_of_chunk_table(
+    bytes: &[u8],
+    chunk_count: usize,
+) -> Result<ChunkLayout, IndexError> {
+    let table = decode_chunk_table(bytes, chunk_count)?;
+    #[allow(clippy::cast_possible_truncation, reason = "decoded from u32 fields")]
+    let lengths = table.hashes.iter().map(|(_, len)| *len as u32).collect();
+    Ok(ChunkLayout {
+        lengths,
+        offsets: table.offsets,
     })
 }
 
@@ -233,6 +312,34 @@ mod tests {
             decode_chunk_table(&bytes, usize::MAX),
             Err(IndexError::Corrupt(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn chunk_layout_round_trips_and_matches_the_table() -> Result<(), IndexError> {
+        let t = table();
+        let bytes = encode_chunk_layout(&t);
+        assert_eq!(bytes.len(), 2 * LAYOUT_ENTRY_LEN + 4);
+        let expected = ChunkLayout {
+            lengths: vec![1, 131_072].into(),
+            offsets: vec![0, 17, 70_000].into(),
+        };
+        assert_eq!(decode_chunk_layout(&bytes, 2)?, expected);
+        assert_eq!(
+            decode_layout_of_chunk_table(&encode_chunk_table(&t)?, 2)?,
+            expected
+        );
+        for (bytes, count) in [
+            (&bytes[..], 3),
+            (&bytes[..bytes.len() - 1], 2),
+            (&[][..], 0),
+            (&bytes[..], usize::MAX),
+        ] {
+            assert!(matches!(
+                decode_chunk_layout(bytes, count),
+                Err(IndexError::Corrupt(_))
+            ));
+        }
         Ok(())
     }
 

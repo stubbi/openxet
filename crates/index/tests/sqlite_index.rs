@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openxet_index::{
-    ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, IndexError, NewFile, SqliteIndex,
-    Term, Visibility,
+    ChunkLayout, ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, IndexError, NewFile,
+    SqliteIndex, Term, Visibility,
 };
 use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use tempfile::TempDir;
@@ -393,7 +393,7 @@ async fn chunk_tables_returns_only_present_visible() {
 }
 
 #[tokio::test]
-async fn chunk_tables_handles_more_xorbs_than_one_query_binds() {
+async fn chunk_tables_and_layouts_handle_more_xorbs_than_one_query_binds() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;
     let mut asked = Vec::new();
@@ -402,6 +402,81 @@ async fn chunk_tables_handles_more_xorbs_than_one_query_binds() {
     }
     let tables = ok(index.chunk_tables(&asked, A, Visibility::PerScope).await);
     assert_eq!(tables.len(), 1200);
+    let layouts = ok(index.chunk_layouts(&asked, A, Visibility::PerScope).await);
+    assert_eq!(layouts.len(), 1200);
+}
+
+/// `table`'s lengths and offsets: the layout the index must answer for it.
+fn layout_of(table: &ChunkTable) -> ChunkLayout {
+    ChunkLayout {
+        lengths: table
+            .hashes
+            .iter()
+            .map(|(_, len)| u32::try_from(*len).unwrap_or(u32::MAX))
+            .collect(),
+        offsets: table.offsets.clone(),
+    }
+}
+
+/// A table whose chunks differ in length, so a layout that mixes up
+/// lengths and offsets or entries can't pass.
+fn uneven_table(label: &str, n: u32) -> ChunkTable {
+    let lengths: Vec<u64> = (0..n).map(|i| u64::from(1000 + i * 37)).collect();
+    let mut offsets = vec![0u32];
+    for i in 0..n {
+        offsets.push(offsets[i as usize] + 500 + i * 11);
+    }
+    ChunkTable {
+        hashes: lengths
+            .iter()
+            .enumerate()
+            .map(|(i, len)| (h(&format!("{label}/chunk{i}")), *len))
+            .collect(),
+        offsets: offsets.into(),
+    }
+}
+
+#[tokio::test]
+async fn chunk_layouts_answer_as_chunk_tables_do_without_hashes() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, ta) = (h("xorb/a"), uneven_table("a", 7));
+    let (xb, tb) = (h("xorb/b"), uneven_table("b", 3));
+    ok(index.put_xorb(&xa, 9000, &ta, &[], A).await);
+    ok(index.put_xorb(&xb, 9000, &tb, &[], B).await);
+    // A second put keeps the first table, and so the first layout.
+    ok(index.put_xorb(&xa, 9000, &tb, &[], A).await);
+    let missing = h("xorb/missing");
+    let asked = [xa, xb, missing, xa];
+
+    let per_scope = ok(index.chunk_layouts(&asked, A, Visibility::PerScope).await);
+    assert_eq!(per_scope, HashMap::from([(xa, layout_of(&ta))]));
+    let global = ok(index.chunk_layouts(&asked, A, Visibility::Global).await);
+    assert_eq!(
+        global,
+        HashMap::from([(xa, layout_of(&ta)), (xb, layout_of(&tb))])
+    );
+    assert!(ok(index.chunk_layouts(&[], A, Visibility::Global).await).is_empty());
+}
+
+#[tokio::test]
+async fn chunk_layouts_of_xorbs_stored_before_layouts_come_from_their_tables() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    let index = open_at(&path).await;
+    let (xorb, t) = (h("xorb/old"), uneven_table("old", 5));
+    ok(index.put_xorb(&xorb, 9000, &t, &[], A).await);
+    drop(index);
+    // As a database written before migration 0003 holds it.
+    let db = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+    ok(sqlx::query("DELETE FROM xorb_layouts").execute(&db).await);
+    db.close().await;
+
+    let index = open_at(&path).await;
+    assert_eq!(
+        ok(index.chunk_layouts(&[xorb], A, Visibility::PerScope).await),
+        HashMap::from([(xorb, layout_of(&t))])
+    );
 }
 
 #[tokio::test]

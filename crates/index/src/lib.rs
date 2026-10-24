@@ -19,7 +19,7 @@ use openxet_protocol::MerkleHash;
 #[cfg(feature = "fault-injection")]
 pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;
-pub use types::{ChunkTable, FileRecord, NewFile, Scope, Term, Visibility};
+pub use types::{ChunkLayout, ChunkTable, FileRecord, NewFile, Scope, Term, Visibility};
 
 /// The index's operations. Every write is idempotent: content is addressed by
 /// hash, so repeating a call with the same arguments changes nothing and
@@ -79,6 +79,20 @@ pub trait Index: Send + Sync + 'static {
         scope: &str,
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError>;
+
+    /// The [`ChunkLayout`]s of `xorbs`, as [`Index::chunk_tables`] answers
+    /// their tables: what reconstruction planning reads, without loading the
+    /// chunk hashes.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError>;
 
     /// Registers the files of a verified shard to `scope`, in one
     /// transaction: either everything is recorded or nothing is.

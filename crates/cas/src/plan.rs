@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use openxet_index::{ChunkTable, FileRecord, Term};
+use openxet_index::{ChunkLayout, FileRecord, Term};
 use openxet_protocol::{MerkleHash, hash_to_hex};
 
 /// What answers a file range: the terms in file order and one fetch
@@ -151,7 +151,7 @@ pub(crate) fn window(
 /// disagrees with a term.
 pub(crate) fn plan(
     file: &FileRecord,
-    tables: &HashMap<MerkleHash, ChunkTable>,
+    tables: &HashMap<MerkleHash, ChunkLayout>,
     range: Option<(u64, u64)>,
 ) -> Result<Plan, PlanError> {
     let Some(window) = window(file, range)? else {
@@ -177,8 +177,8 @@ pub(crate) fn plan(
         let mut first = 0;
         let mut chunk_at = term_at;
         if i == 0 {
-            while chunk_at + chunks[first].1 <= window.start {
-                chunk_at += chunks[first].1;
+            while chunk_at + u64::from(chunks[first]) <= window.start {
+                chunk_at += u64::from(chunks[first]);
                 first += 1;
                 if first == chunks.len() {
                     return Err(short_term(file, term));
@@ -190,7 +190,7 @@ pub(crate) fn plan(
         let mut kept_end = first;
         let mut at = chunk_at;
         while kept_end < chunks.len() && at <= window.end {
-            at += chunks[kept_end].1;
+            at += u64::from(chunks[kept_end]);
             kept_end += 1;
         }
         if kept_end == chunks.len() && at - term_at != u64::from(term.unpacked_bytes) {
@@ -230,15 +230,15 @@ pub(crate) fn plan(
     Ok(out)
 }
 
-/// `term`'s chunks in `table`: `(hash, uncompressed length)` each.
+/// The uncompressed lengths of `term`'s chunks in `table`.
 fn term_chunks<'t>(
     file: &FileRecord,
     term: &Term,
-    table: &'t ChunkTable,
-) -> Result<&'t [(MerkleHash, u64)], PlanError> {
+    table: &'t ChunkLayout,
+) -> Result<&'t [u32], PlanError> {
     let range = term.chunk_start as usize..term.chunk_end as usize;
-    match table.hashes.get(range) {
-        Some(chunks) if !chunks.is_empty() && table.offsets.len() == table.hashes.len() + 1 => {
+    match table.lengths.get(range) {
+        Some(chunks) if !chunks.is_empty() && table.offsets.len() == table.lengths.len() + 1 => {
             Ok(chunks)
         }
         _ => Err(PlanError::Inconsistent(format!(
@@ -247,7 +247,7 @@ fn term_chunks<'t>(
             term.chunk_start,
             term.chunk_end,
             hash_to_hex(&term.xorb),
-            table.hashes.len()
+            table.lengths.len()
         ))),
     }
 }
@@ -256,7 +256,7 @@ fn term_chunks<'t>(
 fn stored_bytes(
     file: &FileRecord,
     term: &Term,
-    table: &ChunkTable,
+    table: &ChunkLayout,
     (a, b): (u32, u32),
 ) -> Result<(u64, u64), PlanError> {
     let start = u64::from(table.offsets[a as usize]);
@@ -297,7 +297,7 @@ mod tests {
         hash: MerkleHash,
         chunks: Vec<Vec<u8>>,
         stored: Vec<u8>,
-        table: ChunkTable,
+        table: ChunkLayout,
     }
 
     fn test_xorb(index: usize, lengths: &[u32]) -> TestXorb {
@@ -321,11 +321,8 @@ mod tests {
         offsets.push(stored.len() as u32);
         TestXorb {
             hash: chunk_hash(&[index as u8]),
-            table: ChunkTable {
-                hashes: chunks
-                    .iter()
-                    .map(|d| (chunk_hash(d), d.len() as u64))
-                    .collect(),
+            table: ChunkLayout {
+                lengths: chunks.iter().map(|d| d.len() as u32).collect(),
                 offsets: offsets.into(),
             },
             chunks,
@@ -373,7 +370,7 @@ mod tests {
         (record, bytes)
     }
 
-    fn tables(xorbs: &[TestXorb]) -> HashMap<MerkleHash, ChunkTable> {
+    fn tables(xorbs: &[TestXorb]) -> HashMap<MerkleHash, ChunkLayout> {
         xorbs.iter().map(|x| (x.hash, x.table.clone())).collect()
     }
 
@@ -416,9 +413,9 @@ mod tests {
             let lo = (term.chunks.0 - fetch.chunks.0) as usize;
             let hi = (term.chunks.1 - fetch.chunks.0) as usize;
             let data: Vec<u8> = payloads[lo..hi].concat();
-            let lengths: u64 = xorb.table.hashes[term.chunks.0 as usize..term.chunks.1 as usize]
+            let lengths: u64 = xorb.table.lengths[term.chunks.0 as usize..term.chunks.1 as usize]
                 .iter()
-                .map(|(_, len)| len)
+                .map(|&len| u64::from(len))
                 .sum();
             assert_eq!(u64::from(term.unpacked_length), lengths);
             assert_eq!(data.len() as u64, lengths);
@@ -427,9 +424,9 @@ mod tests {
         // Tight: the offset stays inside the first chunk, and the last
         // chunk holds a byte of the range.
         if let (Some(first), Some(last)) = (plan.terms.first(), plan.terms.last()) {
-            let first_len = by_hash[&first.xorb].table.hashes[first.chunks.0 as usize].1;
+            let first_len = u64::from(by_hash[&first.xorb].table.lengths[first.chunks.0 as usize]);
             assert!(plan.offset_into_first_range < first_len);
-            let last_len = by_hash[&last.xorb].table.hashes[last.chunks.1 as usize - 1].1;
+            let last_len = by_hash[&last.xorb].table.lengths[last.chunks.1 as usize - 1];
             let offset = plan.offset_into_first_range as usize;
             assert!(out.len() - offset >= needed);
             assert!(out.len() - (last_len as usize) < offset + needed);
@@ -532,7 +529,7 @@ mod tests {
     fn a_record_that_disagrees_with_its_tables_is_inconsistent() {
         let xorbs = [test_xorb(0, &[3, 4])];
         let (file, _) = file_of(&xorbs, &[(0, 0, 2)]);
-        let inconsistent = |file: &FileRecord, tables: &HashMap<MerkleHash, ChunkTable>| {
+        let inconsistent = |file: &FileRecord, tables: &HashMap<MerkleHash, ChunkLayout>| {
             matches!(plan(file, tables, None), Err(PlanError::Inconsistent(_)))
         };
 
