@@ -3,13 +3,21 @@
 # the landing page from website/, the docs from docs/ rendered by mdBook
 # (site/book.toml) under /docs/ with each page's plain Markdown next to its
 # HTML, and /llms.txt and /sitemap.xml generated from docs/SUMMARY.md.
-# Fails on a page missing from the navigation, a broken repository link, or
-# any mdBook warning. Needs mdbook 0.5.4 and python3.
+# Fails on a page missing from the navigation, a broken repository link, any
+# mdBook warning, or an llms.txt entry without a description. Needs mdbook
+# 0.5.4 and python3.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/target/site"
 public="$out/public"
+
+want="mdbook v0.5.4"
+have="$(mdbook --version 2>/dev/null || true)"
+if [ "$have" != "$want" ]; then
+  echo "the site build needs $want, found ${have:-no mdbook on PATH}; install it with: cargo install mdbook --version 0.5.4 --locked" >&2
+  exit 1
+fi
 
 python3 -I "$root/scripts/check-docs-nav.py"
 
@@ -30,4 +38,10 @@ cp -R "$out/book/html" "$public/docs"
 cp -R "$out/book/markdown/." "$public/docs/"
 
 python3 -I "$root/scripts/generate-site-index.py" "$public"
+# Every docs entry in llms.txt carries a note: agents choose pages by it.
+if bare="$(grep -E '^- \[[^]]+\]\(https://openxet\.com/docs/[^)]+\)$' "$public/llms.txt")"; then
+  echo "these llms.txt entries have no description; add a <!-- description: ... --> line under the page's title, or start the page with a prose paragraph:" >&2
+  echo "$bare" >&2
+  exit 1
+fi
 echo "site written to $public"

@@ -1,5 +1,7 @@
 # 0005: Serve Xet-native clients from the LFS-scoped token route
 
+<!-- description: Xet-native clients get CAS credentials from the LFS-scoped xet-read-token and xet-write-token routes, authenticated with HTTP Basic. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `hub`, `git`, `auth`, `client`

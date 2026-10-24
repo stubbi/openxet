@@ -1,5 +1,7 @@
 # S5: Is `xet-core-structures` usable server-side?
 
+<!-- description: Whether xet-core-structures can parse and verify shards and xorbs server-side, and what depending on it costs. -->
+
 - Date: 2026-10-23
 - Version examined: `xet-core-structures` 1.7.0 (crates.io, 2026-10-06), the
   exact version `openxet-protocol` pins. Paths below are relative to that

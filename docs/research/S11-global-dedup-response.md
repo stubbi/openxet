@@ -1,5 +1,7 @@
 # S11: What a global dedup answer should offer
 
+<!-- description: Why a global dedup answer should offer a shard's xorbs rather than one xorb, measured against the spec, xet-core and huggingface.co. -->
+
 - Date: 2026-10-24. Implemented by Task 10b as ruling M1-R30; the
   sections "Implementation" and "Answer cost" record what it measured.
 - Versions examined:

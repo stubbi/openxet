@@ -1,5 +1,7 @@
 # 0002: Serve reconstructions with one range-bound URL per fetch entry
 
+<!-- description: Every reconstruction answer has one byte range per fetch entry, each with its own short-lived, range-bound URL. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `cas`, `storage`, `transfer`, `hub`, `server`

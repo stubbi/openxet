@@ -6,8 +6,8 @@ mdBook has written PUBLIC_DIR/docs).
 
 llms.txt (https://llmstxt.org) is site/llms-template.txt with `{docs}`
 replaced by one section per part of the navigation, linking each page's
-plain Markdown copy (design §7.1). A page's note is the first sentence of
-its opening paragraph, when that paragraph is prose.
+plain Markdown copy (design §7.1), with a one-line note for each (see
+note()). scripts/build-site.sh fails if any entry has none.
 
 sitemap.xml lists the landing page and every docs page.
 """
@@ -26,7 +26,8 @@ PART = re.compile(r"^# (.+)$")
 ENTRY = re.compile(r"^\s*(?:- )?\[([^\]]+)\]\(([^)]*)\)\s*$")
 LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 SENTENCE = re.compile(r"^(.+?[.!?])(?:\s|$)")
-NOT_PROSE = re.compile(r"^(?:[-*+|>#]|\d+\.|```|Date:)")
+NOT_PROSE = re.compile(r"^(?:[-*+|>#<]|\d+\.|```|~~~|Date:|Status:)")
+DESCRIPTION = re.compile(r"^<!-- description: (.+?) -->$", re.MULTILINE)
 
 
 def navigation() -> list[tuple[str, list[tuple[str, str]]]]:
@@ -54,18 +55,27 @@ def published(page: str) -> str:
 
 
 def note(markdown: Path) -> str:
-    lines = markdown.read_text(encoding="utf-8").splitlines()
+    """The page's `<!-- description: ... -->` line, or else the first sentence
+    of its first prose paragraph between the title and the first section,
+    past metadata lines such as `Date:` and `- Status:`."""
+    text = markdown.read_text(encoding="utf-8")
+    if described := DESCRIPTION.search(text):
+        return described.group(1).strip()
+    lines = text.splitlines()
+    titles = [i for i, line in enumerate(lines) if line.startswith("# ")]
     paragraph: list[str] = []
-    for line in lines[1:]:
+    for line in lines[titles[0] + 1 if titles else 0 :] + [""]:
+        if line.startswith("## "):
+            break
         if line.strip():
             paragraph.append(line.strip())
-        elif paragraph:
-            break
-    if not paragraph or NOT_PROSE.match(paragraph[0]):
-        return ""
-    text = LINK.sub(r"\1", " ".join(paragraph))
-    sentence = SENTENCE.match(text)
-    return sentence.group(1) if sentence else text
+            continue
+        if paragraph and not NOT_PROSE.match(paragraph[0]):
+            text = LINK.sub(r"\1", " ".join(paragraph))
+            sentence = SENTENCE.match(text)
+            return sentence.group(1) if sentence else text
+        paragraph = []
+    return ""
 
 
 def llms_txt(docs: Path, parts) -> str:

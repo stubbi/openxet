@@ -1,5 +1,7 @@
 # 0004: Serve Git with the `git` binary over openxet-owned refs and bucket packs
 
+<!-- description: Git is served by the git binary over refs in openxet's database and packs in the bucket. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `git`, `ssh`, `storage`, `index`, `gc`, `server`, `hub`

@@ -1,5 +1,7 @@
 # S8: Pull-through mirror of huggingface.co
 
+<!-- description: What a pull-through mirror of huggingface.co must serve, and how it ingests upstream data. -->
+
 - Date: 2026-10-23. Probes ran 07:05–07:10 UTC; legal texts were fetched
   at 07:07 UTC.
 - Clients: `huggingface_hub` 2.2.0 and `hf_xet` 1.7.0, the versions pinned

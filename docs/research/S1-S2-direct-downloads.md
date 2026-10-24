@@ -1,5 +1,7 @@
 # S1 + S2: Direct presigned downloads and plain-HTTP endpoints
 
+<!-- description: Whether stock hf_xet downloads from presigned, range-bound object-store URLs, and the plain-HTTP endpoints downloads need. -->
+
 - Date: 2026-10-23
 - Clients: `huggingface_hub` 2.2.0 and `hf_xet` 1.7.0, the versions pinned
   in `compat/`. Both were also the latest PyPI releases on this date, so

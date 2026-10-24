@@ -1,5 +1,7 @@
 # S10: The CAS wire contract stock clients rely on
 
+<!-- description: The CAS routes, auth and status codes stock hf_xet relies on, observed in traffic and read from the source. -->
+
 - Date: 2026-10-23
 - Versions examined:
   - `xet-core` tag `v1.7.0` (`4b48571`): `xet_client` (`cas_client/remote_client.rs`,

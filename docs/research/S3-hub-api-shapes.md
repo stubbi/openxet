@@ -1,5 +1,7 @@
 # S3: Hub API shapes that `huggingface_hub` requires
 
+<!-- description: The Hub API requests and answers that huggingface_hub and the hf CLI need, captured from real traffic and read from the source. -->
+
 - Date: 2026-10-23
 - Clients: `huggingface_hub` 2.2.0 and `hf_xet` 1.7.0, the versions pinned
   in `compat/`.

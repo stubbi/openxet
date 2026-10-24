@@ -1,5 +1,7 @@
 # NNNN: Title in the imperative ("Use X for Y")
 
+<!-- description: One sentence stating the decision, for the docs site's llms.txt. -->
+
 - Status: proposed | accepted | superseded by NNNN
 - Date: YYYY-MM-DD
 - Scope: components affected (e.g. `cas`, `index`)
