@@ -362,7 +362,11 @@ async fn shard_upload_retry_after_commit_succeeds() {
 
     assert_eq!(files(&server, SCOPE_A).await, first);
     assert_eq!(server.bucket_files(), bucket);
-    assert_eq!(bucket.len(), 2, "one xorb and one shard: {bucket:?}");
+    assert_eq!(
+        bucket.len(),
+        4,
+        "one xorb, its owner record, one shard and its registration record: {bucket:?}"
+    );
 }
 
 #[tokio::test]
@@ -389,14 +393,14 @@ async fn same_shard_other_scope_registers_again() {
 }
 
 #[tokio::test]
-async fn per_scope_shard_cannot_reference_foreign_xorb() {
+async fn per_tenant_shard_cannot_reference_foreign_xorb() {
     // Ruling M1-R17: another scope's xorb answers exactly as a missing one,
     // so the error can't probe what other scopes stored.
-    let missing = TestServer::start(config(Visibility::PerScope)).await;
+    let missing = TestServer::start(config(Visibility::PerTenant)).await;
     let missing_v2 = stream_error(&upload_v2(&missing, hf_xet_shard(), &missing.write_token).await);
     let missing_v1 = upload_v1(&missing, hf_xet_shard(), &missing.write_token).await;
 
-    let foreign = TestServer::start(config(Visibility::PerScope)).await;
+    let foreign = TestServer::start(config(Visibility::PerTenant)).await;
     upload_xorb(&foreign, &foreign.other_scope_token).await;
     let foreign_v2 = stream_error(&upload_v2(&foreign, hf_xet_shard(), &foreign.write_token).await);
     let foreign_v1 = upload_v1(&foreign, hf_xet_shard(), &foreign.write_token).await;

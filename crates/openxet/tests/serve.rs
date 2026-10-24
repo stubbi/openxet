@@ -568,7 +568,7 @@ fn config_env_override() {
     let out = run(openxet()
         .args(["config", "check", "--json", "--config"])
         .arg(&config)
-        .env("OPENXET_CAS__DEDUP_VISIBILITY", "per-scope")
+        .env("OPENXET_CAS__DEDUP_VISIBILITY", "per-tenant")
         .env("OPENXET_SERVER__LOG_FORMAT", "json"));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let report = json_stdout(&out);
@@ -583,7 +583,7 @@ fn config_env_override() {
             .unwrap_or_else(|| panic!("{key} is not reported: {report}"))
             .clone()
     };
-    assert_eq!(setting("cas.dedup_visibility")["value"], "per-scope");
+    assert_eq!(setting("cas.dedup_visibility")["value"], "per-tenant");
     assert_eq!(
         setting("cas.dedup_visibility")["source"],
         "env OPENXET_CAS__DEDUP_VISIBILITY"

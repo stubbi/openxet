@@ -33,8 +33,8 @@ use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
 use openxet_index::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, TermBytes,
-    Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, SqliteIndex,
+    TermBytes, Visibility,
 };
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
@@ -509,6 +509,30 @@ impl TestServer {
         Self::start(config(Visibility::Global)).await
     }
 
+    /// Stops this server and starts another with `cfg` on the same index
+    /// and bucket, as an operator restarting with a new configuration
+    /// would. The new server has new credentials.
+    pub async fn restart(mut self, cfg: CasConfig) -> Self {
+        let dir = std::mem::replace(&mut self.dir, tempfile::tempdir().unwrap());
+        let bucket = Arc::clone(&self.bucket);
+        drop(self);
+        Self::start_in(dir, cfg, bucket, Box::new(|index| index)).await
+    }
+
+    /// The server's index file, which another `SqliteIndex` may open too.
+    pub fn index_path(&self) -> PathBuf {
+        self.dir.path().join("index.sqlite")
+    }
+
+    /// A CAS token for `scope` in `mode`, naming `tenant` if given, valid
+    /// for a minute on the server's clock.
+    pub fn token(&self, scope: &str, tenant: Option<&str>, mode: Mode) -> String {
+        let now = self.clock.now();
+        self.signer
+            .sign_with_tenant("test", scope, tenant, mode, now + 60, now)
+            .unwrap()
+    }
+
     /// Runs `work` on the server's runtime, where the index's connections
     /// live, and returns its output.
     pub async fn on_server<T: Send + 'static>(
@@ -734,14 +758,18 @@ impl Index for SlowIndex {
         self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
@@ -845,14 +873,18 @@ impl Index for TablelessIndex {
         Ok(HashMap::new())
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {

@@ -713,12 +713,12 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         (Visibility::Global, "global"),
         |text| match text {
             "global" => Some(Visibility::Global),
-            "per-scope" => Some(Visibility::PerScope),
+            "per-tenant" => Some(Visibility::PerTenant),
             _ => None,
         },
-        "must be `global` or `per-scope`",
-        "`global` deduplicates across scopes; `per-scope` keeps each scope's xorbs invisible to \
-         the others.",
+        "must be `global` or `per-tenant`",
+        "`global` deduplicates across tenants; `per-tenant` keeps each tenant's xorbs invisible \
+         to the others.",
     );
     let url_lifetime = c.duration(
         "cas.url_lifetime",
@@ -1491,7 +1491,7 @@ mod tests {
         let loaded = load_toml(&example, &[]);
         assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
         let config = loaded.config.unwrap();
-        assert_eq!(config.visibility, Visibility::PerScope);
+        assert_eq!(config.visibility, Visibility::PerTenant);
         assert!(config.auth.is_some());
     }
 

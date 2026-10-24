@@ -40,7 +40,7 @@ use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use openxet_index::ChunkLayout;
+use openxet_index::{ChunkLayout, Visibility};
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::Deserialize;
 use tokio::sync::OwnedSemaphorePermit;
@@ -171,7 +171,7 @@ async fn single(
     state.budget.check_answer(decoded.saturating_add(answer))?;
     reserved.merge(state.budget.reserve_answer(answer).await?);
     let permit = validation_permit(state).await?;
-    let tables = chunk_layouts(state, scope, xorbs).await?;
+    let tables = chunk_layouts(state, xorbs).await?;
 
     let signer = Signer::new(state);
     let (body, reserved) = render(state, permit, reserved, terms, move |workers| {
@@ -294,7 +294,7 @@ async fn batch(
     check_batch_terms(terms)?;
     let xorbs = distinct_xorbs(records.iter().flat_map(|r| &r.terms));
     let permit = validation_permit(state).await?;
-    let tables = chunk_layouts(state, scope, xorbs).await?;
+    let tables = chunk_layouts(state, xorbs).await?;
 
     let signer = Signer::new(state);
     let (body, reserved) = render(state, permit, reserved, terms, move |workers| {
@@ -421,17 +421,23 @@ fn distinct_xorbs<'a>(terms: impl IntoIterator<Item = &'a openxet_index::Term>) 
 }
 
 /// The chunk layouts of `xorbs`, every one of which a file registered to
-/// `scope` names. Registration checked each was visible to `scope` (ruling
-/// M1-R17), so a missing one is an index fault: `500`, logged as an
-/// integrity anomaly.
+/// the caller's scope names. Registration checked each was visible to the
+/// registering tenant (ruling M1-R17), so a missing one is an index fault:
+/// `500`, logged as an integrity anomaly.
+///
+/// Reads follow the scope, not the tenant (ruling M1-R38): whoever may read
+/// a file may read the xorbs it names, and the answer's URLs reveal them
+/// anyway. So the layouts are looked up regardless of [`Visibility`], and a
+/// reader whose credential names another tenant than the registration's,
+/// or a server whose visibility changed since, still gets the file.
 async fn chunk_layouts(
     state: &AppState,
-    scope: &str,
     xorbs: Vec<MerkleHash>,
 ) -> Result<XorbMap<ChunkLayout>, CasError> {
     let tables = state
         .index
-        .chunk_layouts(&xorbs, scope, state.cfg.visibility)
+        // `Global` names no tenant.
+        .chunk_layouts(&xorbs, "", Visibility::Global)
         .await?;
     if let Some(missing) = xorbs.iter().find(|x| !tables.contains_key(x)) {
         return Err(CasError::internal(format!(
@@ -537,7 +543,7 @@ mod tests {
     use axum::http::header::AUTHORIZATION;
     use openxet_auth::{Mode, StaticToken};
     use openxet_index::{
-        ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+        ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, Term, TermBytes, Visibility,
     };
     use tokio::sync::Semaphore;
     use tower::ServiceExt as _;
@@ -617,14 +623,18 @@ mod tests {
             self.inner.chunk_layouts(xorbs, scope, vis).await
         }
 
+        async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+            self.inner.next_registration_seq().await
+        }
+
         async fn register_shard(
             &self,
             shard: &MerkleHash,
             files: &[NewFile],
-            scope: &str,
+            by: Registrant<'_>,
             vis: Visibility,
         ) -> Result<bool, IndexError> {
-            self.inner.register_shard(shard, files, scope, vis).await
+            self.inner.register_shard(shard, files, by, vis).await
         }
 
         async fn file(
@@ -718,7 +728,16 @@ mod tests {
         };
         state
             .index
-            .register_shard(&xorb, &[new], "s", Visibility::Global)
+            .register_shard(
+                &xorb,
+                &[new],
+                Registrant {
+                    scope: "s",
+                    tenant: "s",
+                    seq: 1,
+                },
+                Visibility::Global,
+            )
             .await
             .unwrap();
         let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
@@ -834,7 +853,16 @@ mod tests {
         };
         state
             .index
-            .register_shard(&xorb, &[new], "s", Visibility::Global)
+            .register_shard(
+                &xorb,
+                &[new],
+                Registrant {
+                    scope: "s",
+                    tenant: "s",
+                    seq: 1,
+                },
+                Visibility::Global,
+            )
             .await
             .unwrap();
         (state, request)
@@ -1209,7 +1237,16 @@ mod tests {
         };
         state
             .index
-            .register_shard(&xorbs[0], &[new], "s", Visibility::Global)
+            .register_shard(
+                &xorbs[0],
+                &[new],
+                Registrant {
+                    scope: "s",
+                    tenant: "s",
+                    seq: 1,
+                },
+                Visibility::Global,
+            )
             .await
             .unwrap();
         let get = |path: String| {

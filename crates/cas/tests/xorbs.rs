@@ -132,7 +132,7 @@ async fn acknowledged_xorb_write_is_visible() {
     let tables = server
         .on_server(async move {
             index
-                .chunk_tables(&[hash], SCOPE_A, Visibility::PerScope)
+                .chunk_tables(&[hash], SCOPE_A, Visibility::PerTenant)
                 .await
                 .unwrap()
         })
@@ -162,8 +162,8 @@ async fn xorb_upload_retry_after_commit_succeeds() {
     assert_eq!(bucket_bytes(&server, hash).await.unwrap(), first);
     assert_eq!(
         server.bucket_files().len(),
-        1,
-        "{:?}",
+        2,
+        "the xorb and its owner record: {:?}",
         server.bucket_files()
     );
 }
@@ -195,8 +195,8 @@ async fn concurrent_identical_xorb_uploads() {
     assert_eq!(inserted, 1, "{replies:?}");
     assert_eq!(
         server.bucket_files().len(),
-        1,
-        "{:?}",
+        2,
+        "the xorb and its owner record: {:?}",
         server.bucket_files()
     );
     assert_eq!(bucket_bytes(&server, hash).await, Some(stored(&body).bytes));
@@ -352,10 +352,10 @@ async fn storage_failure_registers_nothing() {
 }
 
 #[tokio::test]
-async fn was_inserted_is_per_scope() {
-    // `was_inserted` never reveals that another scope uploaded the xorb,
+async fn was_inserted_is_per_tenant() {
+    // `was_inserted` never reveals that another tenant uploaded the xorb,
     // under either visibility (design §5.4).
-    for visibility in [Visibility::Global, Visibility::PerScope] {
+    for visibility in [Visibility::Global, Visibility::PerTenant] {
         let server = TestServer::start(config(visibility)).await;
         let body = hf_xet_xorb();
         let hash = hash_from_hex(HF_XET_XORB).unwrap();
@@ -368,7 +368,11 @@ async fn was_inserted_is_per_scope() {
             &upload(&server, &hash, body, &server.other_scope_token).await,
             true,
         );
-        assert_eq!(server.bucket_files().len(), 1);
+        assert_eq!(
+            server.bucket_files().len(),
+            3,
+            "the xorb, stored once, and each tenant's owner record"
+        );
         assert_eq!(
             index_size(&server, hash, SCOPE_B).await,
             Some(stored(&hf_xet_xorb()).bytes.len() as u64)
@@ -377,9 +381,9 @@ async fn was_inserted_is_per_scope() {
 }
 
 #[tokio::test]
-async fn head_under_per_scope_hides_other_scopes_xorbs() {
+async fn head_under_per_tenant_hides_other_tenants_xorbs() {
     let hash = hash_from_hex(HF_XET_XORB).unwrap();
-    for (visibility, other_status) in [(Visibility::Global, 200), (Visibility::PerScope, 404)] {
+    for (visibility, other_status) in [(Visibility::Global, 200), (Visibility::PerTenant, 404)] {
         let server = TestServer::start(config(visibility)).await;
         assert_inserted(
             &upload(&server, &hash, hf_xet_xorb(), &server.write_token).await,

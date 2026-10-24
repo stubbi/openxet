@@ -4,7 +4,11 @@
 
 use std::sync::Arc;
 
-use openxet_index::{ChunkTable, FileRecord, Index, NewFile, SqliteIndex, Term, Visibility};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use openxet_index::{
+    ChunkTable, FileRecord, Index, NewFile, Registrant, SqliteIndex, Term, Visibility,
+};
 use openxet_protocol::{MerkleHash, chunk_hash};
 use tempfile::TempDir;
 use tokio::task::JoinSet;
@@ -15,6 +19,16 @@ const SCOPE: &str = "model/org/repo";
 
 fn h(label: &str) -> MerkleHash {
     chunk_hash(label.as_bytes())
+}
+
+/// A registration to `scope` as its own tenant, numbered in call order.
+fn reg(scope: &str) -> Registrant<'_> {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    Registrant {
+        scope,
+        tenant: scope,
+        seq: SEQ.fetch_add(1, Ordering::Relaxed),
+    }
 }
 
 fn table(label: &str, n: u32) -> ChunkTable {
@@ -112,12 +126,19 @@ async fn identical_concurrent_writes_from_separate_instances_insert_once() {
         assert_eq!(puts.iter().filter(|new| **new).count(), 1, "round {round}");
 
         let fs = files(&label, xorb, 50);
+        // Every node retrying one upload reads the same bucket record, so
+        // all register with its sequence number.
+        let by = Registrant {
+            scope: SCOPE,
+            tenant: SCOPE,
+            seq: u64::try_from(round).unwrap_or(u64::MAX) + 1,
+        };
         let shard = h(&format!("{label}/shard"));
         let registers = all(|i| {
             let (index, fs) = (instances[i].clone(), fs.clone());
             async move {
                 match index
-                    .register_shard(&shard, &fs, SCOPE, Visibility::PerScope)
+                    .register_shard(&shard, &fs, by, Visibility::PerTenant)
                     .await
                 {
                     Ok(new) => new,
@@ -150,7 +171,12 @@ async fn distinct_concurrent_writers_never_fail_on_the_lock() {
                 }
                 let shard = h(&format!("{label}/shard"));
                 if let Err(e) = index
-                    .register_shard(&shard, &files(&label, xorb, 4), SCOPE, Visibility::PerScope)
+                    .register_shard(
+                        &shard,
+                        &files(&label, xorb, 4),
+                        reg(SCOPE),
+                        Visibility::PerTenant,
+                    )
                     .await
                 {
                     panic!("register_shard: {}", chain(&e));

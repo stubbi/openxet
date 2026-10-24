@@ -397,7 +397,7 @@ data_dir = "/var/lib/openxet"
 log_format = "json"
 
 [cas]
-dedup_visibility = "per-scope"
+dedup_visibility = "per-tenant"
 url_lifetime = "60m"
 
 [auth]

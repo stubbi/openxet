@@ -72,7 +72,7 @@ pub struct CasConfig {
     /// transfer URLs. Clients append `/v1/...` to it, so the CAS is served at
     /// the origin's root (S10 "Conventions for every route").
     pub public_url: Url,
-    /// Whether one scope's xorbs are visible to another (design §5.4).
+    /// Whether one tenant's xorbs are visible to another (design §5.4).
     pub visibility: Visibility,
     /// The work bounds shard verification enforces.
     pub verify_limits: VerifyLimits,
@@ -121,7 +121,7 @@ impl Clock for SystemClock {
 /// an `Arc` except the small configuration.
 #[derive(Clone)]
 pub struct AppState {
-    /// Which xorbs, files and shards exist, per scope.
+    /// Which xorbs, files and shards exist, per scope and tenant.
     pub index: Arc<dyn Index>,
     /// Where xorb and shard bytes live; the source of truth.
     pub bucket: Arc<dyn Bucket>,

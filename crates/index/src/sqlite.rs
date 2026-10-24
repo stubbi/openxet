@@ -18,7 +18,8 @@ use crate::types::{
     encode_terms, hash_from,
 };
 use crate::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, Term, TermBytes,
+    Visibility,
 };
 
 /// With the `fault-injection` feature, `register_shard` for this scope fails
@@ -34,11 +35,11 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const HASHES_PER_QUERY: usize = 500;
 
 /// The SQL condition under which xorb `x` is visible: visibility is global
-/// (first bind) or `x` is registered to the caller's scope (second bind). A
+/// (first bind) or `x` is owned by the caller's tenant (second bind). A
 /// macro, so queries using it stay `&'static str`.
 macro_rules! visible {
     () => {
-        "(? OR EXISTS (SELECT 1 FROM xorb_scopes s WHERE s.xorb = x.hash AND s.scope = ?))"
+        "(? OR EXISTS (SELECT 1 FROM xorb_owners o WHERE o.xorb = x.hash AND o.tenant = ?))"
     };
 }
 
@@ -74,7 +75,7 @@ fn with_placeholders(
 #[derive(Debug, Clone)]
 pub struct SqliteIndex {
     writer: SqlitePool,
-    reader: SqlitePool,
+    pub(crate) reader: SqlitePool,
 }
 
 impl SqliteIndex {
@@ -223,12 +224,12 @@ fn fault_point(_file_index: usize, _scope: &str) -> Result<(), IndexError> {
     Ok(())
 }
 
-/// The first of `xorbs`, in order, that isn't visible to `scope` under `vis`,
+/// The first of `xorbs`, in order, that isn't visible to `tenant` under `vis`,
 /// read inside `tx` so the answer holds until it commits.
 async fn first_invisible(
     tx: &mut Transaction<'_, Sqlite>,
     xorbs: &[MerkleHash],
-    scope: &str,
+    tenant: &str,
     vis: Visibility,
 ) -> Result<Option<MerkleHash>, IndexError> {
     let mut seen = HashSet::with_capacity(xorbs.len());
@@ -246,7 +247,7 @@ async fn first_invisible(
         }
         let rows = query
             .bind(vis == Visibility::Global)
-            .bind(scope)
+            .bind(tenant)
             .fetch_all(&mut **tx)
             .await?;
         for row in rows {
@@ -268,12 +269,12 @@ fn unknown_xorb_on_fk_violation(e: IndexError, xorb: MerkleHash) -> IndexError {
     }
 }
 
-/// The layouts of `xorbs` visible to `scope` under `vis`, read on `conn`,
+/// The layouts of `xorbs` visible to `tenant` under `vis`, read on `conn`,
 /// as [`Index::chunk_layouts`] answers them.
 async fn layouts_in(
     conn: &mut SqliteConnection,
     xorbs: &[MerkleHash],
-    scope: &str,
+    tenant: &str,
     vis: Visibility,
 ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
     let unique: Vec<&MerkleHash> = {
@@ -297,7 +298,7 @@ async fn layouts_in(
         }
         let rows = query
             .bind(vis == Visibility::Global)
-            .bind(scope)
+            .bind(tenant)
             .fetch_all(&mut *conn)
             .await?;
         for row in rows {
@@ -395,6 +396,29 @@ async fn insert_shard_xorbs(
     Ok(())
 }
 
+/// Records `tenant` as an owner of each of `xorbs` (ruling M1-R39).
+async fn insert_owners(
+    tx: &mut Transaction<'_, Sqlite>,
+    xorbs: &[MerkleHash],
+    tenant: &str,
+) -> Result<(), IndexError> {
+    let mut seen = HashSet::with_capacity(xorbs.len());
+    let unique: Vec<&MerkleHash> = xorbs.iter().filter(|x| seen.insert(**x)).collect();
+    for batch in unique.chunks(HASHES_PER_QUERY) {
+        let mut query = sqlx::query(with_placeholders(
+            "INSERT INTO xorb_owners (xorb, tenant) VALUES ",
+            "(?, ?)",
+            batch.len(),
+            " ON CONFLICT DO NOTHING",
+        ));
+        for xorb in batch {
+            query = query.bind(xorb.as_bytes()).bind(tenant);
+        }
+        query.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl Index for SqliteIndex {
     async fn put_xorb(
@@ -403,7 +427,7 @@ impl Index for SqliteIndex {
         size: u64,
         table: &ChunkTable,
         eligible: &[MerkleHash],
-        scope: &str,
+        tenant: &str,
     ) -> Result<bool, IndexError> {
         let blob = encode_chunk_table(table)?;
         let layout = encode_chunk_layout(table);
@@ -431,24 +455,24 @@ impl Index for SqliteIndex {
         .bind(layout)
         .execute(&mut *tx)
         .await?;
-        let new_for_scope = sqlx::query(
-            "INSERT INTO xorb_scopes (xorb, scope) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        let new_for_tenant = sqlx::query(
+            "INSERT INTO xorb_owners (xorb, tenant) VALUES (?, ?) ON CONFLICT DO NOTHING",
         )
         .bind(xorb.as_bytes())
-        .bind(scope)
+        .bind(tenant)
         .execute(&mut *tx)
         .await?
         .rows_affected()
             > 0;
         insert_dedup(&mut tx, eligible, xorb).await?;
         tx.commit().await?;
-        Ok(new_for_scope)
+        Ok(new_for_tenant)
     }
 
     async fn xorb_size(
         &self,
         xorb: &MerkleHash,
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<Option<u64>, IndexError> {
         let size: Option<i64> = sqlx::query_scalar(concat!(
@@ -457,7 +481,7 @@ impl Index for SqliteIndex {
         ))
         .bind(xorb.as_bytes())
         .bind(vis == Visibility::Global)
-        .bind(scope)
+        .bind(tenant)
         .fetch_optional(&self.reader)
         .await?;
         size.map(|s| to_u64(s, "xorb size")).transpose()
@@ -466,7 +490,7 @@ impl Index for SqliteIndex {
     async fn chunk_tables(
         &self,
         xorbs: &[MerkleHash],
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
         let unique: Vec<&MerkleHash> = {
@@ -486,7 +510,7 @@ impl Index for SqliteIndex {
             }
             let rows = query
                 .bind(vis == Visibility::Global)
-                .bind(scope)
+                .bind(tenant)
                 .fetch_all(&self.reader)
                 .await?;
             for row in rows {
@@ -502,20 +526,31 @@ impl Index for SqliteIndex {
     async fn chunk_layouts(
         &self,
         xorbs: &[MerkleHash],
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
         let mut conn = self.reader.acquire().await?;
-        layouts_in(&mut conn, xorbs, scope, vis).await
+        layouts_in(&mut conn, xorbs, tenant, vis).await
+    }
+
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        let seq: i64 = sqlx::query_scalar(
+            "UPDATE registration_seq SET last = last + 1 WHERE id = 0 RETURNING last",
+        )
+        .fetch_one(&self.writer)
+        .await?;
+        to_u64(seq, "registration sequence number")
     }
 
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
+        let Registrant { scope, tenant, seq } = by;
+        let seq = to_i64(seq, "registration sequence number")?;
         let sizes = files
             .iter()
             .map(|f| to_i64(f.record.size, "file size"))
@@ -525,42 +560,71 @@ impl Index for SqliteIndex {
             .iter()
             .flat_map(|f| f.record.terms.iter().map(|t| t.xorb))
             .collect();
-        if let Some(xorb) = first_invisible(&mut tx, &referenced, scope, vis).await? {
+        if let Some(xorb) = first_invisible(&mut tx, &referenced, tenant, vis).await? {
             return Err(IndexError::UnknownXorb { xorb });
         }
-        // `WHERE true` as in `put_xorb`.
         let mut new_for_scope = sqlx::query(
-            "INSERT INTO shard_scopes (shard, scope, registered_seq) \
-             SELECT ?, ?, COALESCE(MAX(registered_seq), 0) + 1 FROM shard_scopes WHERE true \
-             ON CONFLICT DO NOTHING",
+            "INSERT INTO shard_registrations (shard, scope, tenant, registered_seq) \
+             VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
         )
         .bind(shard.as_bytes())
         .bind(scope)
+        .bind(tenant)
+        .bind(seq)
         .execute(&mut *tx)
         .await?
         .rows_affected()
             > 0;
         insert_shard_xorbs(&mut tx, shard, &referenced).await?;
+        insert_owners(&mut tx, &referenced, tenant).await?;
         // Every term xorb is visible (checked above), so every layout is
         // found.
-        let layouts = layouts_in(&mut tx, &referenced, scope, vis).await?;
+        let layouts = layouts_in(&mut tx, &referenced, tenant, vis).await?;
         for (i, (file, size)) in files.iter().zip(sizes).enumerate() {
             let record = &file.record;
-            new_for_scope |= sqlx::query(
-                "INSERT INTO file_scopes (file, scope, size, terms, sha256, shard, term_bytes) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            let terms = encode_terms(&record.terms);
+            let sha256 = file.sha256.as_ref().map(<[u8; 32]>::as_slice);
+            let bytes = encode_term_bytes(&term_bytes(&record.terms, &layouts)?);
+            let inserted = sqlx::query(
+                "INSERT INTO file_scopes \
+                 (file, scope, size, terms, sha256, shard, term_bytes, registered_seq) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             )
             .bind(record.hash.as_bytes())
             .bind(scope)
             .bind(size)
-            .bind(encode_terms(&record.terms))
-            .bind(file.sha256.as_ref().map(<[u8; 32]>::as_slice))
+            .bind(&terms)
+            .bind(sha256)
             .bind(shard.as_bytes())
-            .bind(encode_term_bytes(&term_bytes(&record.terms, &layouts)?))
+            .bind(&bytes)
+            .bind(seq)
             .execute(&mut *tx)
             .await?
             .rows_affected()
                 > 0;
+            if !inserted {
+                // Registered already. The lower-numbered registration's row
+                // is kept whichever committed first, as a rebuild from the
+                // bucket keeps it (ruling M1-R37); both describe the same
+                // bytes.
+                sqlx::query(
+                    "UPDATE file_scopes SET size = ?, terms = ?, sha256 = ?, shard = ?, \
+                     term_bytes = ?, registered_seq = ? \
+                     WHERE file = ? AND scope = ? AND registered_seq > ?",
+                )
+                .bind(size)
+                .bind(&terms)
+                .bind(sha256)
+                .bind(shard.as_bytes())
+                .bind(&bytes)
+                .bind(seq)
+                .bind(record.hash.as_bytes())
+                .bind(scope)
+                .bind(seq)
+                .execute(&mut *tx)
+                .await?;
+            }
+            new_for_scope |= inserted;
             if let (Some(first), Some(term)) = (file.first_chunk, record.terms.first()) {
                 insert_dedup(&mut tx, &[first], &term.xorb)
                     .await
@@ -683,7 +747,7 @@ impl Index for SqliteIndex {
     async fn dedup_xorb(
         &self,
         chunk: &MerkleHash,
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<Option<MerkleHash>, IndexError> {
         let xorb: Option<Vec<u8>> = sqlx::query_scalar(concat!(
@@ -693,7 +757,7 @@ impl Index for SqliteIndex {
         ))
         .bind(chunk.as_bytes())
         .bind(vis == Visibility::Global)
-        .bind(scope)
+        .bind(tenant)
         .fetch_optional(&self.reader)
         .await?;
         xorb.as_deref().map(hash_from).transpose()
@@ -702,7 +766,7 @@ impl Index for SqliteIndex {
     async fn dedup_shard_xorbs(
         &self,
         xorb: &MerkleHash,
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
         let global = vis == Visibility::Global;
@@ -711,8 +775,8 @@ impl Index for SqliteIndex {
             "SELECT x.hash FROM shard_xorbs sx JOIN xorbs x ON x.hash = sx.xorb \
              WHERE sx.shard = (\
                  SELECT ss.shard FROM shard_xorbs m \
-                 JOIN shard_scopes ss ON ss.shard = m.shard \
-                 WHERE m.xorb = ? AND (? OR ss.scope = ?) \
+                 JOIN shard_registrations ss ON ss.shard = m.shard \
+                 WHERE m.xorb = ? AND (? OR ss.tenant = ?) \
                  ORDER BY ss.registered_seq DESC LIMIT 1\
              ) AND ",
             visible!(),
@@ -720,9 +784,9 @@ impl Index for SqliteIndex {
         ))
         .bind(xorb.as_bytes())
         .bind(global)
-        .bind(scope)
+        .bind(tenant)
         .bind(global)
-        .bind(scope)
+        .bind(tenant)
         .fetch_all(&self.reader)
         .await?;
         if rows.is_empty() {
