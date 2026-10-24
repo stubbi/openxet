@@ -18,6 +18,7 @@ async-trait = "0.1"
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio", "migrate", "macros"] }
 thiserror = "2"
+tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
 openxet-index = { path = ".", features = ["fault-injection"] }

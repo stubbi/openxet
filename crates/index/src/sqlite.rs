@@ -1,7 +1,8 @@
 //! The SQLite implementation of [`Index`].
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::fs::{File, OpenOptions, TryLockError};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use openxet_protocol::MerkleHash;
@@ -77,6 +78,12 @@ impl SqliteIndex {
     /// [`IndexError::Database`] if the file can't be opened or created, and
     /// [`IndexError::Migrate`] if the schema can't be migrated.
     pub async fn open(path: &Path) -> Result<Self, IndexError> {
+        // Held until the schema is migrated: SQLite answers two first-time
+        // opens (the switch to WAL, the migrations' read-then-write
+        // transactions) with an immediate `SQLITE_BUSY` that its busy
+        // handler never retries, so servers starting together on one data
+        // directory would otherwise fail.
+        let _lock = OpenLock::acquire(path).await?;
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -100,6 +107,59 @@ impl SqliteIndex {
     /// its reads and writes see one state and it never fails to upgrade.
     async fn begin_write(&self) -> Result<Transaction<'static, Sqlite>, IndexError> {
         Ok(self.writer.begin_with("BEGIN IMMEDIATE").await?)
+    }
+}
+
+/// An exclusive advisory lock on `{index}-lock`, between processes opening
+/// the same index. Released on drop.
+struct OpenLock {
+    _held: Option<File>,
+}
+
+/// How long an open waits for another process's open to finish.
+const OPEN_LOCK_TIMEOUT: Duration = Duration::from_mins(1);
+
+impl OpenLock {
+    async fn acquire(index: &Path) -> Result<Self, IndexError> {
+        let mut name = index.as_os_str().to_owned();
+        name.push("-lock");
+        let path = PathBuf::from(name);
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let failed = |source| IndexError::OpenLock {
+            path: path.clone(),
+            source,
+        };
+        let file = match options.open(&path) {
+            Ok(file) => file,
+            // No directory to hold the index either: opening the database
+            // reports that, with SQLite's own cause.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self { _held: None });
+            }
+            Err(err) => return Err(failed(err)),
+        };
+        let deadline = tokio::time::Instant::now() + OPEN_LOCK_TIMEOUT;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _held: Some(file) }),
+                Err(TryLockError::WouldBlock) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return Err(failed(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "another process held it for over a minute",
+                    )));
+                }
+                Err(TryLockError::Error(err)) => return Err(failed(err)),
+            }
+        }
     }
 }
 
