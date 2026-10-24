@@ -536,7 +536,11 @@ with a configured key. It then stores Xet file hashes in its own database.
 **Scopes and tenants (builder-check call, ruling M1-R38):**
 - A **scope** is the unit of access. In the Hub layer a scope is a
   repository (`{label}/{namespace}/{name}`), matching HF's repo-scoped
-  Xet tokens, or a bucket. In
+  Xet tokens, or a bucket (`bucket/{namespace}/{name}`). `bucket` is
+  never a label, so the two never collide. Scope strings are persisted
+  (their SHA-256 keys every registration record, §5.3), so both kinds
+  map to an immutable scope id, which the M2 plan defines, and a rename
+  never orphans their data. In
   storage-only mode it is an opaque string the platform chooses. Files
   are read and registered per scope.
 - A **tenant** is the unit of isolation for `per-tenant` dedup and
@@ -551,6 +555,14 @@ with a configured key. It then stores Xet file hashes in its own database.
 - A commit in repo B may only reference files registered to repo B. A file
   already in repo A is registered to B by uploading it to B; dedup makes
   that nearly free, because only a shard is sent.
+- A bucket `batch` names files by Xet hash, so each reference must prove
+  the caller can read it. `addFile` needs the hash registered to the
+  bucket's own scope. `copyFile` needs a read credential on its source
+  repository or bucket and the hash registered there, and then registers
+  the file to the bucket's scope. Under `per-tenant`, the hash must also
+  be visible to the caller's tenant. Anything else answers the same
+  `404` as an unknown hash, so a `batch` is never an existence oracle
+  (the pattern of M1-R17 and M1-R23).
 
 **File access scoping:** files registered by a shard upload are associated
 with the token's scope, and so is the sha256 → Xet hash mapping from the
@@ -749,12 +761,12 @@ step.
 | # | Requirement | Tests |
 |---|---|---|
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
-| 2 | **Credentials are repo-scoped.** CAS tokens and capability `href`s are scoped to one repo; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's repo check; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
+| 2 | **Credentials are scoped to one repository or bucket.** CAS tokens and capability `href`s are scoped to one repository or bucket; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's scope check; user credentials are authorized per repository or bucket on every Hub and CAS route. A foreign repository or bucket answers `403`, or `404` where the caller can't read it, never revealing a private one's existence. Repository and bucket creation is authorized per namespace (§5.4). A bucket `batch` that adds or copies a file by Xet hash names a file the caller can read, or gets the `404` of an unknown hash (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repository's or bucket's credential, bucket routes included; `repo_create_authorized_per_namespace`; `bucket_create_authorized_per_namespace`; `bucket_add_file_hash_must_be_readable`; `bucket_copy_file_requires_source_read` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-tenant`, §5.4) is available. In `per-tenant` mode every existence check (`HEAD` of xorbs, dedup lookups, shard xorb lookups) answers as absent for any xorb the caller's tenant doesn't own, and `HEAD` of files for any file not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_tenant_dedup_isolates_tenants`, `per_tenant_multi_xorb_answer_hides_foreign_xorbs`, `per_tenant_existence_checks_hide_other_tenants`, `per_tenant_scopes_of_one_tenant_share_dedup` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
 | 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
-| 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_xorb_write_is_visible`, `acknowledged_shard_write_is_visible`, `acked_write_survives_sigkill` |
+| 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. An acknowledged bucket key write also survives the loss of the database: `reindex` restores it (§10.4). | `acknowledged_xorb_write_is_visible`, `acknowledged_shard_write_is_visible`, `acked_write_survives_sigkill`, `acknowledged_bucket_key_write_is_visible` |
 | 8 | **Git reads check reachability on every path** (R22), and **every ref writer is fenced** (ADR 0004). | ADR 0004's `v2_want_unreachable_refused`, `hub_read_by_sha_obeys_r22`, `writer_cannot_make_unreachable_reachable`, `hub_ref_write_fenced`, `ref_log_in_cas_transaction` |
 
 Xet reads by hash follow scope membership (R25, §5.4); that is by design,
@@ -1692,6 +1704,8 @@ release of the open-source build: it runs the released build (§15).
     one-key `batch` commits per second per deployment (§5.8's shard
     registration rate), with a one-key commit's p99 within 20 ms of the
     object store's own PUT p99.
+  - The bucket rows of the security tests (§5.9 requirements 2 and 7),
+    including the `addFile` and `copyFile` checks of §5.4.
   - Cache tier.
   - HF pull-through mirror.
   - Multiple storage pools, residency and KMS.

@@ -102,8 +102,16 @@ schedule it.
   10 GB dense checkpoints holds about 7.2 TB through the default grace,
   240 times its live size. S12 asks whether xorbs never offered in a
   dedup answer could take a shorter grace; that needs its own decision.
-- A repository's Hub scope is its label, namespace and name; a bucket's
-  scope is the bucket.
+- A repository's Hub scope is `{label}/{namespace}/{name}` and a
+  bucket's is `bucket/{namespace}/{name}`; `bucket` is never a label, so
+  they can't collide. Both map to the immutable scope ids the M2 plan
+  defines, so a rename never orphans data.
+- Design §5.9 requirements 2 and 7 cover buckets: credentials and
+  creation are scoped per bucket, a `batch` that adds or copies a file by
+  Xet hash must name a file the caller can read (else the `404` of an
+  unknown hash), and an acknowledged key write survives the loss of the
+  database. Their tests are in the [security test
+  map](../reference/security-tests.md) for M5.
 - The compatibility suite tests every label on the Hub routes in M2 and
   the Storage Buckets routes in M5, with stock `huggingface_hub`.
 
