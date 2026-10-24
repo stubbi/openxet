@@ -28,7 +28,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use openxet_protocol::{MerkleHash, dedup_shard, hash_to_hex};
+use openxet_protocol::{MAX_DEDUP_ANSWER_BYTES, MerkleHash, dedup_shard, hash_to_hex};
 
 use crate::blocking::blocking;
 use crate::cache::private;
@@ -101,10 +101,15 @@ async fn query(
         .await
         .map_err(CasError::internal)?;
     let (_, body) = blocking(permit, move || {
-        dedup_shard(&xorb, &table.hashes, key, expiry)
+        dedup_shard(
+            &[(xorb, &table.hashes[..])],
+            MAX_DEDUP_ANSWER_BYTES,
+            key,
+            expiry,
+        )
     })
     .await?;
-    let body = body.map_err(CasError::internal)?;
+    let (body, _) = body.map_err(CasError::internal)?;
     tracing::debug!(xorb = %hash_to_hex(&xorb), "dedup match offered");
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
 }

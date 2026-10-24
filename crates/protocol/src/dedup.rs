@@ -2,9 +2,13 @@
 //! <https://huggingface.co/docs/xet/shard#global-deduplication>.
 
 use std::io::Cursor;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use xet_core_structures::metadata_shard::shard_in_memory::MDBInMemoryShard;
+use xet_core_structures::metadata_shard::xorb_structs::{
+    XorbChunkSequenceEntry, XorbChunkSequenceHeader,
+};
 use xet_core_structures::metadata_shard::{MDBShardInfo, hash_is_global_dedup_eligible};
 
 use crate::shard::xorb_info;
@@ -22,38 +26,97 @@ pub fn is_dedup_eligible(chunk: &MerkleHash) -> bool {
     hash_is_global_dedup_eligible(chunk)
 }
 
+/// The largest dedup answer built, in bytes: the spec's shard maximum
+/// (<https://huggingface.co/docs/xet/deduplication>, "Shards"), which is
+/// also [`crate::MAX_UPLOAD_SHARD_BYTES`] (ruling M1-R30).
+pub const MAX_DEDUP_ANSWER_BYTES: u64 = crate::MAX_UPLOAD_SHARD_BYTES;
+
+/// What offering a xorb of `chunks` chunks adds to a dedup answer, in
+/// bytes: its xorb-section block, upstream's `MDBXorbInfo::num_bytes`. A
+/// caller can bound what it loads before calling [`dedup_shard`], which
+/// counts the same sizes.
+#[must_use]
+pub fn dedup_answer_xorb_bytes(chunks: usize) -> u64 {
+    (size_of::<XorbChunkSequenceHeader>() + chunks * size_of::<XorbChunkSequenceEntry>()) as u64
+}
+
 /// The body of a global dedup answer (`GET /v1/chunks/{prefix}/{chunk}`)
-/// offering one xorb: a footered shard whose file-info section is empty and
+/// offering `xorbs`: a footered shard whose file-info section is empty and
 /// whose chunk hashes are keyed with `key`, as the spec requires
 /// (<https://huggingface.co/docs/xet/shard#global-deduplication>). Raw chunk
 /// hashes never appear in it.
 ///
-/// `chunks` is the xorb's stored chunk table. Upstream builds the shard
-/// (`MDBShardInfo::serialize_from`) and keys it
-/// (`MDBShardInfo::export_as_keyed_shard_streaming`, without file info, with
-/// the xorb and chunk lookup tables). Upstream stamps the key expiry from its
-/// own clock; openxet's caller decides it, so the footer is re-serialized
-/// with `shard_key_expiry = expiry_unix` (seconds since the Unix epoch).
+/// Each entry is a xorb with its stored chunk table. Entries are taken in
+/// order while the serialized answer stays within `budget` bytes; the first
+/// is always taken, so the queried chunk's xorb is offered however small the
+/// budget (one xorb is at most about 400 KB, far below
+/// [`MAX_DEDUP_ANSWER_BYTES`]). Returns the body and how many leading
+/// entries it covers; a xorb listed twice is offered once. The xorb section
+/// is in upstream's order (by xorb hash), not the order given; the client
+/// indexes every offered chunk whatever the order (S11).
+///
+/// Upstream builds the shard (`MDBShardInfo::serialize_from`) and keys it
+/// (`MDBShardInfo::export_as_keyed_shard_streaming`), without file info and
+/// without the xorb and chunk lookup tables, as the spec's reference answer
+/// has none: the client rebuilds its chunk index from the xorb section
+/// (`MDBShardInfo::read_all_truncated_hashes`, `xet-core-structures`
+/// 1.7.0). Upstream stamps the key expiry from its own clock; openxet's
+/// caller decides it, so the footer is re-serialized with
+/// `shard_key_expiry = expiry_unix` (seconds since the Unix epoch).
 ///
 /// # Errors
 ///
 /// [`ProtocolError::DedupKeyZero`] for the all-zero key, which upstream
-/// treats as "unkeyed"; [`ProtocolError::XorbTableTooLarge`] if `chunks`
-/// doesn't fit the shard format's 32-bit counts.
+/// treats as "unkeyed"; [`ProtocolError::XorbTableTooLarge`] if a chunk
+/// table doesn't fit the shard format's 32-bit counts.
 pub fn dedup_shard(
-    xorb: &MerkleHash,
-    chunks: &[(MerkleHash, u64)],
+    xorbs: &[(MerkleHash, &[(MerkleHash, u64)])],
+    budget: u64,
     key: MerkleHash,
     expiry_unix: u64,
-) -> Result<Vec<u8>, ProtocolError> {
+) -> Result<(Vec<u8>, usize), ProtocolError> {
     if key == MerkleHash::default() {
         return Err(ProtocolError::DedupKeyZero);
     }
     let mut mdb = MDBInMemoryShard::default();
-    mdb.add_xorb_block(xorb_info(xorb, chunks)?)
-        .map_err(ProtocolError::ShardSerialization)?;
+    let mut size = answer_overhead()?;
+    let mut covered = 0;
+    for (xorb, chunks) in xorbs {
+        if !mdb.xorb_content.contains_key(xorb) {
+            let info = xorb_info(xorb, chunks)?;
+            let grown = size + info.num_bytes();
+            if covered > 0 && grown > budget {
+                break;
+            }
+            size = grown;
+            mdb.add_xorb_block(info)
+                .map_err(ProtocolError::ShardSerialization)?;
+        }
+        covered += 1;
+    }
+    let body = keyed_answer(&mdb, key, expiry_unix)?;
+    debug_assert_eq!(body.len() as u64, size, "the answer's size was miscounted");
+    Ok((body, covered))
+}
+
+/// The size of an answer offering no xorb: header, empty sections and
+/// footer. Every answer is this plus its xorbs' blocks.
+fn answer_overhead() -> Result<u64, ProtocolError> {
+    static OVERHEAD: OnceLock<u64> = OnceLock::new();
+    if let Some(size) = OVERHEAD.get() {
+        return Ok(*size);
+    }
+    let empty = keyed_answer(&MDBInMemoryShard::default(), MerkleHash::from([1; 32]), 0)?;
+    Ok(*OVERHEAD.get_or_init(|| empty.len() as u64))
+}
+
+fn keyed_answer(
+    mdb: &MDBInMemoryShard,
+    key: MerkleHash,
+    expiry_unix: u64,
+) -> Result<Vec<u8>, ProtocolError> {
     let mut plain = Vec::new();
-    MDBShardInfo::serialize_from(&mut plain, &mdb, None)
+    MDBShardInfo::serialize_from(&mut plain, mdb, None)
         .map_err(ProtocolError::ShardSerialization)?;
 
     let mut keyed = Vec::new();
@@ -64,8 +127,8 @@ pub fn dedup_shard(
         // Replaced by `expiry_unix` below.
         Duration::ZERO,
         /* include_file_info */ false,
-        /* include_xorb_lookup_table */ true,
-        /* include_chunk_lookup_table */ true,
+        /* include_xorb_lookup_table */ false,
+        /* include_chunk_lookup_table */ false,
     )
     .map_err(ProtocolError::ShardSerialization)?;
 
