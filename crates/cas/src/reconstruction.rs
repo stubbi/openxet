@@ -22,15 +22,20 @@
 //! on the caller's scope and carries URLs that act as credentials (design
 //! §5.9 req 3).
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, RawQuery, Request, State};
 use axum::handler::Handler as _;
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use http_body::{Frame, SizeHint};
 use openxet_index::ChunkLayout;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::Deserialize;
@@ -134,14 +139,15 @@ async fn single(
         .ok_or(CasError::FileNotFound)?;
     let range = resolve(requested, record.size)?;
     let window = plan::window(&record, range).map_err(planning_failed)?;
+    let terms = window.as_ref().map_or(0, |w| w.terms.len());
     let xorbs = window.map_or_else(Vec::new, |w| distinct_xorbs(&record.terms[w.terms]));
     let permit = validation_permit(state).await?;
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(permit, move || {
+    let body = render(state, permit, terms, move |workers| {
         let plan = plan::plan(&record, &tables, range).map_err(planning_failed)?;
-        answer::single(&plan, version, &signer)
+        answer::single(&plan, version, &signer, workers)
     })
     .await?;
     tracing::debug!(file = %hash_to_hex(&file), "reconstruction answered");
@@ -244,7 +250,7 @@ async fn batch(
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(permit, move || {
+    let body = render(state, permit, terms, move |workers| {
         let plans = records
             .iter()
             .map(|record| {
@@ -253,7 +259,7 @@ async fn batch(
                     .map_err(planning_failed)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        answer::batch(&plans, &signer)
+        answer::batch(&plans, &signer, workers)
     })
     .await?;
     tracing::debug!(files = files.len(), "batch reconstruction answered");
@@ -400,16 +406,63 @@ async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, Cas
         .map_err(CasError::internal)
 }
 
-/// Runs `work` on a blocking thread holding `permit` ([`blocking`]).
+/// Runs `work` on a blocking thread holding `permit` ([`blocking`]), for an
+/// answer of `terms` terms. `work` gets how many threads may write the
+/// answer: one, plus one per further `validate` permit free right now, up
+/// to what the answer is worth ([`answer::workers_for`]). Those permits are
+/// held until `work` returns, so the threads stay within the CPU bound of
+/// rulings M1-R8 and M1-R25, and a busy server writes the answer on one.
 async fn render(
+    state: &AppState,
     permit: OwnedSemaphorePermit,
-    work: impl FnOnce() -> Result<Vec<u8>, CasError> + Send + 'static,
-) -> Result<Vec<u8>, CasError> {
-    blocking(permit, work).await?.1
+    terms: usize,
+    work: impl FnOnce(usize) -> Result<Vec<Bytes>, CasError> + Send + 'static,
+) -> Result<Vec<Bytes>, CasError> {
+    let wanted = answer::workers_for(terms) - 1;
+    let extra = (1..=wanted).rev().find_map(|n| {
+        let n = u32::try_from(n).ok()?;
+        let permits = Arc::clone(&state.validate).try_acquire_many_owned(n).ok()?;
+        Some((permits, n as usize))
+    });
+    blocking(permit, move || {
+        let (_held, workers) = extra.map_or((None, 1), |(permits, n)| (Some(permits), 1 + n));
+        work(workers)
+    })
+    .await?
+    .1
 }
 
-fn json(body: Vec<u8>) -> Response {
-    ([(CONTENT_TYPE, "application/json")], body).into_response()
+/// A JSON answer sent as `parts`, with their total as its Content-Length.
+fn json(parts: Vec<Bytes>) -> Response {
+    (
+        [(CONTENT_TYPE, "application/json")],
+        Body::new(Frames(parts.into())),
+    )
+        .into_response()
+}
+
+/// A body of the given frames, of an exact size known up front, so the
+/// server sends a Content-Length as for one buffer.
+struct Frames(VecDeque<Bytes>);
+
+impl http_body::Body for Frames {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        Poll::Ready(self.0.pop_front().map(|part| Ok(Frame::data(part))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.0.iter().map(|part| part.len() as u64).sum())
+    }
 }
 
 #[cfg(test)]

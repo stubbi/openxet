@@ -10,10 +10,12 @@
 //! compact and with fields in this order; the tests pin that.
 
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::Arc;
 
+use axum::body::Bytes;
 use foldhash::fast::RandomState;
-use openxet_auth::{UrlSigner, XorbUrls};
+use openxet_auth::{TransferUrls, UrlSigner, XorbUrls};
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use url::Url;
 
@@ -46,44 +48,135 @@ impl Signer {
     }
 }
 
-/// The single-file answer to `plan`, in `version`'s shape.
-pub(crate) fn single(plan: &Plan, version: Version, signer: &Signer) -> Result<Vec<u8>, CasError> {
+/// The single-file answer to `plan`, in `version`'s shape, written by
+/// `workers` threads.
+pub(crate) fn single(
+    plan: &Plan,
+    version: Version,
+    signer: &Signer,
+    workers: usize,
+) -> Result<Vec<Bytes>, CasError> {
     let mut catalog = Catalog::default();
     let names = catalog.add(plan);
-    let mut out = Json::sized(plan.terms.len(), 1, &catalog, signer);
-    out.raw(r#"{"offset_into_first_range":"#);
-    out.num(plan.offset_into_first_range);
-    out.raw(r#","terms":"#);
-    out.terms(&plan.terms, &names, &catalog);
-    out.raw(match version {
-        Version::V2 => r#","xorbs":"#,
-        Version::V1 => r#","fetch_info":"#,
+    let entries = Entries::new(&catalog, version, signer);
+    let groups = catalog.split(workers);
+    let terms = split(plan.terms.len(), workers);
+    let written = in_parallel(workers, |w| {
+        let mut list = Json::with_capacity(terms[w].len() * TERM_BYTES);
+        list.terms(
+            &plan.terms[terms[w].clone()],
+            terms[w].start == 0,
+            &names,
+            &catalog,
+        );
+        let mut map = Json::with_capacity(entries.capacity(&groups[w]));
+        map.entries(&entries, groups[w].clone())?;
+        Ok::<_, CasError>((list.0, map.0))
     });
-    out.entries(&catalog, version, signer)?;
-    out.raw("}");
-    Ok(out.0.into_bytes())
+    let (lists, maps): (Vec<String>, Vec<String>) = written
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .unzip();
+
+    let mut head = Json::with_capacity(64);
+    head.raw(r#"{"offset_into_first_range":"#);
+    head.num(plan.offset_into_first_range);
+    head.raw(r#","terms":["#);
+    let middle = match version {
+        Version::V2 => r#"],"xorbs":{"#,
+        Version::V1 => r#"],"fetch_info":{"#,
+    };
+    Ok(frames(
+        [head.0]
+            .into_iter()
+            .chain(lists)
+            .chain([middle.to_owned()])
+            .chain(maps)
+            .chain(["}}".to_owned()]),
+    ))
 }
 
 /// The batch answer for `plans`, each a file and its whole-file plan, in
-/// the v1 shapes.
-pub(crate) fn batch(plans: &[(MerkleHash, Plan)], signer: &Signer) -> Result<Vec<u8>, CasError> {
+/// the v1 shapes. Its `fetch_info` is written by `workers` threads.
+pub(crate) fn batch(
+    plans: &[(MerkleHash, Plan)],
+    signer: &Signer,
+    workers: usize,
+) -> Result<Vec<Bytes>, CasError> {
     let mut catalog = Catalog::default();
     let names: Vec<Vec<usize>> = plans.iter().map(|(_, plan)| catalog.add(plan)).collect();
-    let terms = plans.iter().map(|(_, plan)| plan.terms.len()).sum();
-    let mut out = Json::sized(terms, plans.len(), &catalog, signer);
-    out.raw(r#"{"files":{"#);
+    let terms: usize = plans.iter().map(|(_, plan)| plan.terms.len()).sum();
+    let mut files = Json::with_capacity(terms * TERM_BYTES + plans.len() * NAME_BYTES + 64);
+    files.raw(r#"{"files":{"#);
     for (i, ((file, plan), names)) in plans.iter().zip(&names).enumerate() {
         if i > 0 {
-            out.raw(",");
+            files.raw(",");
         }
-        out.string(&hash_to_hex(file));
-        out.raw(":");
-        out.terms(&plan.terms, names, &catalog);
+        files.string(&hash_to_hex(file));
+        files.raw(":[");
+        files.terms(&plan.terms, true, names, &catalog);
+        files.raw("]");
     }
-    out.raw(r#"},"fetch_info":"#);
-    out.entries(&catalog, Version::V1, signer)?;
-    out.raw("}");
-    Ok(out.0.into_bytes())
+    files.raw(r#"},"fetch_info":{"#);
+    let entries = Entries::new(&catalog, Version::V1, signer);
+    let groups = catalog.split(workers);
+    let maps = in_parallel(workers, |w| {
+        let mut map = Json::with_capacity(entries.capacity(&groups[w]));
+        map.entries(&entries, groups[w].clone())?;
+        Ok::<_, CasError>(map.0)
+    });
+    let maps = maps.into_iter().collect::<Result<Vec<_>, _>>()?;
+    Ok(frames(
+        [files.0].into_iter().chain(maps).chain(["}}".to_owned()]),
+    ))
+}
+
+/// How many threads should write an answer of `terms` terms: one per
+/// [`TERMS_PER_WORKER`], at least one. Each thread past the first runs
+/// under a `validate` permit of its own (rulings M1-R8, M1-R25).
+pub(crate) fn workers_for(terms: usize) -> usize {
+    terms.div_ceil(TERMS_PER_WORKER).max(1)
+}
+
+/// Terms one writer thread is worth: below this, starting a thread costs
+/// more than it saves.
+const TERMS_PER_WORKER: usize = 16 * 1024;
+
+/// The non-empty `parts` as body frames.
+fn frames(parts: impl IntoIterator<Item = String>) -> Vec<Bytes> {
+    parts
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .map(Bytes::from)
+        .collect()
+}
+
+/// `work(w)` for every `w` below `workers`, each on its own thread but the
+/// first, which runs on this one; the results in order of `w`. A panic in
+/// any is resumed here.
+fn in_parallel<T: Send>(workers: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    if workers <= 1 {
+        return vec![work(0)];
+    }
+    std::thread::scope(|scope| {
+        let work = &work;
+        let others: Vec<_> = (1..workers).map(|w| scope.spawn(move || work(w))).collect();
+        let first = work(0);
+        std::iter::once(first)
+            .chain(others.into_iter().map(|t| {
+                t.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            }))
+            .collect()
+    })
+}
+
+/// `0..len` in `parts` contiguous ranges of near-equal length.
+fn split(len: usize, parts: usize) -> Vec<Range<usize>> {
+    (0..parts)
+        .map(|p| len * p / parts..len * (p + 1) / parts)
+        .collect()
 }
 
 /// The fetch descriptors of one answer, grouped by xorb. A descriptor two
@@ -128,6 +221,55 @@ impl Catalog {
             self.xorbs.len() - 1
         })
     }
+
+    /// The xorbs in `parts` contiguous ranges holding near-equal numbers of
+    /// descriptors, for writing their entries in parallel.
+    fn split(&self, parts: usize) -> Vec<Range<usize>> {
+        let total = self.fetches.len();
+        let mut ranges = Vec::with_capacity(parts);
+        let (mut start, mut seen) = (0, 0);
+        for (i, group) in self.groups.iter().enumerate() {
+            seen += group.len();
+            if ranges.len() + 1 < parts && seen * parts >= total * (ranges.len() + 1) {
+                ranges.push(start..i + 1);
+                start = i + 1;
+            }
+        }
+        ranges.push(start..self.groups.len());
+        ranges.resize(parts, self.groups.len()..self.groups.len());
+        ranges
+    }
+}
+
+/// What writing the catalog's entries needs, shared by the writer threads.
+struct Entries<'a> {
+    catalog: &'a Catalog,
+    version: Version,
+    urls: TransferUrls<'a>,
+    /// Whether the URLs' base needs a JSON escape ([`json_safe`]).
+    escape: bool,
+    base_len: usize,
+}
+
+impl<'a> Entries<'a> {
+    fn new(catalog: &'a Catalog, version: Version, signer: &'a Signer) -> Self {
+        Self {
+            catalog,
+            version,
+            urls: signer.urls.transfer_urls(&signer.base, signer.now),
+            escape: !json_safe(signer.base.as_str()),
+            base_len: signer.base.as_str().len(),
+        }
+    }
+
+    /// An upper bound on the bytes of the entries of `xorbs`.
+    fn capacity(&self, xorbs: &Range<usize>) -> usize {
+        let fetches: usize = self.catalog.groups[xorbs.clone()]
+            .iter()
+            .map(Vec::len)
+            .sum();
+        fetches * (FETCH_BYTES + self.base_len) + xorbs.len() * NAME_BYTES
+    }
 }
 
 /// An answer being written. Every string written is ASCII that needs no
@@ -143,12 +285,8 @@ const FETCH_BYTES: usize = 300;
 const NAME_BYTES: usize = 70;
 
 impl Json {
-    fn sized(terms: usize, files: usize, catalog: &Catalog, signer: &Signer) -> Self {
-        let fetches = catalog.fetches.len() * (FETCH_BYTES + signer.base.as_str().len());
-        let names = (catalog.xorbs.len() + files) * NAME_BYTES;
-        Self(String::with_capacity(
-            terms * TERM_BYTES + fetches + names + 64,
-        ))
+    fn with_capacity(bytes: usize) -> Self {
+        Self(String::with_capacity(bytes))
     }
 
     fn raw(&mut self, s: &str) {
@@ -175,12 +313,12 @@ impl Json {
         self.raw("}");
     }
 
-    /// The list of `terms`, each `{hash, unpacked_length, range}`; `names`
-    /// holds the catalog's xorb index of each of their plan's descriptors.
-    fn terms(&mut self, terms: &[PlannedTerm], names: &[usize], catalog: &Catalog) {
-        self.raw("[");
+    /// `terms` as items of a JSON list, each `{hash, unpacked_length,
+    /// range}`, the first after a comma unless `first`. `names` holds the
+    /// catalog's xorb index of each of their plan's descriptors.
+    fn terms(&mut self, terms: &[PlannedTerm], first: bool, names: &[usize], catalog: &Catalog) {
         for (i, term) in terms.iter().enumerate() {
-            if i > 0 {
+            if i > 0 || !first {
                 self.raw(",");
             }
             self.raw(r#"{"hash":"#);
@@ -191,35 +329,31 @@ impl Json {
             self.span(term.chunks);
             self.raw("}");
         }
-        self.raw("]");
     }
 
-    /// The catalog's entries per xorb: v2's `xorbs` or v1's `fetch_info`.
-    /// Each descriptor gets its own URL, signed for exactly its byte range
-    /// (ADR 0002), one xorb at a time so each xorb's part of the MAC is
-    /// computed once.
-    fn entries(
-        &mut self,
-        catalog: &Catalog,
-        version: Version,
-        signer: &Signer,
-    ) -> Result<(), CasError> {
-        let urls = signer.urls.transfer_urls(&signer.base, signer.now);
-        let mut escaped = (!json_safe(signer.base.as_str())).then(String::new);
-        self.raw("{");
-        for (i, ((xorb, name), group)) in catalog.xorbs.iter().zip(&catalog.groups).enumerate() {
+    /// The entries of the catalog's xorbs `xorbs` as members of a JSON
+    /// object, v2's `xorbs` or v1's `fetch_info`: `"{xorb}":[entry…]`, the
+    /// first after a comma unless `xorbs` starts at the first xorb. Each
+    /// descriptor gets its own URL, signed for exactly its byte range (ADR
+    /// 0002), one xorb at a time so each xorb's part of the MAC is computed
+    /// once.
+    fn entries(&mut self, entries: &Entries<'_>, xorbs: Range<usize>) -> Result<(), CasError> {
+        let catalog = entries.catalog;
+        let mut escaped = entries.escape.then(String::new);
+        for i in xorbs {
             if i > 0 {
                 self.raw(",");
             }
+            let (xorb, name) = &catalog.xorbs[i];
             self.string(name);
             self.raw(":[");
-            let xorb = urls.xorb(xorb);
-            for (j, &f) in group.iter().enumerate() {
+            let xorb = entries.urls.xorb(xorb);
+            for (j, &f) in catalog.groups[i].iter().enumerate() {
                 if j > 0 {
                     self.raw(",");
                 }
                 let fetch = &catalog.fetches[f];
-                match version {
+                match entries.version {
                     Version::V2 => {
                         self.raw(r#"{"url":"#);
                         self.url(&xorb, fetch, escaped.as_mut())?;
@@ -242,7 +376,6 @@ impl Json {
             }
             self.raw("]");
         }
-        self.raw("}");
         Ok(())
     }
 
@@ -532,11 +665,12 @@ mod tests {
             offset in any::<u64>(),
             base in 0..BASES.len(),
             now in prop_oneof![Just(u64::MAX), 0u64..(1 << 40)],
+            workers in 1usize..6,
         ) {
             let signer = signer(BASES[base], now);
             let plan = plan_of(offset, &terms);
             for version in [Version::V2, Version::V1] {
-                let ours = single(&plan, version, &signer).unwrap();
+                let ours = single(&plan, version, &signer, workers).unwrap().concat();
                 let theirs = reference::single(&plan, version, &signer);
                 prop_assert_eq!(String::from_utf8(ours).unwrap(), String::from_utf8(theirs).unwrap());
             }
@@ -546,6 +680,7 @@ mod tests {
         fn batch_answers_equal_serde_json_byte_for_byte(
             files in prop::collection::vec(terms_strategy(), 0..5),
             base in 0..BASES.len(),
+            workers in 1usize..6,
         ) {
             let signer = signer(BASES[base], 1_800_000_000);
             let plans: Vec<(MerkleHash, Plan)> = files
@@ -553,7 +688,7 @@ mod tests {
                 .zip(100u8..)
                 .map(|(terms, i)| (chunk_hash(&[i]), plan_of(0, terms)))
                 .collect();
-            let ours = batch(&plans, &signer).unwrap();
+            let ours = batch(&plans, &signer, workers).unwrap().concat();
             let theirs = reference::batch(&plans, &signer);
             prop_assert_eq!(String::from_utf8(ours).unwrap(), String::from_utf8(theirs).unwrap());
         }
@@ -564,7 +699,9 @@ mod tests {
         assert!(json_safe("https://cas.example.com/p%22q"));
         assert!(!json_safe("http://a\"b.example/"));
         let plan = plan_of(0, &[(1, 0, 2, false)]);
-        let body = single(&plan, Version::V2, &signer(BASES[2], 0)).unwrap();
+        let body = single(&plan, Version::V2, &signer(BASES[2], 0), 2)
+            .unwrap()
+            .concat();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let url = json["xorbs"].as_object().unwrap().values().next().unwrap()[0]["url"]
             .as_str()
