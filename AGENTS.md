@@ -189,7 +189,8 @@ One logical change per commit. Every commit builds and passes tests.
 
 M1 complete: the storage-only CAS (`openxet serve`, `upload`, `download`;
 `docs/quickstart-storage-only.md`), with the compatibility suite's agent,
-storage-only and docs legs in CI and every CAS route in
+storage-only and docs legs and the reconstruction latency gate in CI
+(`docs/reference/benchmarks.md`), and every CAS route in
 `docs/reference/routes.md`. M2 next: the Hub API, Git and LFS, per
 `docs/superpowers/plans/` once its plan is written. The design is approved,
 and ADR 0001 decides to build from scratch on `xet-core`'s crates (after

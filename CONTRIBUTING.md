@@ -20,13 +20,20 @@ Install Rust through [rustup](https://rustup.rs); the toolchain is pinned in
 The compatibility suite needs [uv](https://docs.astral.sh/uv/), which
 installs the pinned Python and HF clients from `compat/uv.lock`.
 Run from the repository root. CI runs these same commands
-(`.github/workflows/ci.yml`), so green locally means green there.
+(`.github/workflows/ci.yml`), so green locally means green there, except
+for the latency gate: timed, it needs a quiet machine, and a p99 failure
+with steady p50s on a busy host is load, not a regression. The criterion
+benchmarks are for humans, not CI gates: record their results, with the
+machine, in [`docs/reference/benchmarks.md`](docs/reference/benchmarks.md).
 
 ```bash
 cargo build                                                # build the workspace
 scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
 cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
+cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate)
+cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
+cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans (CI gate)
