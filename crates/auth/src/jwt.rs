@@ -251,15 +251,17 @@ pub fn generate_keypair() -> Result<GeneratedKeypair, AuthError> {
     let public = SigningKey::from_bytes(&seed).verifying_key();
     // PKCS#8 v1 (RFC 8410 §7), without the optional public key: Python's
     // `cryptography`, under PyJWT, refuses the v2 form `SigningKey` writes.
-    let private = KeypairBytes {
+    let mut private = KeypairBytes {
         secret_key: seed,
         public_key: None,
     };
     seed.zeroize();
+    // `KeypairBytes` holds its own copy of the seed and wipes it on drop only
+    // under the `ed25519` crate's `zeroize` feature, which nothing enables.
+    let private_pem = private.to_pkcs8_pem(LineEnding::LF);
+    private.secret_key.zeroize();
     Ok(GeneratedKeypair {
-        private_pem: private
-            .to_pkcs8_pem(LineEnding::LF)
-            .map_err(|_| AuthError::KeyGeneration)?,
+        private_pem: private_pem.map_err(|_| AuthError::KeyGeneration)?,
         public_pem: public
             .to_public_key_pem(LineEnding::LF)
             .map_err(|_| AuthError::KeyGeneration)?,
