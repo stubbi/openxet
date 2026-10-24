@@ -1,29 +1,34 @@
-//! The index's scope tables rebuilt from the bucket alone (ruling M1-R37,
+//! The index's scope and content tables rebuilt from the bucket alone (ruling M1-R37,
 //! non-negotiable 2), and the same tables read from a live index, so a test
 //! can prove the two agree. This is the core of `openxet reindex`
 //! (<https://github.com/stubbi/openxet/issues/26>), which will write the
 //! rebuilt rows into a fresh index.
 //!
 //! The rebuild reads:
+//! - every stored xorb: its `xorbs` row (size and chunk table), its layout,
+//!   and its dedup-eligible chunks as `dedup` candidates;
 //! - every `xorb-owners/` record: a tenant uploaded a xorb;
 //! - every `registrations/` record, in `(seq, shard bytes, tenant)` order,
 //!   with the stored shard it names: the shard's files are registered to
 //!   the record's scope (the first such row is kept per file and scope), its
 //!   xorbs are owned by the record's tenant (ruling M1-R39), and its term
-//!   order is the shard's;
-//! - the stored xorbs the files name, for each term's byte range.
+//!   order is the shard's; each file's first chunk is a `dedup` candidate
+//!   for its first term's xorb, and each term's byte range comes from the
+//!   stored xorb.
 //!
 //! Nothing else: not the index, and not anything a client sent that the
 //! bucket doesn't hold.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use openxet_protocol::{MerkleHash, read_upload_shard, xorb_with_footer};
+use openxet_protocol::{MerkleHash, is_dedup_eligible, read_upload_shard, xorb_with_footer};
 use openxet_storage::{Bucket, Key, KeyKind, Registration, XorbOwner};
 use sqlx::Row as _;
 
-use crate::types::{decode_term_bytes, decode_terms, hash_from};
-use crate::{SqliteIndex, Term, TermBytes};
+use crate::types::{
+    decode_term_bytes, decode_terms, encode_chunk_layout, encode_chunk_table, hash_from,
+};
+use crate::{ChunkTable, SqliteIndex, Term, TermBytes};
 
 /// One file registered to one scope: a `file_scopes` row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +50,11 @@ pub struct FileRow {
     pub registered_tenant: String,
 }
 
-/// The index's scope tables, as comparable rows.
+/// The index's tables, as comparable rows: the scope tables and the content
+/// tables a rebuild restores. Left out: `xorbs.ingested_seq`, which only
+/// orders dedup offers between xorbs and which a rebuild may number afresh
+/// (the review of C1 judged its loss harmless), and the `registration_seq`
+/// counter, which `reindex` sets past the highest number in the bucket.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScopeTables {
     /// `file_scopes`: per (file, scope).
@@ -57,6 +66,13 @@ pub struct ScopeTables {
     pub owners: BTreeSet<(MerkleHash, String)>,
     /// `shard_xorbs`: per shard, its distinct xorbs in term order.
     pub shard_xorbs: BTreeMap<MerkleHash, Vec<MerkleHash>>,
+    /// `xorbs`: per xorb, its stored size and encoded chunk table.
+    pub xorbs: BTreeMap<MerkleHash, (u64, Vec<u8>)>,
+    /// `xorb_layouts`: per xorb, its encoded chunk layout.
+    pub layouts: BTreeMap<MerkleHash, Vec<u8>>,
+    /// `dedup`: (chunk, xorb) candidates, the eligible chunks of every xorb
+    /// and the first chunk of every registered file.
+    pub dedup: BTreeSet<(MerkleHash, MerkleHash)>,
 }
 
 /// Why a rebuild failed: a bucket read, or an object that doesn't decode.
@@ -84,15 +100,37 @@ pub async fn rebuild_scope_tables(bucket: &dyn Bucket) -> Result<ScopeTables, Re
         (a.seq, a.shard.as_bytes(), &a.tenant).cmp(&(b.seq, b.shard.as_bytes(), &b.tenant))
     });
 
-    let mut offsets: HashMap<MerkleHash, Vec<u32>> = HashMap::new();
+    // Every stored xorb, re-read as ingest read it: its row, its layout and
+    // its eligible chunks as dedup candidates.
+    let mut stored_tables: HashMap<MerkleHash, ChunkTable> = HashMap::new();
+    for key in bucket.list(KeyKind::Xorb).await? {
+        let Key::Xorb(hash) = key else { continue };
+        let stored = xorb_with_footer(&read(bucket, &key).await?)?;
+        let table = ChunkTable {
+            hashes: stored.chunks.hashes.into(),
+            offsets: stored.chunk_offsets.into(),
+        };
+        tables.xorbs.insert(
+            hash,
+            (stored.bytes.len() as u64, encode_chunk_table(&table)?),
+        );
+        tables.layouts.insert(hash, encode_chunk_layout(&table));
+        for (chunk, _) in table.hashes.iter().filter(|(c, _)| is_dedup_eligible(c)) {
+            tables.dedup.insert((*chunk, hash));
+        }
+        stored_tables.insert(hash, table);
+    }
+    let table_of = |xorb: &MerkleHash| {
+        stored_tables
+            .get(xorb)
+            .ok_or_else(|| RebuildError::from(format!("xorb {xorb} is missing from the bucket")))
+    };
+
     for record in registrations {
         let shard = read_upload_shard(&read(bucket, &Key::Shard(record.shard)).await?[..])?;
         let referenced: Vec<MerkleHash> = shard.referenced_xorbs().copied().collect();
         for xorb in &referenced {
-            if !offsets.contains_key(xorb) {
-                let stored = xorb_with_footer(&read(bucket, &Key::Xorb(*xorb)).await?)?;
-                offsets.insert(*xorb, stored.chunk_offsets);
-            }
+            table_of(xorb)?;
             tables.owners.insert((*xorb, record.tenant.clone()));
         }
         tables.shard_xorbs.entry(record.shard).or_insert(referenced);
@@ -115,10 +153,14 @@ pub async fn rebuild_scope_tables(bucket: &dyn Bucket) -> Result<ScopeTables, Re
             let term_bytes = terms
                 .iter()
                 .map(|t| {
-                    let o = &offsets[&t.xorb];
-                    (o[t.chunk_start as usize], o[t.chunk_end as usize])
+                    let o = &table_of(&t.xorb)?.offsets;
+                    Ok((o[t.chunk_start as usize], o[t.chunk_end as usize]))
                 })
-                .collect();
+                .collect::<Result<_, RebuildError>>()?;
+            if let Some(first) = terms.first() {
+                let chunk = table_of(&first.xorb)?.hashes[first.chunk_start as usize].0;
+                tables.dedup.insert((chunk, first.xorb));
+            }
             tables
                 .files
                 .entry((file.file_hash, record.scope.clone()))
@@ -212,6 +254,31 @@ impl SqliteIndex {
                 .entry(hash_from(row.try_get(0)?)?)
                 .or_default()
                 .push(hash_from(row.try_get(1)?)?);
+        }
+        for row in sqlx::query("SELECT hash, size, chunk_table FROM xorbs")
+            .fetch_all(&self.reader)
+            .await?
+        {
+            tables.xorbs.insert(
+                hash_from(row.try_get(0)?)?,
+                (u64::try_from(row.try_get::<i64, _>(1)?)?, row.try_get(2)?),
+            );
+        }
+        for row in sqlx::query("SELECT xorb, chunk_layout FROM xorb_layouts")
+            .fetch_all(&self.reader)
+            .await?
+        {
+            tables
+                .layouts
+                .insert(hash_from(row.try_get(0)?)?, row.try_get(1)?);
+        }
+        for row in sqlx::query("SELECT chunk, xorb FROM dedup")
+            .fetch_all(&self.reader)
+            .await?
+        {
+            tables
+                .dedup
+                .insert((hash_from(row.try_get(0)?)?, hash_from(row.try_get(1)?)?));
         }
         Ok(tables)
     }
