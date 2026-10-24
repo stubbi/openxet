@@ -20,7 +20,7 @@ use common::{
     TRANSFER_PATH, TablelessIndex, TestServer, XORB_PATH, bearer, config,
 };
 use openxet_auth::UrlSigner;
-use openxet_cas::{Clock as _, MAX_BATCH_FILES};
+use openxet_cas::{Clock as _, MAX_BATCH_FILES, MAX_BATCH_TERMS};
 use openxet_index::{FileRecord, NewFile, Term, Visibility};
 use openxet_protocol::{
     MerkleHash, chunk_hash, decode_fetched_chunks, file_hash, hash_from_hex, hash_to_hex,
@@ -1211,6 +1211,44 @@ async fn transfer_streams_a_64_mib_range_in_bounded_blocks() {
         "a block of {} bytes",
         counting.largest_block()
     );
+}
+
+#[tokio::test]
+async fn batch_over_the_term_cap_is_400() {
+    // `MAX_BATCH_TERMS` bounds one batch's planning and answer, whatever
+    // the files hold.
+    let server = TestServer::start_default().await;
+    let vis = Visibility::Global;
+    let small = synthetic_file(
+        &server,
+        &server.write_token,
+        SCOPE_A,
+        vis,
+        &[vec![1]],
+        &[(0, 1)],
+    )
+    .await;
+    let terms = vec![(0, 1); MAX_BATCH_TERMS];
+    let big = synthetic_file(
+        &server,
+        &server.write_token,
+        SCOPE_A,
+        vis,
+        &[vec![1]],
+        &terms,
+    )
+    .await;
+
+    let at_cap = batch_post(&server, batch_body(&[big.hash]), &server.read_token).await;
+    assert_eq!(at_cap.status, 200);
+    let over = batch_post(
+        &server,
+        batch_body(&[big.hash, small.hash]),
+        &server.read_token,
+    )
+    .await;
+    over.assert_error(400, "batch_too_large");
+    assert!(over.json()["hint"].as_str().unwrap().contains("Split"));
 }
 
 #[tokio::test]

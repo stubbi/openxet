@@ -108,6 +108,16 @@ pub enum CasError {
         limit: usize,
     },
 
+    /// The files of a batch reconstruction hold more terms than one batch
+    /// may plan. `400 batch_too_large`.
+    #[error("the batch's files hold {terms} terms; at most {limit} are answered per request")]
+    BatchTooManyTerms {
+        /// The terms of the files answered.
+        terms: usize,
+        /// [`crate::MAX_BATCH_TERMS`].
+        limit: usize,
+    },
+
     /// A batch reconstruction body is not a JSON list of
     /// `{"prefix":"default","hash":…}` keys. `400 invalid_batch`. The body is
     /// never echoed.
@@ -425,6 +435,12 @@ impl CasError {
                 StatusCode::BAD_REQUEST,
                 "batch_too_large",
                 "Split the files into batches of at most 1000.",
+            ),
+            Self::BatchTooManyTerms { .. } => (
+                StatusCode::BAD_REQUEST,
+                "batch_too_large",
+                "Split the batch into fewer files per request, or reconstruct the largest files \
+                 one at a time with `GET /v2/reconstructions/{file}`.",
             ),
             Self::InvalidBatch => (
                 StatusCode::BAD_REQUEST,

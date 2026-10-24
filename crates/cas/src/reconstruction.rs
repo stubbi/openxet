@@ -12,9 +12,11 @@
 //! ruling M1-R16); for any other caller it reads as never stored, `404`.
 //! Each answer is planned by [`crate::plan`] and every fetch descriptor gets
 //! its own URL to the transfer route, signed for exactly its byte range
-//! (ADR 0002). Planning, signing and serialization run on a blocking thread
-//! holding a `validate` permit, as other CPU-bound request work does
-//! (rulings M1-R8, M1-R25): a file of 100k terms signs 100k URLs.
+//! (ADR 0002). A `validate` permit is held from loading the chunk tables to
+//! the serialized answer, and planning, signing and serialization run on a
+//! blocking thread, as other CPU-bound request work does (rulings M1-R8,
+//! M1-R25): a file of 100k terms signs 100k URLs. A batch is capped at
+//! [`MAX_BATCH_FILES`] files and [`MAX_BATCH_TERMS`] terms.
 //!
 //! Every answer, errors included, is `Cache-Control: no-store`: it depends
 //! on the caller's scope and carries URLs that act as credentials (design
@@ -34,6 +36,7 @@ use openxet_index::ChunkTable;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::ser::{SerializeStruct as _, Serializer};
 use serde::{Deserialize, Serialize};
+use tokio::sync::OwnedSemaphorePermit;
 use url::Url;
 
 use crate::blocking::blocking;
@@ -45,6 +48,12 @@ use crate::{AppState, CasError, ReadAccess, body, path};
 /// it is `400 batch_too_large`. Every file in a batch is planned whole, so
 /// this bounds the work and the answer of one request.
 pub const MAX_BATCH_FILES: usize = 1000;
+
+/// The most terms one batch reconstruction may plan, over all the files it
+/// is answered for; a batch over it is `400 batch_too_large`. With
+/// [`MAX_BATCH_FILES`], it bounds one batch's chunk tables, signing and
+/// answer, whatever the files hold.
+pub const MAX_BATCH_TERMS: usize = 1_000_000;
 
 // `CasError::BatchTooLarge`'s hint names the cap.
 const _: () = assert!(MAX_BATCH_FILES == 1000);
@@ -135,10 +144,11 @@ async fn single(
     let range = resolve(requested, record.size)?;
     let window = plan::window(&record, range).map_err(planning_failed)?;
     let xorbs = window.map_or_else(Vec::new, |w| distinct_xorbs(&record.terms[w.terms]));
+    let permit = validation_permit(state).await?;
     let tables = chunk_tables(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(state, move || {
+    let body = render(permit, move || {
         let plan = plan::plan(&record, &tables, range).map_err(planning_failed)?;
         let mut catalog = Catalog::default();
         catalog.add(&plan.fetches);
@@ -243,11 +253,19 @@ async fn batch(
             records.push(record);
         }
     }
+    let terms: usize = records.iter().map(|r| r.terms.len()).sum();
+    if terms > MAX_BATCH_TERMS {
+        return Err(CasError::BatchTooManyTerms {
+            terms,
+            limit: MAX_BATCH_TERMS,
+        });
+    }
     let xorbs = distinct_xorbs(records.iter().flat_map(|r| &r.terms));
+    let permit = validation_permit(state).await?;
     let tables = chunk_tables(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(state, move || {
+    let body = render(permit, move || {
         let plans = records
             .iter()
             .map(|record| {
@@ -401,16 +419,22 @@ fn planning_failed(e: PlanError) -> CasError {
     }
 }
 
-/// Runs `work` on a blocking thread holding a `validate` permit
-/// ([`blocking`]).
-async fn render(
-    state: &AppState,
-    work: impl FnOnce() -> Result<Vec<u8>, CasError> + Send + 'static,
-) -> Result<Vec<u8>, CasError> {
-    let permit = Arc::clone(&state.validate)
+/// A `validate` permit, taken before a plan's chunk tables are loaded and
+/// held until its answer is serialized: the tables are most of a large
+/// plan's memory, and planning, signing and serializing its CPU (rulings
+/// M1-R8, M1-R25).
+async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, CasError> {
+    Arc::clone(&state.validate)
         .acquire_owned()
         .await
-        .map_err(CasError::internal)?;
+        .map_err(CasError::internal)
+}
+
+/// Runs `work` on a blocking thread holding `permit` ([`blocking`]).
+async fn render(
+    permit: OwnedSemaphorePermit,
+    work: impl FnOnce() -> Result<Vec<u8>, CasError> + Send + 'static,
+) -> Result<Vec<u8>, CasError> {
     blocking(permit, work).await?.1
 }
 
@@ -687,9 +711,168 @@ impl Serialize for Batch<'_> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use axum::body::Body;
     use axum::http::HeaderValue;
+    use axum::http::header::AUTHORIZATION;
+    use openxet_auth::{Mode, StaticToken};
+    use openxet_index::{FileRecord, Index, IndexError, NewFile, Term, Visibility};
+    use tokio::sync::Semaphore;
+    use tower::ServiceExt as _;
 
     use super::*;
+    use crate::{router, test_support};
+
+    // The scheme is a constant so the repository's secret scanner, which
+    // flags any literal bearer value, can tell this test token from leaks.
+    const BEARER: &str = "Bearer";
+    const READ: &str = "oxt_unit_read";
+
+    /// An index counting its `chunk_tables` calls.
+    struct CountingIndex {
+        inner: Arc<dyn Index>,
+        table_loads: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Index for CountingIndex {
+        async fn put_xorb(
+            &self,
+            xorb: &MerkleHash,
+            size: u64,
+            table: &ChunkTable,
+            eligible: &[MerkleHash],
+            scope: &str,
+        ) -> Result<bool, IndexError> {
+            self.inner
+                .put_xorb(xorb, size, table, eligible, scope)
+                .await
+        }
+
+        async fn xorb_size(
+            &self,
+            xorb: &MerkleHash,
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<Option<u64>, IndexError> {
+            self.inner.xorb_size(xorb, scope, vis).await
+        }
+
+        async fn chunk_tables(
+            &self,
+            xorbs: &[MerkleHash],
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
+            self.table_loads.fetch_add(1, Ordering::SeqCst);
+            self.inner.chunk_tables(xorbs, scope, vis).await
+        }
+
+        async fn register_shard(
+            &self,
+            shard: &MerkleHash,
+            files: &[NewFile],
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<bool, IndexError> {
+            self.inner.register_shard(shard, files, scope, vis).await
+        }
+
+        async fn file(
+            &self,
+            file: &MerkleHash,
+            scope: &str,
+        ) -> Result<Option<FileRecord>, IndexError> {
+            self.inner.file(file, scope).await
+        }
+
+        async fn dedup_xorb(
+            &self,
+            chunk: &MerkleHash,
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<Option<MerkleHash>, IndexError> {
+            self.inner.dedup_xorb(chunk, scope, vis).await
+        }
+    }
+
+    #[tokio::test]
+    async fn chunk_tables_are_loaded_under_a_validation_permit() {
+        // Tables are the bulk of a large plan's memory, so the CPU-sized
+        // `validate` permits bound them too, not only planning.
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        let table_loads = Arc::new(AtomicUsize::new(0));
+        state.index = Arc::new(CountingIndex {
+            inner: Arc::clone(&state.index),
+            table_loads: Arc::clone(&table_loads),
+        });
+        state.validate = Arc::new(Semaphore::new(1));
+        let xorb = openxet_protocol::chunk_hash(b"xorb");
+        let table = ChunkTable {
+            hashes: vec![(openxet_protocol::chunk_hash(b"c"), 1)].into(),
+            offsets: vec![0, 9].into(),
+        };
+        state
+            .index
+            .put_xorb(&xorb, 9, &table, &[], "s")
+            .await
+            .unwrap();
+        let file = FileRecord {
+            hash: openxet_protocol::chunk_hash(b"file"),
+            size: 1,
+            terms: vec![Term {
+                xorb,
+                chunk_start: 0,
+                chunk_end: 1,
+                unpacked_bytes: 1,
+            }],
+        };
+        let new = NewFile {
+            record: file.clone(),
+            sha256: None,
+            first_chunk: None,
+        };
+        state
+            .index
+            .register_shard(&xorb, &[new], "s", Visibility::Global)
+            .await
+            .unwrap();
+        let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
+        let single = Request::get(format!("/v2/reconstructions/{}", hash_to_hex(&file.hash)));
+        let batch = Request::get(format!(
+            "/v1/reconstructions?file_id={}",
+            hash_to_hex(&file.hash)
+        ));
+
+        for request in [single, batch] {
+            let answer = tokio::spawn(
+                router(state.clone()).oneshot(
+                    request
+                        .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                ),
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(!answer.is_finished(), "answered without a permit");
+            assert_eq!(
+                table_loads.load(Ordering::SeqCst),
+                0,
+                "tables loaded without a permit"
+            );
+            answer.abort();
+        }
+        drop(held);
+    }
 
     fn range(value: &str) -> Result<Option<ByteRange>, CasError> {
         let mut headers = HeaderMap::new();

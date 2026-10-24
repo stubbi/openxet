@@ -51,7 +51,7 @@ use url::Url;
 pub use auth::{ReadAccess, WriteAccess};
 pub use error::CasError;
 pub use misc::TELEMETRY_BODY_LIMIT;
-pub use reconstruction::MAX_BATCH_FILES;
+pub use reconstruction::{MAX_BATCH_FILES, MAX_BATCH_TERMS};
 pub use request_id::{RequestId, X_REQUEST_ID};
 
 /// The CAS's configuration.
