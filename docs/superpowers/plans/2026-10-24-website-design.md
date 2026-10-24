@@ -130,3 +130,20 @@ cancellation link. Sign-up/sign-in remain unavailable.
 ARIA target/frame title. Main SEO issues: generic descriptions and no docs
 canonicals or social metadata. Report retained in `/tmp/openxet-audit-before.txt`
 during work; durable findings belong in the research note.
+
+
+## PR 58 follow-up: npm dependency metadata in the secret scan
+
+The agent-leg job at `d240abf` failed before running agent tests: the
+credential-header detector interpreted the waitlist lockfile's npm dependency
+`cookie` version as a Cookie header. The unchanged guard reproduces this locally.
+
+1. Add regressions for the observed v3 lockfile entry and for credentials beside
+   it, unknown/header fields, duplicate keys, malformed JSON and suspicious values.
+2. Recognize only the exact waitlist lockfile path and
+   `packages.<package>.dependencies.cookie` with a numeric release version,
+   optionally prefixed by `^` or `~`. Validate JSON with duplicate-key rejection.
+3. Exempt only the matching credential-header occurrence at its original source
+   offset. Every other detector continues to inspect every original byte.
+4. Run the complete redaction guard and harness-isolation tests, independently
+   review the change, then rerun CI without weakening the agent or core checks.
