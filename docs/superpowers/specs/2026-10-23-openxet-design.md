@@ -50,28 +50,31 @@ artefact taxonomy.
 ### What people store with it
 
 Dedup saves bytes only where versions share content. These numbers are
-from spike S12 (draft PR #60, chunk-level with `xet-data` 1.7.0's
-chunker) unless marked as published by Hugging Face. They are upper
-bounds, since stock clients skip very short matches (§1a).
+from [spike S12](../../research/S12-s3-api-and-dedup-economics.md)
+(chunk-level, with `xet-data` 1.7.0's chunker) unless marked as
+published by Hugging Face. They are upper bounds, since stock clients
+skip very short matches (§1a).
 
 - **ML models and datasets.** Hub compatibility means `hf`,
-  `huggingface_hub` and `git-xet` work unchanged. Model families save
-  about half: 29 GGUF quantizations of one model stored 191 GB in about
-  97 GB (published by HF), and fine-tunes dedup where they keep base
+  `huggingface_hub` and `git-xet` work unchanged. A quantization family
+  can save about half: 29 GGUF quantizations of one model stored 191 GB
+  in about 97 GB (published by HF). Fine-tunes dedup where they keep base
   weights unchanged.
 - **Checkpoints from training runs.** Consecutive dense checkpoints dedup
-  about 0%, because every weight changes (Pythia-70m, two steps apart).
-  Compression saves about 15% on fp16. What helps is resuming, re-uploads
-  and partially frozen weights, not the next step.
+  about 0%, because every weight changes (two consecutive saved
+  checkpoints of Pythia-70m, 1,000 steps apart). Compression saves about
+  15% on fp16. What helps is resuming, re-uploads and partially frozen
+  weights, not the next checkpoint.
 - **Dataset versions and Parquet appends.** An appended log's second
   version adds about 10% new bytes, so about 90% of it dedups. Small
   Parquet files dedup less: an append added about 46% new bytes with
   content-defined chunking and 52% without, on 5 MB files.
-- **Artefacts and binaries from CI.** Uncompressed builds and tarballs
-  share chunks across versions: a CPython point release shared 23% of its
+- **Artefacts and binaries from CI.** Uncompressed source tarballs share
+  chunks across versions: a CPython point release shared 23% of its
   `.tar`. Compressed artefacts (`.tar.gz`, `.tar.xz`) dedup about 0%.
-- **Backups and logs.** Append-only logs and uncompressed snapshots dedup
-  well, as above. Compressed or client-side encrypted backups (restic,
+  Build outputs and binaries were not measured.
+- **Backups and logs.** Append-only logs dedup well, as above.
+  Uncompressed snapshots dedup partly (23% for a CPython point release). Compressed or client-side encrypted backups (restic,
   Borg) dedup about 0%; for those openxet is plain storage.
 - **Agent-generated outputs.** Agents re-run, retry and rewrite. Outputs
   that repeat content dedup like any version series; S12 measured no
@@ -89,8 +92,12 @@ shows logical and stored bytes (§10.10).
 
 - From zero to a working `hf upload` against openxet in under two minutes:
   one command, one environment variable.
-- Uploading a slightly changed 10 GB checkpoint transfers megabytes, not
-  gigabytes.
+- Uploading a file again after a small in-place edit transfers megabytes,
+  not gigabytes: in M1, a 1 MiB edit of a 1 GiB file
+  sent about 1.2 MB with an empty client cache
+  ([S11](../../research/S11-global-dedup-response.md)). A retrained
+  checkpoint is not a small edit: every weight changes, and it transfers
+  in full.
 - It scales by adding nodes, with no redesign, from a laptop to petabytes.
 - Operators recommend it because it is boring to run.
 - People who don't want to run anything get the same thing, done perfectly, on
