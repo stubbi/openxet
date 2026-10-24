@@ -60,6 +60,13 @@ jobs:
       # so the incremental file hash is also tested the way production runs it.
       - if: matrix.os == 'ubuntu-latest'
         run: cargo nextest run --locked --release -p openxet-protocol -E 'binary(file_hash_streaming)'
+      # Design §5.8: reconstruction p99 < 50 ms for files up to 100k terms,
+      # in a release build as production runs, on the Linux runner servers
+      # resemble (the 3-vCPU macOS VM's timings are recorded in
+      # docs/reference/benchmarks.md). It prints each shape's p50 and p99,
+      # so the log tracks the margin.
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo nextest run --locked --release -p openxet-cas -E 'binary(latency_gate)' --no-capture
       - run: cargo doc --locked --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
