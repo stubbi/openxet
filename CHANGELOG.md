@@ -32,6 +32,8 @@ once built.
   - telemetry accepted and dropped
 - Every security requirement of design §5.9 that applies to the CAS, each
   with its test ([security tests](docs/reference/security-tests.md)).
+- Reconstruction answers a 100k-term file within 50 ms at p99 on an idle
+  node, gated in CI ([benchmarks](docs/reference/benchmarks.md)).
 
 ### Upgrading
 
@@ -43,3 +45,13 @@ once built.
   `reindex` command that rebuilds the index from the bucket
   ([#26](https://github.com/stubbi/openxet/issues/26)) will fill in every
   shard.
+- Index migrations 0003 and 0004 record each xorb's chunk layout and each
+  file's per-term byte ranges, which make reconstruction fast. Rows from
+  before them are still answered correctly, only more slowly:
+  - A xorb stored before 0003 has no layout, so planning reads its whole
+    chunk table, until the xorb is uploaded again, which records it.
+  - A file registered before 0004 has no term byte ranges, so every
+    reconstruction of it reads the layouts of all its xorbs. Registering
+    the file again keeps the existing row, so this lasts until `reindex`
+    ([#26](https://github.com/stubbi/openxet/issues/26)) rebuilds the
+    index.
