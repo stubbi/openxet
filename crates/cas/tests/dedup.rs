@@ -130,6 +130,10 @@ fn capture_first_chunk() -> MerkleHash {
 }
 
 /// Whether `body` holds `chunk` as 32 bytes or as an 8-byte truncation.
+/// Upstream's lookup tables truncate a hash to its first little-endian u64
+/// word (`truncate_hash`, `xet-core-structures` 1.7.0
+/// `metadata_shard/utils.rs:31`), which is `raw[..8]`; no other window
+/// can hold it.
 fn reveals(body: &[u8], chunk: &MerkleHash) -> bool {
     let raw = chunk.as_bytes();
     body.windows(32).any(|w| w == raw) || body.windows(8).any(|w| w == &raw[..8])
@@ -329,18 +333,22 @@ async fn dedup_end_to_end_with_capture() {
 
 #[tokio::test]
 async fn dedup_responses_use_fresh_keys() {
+    // Ruling M1-R4: a key per response, so no two answers can be correlated
+    // by their keyed hashes. Sixteen answers, all pairwise distinct.
     let server = TestServer::start_default().await;
     let (body, eligible, _) = mixed_xorb();
     let xorb = upload_xorb(&server, body, &server.write_token).await;
 
-    let first = query(&server, &eligible, &server.read_token).await;
-    let second = query(&server, &eligible, &server.read_token).await;
+    let mut keys = std::collections::HashSet::new();
+    let mut bodies = std::collections::HashSet::new();
+    for _ in 0..16 {
+        let answer = query(&server, &eligible, &server.read_token).await;
+        keys.insert(assert_offers(&answer, &eligible, &xorb).key);
+        bodies.insert(answer.body);
+    }
 
-    assert_ne!(
-        assert_offers(&first, &eligible, &xorb).key,
-        assert_offers(&second, &eligible, &xorb).key
-    );
-    assert_ne!(first.body, second.body);
+    assert_eq!(keys.len(), 16);
+    assert_eq!(bodies.len(), 16);
 }
 
 #[tokio::test]
@@ -375,6 +383,22 @@ async fn percent_encoded_paths_are_400_invalid_path() {
             assert!(answer.contains("\"invalid_path\""), "{path}: {answer}");
         }
     }
+}
+
+#[tokio::test]
+async fn another_method_is_405_and_no_store() {
+    let server = TestServer::start_default().await;
+
+    let reply = Reply::of(
+        server
+            .request(Method::POST, DEDUP_PATH)
+            .header(AUTHORIZATION, bearer(&server.write_token)),
+    )
+    .await;
+
+    reply.assert_error(405, "method_not_allowed");
+    assert_eq!(reply.headers["allow"], "GET,HEAD");
+    assert_eq!(reply.headers[CACHE_CONTROL], "no-store");
 }
 
 /// An index whose `chunk_tables` answers nothing, as if the offered xorb's

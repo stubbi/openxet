@@ -12,7 +12,7 @@
 //! about chunks it doesn't hold (design §5.9 req 4). The key is new per
 //! response (ruling M1-R4), so answers can't be correlated with each other:
 //! the same chunk has a different keyed hash in each. Every answer of the
-//! route is `Cache-Control: no-store`: each depends on
+//! route, a `405` included, is `Cache-Control: no-store`: each depends on
 //! the caller's authorization, and a `200` is keyed per request (§5.9
 //! req 3).
 //!
@@ -32,7 +32,7 @@ use axum::routing::get;
 use openxet_protocol::{MerkleHash, dedup_shard, hash_to_hex};
 
 use crate::blocking::blocking;
-use crate::{AppState, CasError, ReadAccess, path};
+use crate::{AppState, CasError, ReadAccess, error, path};
 
 /// The prefixes served: `default`, which `hf_xet` sends, and
 /// `default-merkledb`, which the spec names (S10 §2).
@@ -45,9 +45,14 @@ const KEY_LIFETIME: u64 = 7 * 24 * 60 * 60;
 
 /// `GET /v1/chunks/{prefix}/{hash}` (S10 §2).
 pub(crate) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/v1/chunks/{prefix}/{hash}", get(query))
-        .route_layer(axum::middleware::map_response(no_store))
+    // The method router's own fallback, so that the layer covers the `405`
+    // too; axum still adds the `Allow` header.
+    Router::new().route(
+        "/v1/chunks/{prefix}/{hash}",
+        get(query)
+            .fallback(error::method_not_allowed)
+            .layer(axum::middleware::map_response(no_store)),
+    )
 }
 
 /// The raw chunk hash named by the path ([`path::prefixed_hash`]).
