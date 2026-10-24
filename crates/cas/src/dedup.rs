@@ -8,10 +8,19 @@
 //!    with a fresh random key that expires in [`KEY_LIFETIME`]
 //! 4. the answer is `200 application/octet-stream`
 //!
-//! The key is new per response (ruling M1-R4), so an answer tells the caller
-//! nothing about chunks it doesn't hold (design §5.9 req 4). Every answer of
-//! the route is `Cache-Control: no-store`: each depends on the caller's
-//! authorization, and a `200` is keyed per request (§5.9 req 3).
+//! Keying hides the raw chunk hashes, so an answer tells the caller nothing
+//! about chunks it doesn't hold (design §5.9 req 4). The key is new per
+//! response (ruling M1-R4), so answers can't be correlated with each other:
+//! the same chunk has a different keyed hash in each. Every answer of the
+//! route is `Cache-Control: no-store`: each depends on
+//! the caller's authorization, and a `200` is keyed per request (§5.9
+//! req 3).
+//!
+//! The shard is built on a blocking thread holding a `validate` permit
+//! (ruling M1-R25), so concurrent dedup work is bounded by the same
+//! CPU-sized permit set as xorb and shard validation.
+
+use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{FromRequestParts, State};
@@ -22,6 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use openxet_protocol::{MerkleHash, dedup_shard, hash_to_hex};
 
+use crate::blocking::blocking;
 use crate::{AppState, CasError, ReadAccess, path};
 
 /// The prefixes served: `default`, which `hf_xet` sends, and
@@ -82,16 +92,21 @@ async fn query(
     };
     let key = fresh_key()?;
     let expiry = state.clock.now().saturating_add(KEY_LIFETIME);
-    // Building and keying the shard of a full `MAX_XORB_CHUNKS` table takes
-    // about 1 ms in a release build (measured on an Apple M3),
-    // against tens for validating a xorb, so it runs off the async threads
-    // without a `validate` permit. Every failure is a server bug: a
-    // stored table within the format's counts and a non-zero key always
-    // serialize.
-    let body = tokio::task::spawn_blocking(move || dedup_shard(&xorb, &table.hashes, key, expiry))
+    // A full `MAX_XORB_CHUNKS` table builds and keys in about 1 ms in a
+    // release build (measured on an Apple M3). Cheap, but a flood of
+    // queries would otherwise grow the blocking pool without bound, so the
+    // work holds a `validate` permit (ruling M1-R25). Every failure is a
+    // server bug: a stored table within the format's counts and a non-zero
+    // key always serialize.
+    let permit = Arc::clone(&state.validate)
+        .acquire_owned()
         .await
-        .map_err(CasError::internal)?
         .map_err(CasError::internal)?;
+    let (_, body) = blocking(permit, move || {
+        dedup_shard(&xorb, &table.hashes, key, expiry)
+    })
+    .await?;
+    let body = body.map_err(CasError::internal)?;
     tracing::debug!(xorb = %hash_to_hex(&xorb), "dedup match offered");
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
 }
@@ -114,4 +129,84 @@ async fn no_store(mut response: Response) -> Response {
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use std::time::Duration;
+
+    use axum::body::Body;
+    use axum::http::header::AUTHORIZATION;
+    use axum::http::{Request, StatusCode};
+    use openxet_auth::{Mode, StaticToken};
+    use openxet_index::ChunkTable;
+    use openxet_protocol::{chunk_hash, is_dedup_eligible, xorb_with_footer};
+    use tokio::sync::Semaphore;
+    use tower::ServiceExt as _;
+
+    use super::*;
+    use crate::{router, test_support};
+
+    // The scheme is a constant so the repository's secret scanner, which
+    // flags any literal bearer value, can tell this test token from leaks.
+    const BEARER: &str = "Bearer";
+    const READ: &str = "oxt_unit_read";
+
+    /// An uncompressed chunk whose hash is dedup eligible, framed per
+    /// <https://huggingface.co/docs/xet/xorb#chunk-header-structure>.
+    fn eligible_chunk() -> (Vec<u8>, MerkleHash) {
+        let data = (0..1_000_000u64)
+            .map(|n| n.to_le_bytes().to_vec())
+            .find(|data| is_dedup_eligible(&chunk_hash(data)))
+            .unwrap();
+        let mut framed = vec![0, 8, 0, 0, 0, 8, 0, 0];
+        framed.extend_from_slice(&data);
+        (framed, chunk_hash(&data))
+    }
+
+    #[tokio::test]
+    async fn building_the_answer_takes_a_validation_permit() {
+        // Ruling M1-R25: dedup work is bounded by the CPU-sized `validate`
+        // permits, so a flood of queries can't grow the blocking pool.
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.validate = Arc::new(Semaphore::new(1));
+        let (body, chunk) = eligible_chunk();
+        let xorb = xorb_with_footer(&body).unwrap();
+        let table = ChunkTable {
+            hashes: xorb.chunks.hashes.into(),
+            offsets: xorb.chunk_offsets.into(),
+        };
+        state
+            .index
+            .put_xorb(&xorb.hash, 1, &table, &[chunk], "s")
+            .await
+            .unwrap();
+        let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
+        let app = router(state.clone());
+
+        let answer = tokio::spawn(
+            app.oneshot(
+                Request::get(format!("/v1/chunks/default/{}", hash_to_hex(&chunk)))
+                    .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!answer.is_finished(), "answered without a permit");
+
+        drop(held);
+        let response = answer.await.unwrap().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(state.validate.available_permits(), 1);
+    }
 }

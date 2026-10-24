@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod blocking;
 mod body;
 mod dedup;
 mod error;
