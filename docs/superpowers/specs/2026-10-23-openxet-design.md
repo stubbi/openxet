@@ -1544,7 +1544,8 @@ Until `1.0`, the compatibility suite, benchmarks and the measured
 time-to-first-upload stand in for users. The repo is public while it is
 built, so anyone can try it early, but no milestone waits on that. The work
 is built by the user with coding agents, so the plan sequences milestones
-but sets no calendar dates.
+but sets no calendar dates. M8 is the hosted service on openxet.com, not a
+release of the open-source build: it runs the released build (§15).
 
 
 - **M0:**
@@ -1638,6 +1639,17 @@ but sets no calendar dates.
     verify packaged versions execute the documented recipes (ADR 0009).
   - Published benchmarks.
   - Time-to-first-upload check.
+- **M8: openxet.com hosted service** (§15). Features, pricing and the
+  end-to-end experience per spike S13 (draft PR #59), pending the owner's
+  approval of pricing and positioning. It delivers the 60 s journey from
+  the landing page to a working `hf upload`. It meters logical and
+  physical bytes and bills each tenant on its own deduplicated bytes,
+  never crediting dedup across tenants, since a bill that drops when
+  another tenant holds the same chunks would reveal that they exist
+  (S12). It ships the agent features on the hosted service: delegated
+  tokens, approval gates and MCP (§7.1). Load and capacity tests run
+  before launch. Anything it needs from the core ships in the
+  open-source build first (§15).
 
 ## 13. Left to the builder
 
@@ -1674,7 +1686,8 @@ schedule the specification, compatibility audit and client delivery.
 openxet.com is a first-class product, not an afterthought. "Perfect" is
 measured by the same anti-goals as the open-source project: fast, effortless,
 and listening. Detailed design is its own brainstorming round (pricing, legal,
-operations). These requirements are fixed now because they shape the core:
+operations): spike S13 (draft PR #59) proposes it, and M8 (§12) delivers
+it once the owner approves pricing and positioning. These requirements are fixed now because they shape the core:
 
 **Experience:**
 - From the landing page to a working `hf upload` in under 60 seconds: sign in
