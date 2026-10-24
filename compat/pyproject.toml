@@ -17,6 +17,7 @@ testpaths = ["tests"]
 tmp_path_retention_policy = "failed"
 markers = [
     "agent: drives the openxet CLI as an agent would (needs OPENXET_BIN)",
+    "docs: runs the documentation's examples against the built CLI (needs OPENXET_BIN)",
     "pinned: only valid when the locked client versions are installed",
     "storage_only: stock hf_xet against openxet serve, no Hub (needs OPENXET_BIN)",
 ]

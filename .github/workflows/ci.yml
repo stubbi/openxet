@@ -153,6 +153,11 @@ jobs:
       - run: uv run --frozen --directory compat pytest -m storage_only
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+      # docs/quickstart-storage-only.md runs as written, within design §5.8's
+      # 2 minutes.
+      - run: uv run --frozen --directory compat pytest -m docs
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
 
   # Not a required check: it needs the nightly toolchain, whose moving
   # sanitizer and coverage flags make it non-hermetic (see GOVERNANCE.md).
