@@ -474,8 +474,8 @@ Xorbs remain globally content-addressed and shared.
   already exists across tenants is unacceptable.
 
 A dedup answer offers every xorb of the newest visible shard that
-references the matched xorb, up to 64 MiB, so one hit lets a client with an
-empty cache dedup a whole earlier upload (ruling M1-R30, S11); under
+references the matched xorb, up to 16 MiB, so one hit lets a client with an
+empty cache dedup a whole earlier upload (rulings M1-R30, M1-R32, S11); under
 `per-scope` that shard must be registered to the caller's scope and only
 the caller's xorbs are offered.
 
@@ -1590,4 +1590,5 @@ made. Public docs cite them by number; this is what each cited one decides.
 | M1-R10 | The default bind is `127.0.0.1:8080`, which is also `hf_xet`'s default CAS endpoint. | S10 |
 | M1-R23 | Verification errors name the rule, the file, the xorb and the chunk range the client sent, and never a value derived from stored data (expected hashes, lengths, chunk counts); those are logged only. | §5.9 req 5, S6 |
 | M1-R24 | Shard commits (bucket write through index registration) are bounded per process by a commit semaphore of 4 permits per CPU, separate from the validation permits; ingest memory is at most validation permits × the verification limits plus commit permits × a stored shard and its files. | M1 plan |
-| M1-R30 | A dedup answer offers every xorb of the newest shard that references the matched xorb and is visible to the caller, in the shard's term order from the matched xorb, wrapping round, up to 64 MiB of serialized answer and without lookup tables; with no such shard, the matched xorb alone. | §5.4, S11 |
+| M1-R30 | A dedup answer offers every xorb of the newest shard that references the matched xorb and is visible to the caller, in the shard's term order from the matched xorb, wrapping round, up to the answer budget of M1-R32 and without lookup tables; with no such shard, the matched xorb alone. | §5.4, S11 |
+| M1-R32 | Dedup answers are at most 16 MiB (about 350 typical xorbs, about 22 GB of file) and hold a `dedup` permit, a pool of a quarter of the CPUs separate from `validate`, from loading their chunk tables until their body has been sent or dropped; dedup memory per process is at most those permits × about 100 MB. | §5.4, S11 |

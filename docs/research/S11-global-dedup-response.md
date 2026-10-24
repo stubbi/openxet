@@ -297,7 +297,8 @@ differs in detail.
    before it. Fall back to the single xorb (today's answer) when no
    visible shard references it yet. This supersedes the "single xorb"
    part of M1-R4; the fresh key and 7-day expiry stay.
-2. **Bound.** Stop adding xorbs at a 64 MiB answer, the spec's shard
+2. **Bound** (64 MiB here; ruling M1-R32 set 16 MiB after review, see
+   "Implementation"). Stop adding xorbs at a 64 MiB answer, the spec's shard
    maximum, and omit the xorb and chunk lookup tables, as the reference
    answer does (the client rebuilds its index from the xorb section; both
    forms dedup, S10 §2). Cost per chunk is then 48 B: observed density
@@ -348,22 +349,36 @@ differs in detail.
   section by hand (ADR 0001). The client indexes every offered chunk
   whatever the order (see "What the client does with an answer"), so only
   which xorbs make the cut depends on the term order.
-- **Budget.** `MAX_DEDUP_ANSWER_BYTES` = 64 MiB. `dedup_shard` counts the
-  exact serialized size (header, empty sections and footer, plus
-  upstream's `MDBXorbInfo::num_bytes` per xorb, 48 B per chunk plus 48 B
-  per xorb), always takes the first xorb and stops before the next one
-  that would exceed the budget. The route loads chunk tables 64 xorbs per
-  index read and stops once the loaded tables fill the budget, so an
-  answer holds at most about 64 MiB of tables plus one read whatever the
-  shard references.
+- **Budget.** `DEDUP_ANSWER_BUDGET` = 16 MiB (ruling M1-R32; Task 10b
+  first shipped 64 MiB, the spec's shard maximum, which review found
+  costly for no measured gain). At 48 B per chunk, 16 MiB offers about
+  350 xorbs of the typical density (about 47 KB of answer each), about
+  22 GB of file. `dedup_shard` counts the exact serialized size (header,
+  empty sections and footer, plus upstream's `MDBXorbInfo::num_bytes` per
+  xorb, 48 B per chunk plus 48 B per xorb), always takes the first xorb
+  and stops before the next one that would exceed the budget. The route
+  loads chunk tables 32 xorbs per index read and stops at the first table
+  that fills the budget.
 - **Lookup tables.** Omitted through upstream's own flags
   (`export_as_keyed_shard_streaming(…, include_xorb_lookup_table: false,
   include_chunk_lookup_table: false)`); no format code was written.
   Stock `hf_xet` 1.7.0 deduped against them as before (rows above).
-- **Permit.** Loading the tables and building the answer hold one
-  `validate` permit (M1-R25); the test
-  `building_the_answer_takes_a_validation_permit` checks the tables load
-  with none free.
+- **Permits.** Each answer holds one permit of its own pool,
+  `AppState::dedup`, a quarter of the CPUs and at least one (ruling
+  M1-R32), from the table load until its body has been written or
+  dropped: the body owns the permit (`Bytes::from_owner`). Dedup never
+  takes a `validate` permit, so it can't starve xorb or shard validation
+  (`dedup_never_starves_validation`); a client that never reads keeps its
+  permit, so bodies can't pile up
+  (`the_dedup_permit_lives_until_the_body_is_gone`).
+- **Peak per answer.** `dedup_shard` consumes the tables, dropping each
+  once copied into upstream's in-memory shard; serializes only the
+  sections the keyed export reads; and drops the in-memory shard before
+  `UnkeyedDedupShard::keyed` keys the serialization into an exactly sized
+  buffer. The peak is during upstream's serialization: the in-memory shard
+  (48 B per chunk plus its chunk index, about 100 B per chunk) and the
+  serialization, about 55 MB for a 16 MiB answer (estimate from those
+  sizes).
 - **End-to-end test.** `fresh_cache_edit_dedups_against_the_server`
   (`crates/openxet/tests/transfer_cmd.rs`) uploads a seeded 100 MiB file
   with `openxet upload`, edits 1 MiB in the middle and re-uploads with a
@@ -387,8 +402,29 @@ of `dedup_shard` alone (observed):
 In the 1 GiB run with `hf_xet` above, the server logged the 17-xorb
 answer at 14 ms while it was also ingesting the upload. The cost is about
 0.2 µs per chunk of building and keying, plus the index read. A full
-64 MiB answer (about 1.4 million chunks) would take about 0.3 s of one
-permit; answers can't be cached, as each has a fresh key.
+16 MiB answer (about 345,000 chunks) takes about 80 ms of one permit;
+answers can't be cached, as each has a fresh key.
+
+**Memory** (ruling M1-R32, measured after review I1). Release build,
+Apple M3 with 8 CPUs, so 2 `dedup` permits; a scratch test (not
+committed) registers one shard of 200 xorbs of 8192 chunks, so every
+answer is a full 16.5 MB, and samples the process's resident size every
+5 ms while clients query its first chunk. The test's own HTTP clients
+are in the process and count too (observed):
+
+| Load | Peak RSS over idle, after the fix | Before (64 MiB, `validate` permits; review) |
+|---|---|---|
+| 1 answer, cold process | 107 MB | about 0.55 GB |
+| 2 concurrent, reading | 103-107 MB | 0.93 GB |
+| 8 concurrent, reading | 160-188 MB | 2.05 GB |
+| 16 concurrent, reading | 150-180 MB | 2.8 GB |
+| 32 connections that never read | 132-198 MB | 2.68 GB |
+| 64 connections that never read | 82-101 MB | 3.2 GB |
+
+Ranges are two runs. The load beyond the permits waits for one and holds
+nothing but its request, so memory stays flat from 2 to 64 clients. Per
+process, dedup memory is at most the `dedup` permits × about 100 MB
+(the build peak plus allocator slack), whatever the number of clients.
 
 ## Security
 

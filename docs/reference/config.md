@@ -243,9 +243,13 @@ Files are always visible only in the scope they were uploaded to.
   bandwidth.
 
   One dedup match offers the client every xorb of the latest upload
-  (shard) that stored the matched chunk, up to 64 MiB of answer. So a
+  (shard) that stored the matched chunk, up to 16 MiB of answer. So a
   client with an empty cache that re-uploads an edited file sends little
   more than the edit: about 1.2 MB for a 1 MiB edit of a 100 MiB file.
+  The price is what one matching chunk reveals: anyone who holds one
+  chunk of an upload learns that upload's xorb hashes, chunk counts and
+  chunk lengths (never its data or raw chunk hashes); choose `per-scope`
+  if tenants must not learn that about each other.
 - `per-scope`: a scope sees only xorbs uploaded with its own credentials.
   To any other scope, another scope's xorb reads as absent: `HEAD` of it
   answers `404`, dedup queries find no match in it, and a shard that

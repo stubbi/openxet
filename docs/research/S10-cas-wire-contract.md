@@ -267,7 +267,7 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
     files' reconstructions.
   - **Xorb-info section:** the offered xorbs. openxet offers every xorb
     of the newest visible shard that references the matched xorb, up to
-    64 MiB of answer (ruling M1-R30, S11). Xorb hashes are plain;
+    16 MiB of answer (rulings M1-R30, M1-R32; S11). Xorb hashes are plain;
     every chunk hash is `HMAC(chunk_hash, key)` (`keyed_chunk_hash`,
     `shard_format.rs:603-611`).
   - **Footer: required.** The client reads the last 200 bytes and checks
