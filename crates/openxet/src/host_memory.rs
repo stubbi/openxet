@@ -3,8 +3,11 @@
 //! container's cgroup limit when that is lower.
 //!
 //! Read the simplest way each system offers, with no `unsafe`:
-//! - Linux: `MemTotal` in `/proc/meminfo`, and the cgroup v2 `memory.max`
-//!   or v1 `memory.limit_in_bytes` of the process's cgroup root
+//! - Linux: `MemTotal` in `/proc/meminfo`, lowered to the smallest cgroup
+//!   v2 `memory.max` (or v1 `memory.limit_in_bytes`) from the process's own
+//!   cgroup, named in `/proc/self/cgroup`, up to the root. So a container's
+//!   limit counts, and so does a systemd unit's `MemoryMax=` or a cgroup
+//!   seen from the host's namespace (review M-2 of ruling M1-R40).
 //! - macOS: `sysctl -n hw.memsize`
 //!
 //! Anything else, or a read that fails, gives `None`, and the budget falls
@@ -17,13 +20,13 @@ pub fn total() -> Option<u64> {
         let physical = std::fs::read_to_string("/proc/meminfo")
             .ok()
             .and_then(|text| meminfo_total(&text));
-        let limit = [
-            "/sys/fs/cgroup/memory.max",
-            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
-        ]
-        .iter()
-        .find_map(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| cgroup_limit(&text));
+        let limit = std::fs::read_to_string("/proc/self/cgroup")
+            .map(|text| cgroup_limit_files(&text))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .filter_map(|text| cgroup_limit(&text))
+            .min();
         match (physical, limit) {
             (Some(p), Some(l)) => Some(p.min(l)),
             (p, l) => p.or(l),
@@ -55,6 +58,38 @@ fn meminfo_total(text: &str) -> Option<u64> {
     (words.next() == Some("kB")).then_some(kib.checked_mul(1024)?)
 }
 
+/// The files that may hold a memory limit for the cgroups named in the
+/// text of `/proc/self/cgroup`, from the process's own cgroup up to the
+/// root: `memory.max` for cgroup v2 (`0::/path`), `memory.limit_in_bytes`
+/// for a v1 hierarchy with the `memory` controller (`N:memory:/path`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn cgroup_limit_files(text: &str) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (mount, file) = if controllers.is_empty() {
+            ("/sys/fs/cgroup", "memory.max")
+        } else if controllers.split(',').any(|c| c == "memory") {
+            ("/sys/fs/cgroup/memory", "memory.limit_in_bytes")
+        } else {
+            continue;
+        };
+        let mut dir = std::path::Path::new(mount).join(path.trim_start_matches('/'));
+        loop {
+            files.push(dir.join(file));
+            if dir == std::path::Path::new(mount) || !dir.pop() {
+                break;
+            }
+        }
+    }
+    files
+}
+
 /// A cgroup memory limit, in bytes: `None` for v2's `max`, and for v1's
 /// "no limit", a value near `i64::MAX`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -73,6 +108,35 @@ mod tests {
         assert_eq!(meminfo_total(text), Some(16_303_312 * 1024));
         assert_eq!(meminfo_total("MemFree: 1 kB\n"), None);
         assert_eq!(meminfo_total("MemTotal: x kB\n"), None);
+    }
+
+    #[test]
+    fn finds_the_limit_files_from_the_process_cgroup_up() {
+        let v2 = cgroup_limit_files("0::/system.slice/openxet.service\n");
+        let v2: Vec<_> = v2.iter().map(|p| p.display().to_string()).collect();
+        assert_eq!(
+            v2,
+            [
+                "/sys/fs/cgroup/system.slice/openxet.service/memory.max",
+                "/sys/fs/cgroup/system.slice/memory.max",
+                "/sys/fs/cgroup/memory.max",
+            ]
+        );
+        assert_eq!(
+            cgroup_limit_files("0::/\n"),
+            [std::path::PathBuf::from("/sys/fs/cgroup/memory.max")]
+        );
+        let v1 = cgroup_limit_files("5:cpu,cpuacct:/docker/x\n4:memory:/docker/x\n");
+        let v1: Vec<_> = v1.iter().map(|p| p.display().to_string()).collect();
+        assert_eq!(
+            v1,
+            [
+                "/sys/fs/cgroup/memory/docker/x/memory.limit_in_bytes",
+                "/sys/fs/cgroup/memory/docker/memory.limit_in_bytes",
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+            ]
+        );
+        assert!(cgroup_limit_files("garbage\n").is_empty());
     }
 
     #[test]
