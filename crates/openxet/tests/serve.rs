@@ -946,8 +946,9 @@ async fn credentials_never_logged() {
 #[test]
 fn sigterm_lets_in_flight_requests_finish() {
     let dir = tempfile::tempdir().unwrap();
-    let server = Server::start(dir.path(), &[], &[]);
+    let server = Server::start(dir.path(), &[], &[("OPENXET_SERVER__LOG_LEVEL", "debug")]);
     let (mut stream, tail) = start_upload(&server);
+    server.wait_for_log(UPLOAD_STARTED);
     server.signal("-TERM");
     wait_until_refusing(server.addr());
 
@@ -957,6 +958,21 @@ fn sigterm_lets_in_flight_requests_finish() {
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
     let (status, stderr) = server.wait();
     assert_eq!(status.code(), Some(0), "{stderr}");
+}
+
+/// The debug log line of a request whose handler has started, so its
+/// connection is in flight rather than idle or still in the listen backlog.
+const UPLOAD_STARTED: &str = "started processing request";
+
+impl Server {
+    /// Waits until the server's log holds `needle`.
+    fn wait_for_log(&self, needle: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while !String::from_utf8_lossy(&self.stderr.lock().unwrap()).contains(needle) {
+            assert!(Instant::now() < deadline, "the log never showed {needle:?}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 /// Starts sending a xorb upload's first half and returns the connection.
@@ -991,8 +1007,9 @@ fn wait_until_refusing(addr: SocketAddr) {
 #[test]
 fn a_second_signal_exits_at_once() {
     let dir = tempfile::tempdir().unwrap();
-    let server = Server::start(dir.path(), &[], &[]);
+    let server = Server::start(dir.path(), &[], &[("OPENXET_SERVER__LOG_LEVEL", "debug")]);
     let (_upload, _) = start_upload(&server);
+    server.wait_for_log(UPLOAD_STARTED);
     server.signal("-INT");
     wait_until_refusing(server.addr());
     server.signal("-INT");
