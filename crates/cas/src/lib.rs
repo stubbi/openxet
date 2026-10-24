@@ -134,9 +134,9 @@ pub struct AppState {
     /// Bounds concurrent xorb validation, which decompresses up to 2 × the
     /// xorb's size, and shard parsing and verification (ruling M1-R8).
     pub validate: Arc<Semaphore>,
-    /// Bounds concurrent shard commits, from the bucket write to the end of
-    /// index registration (ruling M1-R24), including v2 uploads whose client
-    /// has left. Separate from `validate`, so slow storage never holds a
+    /// Bounds concurrent xorb and shard commits, from the bucket write to
+    /// the end of index registration (rulings M1-R24, M1-R40), including v2
+    /// uploads whose client has left. Separate from `validate`, so slow storage never holds a
     /// CPU permit.
     ///
     /// With both, shard ingest's memory per process is at most `validate`'s

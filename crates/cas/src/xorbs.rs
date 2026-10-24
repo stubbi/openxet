@@ -62,8 +62,9 @@ struct Uploaded {
 /// - The body is validated by `xorb_with_footer` on a blocking thread,
 ///   holding a `validate` permit for that step only (ruling M1-R8). Its
 ///   computed hash must be the path's.
-/// - Bucket first, then index (design §5.3). A failed put registers
-///   nothing, so the index never names bytes the bucket lacks.
+/// - Bucket first, then index (design §5.3), under a `commit` permit
+///   (ruling M1-R40). A failed put registers nothing, so the index never
+///   names bytes the bucket lacks.
 /// - The body's length is reserved from the memory budget before it is
 ///   read, until the xorb is registered ([`body::buffer`]).
 /// - Idempotent: `hf_xet` resends the whole body on a `5xx` or a lost
@@ -212,6 +213,15 @@ async fn register(state: &AppState, scope: &str, stored: StoredXorb) -> Result<b
         hashes: chunks.hashes.into(),
         offsets: chunk_offsets.into(),
     };
+    // Held from the bucket put until registration ends, as for shards
+    // (rulings M1-R24, M1-R40): on local disk each put is a blocking task,
+    // so slow storage would otherwise pile puts up on the blocking threads
+    // that transfers and validation also need. The `validate` permit is
+    // already returned, so slow storage never holds a CPU permit.
+    let _commit = Arc::clone(&state.commit)
+        .acquire_owned()
+        .await
+        .map_err(CasError::internal)?;
     state
         .bucket
         .put(&Key::Xorb(hash), Bytes::from(bytes))
@@ -375,6 +385,43 @@ mod tests {
         let response = router(state).oneshot(post(body)).await.unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert_memory_busy(response).await;
+    }
+
+    #[tokio::test]
+    async fn a_xorb_is_stored_and_registered_under_a_commit_permit() {
+        // Ruling M1-R40, as M1-R24 for shards: the bucket put and the index
+        // registration wait for a `commit` permit, so slow storage can't
+        // pile up puts on the blocking threads.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![write_token()]).await;
+        state.commit = Arc::new(tokio::sync::Semaphore::new(1));
+        let held = Arc::clone(&state.commit).acquire_owned().await.unwrap();
+        let name = "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c";
+        let body = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/hf-xet-1.7.0-upload")
+                .join(format!("{name}.xorb")),
+        )
+        .unwrap();
+        let hash = openxet_protocol::xorb_with_footer(&body).unwrap().hash;
+
+        let upload = tokio::spawn(
+            router(state.clone()).oneshot(
+                Request::post(format!("/v1/xorbs/default/{name}"))
+                    .header(AUTHORIZATION, format!("{BEARER} {WRITE}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            ),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!upload.is_finished(), "stored without a commit permit");
+        assert_eq!(state.bucket.size(&Key::Xorb(hash)).await.unwrap(), None);
+
+        drop(held);
+        let response = upload.await.unwrap().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(state.bucket.size(&Key::Xorb(hash)).await.unwrap().is_some());
+        assert_eq!(state.commit.available_permits(), 1);
     }
 
     #[tokio::test]
