@@ -5,15 +5,27 @@ the Rust test `every_subcommand_is_in_the_agent_leg` fails until it does.
 """
 
 import json
+import signal
 import subprocess
 
 import pytest
 
 pytestmark = pytest.mark.agent
 
+# `{tmp}` is a fresh directory per command, and `{key}` a signing key
+# `token keygen` wrote there first.
 JSON_COMMANDS = [
     ["version", "--json"],
+    ["config", "check", "--json"],
+    ["token", "keygen", "--key", "{tmp}/signing.key", "--json"],
+    ["token", "mint", "--key", "{key}", "--scope", "agent", "--mode", "read", "--ttl", "1h", "--json"],
+    ["token", "generate", "--scope", "agent", "--mode", "write", "--json"],
+    ["serve", "--data-dir", "{tmp}/data", "--port", "0", "--json"],
 ]
+
+# Commands that run until stopped. Their first stdout line is the result;
+# SIGTERM then stops them cleanly.
+LONG_RUNNING = {"serve"}
 
 
 def run(openxet_bin, *args):
@@ -25,14 +37,45 @@ def run(openxet_bin, *args):
     )
 
 
-@pytest.mark.parametrize("args", JSON_COMMANDS, ids=" ".join)
-def test_command_json_is_parseable_with_schema(openxet_bin, args):
-    # run() closes stdin and has no tty: a command that prompts would hang
-    # until the timeout and fail here.
-    out = run(openxet_bin, *args)
+def expand(openxet_bin, args, tmp_path):
+    if any("{key}" in a for a in args):
+        key = tmp_path / "mint.key"
+        out = run(openxet_bin, "token", "keygen", "--key", str(key), "--json")
+        assert out.returncode == 0, out.stderr.decode()
+        args = [a.replace("{key}", str(key)) for a in args]
+    return [a.replace("{tmp}", str(tmp_path)) for a in args]
 
-    assert out.returncode == 0, out.stderr.decode()
-    schema = json.loads(out.stdout)["schema"]
+
+def run_long(openxet_bin, *args):
+    """The first stdout line, and the exit code after SIGTERM."""
+    proc = subprocess.Popen(
+        [openxet_bin, *args],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        line = proc.stdout.readline()
+        proc.send_signal(signal.SIGTERM)
+        _, stderr = proc.communicate(timeout=60)
+    finally:
+        proc.kill()
+    return line, proc.returncode, stderr
+
+
+@pytest.mark.parametrize("args", JSON_COMMANDS, ids=" ".join)
+def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
+    # stdin is closed and there is no tty: a command that prompts would hang
+    # until the timeout and fail here.
+    args = expand(openxet_bin, args, tmp_path)
+    if args[0] in LONG_RUNNING:
+        stdout, returncode, stderr = run_long(openxet_bin, *args)
+    else:
+        out = run(openxet_bin, *args)
+        stdout, returncode, stderr = out.stdout, out.returncode, out.stderr
+
+    assert returncode == 0, stderr.decode()
+    schema = json.loads(stdout)["schema"]
     assert schema.startswith("openxet.") and schema.endswith(".v1")
 
 
