@@ -1,5 +1,7 @@
 # S9: Git hosting engine
 
+<!-- description: Which engine serves Git for openxet-hosted repos, with packs in the bucket and refs in the database, compared on measured numbers. -->
+
 - Date: 2026-10-23
 - Question (design §10.9, §11): which engine serves Git smart HTTP and SSH
   (upload-pack with protocol v2, receive-pack) for openxet-hosted repos,

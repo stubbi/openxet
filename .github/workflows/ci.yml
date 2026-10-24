@@ -212,3 +212,29 @@ jobs:
           for target in xorb_upload xorb_chunks upload_shard verify_shard; do
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=60
           done
+
+  # Builds the docs site as pages.yml deploys it, which fails on an mdBook
+  # warning, a page under docs/ missing from docs/SUMMARY.md, or a repository
+  # link to a missing file; then checks every link and anchor in the built
+  # site and in docs/, offline. Not a required check yet.
+  docs-site:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: mdbook@0.5.4
+      - run: scripts/build-site.sh
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: >-
+            --offline --include-fragments --no-progress
+            --root-dir ${{ github.workspace }}/target/site/public
+            --exclude-path docs/SUMMARY.md
+            target/site/public docs
+          jobSummary: false

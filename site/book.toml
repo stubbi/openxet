@@ -1,0 +1,45 @@
+# The docs site at https://openxet.com/docs/, built by scripts/build-site.sh
+# from docs/ (the only place docs are written) and docs/SUMMARY.md (the
+# navigation). Preview with `mdbook serve site --open`; see docs/README.md.
+
+[book]
+title = "openxet docs"
+description = "Documentation for openxet, the open-source server and client for the Xet protocol."
+language = "en"
+src = "../docs"
+
+[build]
+build-dir = "../target/site/book"
+# A page in SUMMARY.md that does not exist fails the build instead of being
+# created empty.
+create-missing = false
+
+# Repository-relative links in docs/ (and in CHANGELOG.md, included by
+# docs/changelog.md) resolve to the published page, or to GitHub for files
+# outside the book; a link to a missing file fails the build. It expands
+# whole-file includes itself, so it runs before mdBook's `links`.
+[preprocessor.repo-links]
+command = "python3 -I repo_links.py"
+after = ["index"]
+before = ["links"]
+
+[output.html]
+site-url = "/docs/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+smart-punctuation = false
+no-section-label = true
+additional-css = ["theme/openxet.css"]
+git-repository-url = "https://github.com/stubbi/openxet"
+edit-url-template = "https://github.com/stubbi/openxet/edit/main/docs/{path}"
+
+[output.html.print]
+enable = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+# Each page's plain Markdown, published next to its HTML for agents
+# (design §7.1) and linked from /llms.txt.
+[output.markdown]

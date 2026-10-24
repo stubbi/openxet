@@ -1,5 +1,7 @@
 # S7: `git-lfs` / `git-xet` handshake, credential sourcing and SSH
 
+<!-- description: How git-lfs and git-xet negotiate Xet transfers and source credentials, over HTTPS and SSH. -->
+
 - Date: 2026-10-23
 - Clients:
   - `git-lfs` 3.5.1 and 3.7.1 (release binaries, checksums verified)

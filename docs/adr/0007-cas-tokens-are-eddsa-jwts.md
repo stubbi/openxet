@@ -1,5 +1,7 @@
 # 0007: CAS tokens are EdDSA JWTs
 
+<!-- description: CAS tokens are Ed25519-signed JWTs with a fixed set of claims: subject, scope, mode and expiry. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `auth`, `cas`

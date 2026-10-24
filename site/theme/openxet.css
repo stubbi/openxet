@@ -1,0 +1,116 @@
+/* openxet's look on mdBook's theme: the palette and fonts of
+   website/index.html. mdBook's "light" and "rust" themes take the light
+   palette; "navy" (the dark default), "coal" and "ayu" take the dark one. */
+
+:root {
+    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono-font: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+    --content-max-width: 850px;
+}
+
+.light, .rust, html:not(.js) {
+    --bg: #fafaf9;
+    --fg: #0c0c0b;
+    --muted: #5c5c57;
+    --line: #d9d8d3;
+    --faint: #e7e6e2;
+    --card: #ffffff;
+    --accent: #0f7a55;
+    --accent-soft: #d6efe4;
+    --color-scheme: light;
+}
+
+.navy, .coal, .ayu {
+    --bg: #0c0c0b;
+    --fg: #ededea;
+    --muted: #a3a29c;
+    --line: #2b2b28;
+    --faint: #1b1b19;
+    --card: #121211;
+    --accent: #4fd1a1;
+    --accent-soft: #11392b;
+    --color-scheme: dark;
+}
+
+/* Without JavaScript mdBook can't switch themes, so follow the system. */
+@media (prefers-color-scheme: dark) {
+    html:not(.js) {
+        --bg: #0c0c0b;
+        --fg: #ededea;
+        --muted: #a3a29c;
+        --line: #2b2b28;
+        --faint: #1b1b19;
+        --card: #121211;
+        --accent: #4fd1a1;
+        --accent-soft: #11392b;
+        --color-scheme: dark;
+    }
+}
+
+.light, .rust, html:not(.js), .navy, .coal, .ayu {
+    --sidebar-bg: var(--card);
+    --sidebar-fg: var(--muted);
+    --sidebar-non-existant: var(--muted);
+    --sidebar-active: var(--accent);
+    --sidebar-spacer: var(--faint);
+    --sidebar-header-border-color: var(--accent);
+    --scrollbar: var(--line);
+    --icons: var(--muted);
+    --icons-hover: var(--fg);
+    --links: var(--accent);
+    --inline-code-color: var(--fg);
+    --theme-popup-bg: var(--card);
+    --theme-popup-border: var(--line);
+    --theme-hover: var(--faint);
+    --quote-bg: var(--card);
+    --quote-border: var(--line);
+    --table-border-color: var(--line);
+    --table-header-bg: var(--faint);
+    --table-alternate-bg: var(--card);
+    --searchbar-border-color: var(--line);
+    --searchbar-bg: var(--card);
+    --searchbar-fg: var(--fg);
+    --searchbar-shadow-color: var(--line);
+    --searchresults-header-fg: var(--muted);
+    --searchresults-border-color: var(--line);
+    --searchresults-li-bg: var(--accent-soft);
+    --search-mark-bg: var(--accent-soft);
+    --footnote-highlight: var(--accent);
+}
+
+html {
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+}
+
+.content h1, .content h2, .content h3 {
+    letter-spacing: -0.02em;
+    font-weight: 620;
+}
+
+.content a {
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+    text-underline-offset: 0.2em;
+}
+
+.content a:hover {
+    text-decoration-color: currentColor;
+}
+
+.content :not(pre) > code {
+    background: var(--faint);
+    border-radius: 3px;
+    padding: 0.1em 0.3em;
+}
+
+.menu-title {
+    font-family: var(--mono-font);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+
+/* Notes for readers of docs/ on GitHub, such as docs/changelog.md's. */
+.github-only {
+    display: none;
+}

@@ -1,5 +1,7 @@
 # openxet — Design
 
+<!-- description: The approved design: scope, architecture, security requirements, milestones and the hosted service, and the source of truth for what openxet builds. -->
+
 Date: 2026-10-23 · Status: approved; reconciled with the M0 spike results
 
 ## 1. Intent

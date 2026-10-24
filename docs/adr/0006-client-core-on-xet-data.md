@@ -1,5 +1,7 @@
 # 0006: Build the client core on xet-data, and only in the client crate
 
+<!-- description: Only the client crate may depend on xet-data and its runtime; a cargo deny ban keeps them out of the server crates. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Amended 2026-10-24: corrected the server-build consequence (M1 Task 13)

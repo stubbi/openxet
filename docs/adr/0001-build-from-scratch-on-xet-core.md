@@ -1,5 +1,7 @@
 # 0001: Build openxet from scratch on HF's xet-core crates
 
+<!-- description: openxet is a new codebase that takes the Xet format, hashing and chunking from Hugging Face's published xet-core crates, through its own protocol crate. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Scope: whole project, `protocol`

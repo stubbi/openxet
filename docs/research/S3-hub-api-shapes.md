@@ -1,5 +1,7 @@
 # S3: Hub API shapes that `huggingface_hub` requires
 
+<!-- description: The Hub API requests and answers that huggingface_hub and the hf CLI need, captured from real traffic and read from the source. -->
+
 - Date: 2026-10-23
 - Clients: `huggingface_hub` 2.2.0 and `hf_xet` 1.7.0, the versions pinned
   in `compat/`.
@@ -520,7 +522,7 @@ Fixture: `03-whoami-cli--01-…`.
 | 3xx | `Location` | Never raised (`utils/_http.py:868`). Followed for on-Hub targets (`utils/_http.py:776`). |
 | 400 | — | `BadRequestError`, naming the endpoint (`utils/_http.py:955`) |
 | 401 | `{"error":"Invalid username or password."}`, `WWW-Authenticate: Bearer realm=…` | `RepositoryNotFoundError` on repo URLs (`utils/_http.py:933`) |
-| 403 | `{"error":"You don't have the rights …"}`, `X-Error-Message` | `HfHubHTTPError` "403 Forbidden: <X-Error-Message>." (`utils/_http.py:961`) |
+| 403 | `{"error":"You don't have the rights …"}`, `X-Error-Message` | `HfHubHTTPError` `"403 Forbidden: <X-Error-Message>."` (`utils/_http.py:961`) |
 | 404 | `X-Error-Code: RepoNotFound` / `RevisionNotFound` / `EntryNotFound` | Typed errors (`utils/_http.py:880-933`) |
 | 409 | `{"error":…,"url"?:…}`, `X-Error-Message` | Swallowed by `exist_ok`; retried on "conflicting operation" (`hf_api.py:4690`, `4704`) |
 | 416 | text body (CAS) | `HfHubHTTPError` naming the range (`utils/_http.py:989`). `hf_xet` handles it itself for reconstructions. |

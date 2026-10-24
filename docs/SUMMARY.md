@@ -1,0 +1,38 @@
+# Summary
+
+[openxet docs](README.md)
+
+# User
+
+- [Quickstart: storage only](quickstart-storage-only.md)
+- [Server configuration](reference/config.md)
+- [Command line](reference/cli.md)
+- [CAS routes](reference/routes.md)
+- [Exit codes](reference/exit-codes.md)
+- [Security tests](reference/security-tests.md)
+- [Benchmarks](reference/benchmarks.md)
+- [Changelog](changelog.md)
+
+# Project
+
+- [Design](superpowers/specs/2026-10-23-openxet-design.md)
+- [Architecture decisions]()
+  - [0001: Build from scratch on xet-core](adr/0001-build-from-scratch-on-xet-core.md)
+  - [0002: One range-bound URL per fetch entry](adr/0002-one-range-bound-url-per-fetch-entry.md)
+  - [0003: git-xet credential strategy](adr/0003-git-xet-credential-strategy.md)
+  - [0004: Git hosting engine](adr/0004-git-hosting-engine.md)
+  - [0005: Xet-native client contract](adr/0005-xet-native-client-contract.md)
+  - [0006: Client core on xet-data](adr/0006-client-core-on-xet-data.md)
+  - [0007: CAS tokens are EdDSA JWTs](adr/0007-cas-tokens-are-eddsa-jwts.md)
+- [Research notes]()
+  - [S1 + S2: Direct downloads](research/S1-S2-direct-downloads.md)
+  - [S3: Hub API shapes](research/S3-hub-api-shapes.md)
+  - [S4: Analytics clients](research/S4-analytics-clients.md)
+  - [S5: xet-core-structures server-side](research/S5-xet-core-structures-server-side.md)
+  - [S6: Shard verification](research/S6-shard-verification.md)
+  - [S7: git-lfs and git-xet](research/S7-git-lfs-xet.md)
+  - [S8: Pull-through mirror](research/S8-hf-mirror.md)
+  - [S9: Git engine](research/S9-git-engine.md)
+  - [S10: CAS wire contract](research/S10-cas-wire-contract.md)
+  - [S11: Global dedup answer](research/S11-global-dedup-response.md)
+- [Competitive matrix](competitive-matrix.md)

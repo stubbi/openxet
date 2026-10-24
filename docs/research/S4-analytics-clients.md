@@ -1,5 +1,7 @@
 # S4: analytics clients against a custom endpoint
 
+<!-- description: Which analytics clients (DuckDB, polars, HfFileSystem) can reach a custom Hub endpoint, and the plain-HTTP fallback for those that cannot. -->
+
 - Date: 2026-10-23
 - Question (design §11): can DuckDB `hf://`, polars `hf://` and
   `HfFileSystem` (fsspec) target a non-huggingface.co endpoint? If not,

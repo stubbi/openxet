@@ -1,5 +1,7 @@
 # S6: Shard upload verification rules
 
+<!-- description: The rules a server applies to verify an uploaded shard before registering it, and where the spec and xet-core disagree. -->
+
 - Date: 2026-10-23
 - Versions examined: `xet-core-structures` 1.7.0 (the pinned format crate),
   `xet-client` 1.7.0 (upstream's in-process test backend,

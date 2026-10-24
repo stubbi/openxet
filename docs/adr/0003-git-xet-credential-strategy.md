@@ -1,5 +1,7 @@
 # 0003: Serve `git-xet` with capability `href`s and repo-local client config
 
+<!-- description: git-xet uploads get signed capability hrefs that need no Authorization header, plus repo-local client configuration. -->
+
 - Status: accepted
 - Date: 2026-10-23
 - Scope: `git`, `hub`, `auth`, `ssh`, `client`

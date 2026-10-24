@@ -147,7 +147,8 @@ start drive-by rewrites without a plan.
 
 **Docs are part of the change.** User-facing behaviour, config, commands and
 operator procedures are documented in the same change. Examples in docs run
-in CI. A doc that drifts from behaviour is a bug.
+in CI. A doc that drifts from behaviour is a bug. A new page under `docs/`
+goes into `docs/SUMMARY.md`, the docs site's navigation.
 
 ## Quality bar: no slop
 
@@ -231,7 +232,8 @@ OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest 
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it, plus the HF baseline against huggingface.co (nightly)
 cargo nextest list --workspace --message-format json > /tmp/tests.json && python3 -I scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the Rust tests that run (CI gate)
 uv run --frozen --directory compat pytest --collect-only -q > /tmp/compat-tests.txt && python3 -I scripts/check-security-tests-map.py --pytest /tmp/compat-tests.txt # the same for the compat tests (CI gate)
-python3 -m http.server -d website 8000                    # preview the openxet.com site; main deploys it (.github/workflows/pages.yml)
+scripts/build-site.sh                                      # openxet.com, landing + docs/, into target/site/public; needs mdbook 0.5.4 (CI: docs-site; main deploys it)
+mdbook serve site --open                                   # live preview of the docs site while editing docs/
 ```
 
 Exit codes and JSON output schemas are documented in `docs/reference/`.
