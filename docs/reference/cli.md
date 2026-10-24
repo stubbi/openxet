@@ -145,11 +145,21 @@ openxet upload model.bin config.json
 PATH         XET HASH                                                              SIZE  SHA256
 model.bin    36f01138cb24db2e9c72d0c9fdb7dff31322b73b2e60b4d365bb1e3fb54d0f23  50000000  ba2f32d4…
 config.json  …
+Uploaded 1.2 MiB of 47.7 MiB (97% deduplicated).
 ```
 
 ```json
-{"schema":"openxet.upload.v1","files":[{"path":"model.bin","hash":"36f0…0f23","size":50000000,"sha256":"ba2f…e3ec"}]}
+{"schema":"openxet.upload.v1","files":[{"path":"model.bin","hash":"36f0…0f23","size":50000000,"sha256":"ba2f…e3ec"}],"bytes_uploaded":1258291,"bytes_deduplicated":48741709}
 ```
+
+- **Dedup savings.** `bytes_uploaded` counts the files' content bytes in
+  chunks the server didn't have, which this upload sent (before
+  compression); `bytes_deduplicated` counts those the server or the local
+  cache already had. They add up to the files' total size.
+- **Empty files.** An empty file's `sha256` is the digest of zero bytes,
+  `e3b0c442…b855`. `hf_xet` 1.7.0 reports, and writes into the shard, all
+  zeros for it instead; openxet sends the same zeros, so only what is shown
+  differs.
 
 - **Paths** are taken literally, in order: no globbing and no directory
   walking. `path` in the output is the path as given. If any path is
@@ -173,7 +183,9 @@ openxet download <HASH> --output PATH [--size N] [--force] [--endpoint URL] [--t
 ```
 
 Downloads the file with Xet hash `HASH` (as `openxet upload` printed it) to
-`PATH`. With `--size`, a file of another size is an error.
+`PATH`, and prints `Downloaded <hash> to <path> (<size>).`. With `--size`,
+a file of another size fails with `size_mismatch` (exit 1), and nothing is
+written.
 
 ```json
 {"schema":"openxet.download.v1","hash":"36f0…0f23","path":"model.bin","size":50000000}
@@ -181,9 +193,11 @@ Downloads the file with Xet hash `HASH` (as `openxet upload` printed it) to
 
 - **No overwrite.** If `PATH` exists, the command exits 2 with error code
   `output_exists` and downloads nothing, unless `--force` is given.
-- **Atomic.** The file is written to `PATH.openxet-partial`, synced, and
-  renamed to `PATH`, so `PATH` is either absent or complete. A failed
-  download removes the partial file.
+- **Atomic.** The file is written to a new file next to `PATH`, named
+  `.<name>.<random>.openxet-partial` and created exclusively (a symlink
+  planted at any name is never followed), then synced and renamed (with
+  `--force`) or linked (without) to `PATH`, so `PATH` is either absent or
+  complete. A failed or interrupted download removes the partial file.
 
 ## Endpoint, token and cache
 
@@ -201,10 +215,11 @@ Downloads the file with Xet hash `HASH` (as `openxet upload` printed it) to
   read without verifying the signature (the server verifies). Within 30
   seconds of expiry the command fails with `token_expired` before sending
   anything, as `hf_xet` would mid-transfer. Static tokens don't expire.
-- **Unreachable endpoint.** The command dials the endpoint first and fails
-  at once with `unreachable_endpoint` if nothing answers within 10 seconds.
-  Behind an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` set),
-  this check is skipped.
+- **Unreachable endpoint.** The command dials where its requests go first,
+  and fails at once with `unreachable_endpoint` if nothing answers within
+  10 seconds. That is the endpoint, or the proxy reqwest would use for it
+  (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY`, else the system
+  settings); a proxy is named in the message.
 - **Cache.** Without `--cache-dir`, the cache root is chosen exactly as by
   `hf_xet`: `$HF_XET_CACHE`, else `$HF_HOME/xet`, else
   `$XDG_CACHE_HOME/huggingface/xet`, else `~/.cache/huggingface/xet`. It
@@ -212,14 +227,22 @@ Downloads the file with Xet hash `HASH` (as `openxet upload` printed it) to
   (kept 21 days) that let later uploads skip chunks the server has. If a
   server is reset while the cache remembers its data, uploads fail with
   `upload_rejected` and the server's message says to clear the cache: remove
-  the endpoint's directory under the cache root, or pass an empty
-  `--cache-dir`.
+  the endpoint's directory under the cache root, or point `--cache-dir` at
+  a new, empty directory. A cache root openxet creates is mode `0700`,
+  since its shards list your files' hashes; an existing one, which
+  `hf_xet` may share, is left as it is.
 - **No telemetry.** The client never sends telemetry, whatever
   `HF_XET_TELEMETRY_ENABLED` says. Requests carry
   `User-Agent: openxet/<version>`.
 - **Output.** With `--json`, stdout has the result and stderr nothing but
   an `openxet.error.v1` object on failure. Without it, a progress line is
-  drawn on stderr when stderr is a terminal. The token is never printed.
+  drawn on stderr when stderr is a terminal. The token is never printed,
+  and server text (an upload rejection's reason) is printed without
+  control characters.
+- **Interrupts.** `SIGINT` (Ctrl-C) or `SIGTERM` stops the transfer, removes
+  a partial download, and exits 130 with error code `interrupted`. An
+  interrupted upload registers nothing; running it again skips what the
+  server already has.
 
 Other `HF_XET_*` variables tune the client core as they tune `hf_xet`, for
 example `HF_XET_CLIENT_RETRY_MAX_ATTEMPTS`.

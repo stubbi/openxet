@@ -8,10 +8,15 @@
 
 #![forbid(unsafe_code)]
 
+mod download;
 mod endpoint;
 mod error;
-mod transfer;
+mod net;
+mod session;
+mod upload;
 
+pub use download::{PARTIAL_SUFFIX, download, is_hash};
 pub use endpoint::{EXPIRY_MARGIN_SECS, Endpoint, STATIC_TOKEN_EXP};
 pub use error::{ClientError, InputProblem, Problem};
-pub use transfer::{OnProgress, Options, Progress, Uploaded, download, is_hash, upload};
+pub use session::{OnProgress, Options, Progress};
+pub use upload::{Uploaded, Uploads, upload};

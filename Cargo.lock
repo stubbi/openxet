@@ -1825,9 +1825,11 @@ version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "http",
+ "hyper-util",
  "reqwest",
  "reqwest-middleware",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "uuid",

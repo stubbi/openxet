@@ -10,6 +10,8 @@ impl ExitCode {
     pub const SUCCESS: u8 = 0;
     pub const FAILURE: u8 = 1;
     pub const USAGE: u8 = 2;
+    /// Stopped by `SIGINT` or `SIGTERM`, as shells report 128 + `SIGINT`.
+    pub const INTERRUPTED: u8 = 130;
 }
 
 /// A failure reported to the user: one line of text, or with `--json` one

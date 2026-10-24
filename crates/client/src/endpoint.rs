@@ -61,30 +61,23 @@ impl Endpoint {
         })
     }
 
-    /// The host and port to reach, for the connection check.
-    pub(crate) fn authority(&self) -> Option<(String, u16)> {
-        let uri: http::Uri = self.url.parse().ok()?;
-        let default_port = if uri.scheme_str() == Some("https") {
-            443
-        } else {
-            80
-        };
-        let host = uri.host()?.trim_start_matches('[').trim_end_matches(']');
-        Some((host.to_owned(), uri.port_u16().unwrap_or(default_port)))
-    }
-
     /// Fails if the token expires within [`EXPIRY_MARGIN_SECS`].
     pub(crate) fn check_expiry(&self) -> Result<(), ClientError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        if self.token_exp <= now.saturating_add(EXPIRY_MARGIN_SECS) {
+        if expires_soon(self.token_exp) {
             return Err(ClientError::TokenExpired {
                 exp: self.token_exp,
             });
         }
         Ok(())
     }
+}
+
+/// Whether a token with expiry `exp` expires within [`EXPIRY_MARGIN_SECS`].
+pub(crate) fn expires_soon(exp: u64) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    exp <= now.saturating_add(EXPIRY_MARGIN_SECS)
 }
 
 fn checked_url(raw: &str) -> Result<String, ClientError> {
@@ -181,9 +174,7 @@ mod tests {
     fn urls_are_checked_and_trimmed() {
         let ep = Endpoint::new("https://cas.example.com/", "t".into()).unwrap();
         assert_eq!(ep.url, "https://cas.example.com");
-        assert_eq!(ep.authority(), Some(("cas.example.com".into(), 443)));
-        let ep = Endpoint::new("http://[::1]:9000", "t".into()).unwrap();
-        assert_eq!(ep.authority(), Some(("::1".into(), 9000)));
+        assert!(Endpoint::new("http://[::1]:9000", "t".into()).is_ok());
         for bad in [
             "cas.example.com",
             "ftp://h",

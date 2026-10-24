@@ -8,6 +8,7 @@ can rely on them.
 | 0    | `SUCCESS` | The command did what was asked.                                      |
 | 1    | `FAILURE` | The command was valid but failed. The message on stderr says why.    |
 | 2    | `USAGE`   | Unknown command, missing argument or invalid option. Nothing was run. |
+| 130  | `INTERRUPTED` | `upload` or `download` was stopped by `SIGINT` (Ctrl-C) or `SIGTERM`. A partial download was removed. |
 
 Every failure is reported on stderr. With `--json`, it is a single JSON
 object with a stable `code` and a `hint` naming the next action:
@@ -41,14 +42,16 @@ object with a stable `code` and a `hint` naming the next action:
 | `invalid_hash` | 2 | `download` was given a hash that isn't 64 lowercase hex characters. |
 | `output_exists` | 2 | `download --output` names an existing file and `--force` wasn't given. Nothing was downloaded. |
 | `token_expired` | 1 | The token expires within 30 seconds, or expired during the transfer. Nothing was sent if it was found before. |
-| `unreachable_endpoint` | 1 | Nothing answered at the endpoint. |
+| `unreachable_endpoint` | 1 | Nothing answered at the endpoint, or at the proxy in front of it (named in the message). |
 | `unauthorized` | 1 | The server refused the token (`401`): unknown, revoked or expired. |
 | `forbidden` | 1 | The token doesn't allow this (`403`), e.g. a read token uploading. |
 | `not_found` | 1 | `download`: no file with this hash in the token's scope. |
-| `upload_rejected` | 1 | The server refused the upload. The message is the server's reason, e.g. a stale client cache after a server reset. |
+| `size_mismatch` | 1 | `download --size` doesn't match the file's size: the size or the hash is wrong. Nothing was written. |
+| `interrupted` | 130 | `upload` or `download` was stopped by a signal. |
+| `upload_rejected` | 1 | The server refused the upload's shard. The message is the server's reason, without control characters, e.g. a stale client cache after a server reset. |
 | `server_error` | 1 | The server kept answering with an error status after the client's retries. |
 | `transfer_failed` | 1 | The transfer failed for another reason; the message names its kind. |
-| `internal` | 1 | A bug. Report it with the log. |
+| `internal` | 1 | A bug, such as a panic. Its details are never printed, since they may hold request data. Report it with the command you ran or the log. |
 
 Without `--json`, a usage error is clap's message and usage line, and any
 other error is two lines, `error: <message>` and `hint: <hint>`, with one

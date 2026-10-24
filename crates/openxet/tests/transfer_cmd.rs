@@ -242,12 +242,54 @@ fn sha256_hex(data: &[u8]) -> String {
         })
 }
 
-/// Uploads `paths` with `--json` and returns the `files` entries.
-fn upload(server: &Server, cache: &Path, paths: &[&Path]) -> Vec<Value> {
+/// Uploads `paths` with `--json` and returns the `openxet.upload.v1` object.
+fn upload_result(server: &Server, cache: &Path, paths: &[&Path]) -> Value {
     let out = run(server.client(cache).arg("upload").args(paths).arg("--json"));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(out.stderr.is_empty(), "{out:?}");
-    json_stdout(&out)["files"].as_array().unwrap().clone()
+    json_stdout(&out)
+}
+
+/// Uploads `paths` with `--json` and returns the `files` entries.
+fn upload(server: &Server, cache: &Path, paths: &[&Path]) -> Vec<Value> {
+    upload_result(server, cache, paths)["files"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// Every `*.openxet-partial` file in `dir`.
+fn partials(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|p| p.to_string_lossy().ends_with(".openxet-partial"))
+        .collect()
+}
+
+#[cfg(unix)]
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// Sends `signal` (a `kill -s` name) to process `pid`.
+#[cfg(unix)]
+fn signal(pid: u32, signal: &str) {
+    let status = Command::new("kill")
+        .args(["-s", signal, &pid.to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "kill -s {signal} {pid} failed");
+}
+
+/// Waits until `ready` holds.
+fn wait_until(what: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + PATIENCE;
+    while !ready() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 const XORB_ROUTE: &str = "/v1/xorbs/{prefix}/{hash}";
@@ -294,12 +336,15 @@ fn upload_then_download_round_trip() {
             .arg(&download_cache));
         assert_eq!(out.status.code(), Some(0), "{out:?}");
         assert_eq!(&std::fs::read(&out_path).unwrap(), data);
-        assert!(
-            !Path::new(&format!("{}.openxet-partial", out_path.display())).exists(),
-            "the partial file was left behind"
-        );
+        assert_eq!(partials(dir.path()), Vec::<PathBuf>::new());
     }
     assert!(download_cache.is_dir(), "--cache-dir was not used");
+    // The cache lists the user's file and chunk hashes: private.
+    #[cfg(unix)]
+    {
+        assert_eq!(mode_of(&download_cache), 0o700);
+        assert_eq!(mode_of(&cache), 0o700);
+    }
 }
 
 #[test]
@@ -309,14 +354,20 @@ fn reupload_sends_no_xorb() {
     let path = dir.path().join("model.bin");
     std::fs::write(&path, noise(3 << 20, 3)).unwrap();
 
-    let first = upload(&server, &dir.path().join("cache-1"), &[&path]);
+    let first = upload_result(&server, &dir.path().join("cache-1"), &[&path]);
+    assert_eq!(first["bytes_uploaded"], 3 << 20, "{first}");
+    assert_eq!(first["bytes_deduplicated"], 0, "{first}");
+    let first = first["files"].as_array().unwrap().clone();
     server.settle();
     let xorbs = server.requests("POST", XORB_ROUTE);
     assert!(xorbs > 0, "the first upload sent no xorb");
 
     // An empty cache: only the server's global dedup answer can spare the
     // xorb.
-    let second = upload(&server, &dir.path().join("cache-2"), &[&path]);
+    let second = upload_result(&server, &dir.path().join("cache-2"), &[&path]);
+    assert_eq!(second["bytes_uploaded"], 0, "{second}");
+    assert_eq!(second["bytes_deduplicated"], 3 << 20, "{second}");
+    let second = second["files"].as_array().unwrap().clone();
     server.settle();
     assert_eq!(second[0]["hash"], first[0]["hash"]);
     assert_eq!(
@@ -389,6 +440,23 @@ fn json_output_schemas() {
     assert!(out.stderr.is_empty(), "{out:?}");
     let upload = json_stdout(&out);
     assert_eq!(upload["schema"], "openxet.upload.v1");
+    let mut top: Vec<&str> = upload
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    top.sort_unstable();
+    assert_eq!(
+        top,
+        ["bytes_deduplicated", "bytes_uploaded", "files", "schema"],
+        "{upload}"
+    );
+    assert_eq!(
+        upload["bytes_uploaded"].as_u64().unwrap() + upload["bytes_deduplicated"].as_u64().unwrap(),
+        4096,
+        "{upload}"
+    );
     let file = &upload["files"][0];
     let keys: Vec<&str> = file
         .as_object()
@@ -429,6 +497,18 @@ fn json_output_schemas() {
     assert!(text.contains(hash), "{text}");
     assert!(text.contains(&sha256_hex(&data)), "{text}");
     assert!(text.contains(path.to_str().unwrap()), "{text}");
+    // The second upload of the same bytes is all dedup, and says so.
+    assert!(
+        text.contains("Uploaded 0 B of 4.0 KiB (100% deduplicated)"),
+        "{text}"
+    );
+    let out = run(server
+        .client(&cache)
+        .args(["download", hash, "--force", "--output"])
+        .arg(&out_path));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("(4.0 KiB)"), "{text}");
     // stderr is not a terminal here: no progress.
     assert!(
         out.stderr.is_empty(),
@@ -577,7 +657,7 @@ fn unknown_hash_is_not_found() {
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert_eq!(json_stderr(&out)["code"], "not_found");
     assert!(!out_path.exists());
-    assert!(!Path::new(&format!("{}.openxet-partial", out_path.display())).exists());
+    assert_eq!(partials(dir.path()), Vec::<PathBuf>::new());
 
     let out = run(server
         .client(&dir.path().join("cache"))
@@ -728,4 +808,208 @@ fn an_expired_jwt_fails_before_any_request() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains(jwt));
     server.settle();
     assert_eq!(server.started(), 0, "a request was sent");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlink_at_a_partial_path_is_never_written_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(&dir.path().join("data"));
+    let cache = dir.path().join("cache");
+    let path = dir.path().join("a.bin");
+    let data = noise(1000, 9);
+    std::fs::write(&path, &data).unwrap();
+    let hash = upload(&server, &cache, &[&path])[0]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let victim = dir.path().join("victim");
+    std::fs::write(&victim, b"untouched").unwrap();
+    let out_path = dir.path().join("out");
+    // Every name a partial file could predictably have.
+    for planted in ["out.openxet-partial", ".out.openxet-partial"] {
+        std::os::unix::fs::symlink(&victim, dir.path().join(planted)).unwrap();
+    }
+
+    let out = run(server
+        .client(&cache)
+        .args(["download", &hash, "--json", "--output"])
+        .arg(&out_path));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+    assert!(
+        !std::fs::symlink_metadata(&out_path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "--output became a symlink"
+    );
+    assert_eq!(std::fs::read(&out_path).unwrap(), data);
+    // Only the planted links remain.
+    assert_eq!(partials(dir.path()).len(), 2);
+}
+
+/// Interrupts a download stalled against a stopped server once its
+/// partial file exists, and checks it is cleaned up.
+#[cfg(unix)]
+fn interrupted_download(sig: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(&dir.path().join("data"));
+    let cache = dir.path().join("cache");
+    let path = dir.path().join("a.bin");
+    std::fs::write(&path, noise(1000, 10)).unwrap();
+    let hash = upload(&server, &cache, &[&path])[0]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out_dir = dir.path().join("out");
+    std::fs::create_dir(&out_dir).unwrap();
+    // A stopped server still accepts connections into its backlog, so the
+    // client stalls on its first request.
+    signal(server.child.id(), "STOP");
+
+    let child = server
+        .client(&cache)
+        .args(["download", &hash, "--json", "--output"])
+        .arg(out_dir.join("a.out"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_until("the partial file", || !partials(&out_dir).is_empty());
+    signal(child.id(), sig);
+    let out = child.wait_with_output().unwrap();
+    signal(server.child.id(), "CONT");
+
+    assert_eq!(out.status.code(), Some(130), "{out:?}");
+    assert_eq!(json_stderr(&out)["code"], "interrupted");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert_eq!(partials(&out_dir), Vec::<PathBuf>::new());
+    assert!(!out_dir.join("a.out").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn sigint_during_a_download_removes_the_partial_file() {
+    interrupted_download("INT");
+}
+
+#[test]
+#[cfg(unix)]
+fn sigterm_during_a_download_removes_the_partial_file() {
+    interrupted_download("TERM");
+}
+
+#[test]
+#[cfg(unix)]
+fn an_interrupted_upload_exits_130() {
+    for sig in ["INT", "TERM"] {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(&dir.path().join("data"));
+        let cache = dir.path().join("cache");
+        let path = dir.path().join("a.bin");
+        std::fs::write(&path, noise(1000, 11)).unwrap();
+        signal(server.child.id(), "STOP");
+
+        let child = server
+            .client(&cache)
+            .arg("upload")
+            .arg(&path)
+            .arg("--json")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // The cache appears once the session starts.
+        wait_until("the client cache", || cache.is_dir());
+        signal(child.id(), sig);
+        let out = child.wait_with_output().unwrap();
+        signal(server.child.id(), "CONT");
+
+        assert_eq!(out.status.code(), Some(130), "{sig}: {out:?}");
+        assert_eq!(json_stderr(&out)["code"], "interrupted", "{sig}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+    }
+}
+
+#[test]
+fn a_wrong_size_is_size_mismatch() {
+    // Run in a debug build too: xet-data's debug assertions must never see
+    // a wrong size.
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(&dir.path().join("data"));
+    let cache = dir.path().join("cache");
+    let path = dir.path().join("a.bin");
+    std::fs::write(&path, noise(1000, 12)).unwrap();
+    let hash = upload(&server, &cache, &[&path])[0]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out_dir = dir.path().join("out");
+    std::fs::create_dir(&out_dir).unwrap();
+
+    for size in ["999", "1001"] {
+        let out = run(server
+            .client(&cache)
+            .args(["download", &hash, "--json", "--size", size, "--output"])
+            .arg(out_dir.join("a.out")));
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        let error = json_stderr(&out);
+        assert_eq!(error["code"], "size_mismatch");
+        assert!(
+            error["hint"].as_str().unwrap().contains("--size"),
+            "{error}"
+        );
+        assert!(
+            error["message"].as_str().unwrap().contains("1000"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn no_proxy_is_honoured_and_a_proxy_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.bin");
+    std::fs::write(&path, b"x").unwrap();
+    let closed = || {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    };
+    let endpoint = format!("http://127.0.0.1:{}", closed());
+    let proxy = format!("http://127.0.0.1:{}", closed());
+    let attempt = |no_proxy: &str| {
+        let started = Instant::now();
+        let out = run(openxet()
+            .env("OPENXET_ENDPOINT", &endpoint)
+            .env("OPENXET_TOKEN", "oxt_unused")
+            .env("HF_XET_CACHE", dir.path().join("cache"))
+            .env("HTTP_PROXY", &proxy)
+            .env("NO_PROXY", no_proxy)
+            .arg("upload")
+            .arg(&path)
+            .arg("--json"));
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        let error = json_stderr(&out);
+        assert_eq!(error["code"], "unreachable_endpoint");
+        error["message"].as_str().unwrap().to_owned()
+    };
+
+    // The endpoint bypasses the proxy: it is dialled itself.
+    let message = attempt("127.0.0.1");
+    assert!(message.contains(&endpoint), "{message}");
+    assert!(!message.contains("proxy"), "{message}");
+    // Through the proxy: the proxy is what is unreachable.
+    let message = attempt("");
+    assert!(message.contains(&proxy), "{message}");
+    assert!(message.contains("proxy"), "{message}");
 }
