@@ -189,6 +189,7 @@ def test_server_ignores_the_developers_openxet_configuration(openxet_bin, tmp_pa
 
     with openxet_serve(openxet_bin, tmp_path / "server") as server:
         assert server.scope == "default" and server.token, "the server left dev mode"
+        server.settle()
         assert server.requests("GET", "/readyz") > 0, "the debug request log is off"
 
 
@@ -228,6 +229,7 @@ def test_reupload_global_dedup(openxet_server, clients, tmp_path):
     path = write_noise(tmp_path / "model.bin", 3 * MiB, 4)
     mark = openxet_server.mark()
     [first] = clients.hf_xet_upload(openxet_server, [path])
+    openxet_server.settle()
     assert openxet_server.requests("POST", XORB_ROUTE, mark) > 0, "the first upload sent no xorb"
 
     # A fresh client cache: only the server's dedup answer can spare the xorbs.
