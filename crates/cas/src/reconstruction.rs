@@ -22,7 +22,7 @@
 //! on the caller's scope and carries URLs that act as credentials (design
 //! §5.9 req 3).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, FromRequestParts, RawQuery, Request, State};
@@ -38,7 +38,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use crate::answer::{self, Signer, Version};
 use crate::blocking::blocking;
-use crate::plan::{self, PlanError};
+use crate::plan::{self, PlanError, XorbMap, XorbSet};
 use crate::routes::{Routes, on};
 use crate::{AppState, CasError, ReadAccess, body, path};
 
@@ -351,7 +351,7 @@ fn resolve(range: Option<ByteRange>, size: u64) -> Result<Option<(u64, u64)>, Ca
 
 /// The distinct xorbs `terms` name, in order of first use.
 fn distinct_xorbs<'a>(terms: impl IntoIterator<Item = &'a openxet_index::Term>) -> Vec<MerkleHash> {
-    let mut seen = HashSet::new();
+    let mut seen = XorbSet::default();
     terms
         .into_iter()
         .map(|t| t.xorb)
@@ -367,7 +367,7 @@ async fn chunk_layouts(
     state: &AppState,
     scope: &str,
     xorbs: Vec<MerkleHash>,
-) -> Result<HashMap<MerkleHash, ChunkLayout>, CasError> {
+) -> Result<XorbMap<ChunkLayout>, CasError> {
     let tables = state
         .index
         .chunk_layouts(&xorbs, scope, state.cfg.visibility)
@@ -379,7 +379,7 @@ async fn chunk_layouts(
             hash_to_hex(missing)
         )));
     }
-    Ok(tables)
+    Ok(tables.into_iter().collect())
 }
 
 /// The answer to a [`PlanError`]. An inconsistent record is logged, with
@@ -420,6 +420,7 @@ fn json(body: Vec<u8>) -> Response {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 

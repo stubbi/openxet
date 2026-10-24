@@ -11,11 +11,24 @@
 //! `offset_into_first_range` bytes into the first term and trims after the
 //! last (S10 §1).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
+use foldhash::fast::RandomState;
 use openxet_index::{ChunkLayout, FileRecord, Term};
 use openxet_protocol::{MerkleHash, hash_to_hex};
+
+/// A map keyed by xorb hash, for the per-request maps of a reconstruction,
+/// which a 100k-term answer queries several times per term: with `SipHash`
+/// they took about 10 ms of it. foldhash is no defence against an attacker
+/// who can both choose keys and watch one map's timings, but these keys are
+/// BLAKE3 outputs no caller can choose without a preimage search, and each
+/// map lives for one request under its own random seed, so no key list
+/// collides in every map.
+pub(crate) type XorbMap<V> = HashMap<MerkleHash, V, RandomState>;
+
+/// A set of xorb hashes, as [`XorbMap`].
+pub(crate) type XorbSet = HashSet<MerkleHash, RandomState>;
 
 /// What answers a file range: the terms in file order and one fetch
 /// descriptor per stored byte range, before any URL is signed.
@@ -153,7 +166,7 @@ pub(crate) fn window(
 /// disagrees with a term.
 pub(crate) fn plan(
     file: &FileRecord,
-    tables: &HashMap<MerkleHash, ChunkLayout>,
+    tables: &XorbMap<ChunkLayout>,
     range: Option<(u64, u64)>,
 ) -> Result<Plan, PlanError> {
     let Some(window) = window(file, range)? else {
@@ -373,7 +386,7 @@ mod tests {
         (record, bytes)
     }
 
-    fn tables(xorbs: &[TestXorb]) -> HashMap<MerkleHash, ChunkLayout> {
+    fn tables(xorbs: &[TestXorb]) -> XorbMap<ChunkLayout> {
         xorbs.iter().map(|x| (x.hash, x.table.clone())).collect()
     }
 
@@ -517,10 +530,10 @@ mod tests {
             size: 0,
             terms: vec![],
         };
-        assert_eq!(plan(&file, &HashMap::new(), None), Ok(Plan::default()));
+        assert_eq!(plan(&file, &XorbMap::default(), None), Ok(Plan::default()));
         for range in [(0, 0), (0, u64::MAX), (1, 5)] {
             assert_eq!(
-                plan(&file, &HashMap::new(), Some(range)),
+                plan(&file, &XorbMap::default(), Some(range)),
                 Err(PlanError::Unsatisfiable { size: 0 })
             );
         }
@@ -530,11 +543,11 @@ mod tests {
     fn a_record_that_disagrees_with_its_tables_is_inconsistent() {
         let xorbs = [test_xorb(0, &[3, 4])];
         let (file, _) = file_of(&xorbs, &[(0, 0, 2)]);
-        let inconsistent = |file: &FileRecord, tables: &HashMap<MerkleHash, ChunkLayout>| {
+        let inconsistent = |file: &FileRecord, tables: &XorbMap<ChunkLayout>| {
             matches!(plan(file, tables, None), Err(PlanError::Inconsistent(_)))
         };
 
-        assert!(inconsistent(&file, &HashMap::new()), "a missing table");
+        assert!(inconsistent(&file, &XorbMap::default()), "a missing table");
         let mut wrong_size = file.clone();
         wrong_size.size += 1;
         assert!(

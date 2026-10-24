@@ -9,14 +9,15 @@
 //! into it. The bytes are what `serde_json` writes for the same shapes,
 //! compact and with fields in this order; the tests pin that.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use foldhash::fast::RandomState;
 use openxet_auth::{UrlSigner, XorbUrls};
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use url::Url;
 
-use crate::plan::{Fetch, Plan, PlannedTerm};
+use crate::plan::{Fetch, Plan, PlannedTerm, XorbMap};
 use crate::{AppState, CasError};
 
 /// Which answer shape a single-file reconstruction takes (S10 §1).
@@ -92,18 +93,21 @@ struct Catalog {
     /// The distinct xorbs, in order of first use, and their hex names.
     xorbs: Vec<(MerkleHash, String)>,
     /// Where each xorb is in `xorbs`.
-    index: HashMap<MerkleHash, usize>,
+    index: XorbMap<usize>,
     /// Per entry of `xorbs`, its descriptors' indices in `fetches`.
     groups: Vec<Vec<usize>>,
     fetches: Vec<Fetch>,
-    /// The listed descriptors, by xorb index and chunk range.
-    seen: HashSet<(usize, (u32, u32))>,
+    /// The listed descriptors, by xorb index and chunk range. A chunk range
+    /// is the uploader's choice, but as with [`XorbMap`] each request's set
+    /// has its own random seed, so no list of them collides in every set.
+    seen: HashSet<(usize, (u32, u32)), RandomState>,
 }
 
 impl Catalog {
     /// Adds `plan`'s descriptors, and returns for each the index of its
     /// xorb in `xorbs`, which names the terms it holds.
     fn add(&mut self, plan: &Plan) -> Vec<usize> {
+        self.seen.reserve(plan.fetches.len());
         plan.fetches
             .iter()
             .map(|fetch| {
