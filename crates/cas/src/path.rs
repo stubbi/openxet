@@ -1,5 +1,5 @@
-//! Path segments shared by the routes that name a hash under a prefix
-//! (S10 "Conventions for every route").
+//! Path segments shared by the routes that name a hash, alone or under a
+//! prefix (S10 "Conventions for every route").
 
 use axum::extract::{FromRequestParts as _, RawPathParams};
 use axum::http::request::Parts;
@@ -43,11 +43,29 @@ pub(crate) async fn prefixed_hash(
     parse_hash(hash.unwrap_or_default())
 }
 
+/// The hash of a route whose only segment parameter is `{hash}`, such as
+/// `/v1/files/{hash}`, under the same rules as [`prefixed_hash`]: a
+/// percent-encoded path is `400 invalid_path`, a hash not in the spec's form
+/// `400 invalid_hash`. Answered before authentication, like
+/// [`prefixed_hash`].
+pub(crate) async fn hash(parts: &mut Parts, state: &AppState) -> Result<MerkleHash, CasError> {
+    if parts.uri.path().contains('%') {
+        return Err(CasError::InvalidPath);
+    }
+    let params = RawPathParams::from_request_parts(parts, state)
+        .await
+        .map_err(|_| CasError::NoRoute)?;
+    let hash = params
+        .iter()
+        .find_map(|(name, value)| (name == "hash").then_some(value));
+    parse_hash(hash.unwrap_or_default())
+}
+
 /// A path hash: exactly 64 lowercase hex characters (S10 "Conventions for
 /// every route"; <https://huggingface.co/docs/xet/api#converting-hashes-to-strings>).
 /// `hash_from_hex` alone also takes uppercase, which no client sends and
 /// which would give one object two URLs.
-fn parse_hash(s: &str) -> Result<MerkleHash, CasError> {
+pub(crate) fn parse_hash(s: &str) -> Result<MerkleHash, CasError> {
     if !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         return Err(CasError::InvalidHash);
     }

@@ -16,14 +16,18 @@
 mod auth;
 mod blocking;
 mod body;
+mod cache;
 mod dedup;
 mod error;
 mod misc;
 mod path;
+mod plan;
+mod reconstruction;
 mod request_id;
 mod shards;
 #[cfg(test)]
 mod test_support;
+mod transfer;
 mod xorbs;
 
 use std::any::Any;
@@ -47,6 +51,7 @@ use url::Url;
 pub use auth::{ReadAccess, WriteAccess};
 pub use error::CasError;
 pub use misc::TELEMETRY_BODY_LIMIT;
+pub use reconstruction::MAX_BATCH_FILES;
 pub use request_id::{RequestId, X_REQUEST_ID};
 
 /// The CAS's configuration.
@@ -181,7 +186,9 @@ pub fn router(state: AppState) -> Router {
             .merge(misc::routes())
             .merge(xorbs::routes())
             .merge(shards::routes())
-            .merge(dedup::routes()),
+            .merge(dedup::routes())
+            .merge(reconstruction::routes())
+            .merge(transfer::routes()),
         state,
     )
 }

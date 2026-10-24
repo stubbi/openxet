@@ -129,6 +129,44 @@ pub const ROUTES: &[Route] = &[
         authorized: 404,
         authorized_code: Some("not_found"),
     },
+    Route {
+        method: Method::GET,
+        path: RECONSTRUCTION_V2_PATH,
+        access: Access::Read,
+        // No file is registered to the caller's scope.
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
+    Route {
+        method: Method::GET,
+        path: RECONSTRUCTION_V1_PATH,
+        access: Access::Read,
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
+    Route {
+        method: Method::GET,
+        path: BATCH_GET_PATH,
+        access: Access::Read,
+        // Files the caller can't read are left out of the answer.
+        authorized: 200,
+        authorized_code: None,
+    },
+    Route {
+        method: Method::POST,
+        path: BATCH_POST_PATH,
+        access: Access::Read,
+        // An empty body is not a JSON list of keys.
+        authorized: 400,
+        authorized_code: Some("invalid_batch"),
+    },
+    Route {
+        method: Method::HEAD,
+        path: FILE_PATH,
+        access: Access::Read,
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
 ];
 
 impl Route {
@@ -167,6 +205,31 @@ pub const DEDUP_MERKLEDB_PATH: &str =
 /// A dedup path under a prefix neither clients nor the spec use.
 pub const OTHER_PREFIX_DEDUP_PATH: &str =
     "/v1/chunks/other/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// `GET /v2/reconstructions/{file}` for a file no test registers (S10 §1).
+pub const RECONSTRUCTION_V2_PATH: &str =
+    "/v2/reconstructions/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// `GET /v1/reconstructions/{file}` for a file no test registers (S10 §1).
+pub const RECONSTRUCTION_V1_PATH: &str =
+    "/v1/reconstructions/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The batch reconstruction as `xet-client` sends it, for a file no test
+/// registers (S10 §1 "Batch reconstruction").
+pub const BATCH_GET_PATH: &str =
+    "/v1/reconstructions?file_id=0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The batch reconstruction as the spec writes it, with a JSON body.
+pub const BATCH_POST_PATH: &str = "/v1/reconstructions";
+
+/// `HEAD /v1/files/{file}` for a file no test registers (S10 §5).
+pub const FILE_PATH: &str =
+    "/v1/files/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The signed transfer route for a xorb no test stores, without a query.
+/// It reads no `Authorization` header, so it is not in [`ROUTES`].
+pub const TRANSFER_PATH: &str =
+    "/v1/transfer/xorbs/0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Paths no route serves, each of which must answer `404` with the error
 /// body. Some are deliberate: stock clients treat `404` as "not here" and
@@ -265,6 +328,8 @@ pub struct TestServer {
     pub read_token: String,
     /// A static write token for [`SCOPE_B`].
     pub other_scope_token: String,
+    /// A static read token for [`SCOPE_B`].
+    pub other_scope_read_token: String,
     /// Signs CAS tokens (`EdDSA` JWTs) the server accepts.
     pub signer: TokenSigner,
     /// The clock the server checks credentials against.
@@ -326,6 +391,7 @@ impl TestServer {
         let write_token = new_token();
         let read_token = new_token();
         let other_scope_token = new_token();
+        let other_scope_read_token = new_token();
         let keys = generate_keypair().unwrap();
         let signer = TokenSigner::from_pem(keys.private_pem()).unwrap();
         let auth = Authenticator::new(
@@ -333,6 +399,7 @@ impl TestServer {
                 static_token(&write_token, SCOPE_A, Mode::Write),
                 static_token(&read_token, SCOPE_A, Mode::Read),
                 static_token(&other_scope_token, SCOPE_B, Mode::Write),
+                static_token(&other_scope_read_token, SCOPE_B, Mode::Read),
             ],
             vec![signer.public_key()],
             Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
@@ -406,6 +473,7 @@ impl TestServer {
             write_token,
             read_token,
             other_scope_token,
+            other_scope_read_token,
             signer,
             clock,
             http: reqwest::Client::new(),
@@ -636,6 +704,78 @@ impl Index for SlowIndex {
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
         tokio::time::sleep(self.delay).await;
         self.inner.chunk_tables(xorbs, scope, vis).await
+    }
+
+    async fn register_shard(
+        &self,
+        shard: &MerkleHash,
+        files: &[NewFile],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<bool, IndexError> {
+        self.inner.register_shard(shard, files, scope, vis).await
+    }
+
+    async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
+        self.inner.file(file, scope).await
+    }
+
+    async fn dedup_xorb(
+        &self,
+        chunk: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<MerkleHash>, IndexError> {
+        self.inner.dedup_xorb(chunk, scope, vis).await
+    }
+}
+
+/// An index that answers `chunk_tables` with nothing, as an index that
+/// lost rows would, for tests of the integrity checks on reads. Everything
+/// else is the wrapped index's.
+pub struct TablelessIndex {
+    /// The index answering every other call.
+    pub inner: Arc<dyn Index>,
+}
+
+impl TablelessIndex {
+    /// A [`WrapIndex`] whose `chunk_tables` finds no table.
+    pub fn wrap() -> WrapIndex {
+        Box::new(|inner| Arc::new(Self { inner }))
+    }
+}
+
+#[async_trait::async_trait]
+impl Index for TablelessIndex {
+    async fn put_xorb(
+        &self,
+        xorb: &MerkleHash,
+        size: u64,
+        table: &ChunkTable,
+        eligible: &[MerkleHash],
+        scope: &str,
+    ) -> Result<bool, IndexError> {
+        self.inner
+            .put_xorb(xorb, size, table, eligible, scope)
+            .await
+    }
+
+    async fn xorb_size(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<u64>, IndexError> {
+        self.inner.xorb_size(xorb, scope, vis).await
+    }
+
+    async fn chunk_tables(
+        &self,
+        _: &[MerkleHash],
+        _: &str,
+        _: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
+        Ok(HashMap::new())
     }
 
     async fn register_shard(

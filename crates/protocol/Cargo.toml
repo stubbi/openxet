@@ -8,8 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Test-only: `read_dedup_answer`, which reads a dedup answer as a stock
-# client does, for the CAS's tests. Never enable it in a shipped build.
+# Test-only: `read_dedup_answer` and `decode_fetched_chunks`, which read a
+# dedup answer and a fetched xorb range as a stock client does, for the CAS's
+# tests. Never enable it in a shipped build.
 test-support = []
 
 [dependencies]

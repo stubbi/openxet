@@ -333,3 +333,18 @@ impl Write for BoundedWriter {
 pub fn xorb_hash(chunks: &XorbChunks) -> MerkleHash {
     merklehash::xorb_hash(&chunks.hashes)
 }
+
+/// Decodes `bytes`, one fetched xorb range, as `hf_xet` 1.7.0 decodes a
+/// data URL's body: upstream's `deserialize_chunks` over the chunk headers
+/// and payloads (`xet-client` 1.7.0, `remote_client.rs`). Returns the
+/// chunks' uncompressed bytes, concatenated, and where each chunk starts in
+/// them: `n + 1` offsets for `n` chunks, starting at `0`.
+///
+/// # Errors
+///
+/// [`ProtocolError::MalformedXorb`] if upstream refuses `bytes`.
+#[cfg(feature = "test-support")]
+pub fn decode_fetched_chunks(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u32>), ProtocolError> {
+    xet_core_structures::xorb_object::deserialize_chunks(&mut &bytes[..])
+        .map_err(ProtocolError::MalformedXorb)
+}

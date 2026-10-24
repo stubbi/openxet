@@ -9,8 +9,8 @@ mod common;
 use std::collections::HashSet;
 
 use common::{
-    Access, FILE_CHUNK_HASHES_PATH, ROUTES, Reply, SCOPE_A, TestServer, UNSERVED, XORB_GRANT_PATH,
-    bearer,
+    Access, FILE_CHUNK_HASHES_PATH, ROUTES, Reply, SCOPE_A, TRANSFER_PATH, TestServer, UNSERVED,
+    XORB_GRANT_PATH, bearer,
 };
 use openxet_auth::Mode;
 use openxet_cas::TELEMETRY_BODY_LIMIT;
@@ -194,6 +194,7 @@ async fn every_response_has_a_request_id() {
         requests.push(server.request(method.clone(), path));
     }
     requests.push(server.request(Method::GET, "/v1/telemetry"));
+    requests.push(server.request(Method::GET, TRANSFER_PATH));
 
     let mut seen = HashSet::new();
     for request in requests {
@@ -303,6 +304,7 @@ async fn responses_never_echo_credential() {
         server.write_token.clone(),
         server.read_token.clone(),
         server.other_scope_token.clone(),
+        server.other_scope_read_token.clone(),
         jwt,
         unknown,
     ];
@@ -310,6 +312,8 @@ async fn responses_never_echo_credential() {
         ROUTES.iter().map(|r| (r.method.clone(), r.path)).collect();
     targets.extend(UNSERVED.iter().cloned());
     targets.push((Method::GET, "/v1/telemetry"));
+    // The transfer route reads no `Authorization`, but must not echo one.
+    targets.push((Method::GET, TRANSFER_PATH));
 
     for (method, path) in &targets {
         for token in &tokens {
