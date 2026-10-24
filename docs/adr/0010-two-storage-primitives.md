@@ -25,7 +25,18 @@ the compatibility suite pins), `hf_api.py` and `utils/_xet.py`:
 - Repositories are addressed per type: `/api/models/…`,
   `/api/datasets/…`, `/api/spaces/…`, and `/api/kernels/…` for kernels
   (`REPO_TYPES_WITH_KERNEL` in `constants.py`). A model and a dataset may
-  share a name, so the type is part of a repository's address.
+  share a name, so the type is part of a repository's address. Web, Git
+  and resolve URLs carry the same prefixes (`REPO_TYPES_URL_PREFIXES`:
+  `datasets/`, `spaces/`, `kernels/`, none for models).
+- `kernel` repositories can be created, deleted, read and downloaded:
+  `create_repo` and `delete_repo` check `REPO_TYPES_WITH_KERNEL`
+  (`hf_api.py` lines 4602 and 4760), as do `hf_hub_download` and
+  `snapshot_download` (`file_download.py`, `_snapshot_download.py`), and
+  `kernel_info` reads `/api/kernels/{id}`. But `create_commit`,
+  `preupload_lfs_files`, `upload_file` and `upload_folder` accept only
+  `REPO_TYPES`, which has no `kernel` (`hf_api.py` lines 5084, 5328, 5673
+  and 5888). So stock clients write kernels over Git (`git-xet` and
+  `git-lfs`), not through the Hub commit API.
 - Storage Buckets have their own API: `/api/buckets/{namespace}/{name}`
   for create, info and settings, `/api/buckets/{id}/tree`,
   `/paths-info` and `/batch`, downloads from
@@ -52,8 +63,9 @@ The owner decided on 2026-10-24 that openxet has two storage primitives.
    refs, LFS and Xet paths, and `space` runs nothing.
 3. **Compatibility is unchanged.** The Hub API keeps every route stock
    clients call, per label (`/api/models/…`, `/api/datasets/…` and the
-   rest), and buckets answer the Storage Buckets routes above. Labels
-   need no work beyond M2's Hub API.
+   rest), and buckets answer the Storage Buckets routes above. The label
+   prefixes apply to resolve and Git URLs too. Labels need no work
+   beyond M2's Hub API and Git hosting.
 4. **Delivery.** M2 ships repositories with all four labels. M5 ships the
    bucket primitive (design §12).
 5. **Invariants hold for buckets too** (design §10.4 has the full
@@ -112,8 +124,11 @@ schedule it.
   unknown hash), and an acknowledged key write survives the loss of the
   database. Their tests are in the [security test
   map](../reference/security-tests.md) for M5.
-- The compatibility suite tests every label on the Hub routes in M2 and
-  the Storage Buckets routes in M5, with stock `huggingface_hub`.
+- The compatibility suite reads every label with stock `huggingface_hub`
+  (repo info, listing, `hf download`) and writes it with whichever stock
+  client supports it: Hub commits for `model`, `dataset` and `space`, Git
+  with `git-xet` for `kernel`. It tests the Storage Buckets routes in M5
+  with stock `huggingface_hub`.
 
 ## Alternatives considered
 

@@ -807,7 +807,16 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   `200 {"errors":[],"warnings":[]}` or real validation, never `501`.
 - `POST /api/{type}s/{id}/commit/{rev}` (NDJSON)
 - branch and tag create/delete
-- `HEAD|GET /{[datasets/]}{id}/resolve/{rev}/{path}`
+- `HEAD|GET /{[datasets/|spaces/|kernels/]}{id}/resolve/{rev}/{path}`
+
+The label prefixes (`REPO_TYPES_URL_PREFIXES` in `huggingface_hub`
+2.2.0: `datasets/`, `spaces/`, `kernels/`, and none for models) apply to
+resolve URLs, Git URLs (`https://openxet.example/datasets/{namespace}/{name}`,
+§10.9) and the implicit LFS endpoint alike. `huggingface_hub` 2.2.0
+creates, reads and downloads `kernel` repositories but won't commit or
+upload to them (its commit and upload functions accept only
+`REPO_TYPES`), so kernels are written over Git with `git-xet`
+([ADR 0010](../../adr/0010-two-storage-primitives.md)).
 
 **Model:**
 - Repositories, each labelled `model`, `dataset`, `space` or `kernel`
@@ -1173,7 +1182,9 @@ The two storage primitives of §1
 
 **Repositories** carry one label, `model`, `dataset`, `space` (files
 only; nothing is run) or `kernel`, chosen at creation. Every label
-behaves the same; labels need nothing beyond M2's Hub API.
+behaves the same; labels need nothing beyond M2's Hub API and Git
+hosting. Stock `huggingface_hub` can't commit to a `kernel`, so kernels
+are written over Git (§6).
 
 **Buckets** (mutable, non-versioned) serve the HF Storage Buckets API
 (§3). Keys map to Xet files with last-writer-wins and optional object
@@ -1376,7 +1387,8 @@ binaries. The client must run on Windows; the server need not.
 ### 10.9 Git hosting *(decided by the user: v1)*
 
 `git clone https://openxet.example/org/model` (and `git@openxet.example:org/model`)
-works as it does on huggingface.co. This sits alongside §6.1, where the repo
+works as it does on huggingface.co, with the label prefix for other labels
+(`https://openxet.example/datasets/org/data`, §6). This sits alongside §6.1, where the repo
 lives elsewhere and openxet is only its LFS store; both modes are supported.
 
 **Behaviour:**
@@ -1639,7 +1651,11 @@ release of the open-source build: it runs the released build (§15).
     `git-xet`.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
   - Repositories under all four labels, `model`, `dataset`, `space` and
-    `kernel`, on their Hub routes (§10.4, ADR 0010).
+    `kernel`, on their Hub routes and their prefixed resolve and Git URLs
+    (§6, §10.4, ADR 0010). Each label is read with stock
+    `huggingface_hub` and written with the stock client that supports
+    it: Hub commits for `model`, `dataset` and `space`, Git with
+    `git-xet` for `kernel`.
   - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
     `basic` download `href`s point at it (ADR 0003).
   - **M2-URI: resource-address contract** (ADR 0009), after the Hub resource
