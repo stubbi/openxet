@@ -31,8 +31,8 @@ hash.
 
 | Source | Form | Example |
 | ------ | ---- | ------- |
-| File | `[section]` and `key = value` | `[cas]` `url_lifetime = "2h"` |
-| Environment | `OPENXET_<SECTION>__<KEY>`, case-insensitive, `__` between section and key | `OPENXET_CAS__URL_LIFETIME=2h` |
+| File | `[section]` and `key = value` | `[cas]` `url_lifetime = "45m"` |
+| Environment | `OPENXET_<SECTION>__<KEY>`, case-insensitive, `__` between section and key | `OPENXET_CAS__URL_LIFETIME=45m` |
 | Flags | `--port N` replaces the port of `server.bind`; `--data-dir DIR` and `--log-format text\|json` replace their keys | `--port 0` |
 
 An environment value is taken as written for string keys. For the other
