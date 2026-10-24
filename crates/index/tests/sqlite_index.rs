@@ -1202,8 +1202,8 @@ async fn lowest_numbered_registration_of_a_file_wins() {
 }
 
 /// Migration 0005 carries a database written before tenants existed: each
-/// scope becomes its own tenant, owning the xorbs it uploaded and those its
-/// registered shards reference (ruling M1-R39), and registration numbers
+/// scope becomes its own tenant, `scope:` and its name (ruling M1-R43),
+/// owning the xorbs it uploaded and those its registered shards reference (ruling M1-R39), and registration numbers
 /// continue past the highest one recorded.
 #[tokio::test]
 async fn migration_0005_makes_each_scope_its_own_tenant() {
@@ -1263,7 +1263,10 @@ async fn migration_0005_makes_each_scope_its_own_tenant() {
     db.close().await;
 
     let index = open_at(&path).await;
-    for (xorb, tenant) in [(x1, "uploader"), (x1, A), (x2, A)] {
+    // A credential for scope `s` naming no tenant is in tenant `scope:s`
+    // (ruling M1-R43).
+    let tenant_a = format!("scope:{A}");
+    for (xorb, tenant) in [(x1, "scope:uploader"), (x1, &tenant_a), (x2, &tenant_a)] {
         assert!(
             ok(index.xorb_size(&xorb, tenant, Visibility::PerTenant).await).is_some(),
             "{tenant} owns {xorb}"
@@ -1271,14 +1274,17 @@ async fn migration_0005_makes_each_scope_its_own_tenant() {
     }
     assert!(
         ok(index
-            .xorb_size(&x2, "uploader", Visibility::PerTenant)
+            .xorb_size(&x2, "scope:uploader", Visibility::PerTenant)
             .await)
         .is_none()
     );
     assert_eq!(
-        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerTenant).await),
+        ok(index
+            .dedup_shard_xorbs(&x1, &tenant_a, Visibility::PerTenant)
+            .await),
         Some(vec![x1, x2])
     );
+    assert!(ok(index.xorb_size(&x1, A, Visibility::PerTenant).await).is_none());
     assert_eq!(ok(index.next_registration_seq().await), 8);
     let db = ok(sqlx::SqlitePool::connect(&url).await);
     let seq: i64 = ok(sqlx::query_scalar("SELECT registered_seq FROM file_scopes")
@@ -1288,5 +1294,5 @@ async fn migration_0005_makes_each_scope_its_own_tenant() {
     let tenant: String = ok(sqlx::query_scalar("SELECT tenant FROM shard_registrations")
         .fetch_one(&db)
         .await);
-    assert_eq!(tenant, A);
+    assert_eq!(tenant, tenant_a);
 }

@@ -104,7 +104,8 @@ requirement that the named tests don't.
 | 4 | `head_under_per_tenant_hides_other_tenants_xorbs` | `crates/cas/tests/xorbs.rs` | `HEAD` of a xorb under `per-tenant`. |
 | 4 | `per_tenant_shard_cannot_reference_foreign_xorb` | `crates/cas/tests/shards.rs` | Shard verification's xorb lookups under `per-tenant`. |
 | 4 | `switching_global_to_per_tenant_keeps_reads_and_dedup` | `crates/cas/tests/reconstruction.rs` | After a switch from `global`, a tenant keeps its reads and dedup over xorbs another tenant uploaded, and a third tenant stays isolated (ruling M1-R39). |
-| 4 | `jwt_rejects_empty_or_malformed_tenant` | `crates/auth/tests/auth.rs` | A token's `tenant`, which decides isolation, passes the scope's checks or the token is refused. |
+| 4 | `jwt_rejects_empty_or_malformed_tenant` | `crates/auth/tests/auth.rs` | A token's `tenant`, which decides isolation, passes the scope's checks and doesn't start with the reserved `scope:`, or the token is refused. |
+| 4 | `a_scope_named_like_a_tenant_stays_out_of_it` | `crates/cas/tests/dedup.rs` | A credential naming no tenant is in tenant `scope:{scope}`, so a scope named like a tenant never sees that tenant's xorbs, nor the other way round (ruling M1-R43). |
 | 7 | `index_scope_tables_rebuild_from_the_bucket` | `crates/cas/tests/bucket_truth.rs` | Every acknowledged registration and ownership is in the bucket: the index's scope tables rebuild from it alone (ruling M1-R37). |
 | 6 | `auth_errors_never_contain_the_credential` | `crates/auth/tests/auth.rs` | Credential errors never carry the credential. |
 | 6 | `signed_urls_are_never_logged` | `crates/cas/tests/reconstruction.rs` | A transfer URL's signature never reaches the log. |

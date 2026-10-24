@@ -335,6 +335,37 @@ async fn per_tenant_scopes_of_one_tenant_share_dedup() {
     .assert_error(400, "unknown_xorb");
 }
 
+/// Ruling M1-R43 (F-A review I-1): a credential naming no tenant is in
+/// tenant `scope:{scope}`, which no explicit tenant can equal. So a token
+/// for scope `org` without a claim never sees tenant `org`'s xorbs, and
+/// the other way round.
+#[tokio::test]
+async fn a_scope_named_like_a_tenant_stays_out_of_it() {
+    let server = TestServer::start(config(Visibility::PerTenant)).await;
+    let tenant_org = server.token("org/base", Some("org"), Mode::Write);
+    let scope_org = server.token("org", None, Mode::Write);
+    let (body, eligible, _) = mixed_xorb();
+    let xorb = upload_xorb(&server, body, &tenant_org).await;
+    let other = upload_xorb(&server, labelled_xorb("scope-org", 3, false), &scope_org).await;
+    let head = |xorb: MerkleHash, token: String| {
+        Reply::of(
+            server
+                .request(Method::HEAD, &xorb_path(&xorb))
+                .header(AUTHORIZATION, bearer(&token)),
+        )
+    };
+    assert_eq!(head(xorb, tenant_org.clone()).await.status, 200);
+    assert_eq!(head(xorb, scope_org.clone()).await.status, 404);
+    assert_eq!(head(other, scope_org.clone()).await.status, 200);
+    assert_eq!(head(other, tenant_org.clone()).await.status, 404);
+    assert_offers(
+        &query(&server, &eligible, &tenant_org).await,
+        &eligible,
+        &xorb,
+    );
+    assert_no_match(&query(&server, &eligible, &scope_org).await);
+}
+
 #[tokio::test]
 async fn unauthenticated_is_401() {
     let server = TestServer::start_default().await;
@@ -679,7 +710,7 @@ async fn register_file(
                     &[new],
                     Registrant {
                         scope,
-                        tenant: scope,
+                        tenant: &openxet_auth::default_tenant(scope),
                         seq: index.next_registration_seq().await.unwrap(),
                     },
                     vis,

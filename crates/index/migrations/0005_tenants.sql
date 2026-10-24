@@ -3,8 +3,9 @@
 -- records its tenant and the sequence number its bucket record carries
 -- (ruling M1-R37), so every row here is derivable from the bucket's
 -- registrations/ and xorb-owners/ records with the stored shards and xorbs.
--- Rows from before this migration take their scope as their tenant, the
--- default for a credential that names none.
+-- Rows from before this migration take the tenant a credential naming none
+-- gets: `scope:` and the scope (ruling M1-R43), which no explicit tenant can
+-- equal.
 
 -- The tenants a xorb is owned by: those it was uploaded under, and those
 -- of every registration whose files reference it (ruling M1-R39), so
@@ -17,12 +18,12 @@ CREATE TABLE xorb_owners (
 );
 
 INSERT INTO xorb_owners (xorb, tenant)
-SELECT xorb, scope FROM xorb_scopes;
+SELECT xorb, 'scope:' || scope FROM xorb_scopes;
 
 -- Ownership by reference, for shards registered since migration 0002
 -- recorded their xorbs. Earlier shards gain it when registered again.
 INSERT INTO xorb_owners (xorb, tenant)
-SELECT sx.xorb, ss.scope FROM shard_xorbs sx JOIN shard_scopes ss ON ss.shard = sx.shard
+SELECT sx.xorb, 'scope:' || ss.scope FROM shard_xorbs sx JOIN shard_scopes ss ON ss.shard = sx.shard
 WHERE true
 ON CONFLICT DO NOTHING;
 
@@ -39,7 +40,7 @@ CREATE TABLE shard_registrations (
 );
 
 INSERT INTO shard_registrations (shard, scope, tenant, registered_seq)
-SELECT shard, scope, scope, registered_seq FROM shard_scopes;
+SELECT shard, scope, 'scope:' || scope, registered_seq FROM shard_scopes;
 
 DROP INDEX shard_scopes_registered_seq;
 DROP TABLE shard_scopes;

@@ -1406,6 +1406,11 @@ mod tests {
             problem_keys(&load_toml(&entry("\"org\\n\""), &[])),
             ["auth.static_tokens[0]"]
         );
+        assert_eq!(
+            problem_keys(&load_toml(&entry("\"scope:org\""), &[])),
+            ["auth.static_tokens[0]"],
+            "`scope:` is reserved for defaulted tenants"
+        );
     }
 
     #[test]

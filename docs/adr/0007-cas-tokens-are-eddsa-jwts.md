@@ -39,8 +39,11 @@ therefore has to honour `exp` exactly.
    `per-tenant` visibility (design §5.4). It follows the rules for
    `scope`: a non-empty string, free of control and format characters,
    at most 1024 bytes; `null` or any other type is rejected. Without it
-   the tenant is the scope, so tokens minted before the claim existed
-   keep working and keep each scope its own tenant. The claim is added
+   the tenant is `scope:` followed by the scope, so tokens minted before
+   the claim existed keep working and keep each scope a tenant of its
+   own. *(M1-R43)* An explicit `tenant` may not start with `scope:`, so
+   a scope whose name equals a tenant's, a project called `acme` next to
+   a tenant `acme`, never shares that tenant's xorbs. The claim is added
    now, before platforms integrate, because the strict claim set above
    would make a later addition break every platform's tokens. Static
    tokens take an optional configured `tenant` with the same default.

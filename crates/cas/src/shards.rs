@@ -614,12 +614,12 @@ mod tests {
         }
     }
 
-    /// A writer of `scope`, its own tenant.
+    /// A writer of `scope` naming no tenant.
     fn writer(scope: &str) -> Principal {
         Principal {
             subject: "test".to_owned(),
             scope: scope.to_owned(),
-            tenant: scope.to_owned(),
+            tenant: openxet_auth::default_tenant(scope),
             mode: openxet_auth::Mode::Write,
         }
     }

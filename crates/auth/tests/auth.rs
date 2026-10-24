@@ -65,7 +65,7 @@ fn static_token_matches_by_hash() {
         Principal {
             subject: "ci".to_owned(),
             scope: "org/model".to_owned(),
-            tenant: "org/model".to_owned(),
+            tenant: "scope:org/model".to_owned(),
             mode: Mode::Write,
         }
     );
@@ -73,8 +73,8 @@ fn static_token_matches_by_hash() {
     assert!(principal.can_write());
 }
 
-/// A static token's tenant is the configured one, or its scope (ruling
-/// M1-R38).
+/// A static token's tenant is the configured one, or `scope:` and its scope
+/// (rulings M1-R38, M1-R43).
 #[test]
 fn static_token_tenant_is_configured_or_the_scope() {
     let mut org = static_token("org secret", Mode::Read);
@@ -86,7 +86,7 @@ fn static_token_tenant_is_configured_or_the_scope() {
     )
     .expect("valid config");
     let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static");
-    assert_eq!(principal.tenant, "org/model");
+    assert_eq!(principal.tenant, "scope:org/model");
     let principal = auth.authenticate("org secret", NOW).expect("static");
     assert_eq!(principal.scope, "org/model");
     assert_eq!(principal.tenant, "org");
@@ -95,7 +95,15 @@ fn static_token_tenant_is_configured_or_the_scope() {
 #[test]
 fn static_tokens_with_invalid_tenant_are_rejected_at_construction() {
     let long = "t".repeat(1025);
-    for tenant in ["", " ", "org\n", "org\u{200B}", long.as_str()] {
+    for tenant in [
+        "",
+        " ",
+        "org\n",
+        "org\u{200B}",
+        long.as_str(),
+        "scope:org/model",
+        "scope:",
+    ] {
         let mut token = static_token(STATIC_SECRET, Mode::Read);
         token.tenant = Some(tenant.to_owned());
         let error = Authenticator::new(
@@ -552,13 +560,14 @@ fn jwt_rejects_unknown_claims() {
 }
 
 /// The optional `tenant` claim names the unit of isolation; without it the
-/// tenant is the scope (ADR 0007 as amended, ruling M1-R38).
+/// tenant is `scope:` and the scope, a name no explicit tenant can take (ADR
+/// 0007 as amended, rulings M1-R38, M1-R43).
 #[test]
 fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
     let (auth, key, header) = auth_for_raw_tokens();
     let token = sign_raw(&key, &header, &b64(&valid_claims().to_string()));
     let principal = auth.authenticate(&token, NOW).expect("no tenant claim");
-    assert_eq!(principal.tenant, "org/model");
+    assert_eq!(principal.tenant, "scope:org/model");
 
     let max = "t".repeat(1024);
     for tenant in ["org", "org with space", max.as_str()] {
@@ -595,7 +604,7 @@ fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
         .expect("valid claims");
     assert_eq!(
         auth.authenticate(&token, NOW).expect("valid").tenant,
-        "org/model"
+        "scope:org/model"
     );
 }
 
@@ -625,7 +634,7 @@ fn jwt_rejects_empty_or_malformed_tenant() {
         );
     }
     let s = signer();
-    for tenant in ["", "org\n", long.as_str()] {
+    for tenant in ["", "org\n", long.as_str(), "scope:org"] {
         assert!(
             matches!(
                 s.sign_with_tenant(

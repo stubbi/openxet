@@ -102,11 +102,11 @@ also refuses a token that expires beyond its `auth.max_token_lifetime`
 claim. `--tenant` adds a `tenant` claim naming the tenant the scope belongs
 to, the unit of isolation under
 [`per-tenant` visibility](config.md#dedup-visibility); without it the
-tenant is the scope. Without `--json`, stdout is the token alone, so
-`TOKEN=$(openxet token mint …)` works.
+tenant is `scope:` and the scope ([tenants](config.md#tenants)). Without
+`--json`, stdout is the token alone, so `TOKEN=$(openxet token mint …)` works.
 
 ```json
-{"schema":"openxet.token-mint.v1","token":"eyJ…","kid":"8f1c2a3b4d5e6f70","subject":"openxet-cli","scope":"team/models","tenant":"team/models","mode":"read","iat":1792800000,"exp":1792803600}
+{"schema":"openxet.token-mint.v1","token":"eyJ…","kid":"8f1c2a3b4d5e6f70","subject":"openxet-cli","scope":"team/models","tenant":"scope:team/models","mode":"read","iat":1792800000,"exp":1792803600}
 ```
 
 ## `openxet token generate`
@@ -121,10 +121,10 @@ Generates a static token (`oxt_` and 43 base64url characters; see
 token is printed this once; openxet never stores it. `--subject` is
 required, so that each token's actions are attributed to it; `--scope`
 defaults to `default`. `--tenant` adds a `tenant` to the entry; without it the
-tenant is the scope.
+tenant is `scope:` and the scope ([tenants](config.md#tenants)).
 
 ```json
-{"schema":"openxet.token-generate.v1","token":"oxt_REDACTED","sha256":"…","scope":"ci","tenant":"ci","mode":"write","subject":"ci-bot","config":"[[auth.static_tokens]]\nsha256 = \"…\"\n…"}
+{"schema":"openxet.token-generate.v1","token":"oxt_REDACTED","sha256":"…","scope":"ci","tenant":"scope:ci","mode":"write","subject":"ci-bot","config":"[[auth.static_tokens]]\nsha256 = \"…\"\n…"}
 ```
 
 ## `openxet upload`

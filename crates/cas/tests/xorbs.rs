@@ -132,7 +132,11 @@ async fn acknowledged_xorb_write_is_visible() {
     let tables = server
         .on_server(async move {
             index
-                .chunk_tables(&[hash], SCOPE_A, Visibility::PerTenant)
+                .chunk_tables(
+                    &[hash],
+                    &openxet_auth::default_tenant(SCOPE_A),
+                    Visibility::PerTenant,
+                )
                 .await
                 .unwrap()
         })

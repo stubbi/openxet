@@ -12,7 +12,7 @@ use std::sync::Arc;
 use common::shard::hf_xet_shard;
 use common::xorb::{hf_xet_xorb, stored, xorb_of, xorb_path};
 use common::{Reply, SCOPE_A, SCOPE_B, TestServer, bearer, config};
-use openxet_auth::Mode;
+use openxet_auth::{Mode, default_tenant};
 use openxet_index::{SqliteIndex, Visibility, rebuild_scope_tables};
 use openxet_protocol::{
     MerkleHash, Segment, ShardFileEntry, UploadShard, file_hash, range_hash, stored_shard,
@@ -194,7 +194,7 @@ async fn index_scope_tables_rebuild_from_the_bucket() {
     }
     let f2_row = &live.files[&(f2.file_hash, SCOPE_A.to_owned())];
     assert_eq!(f2_row.terms.len(), 2, "the first registration's terms stay");
-    assert!(live.owners.contains(&(x1, SCOPE_B.to_owned())));
-    assert!(live.owners.contains(&(x3, "solo/repo".to_owned())));
+    assert!(live.owners.contains(&(x1, default_tenant(SCOPE_B))));
+    assert!(live.owners.contains(&(x3, default_tenant("solo/repo"))));
     assert!(live.files.values().any(|row| row.sha256.is_some()));
 }

@@ -149,7 +149,7 @@ async fn synthetic_file(
                     &[file],
                     Registrant {
                         scope,
-                        tenant: scope,
+                        tenant: &openxet_auth::default_tenant(scope),
                         seq: index.next_registration_seq().await.unwrap(),
                     },
                     vis,
@@ -382,7 +382,7 @@ async fn register_empty_file(server: &TestServer, vis: Visibility) -> MerkleHash
                     &[file],
                     Registrant {
                         scope: SCOPE_A,
-                        tenant: SCOPE_A,
+                        tenant: &openxet_auth::default_tenant(SCOPE_A),
                         seq: index.next_registration_seq().await.unwrap(),
                     },
                     vis,

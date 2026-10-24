@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use openxet_auth::{AuthError, Authenticator, Mode, StaticToken, TokenSigner, generate_keypair};
+use openxet_auth::{
+    AuthError, Authenticator, Mode, StaticToken, TokenSigner, default_tenant, generate_keypair,
+};
 use serde::Serialize;
 
 use crate::duration;
@@ -66,7 +68,7 @@ pub enum TokenCommand {
         #[arg(long)]
         scope: String,
         /// The tenant the scope belongs to (its `tenant` claim), the unit of
-        /// `per-tenant` dedup isolation [default: the scope]
+        /// `per-tenant` dedup isolation [default: `scope:` and the scope]
         #[arg(long)]
         tenant: Option<String>,
         /// What the token may do within its scope
@@ -89,7 +91,7 @@ pub enum TokenCommand {
         #[arg(long, default_value = "default")]
         scope: String,
         /// The tenant the scope belongs to, the unit of `per-tenant` dedup
-        /// isolation [default: the scope]
+        /// isolation [default: `scope:` and the scope]
         #[arg(long)]
         tenant: Option<String>,
         /// What the token may do within its scope
@@ -244,7 +246,7 @@ struct Minted<'a> {
     kid: String,
     subject: &'a str,
     scope: &'a str,
-    tenant: &'a str,
+    tenant: String,
     mode: &'static str,
     iat: u64,
     exp: u64,
@@ -334,7 +336,7 @@ fn mint(
             kid: signer.kid().to_owned(),
             subject,
             scope,
-            tenant: tenant.unwrap_or(scope),
+            tenant: tenant.map_or_else(|| default_tenant(scope), str::to_owned),
             mode: mode.name(),
             iat: now,
             exp,
@@ -348,7 +350,7 @@ struct Generated<'a> {
     token: &'a str,
     sha256: String,
     scope: &'a str,
-    tenant: &'a str,
+    tenant: String,
     mode: &'static str,
     subject: &'a str,
     /// The `[[auth.static_tokens]]` entry, which holds the hash only.
@@ -415,7 +417,7 @@ fn generate(
             token: &token,
             sha256,
             scope,
-            tenant: tenant.unwrap_or(scope),
+            tenant: tenant.map_or_else(|| default_tenant(scope), str::to_owned),
             mode: mode.name(),
             subject,
             config,

@@ -772,7 +772,7 @@ async fn token_mint_verifies() {
     assert_eq!(minted["schema"], "openxet.token-mint.v1");
     assert_eq!(minted["kid"], keygen["kid"]);
     assert_eq!(minted["scope"], "team/models");
-    assert_eq!(minted["tenant"], "team/models");
+    assert_eq!(minted["tenant"], "scope:team/models");
     assert_eq!(minted["mode"], "read");
     let exp = minted["exp"].as_u64().unwrap();
     assert_eq!(exp - minted["iat"].as_u64().unwrap(), 3600);

@@ -46,7 +46,8 @@ once built.
   connections ([config](docs/reference/config.md#memory)).
 - Tenants: every credential names a tenant next to its scope, from a CAS
   token's optional `tenant` claim or a static token's `tenant` field, and
-  the scope when it names none. `dedup_visibility = "per-tenant"` isolates
+  `scope:` followed by the scope when it names none; explicit tenants may
+  not start with `scope:`. `dedup_visibility = "per-tenant"` isolates
   tenants while the scopes of one tenant share dedup
   ([config](docs/reference/config.md#tenants)). `openxet token mint` and
   `token generate` take `--tenant`.
@@ -60,7 +61,8 @@ once built.
 - `dedup_visibility = "per-scope"` is now `"per-tenant"`; the old value is
   refused at startup with a hint. With no tenant configured, each scope
   is its own tenant, which isolates exactly as `per-scope` did.
-- Index migration 0005 gives every existing row its scope as its tenant,
+- Index migration 0005 gives every existing row the tenant `scope:` and
+  its scope, the tenant of a credential that names none,
   and makes each scope an owner of the xorbs its registered shards
   reference where the index lists them (shards registered after migration
   0002), so switching `global` to `per-tenant` keeps their files readable

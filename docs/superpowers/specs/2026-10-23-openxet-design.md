@@ -452,9 +452,11 @@ with a configured key. It then stores Xet file hashes in its own database.
   metering. Every principal carries one. In the Hub layer it is the
   namespace, the first path segment. In storage-only mode it is the CAS
   token's optional `tenant` claim (ADR 0007) or a static token's
-  configured `tenant`, and the scope itself when none is given. So the
-  scopes of one tenant share dedup under `per-tenant`: an org's fine-tune
-  dedups against its base model in another repo.
+  configured `tenant`. When none is given it is `scope:` followed by the
+  scope, and no explicit tenant may start with `scope:` *(ruling
+  M1-R43)*, so a scope named like a tenant never joins it. So the scopes
+  of one tenant share dedup under `per-tenant`: an org's fine-tune dedups
+  against its base model in another repo.
 - A commit in repo B may only reference files registered to repo B. A file
   already in repo A is registered to B by uploading it to B; dedup makes
   that nearly free, because only a shard is sent.

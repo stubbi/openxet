@@ -169,12 +169,15 @@ impl TokenSigner {
 
     /// [`TokenSigner::sign`], with a `tenant` claim when `tenant` is given:
     /// the unit of isolation under `per-tenant` visibility (ruling M1-R38).
-    /// Without one the tenant is the scope.
+    /// Without one the tenant is [`default_tenant`](crate::default_tenant) of
+    /// the scope (ruling M1-R43). An explicit tenant may not start with
+    /// [`DEFAULT_TENANT_PREFIX`](crate::DEFAULT_TENANT_PREFIX).
     ///
     /// # Errors
     ///
     /// [`AuthError::InvalidClaims`] for a token the verifier would reject:
-    /// an empty or control-character `subject`, `scope` or `tenant`, a
+    /// an empty or control-character `subject`, `scope` or `tenant`, a `tenant`
+    /// starting with `scope:`, a
     /// `scope` or `tenant` over [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES),
     /// `exp <= now`, `exp` more than this signer's lifetime limit after
     /// `now`, or claims that make the token longer than [`MAX_TOKEN_BYTES`].
@@ -387,7 +390,9 @@ pub(crate) fn verify(
     }
     Ok(Principal {
         subject: claims.sub,
-        tenant: claims.tenant.unwrap_or_else(|| claims.scope.clone()),
+        tenant: claims
+            .tenant
+            .unwrap_or_else(|| crate::default_tenant(&claims.scope)),
         scope: claims.scope,
         mode: claims.mode,
     })
