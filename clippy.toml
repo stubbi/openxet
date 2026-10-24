@@ -1,12 +1,13 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 doc-valid-idents = ["SQLite", ".."]
-# CAS routes go through `openxet_cas`'s `routes::Routes`, which lists every
-# route it serves, so the tests can check each one is authenticated.
+# Routes are added only through each crate's route builder (for the CAS,
+# `openxet_cas`'s `routes::Routes`), which lists every route it serves, so
+# the security tests can check each one is authenticated.
 disallowed-methods = [
-  { path = "axum::Router::route", reason = "add CAS routes through routes::Routes so endpoints() lists them" },
-  { path = "axum::Router::route_service", reason = "add CAS routes through routes::Routes so endpoints() lists them" },
-  { path = "axum::Router::nest", reason = "add CAS routes through routes::Routes so endpoints() lists them" },
-  { path = "axum::Router::nest_service", reason = "add CAS routes through routes::Routes so endpoints() lists them" },
-  { path = "axum::Router::merge", reason = "add CAS routes through routes::Routes so endpoints() lists them" },
+  { path = "axum::Router::route", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
+  { path = "axum::Router::route_service", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
+  { path = "axum::Router::nest", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
+  { path = "axum::Router::nest_service", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
+  { path = "axum::Router::merge", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
 ]
