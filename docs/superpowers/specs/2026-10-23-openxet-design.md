@@ -23,6 +23,20 @@ and identity systems people already own.
 It is not a Hugging Face copy. It is plug-and-play infrastructure: small surface,
 clear seams, no opinions forced on the operator.
 
+**Two storage primitives** *(decided by the user, 2026-10-24;
+[ADR 0010](../../adr/0010-two-storage-primitives.md))*:
+- A **repository** is versioned and Git and Hub compatible: commits,
+  refs, and large files as LFS pointers to Xet files.
+- A **bucket** holds mutable objects under keys, with no Git history.
+  Its objects are still Xet files, chunked and deduplicated.
+
+Hugging Face's repo types (`model`, `dataset`, `space`, `kernel`) are
+labels on a repository, not separate primitives. They keep the Hub
+routes stock clients need (`/api/models/…`, `/api/datasets/…`), so
+compatibility is unchanged. openxet serves anyone storing large
+versioned or deduplicated files, so it doesn't mirror one field's
+artefact taxonomy.
+
 ### Who it is for
 
 - Organizations that cannot or will not put data on huggingface.co (regulated,
@@ -253,8 +267,13 @@ test suite (§8) is the lasting source of truth.
   Responses are shards whose chunk hashes are HMAC-keyed. This keeps the
   global dedup index about 1/1000th of the chunk count, which is what makes
   scale tractable.
-- `huggingface_hub` now knows a `bucket` repo type (HF Storage Buckets:
-  mutable, no git revisions). openxet serves it in v1 (§10.4).
+- **HF Storage Buckets** (mutable, no Git revisions) have their own API
+  in `huggingface_hub` 2.2.0, not a repo type:
+  `/api/buckets/{namespace}/{name}`, its `tree`, `paths-info` and `batch`
+  routes, `/buckets/{id}/resolve/{path}`, and
+  `/api/buckets/{id}/xet-{read|write}-token` with no revision. `bucket` is
+  a URI type there, not one of `REPO_TYPES`. openxet serves them in v1 as
+  its bucket primitive (§10.4).
 - `xet-core` crates (`xet-core-structures`, `xet-data`, `xet-client`) are
   Apache-2.0 and contain the reference merklehash, xorb, shard and chunking
   code.
@@ -279,7 +298,8 @@ test suite (§8) is the lasting source of truth.
 - `git-xet` and Git over SSH are core, v1 (§6.1, §10.1).
 - Build straight to 1.0 with no alpha pause (§12).
 - Be ambitious: nothing is deferred for convenience. That brings in
-  server-side chunking, all repo types including `bucket`, the cache tier, the
+  server-side chunking, both storage primitives (§10.4; this replaced
+  "all repo types including `bucket`" in ADR 0010), the cache tier, the
   HF pull-through mirror, multiple storage pools and residency, and the full
   distribution list (§9, §10).
 - openxet issues revocable access tokens (and SSH keys) bound to external
@@ -444,8 +464,9 @@ for its users either through an admin endpoint or by signing them itself
 with a configured key. It then stores Xet file hashes in its own database.
 
 **Scopes and tenants (builder-check call, ruling M1-R38):**
-- A **scope** is the unit of access. In the Hub layer a scope is a repo
-  (`{type}/{namespace}/{name}`), matching HF's repo-scoped Xet tokens. In
+- A **scope** is the unit of access. In the Hub layer a scope is a
+  repository (`{label}/{namespace}/{name}`), matching HF's repo-scoped
+  Xet tokens, or a bucket. In
   storage-only mode it is an opaque string the platform chooses. Files
   are read and registered per scope.
 - A **tenant** is the unit of isolation for `per-tenant` dedup and
@@ -580,9 +601,11 @@ already stored writes only its small ownership record. Tests:
 
 ### 5.6 Garbage collection and retention
 
-- **References:** Hub-layer commits reference files; in storage-only mode the
-  platform pins files through an admin API, optionally with a TTL. Files
-  reference xorbs.
+- **References:** Hub-layer commits reference files, and so does each
+  key of a bucket (its current object, plus kept versions); in
+  storage-only mode the platform pins files through an admin API,
+  optionally with a TTL. Files reference xorbs. Overwriting or deleting
+  a bucket key only drops a reference.
 - **Mark and sweep with a grace period:** default 30 days, minimum 28
   (21-day client shard cache + 7-day dedup key), and `gc` rejects anything
   lower. Stock clients dedup against cached shards without asking the
@@ -705,7 +728,9 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
 - `HEAD|GET /{[datasets/]}{id}/resolve/{rev}/{path}`
 
 **Model:**
-- Repo types `model`, `dataset`, `space`, `kernel` and `bucket` (§10.4).
+- Repositories, each labelled `model`, `dataset`, `space` or `kernel`
+  (§10.4). The label picks the route prefix and is part of the address;
+  it changes no behaviour. Buckets have their own routes (§3, §10.4).
 - Every commit is a **real Git commit**, just as on huggingface.co. Small
   files are Git blobs. Large files are Git LFS pointer files whose sha256 maps
   to a Xet file hash. Commits made through the Hub API (`hf upload`) and
@@ -1057,14 +1082,28 @@ chunking, so the hashes are identical to client-side uploads.
 - `preupload` and the LFS batch endpoint offer `basic` and `multipart`
   alongside `xet`.
 
-### 10.4 More repo types
+### 10.4 Repositories and buckets
 
-`model`, `dataset`, `space` (files only; nothing is run) and `kernel`
-behave the same as Hub repos.
+The two storage primitives of §1
+([ADR 0010](../../adr/0010-two-storage-primitives.md)).
 
-**`bucket`** (mutable, non-versioned, mirroring HF Storage Buckets): paths map
-to Xet files with last-writer-wins and optional object versioning. Bucket
-tokens are not revision-scoped, matching `huggingface_hub`.
+**Repositories** carry one label, `model`, `dataset`, `space` (files
+only; nothing is run) or `kernel`, chosen at creation. Every label
+behaves the same; labels need nothing beyond M2's Hub API.
+
+**Buckets** (mutable, non-versioned) serve the HF Storage Buckets API
+(§3). Keys map to Xet files with last-writer-wins and optional object
+versioning. Bucket tokens are not revision-scoped, matching
+`huggingface_hub`. A key's write is recorded in the object store before
+it is acknowledged, so `reindex` rebuilds every bucket (§5.3), and an
+overwritten or deleted object leaves only through GC (§5.6).
+
+"The bucket is the source of truth" (§5.3) means the object-store
+bucket. Where the two could be confused, say "object-store bucket" or
+"bucket primitive".
+
+An S3-compatible API over buckets is under evaluation in spike S12 (draft
+PR #60), pending the owner's decision; it is not scheduled.
 
 ### 10.5 Cache tier
 
@@ -1336,7 +1375,8 @@ binary.
 **What it does:**
 - Sign in through the operator's identity system (OIDC). No local accounts.
 - Create, list and revoke access tokens; add and remove SSH keys.
-- Browse repos, branches, commits and files; download files; copy clone,
+- Browse repositories, branches, commits and files, and buckets and their
+  keys; download files; copy clone,
   `hf` and `openxet` commands.
 - See storage usage per repo and tenant: logical bytes, stored bytes, and the
   dedup savings ratio.
@@ -1466,6 +1506,8 @@ but sets no calendar dates.
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
+  - Repositories under all four labels, `model`, `dataset`, `space` and
+    `kernel`, on their Hub routes (§10.4, ADR 0010).
   - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
     `basic` download `href`s point at it (ADR 0003).
   - **M2-URI: resource-address contract** (ADR 0009), after the Hub resource
@@ -1503,7 +1545,9 @@ but sets no calendar dates.
     alongside the other `git-xet` contributions and coordinated with
     Hugging Face before any PR is filed.
 - **M5:** reach.
-  - `bucket`, `space` and `kernel` repo types.
+  - The bucket primitive (§10.4): the HF Storage Buckets routes, mutable
+    keys with last-writer-wins and optional versioning, and GC, `reindex`
+    and metering for bucket keys. Repository labels need no M5 work.
   - Cache tier.
   - HF pull-through mirror.
   - Multiple storage pools, residency and KMS.

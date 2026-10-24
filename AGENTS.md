@@ -13,6 +13,12 @@ tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`, `git-lfs`,
 `huggingface.js`) work against it unmodified. It runs on storage and identity
 systems people already own, and as a hosted service at **openxet.com**.
 
+It has two storage primitives (ADR 0010): the **repository**, versioned
+and Git and Hub compatible, and the **bucket**, mutable objects under keys
+with no Git history, still Xet-chunked and deduplicated. Hugging Face's
+repo types (`model`, `dataset`, `space`, `kernel`) are labels on a
+repository, served on the Hub routes stock clients call.
+
 The design is the source of truth for scope and decisions:
 `docs/superpowers/specs/2026-10-23-openxet-design.md`. Architecture decisions
 made since are in `docs/adr/`.
