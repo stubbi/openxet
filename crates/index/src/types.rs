@@ -264,15 +264,17 @@ pub(crate) fn decode_term_bytes(bytes: &[u8], terms: usize) -> Result<TermBytes,
             bytes.len()
         )));
     }
-    bytes
-        .chunks_exact(TERM_BYTES_LEN)
-        .map(|e| match (u32_at(e, 0), u32_at(e, 4)) {
-            (start, end) if start < end => Ok((start, end)),
-            (start, end) => Err(IndexError::Corrupt(format!(
+    let mut out = Vec::with_capacity(terms);
+    for e in bytes.chunks_exact(TERM_BYTES_LEN) {
+        let (start, end) = (u32_at(e, 0), u32_at(e, 4));
+        if start >= end {
+            return Err(IndexError::Corrupt(format!(
                 "a term's stored bytes are {start}..{end}"
-            ))),
-        })
-        .collect()
+            )));
+        }
+        out.push((start, end));
+    }
+    Ok(out)
 }
 
 /// Encodes terms as `(xorb, chunk start u32 LE, chunk end u32 LE, unpacked
@@ -300,17 +302,18 @@ pub(crate) fn decode_terms(bytes: &[u8]) -> Result<Vec<Term>, IndexError> {
             bytes.len()
         )));
     }
-    bytes
-        .chunks_exact(TERM_LEN)
-        .map(|t| {
-            Ok(Term {
-                xorb: hash_from(&t[..HASH_LEN])?,
-                chunk_start: u32_at(t, HASH_LEN),
-                chunk_end: u32_at(t, HASH_LEN + 4),
-                unpacked_bytes: u32_at(t, HASH_LEN + 8),
-            })
-        })
-        .collect()
+    // Sized up front: collecting through `Result` can't, and a 100k-term
+    // list would grow by copying.
+    let mut terms = Vec::with_capacity(bytes.len() / TERM_LEN);
+    for t in bytes.chunks_exact(TERM_LEN) {
+        terms.push(Term {
+            xorb: hash_from(&t[..HASH_LEN])?,
+            chunk_start: u32_at(t, HASH_LEN),
+            chunk_end: u32_at(t, HASH_LEN + 4),
+            unpacked_bytes: u32_at(t, HASH_LEN + 8),
+        });
+    }
+    Ok(terms)
 }
 
 #[cfg(test)]
