@@ -1426,14 +1426,22 @@ but sets no calendar dates.
   - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
     `basic` download `href`s point at it (ADR 0003).
   - `openxet purge <file-hash>` (§5.4).
+  - One router: the CAS and Hub routes composed at the builder level under
+    a single fallback, since axum can't merge two routers that each carry
+    one (issue #46).
 - **M3:** production backends.
   - Postgres; S3, GCS and Azure; presigned downloads.
   - The range-binding probe against real AWS S3, R2, Garage, GCS and
     Azure, and the presigned-URL signing benchmarks (ADR 0002).
   - OIDC and webhook auth.
   - A multi-node scale test.
+  - A migration compatibility policy, so nodes of two adjacent versions
+    share one database through a rolling upgrade (issue #47).
+  - Index round trips outside the CPU permits, once the index is
+    networked (issue #48).
 - **M4:** operational completeness.
   - GC, `reindex` from bucket, `verify`.
+  - Readiness that checks the index and the bucket (issue #49).
   - Metrics, tracing, and the rest of the HTTP read gateway.
   - Metering (§5.7) and the admin API that exposes it.
   - Server-side chunking for non-Xet clients.
@@ -1523,6 +1531,8 @@ self-hosting better too.
 - Hard multi-tenant isolation (per-scope dedup visibility, pools per tenant,
   noisy-neighbour limits).
 - Enforced quotas and per-tenant rate limits.
+- Bounds on how much one writer's registrations shape the dedup answers
+  other tenants get under `global` visibility (issue #50).
 - Metering accurate enough to bill.
 - Self-service sign-up via the web UI.
 - Admin tooling for abuse and takedowns.
