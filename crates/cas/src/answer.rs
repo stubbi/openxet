@@ -190,22 +190,23 @@ struct Catalog {
     /// Per entry of `xorbs`, its descriptors' indices in `fetches`.
     groups: Vec<Vec<usize>>,
     fetches: Vec<Fetch>,
-    /// The listed descriptors, by xorb index and chunk range. A chunk range
-    /// is the uploader's choice, but as with [`XorbMap`] each request's set
-    /// has its own random seed, so no list of them collides in every set.
-    seen: HashSet<(usize, (u32, u32)), RandomState>,
+    /// Per entry of `xorbs`, the chunk ranges of its descriptors once they
+    /// stop arriving in increasing order, the only way one can repeat. A
+    /// chunk range is the uploader's choice, but as with [`XorbMap`] each
+    /// set has its own random seed, so no list of them collides in every
+    /// set.
+    listed: Vec<Option<HashSet<(u32, u32), RandomState>>>,
 }
 
 impl Catalog {
     /// Adds `plan`'s descriptors, and returns for each the index of its
     /// xorb in `xorbs`, which names the terms it holds.
     fn add(&mut self, plan: &Plan) -> Vec<usize> {
-        self.seen.reserve(plan.fetches.len());
         plan.fetches
             .iter()
             .map(|fetch| {
                 let xorb = self.xorb(&fetch.xorb);
-                if self.seen.insert((xorb, fetch.chunks)) {
+                if self.is_new(xorb, fetch.chunks) {
                     self.groups[xorb].push(self.fetches.len());
                     self.fetches.push(*fetch);
                 }
@@ -214,10 +215,26 @@ impl Catalog {
             .collect()
     }
 
+    /// Whether `chunks` of the catalog's xorb `xorb` isn't listed yet. While
+    /// a xorb's descriptors start at increasing chunks, a later one starts
+    /// past all of them and can't repeat one, so no set is needed.
+    fn is_new(&mut self, xorb: usize, chunks: (u32, u32)) -> bool {
+        let group = &self.groups[xorb];
+        let fetches = &self.fetches;
+        match (&mut self.listed[xorb], group.last()) {
+            (None, None) => true,
+            (None, Some(&last)) if fetches[last].chunks.0 < chunks.0 => true,
+            (listed, _) => listed
+                .get_or_insert_with(|| group.iter().map(|&f| fetches[f].chunks).collect())
+                .insert(chunks),
+        }
+    }
+
     fn xorb(&mut self, xorb: &MerkleHash) -> usize {
         *self.index.entry(*xorb).or_insert_with(|| {
             self.xorbs.push((*xorb, hash_to_hex(xorb)));
             self.groups.push(Vec::new());
+            self.listed.push(None);
             self.xorbs.len() - 1
         })
     }
