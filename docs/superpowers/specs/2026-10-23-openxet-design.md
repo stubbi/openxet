@@ -1587,7 +1587,20 @@ release of the open-source build: it runs the released build (§15).
   - The range-binding probe against real AWS S3, R2, Garage, GCS and
     Azure, and the presigned-URL signing benchmarks (ADR 0002).
   - OIDC and webhook auth.
-  - A multi-node scale test.
+  - **Load testing** (issue [#55](https://github.com/stubbi/openxet/issues/55)), a deliverable rather than a one-off
+    proof:
+    - a reproducible harness in `loadtest/`, with stock `hf_xet` where
+      client behaviour matters and a native generator for higher rates
+    - scenarios: the §5.8 steady mix, a 10× spike, a 24 h soak, a
+      thundering herd, many tenants with one noisy, slow clients, and
+      dedup-heavy and dedup-free uploads; the reconstruction p99 under
+      load (issue [#43](https://github.com/stubbi/openxet/issues/43)) is one of them
+    - multi-node: near-linear scaling from 1 to N stateless nodes on the
+      production backends, and a node killed mid-run with no
+      acknowledged write lost
+    - a release gate on the release rig, a nightly short run, and results
+      published with machine, method and raw data in the
+      [benchmarks](../../reference/benchmarks.md)
   - A migration compatibility policy, so nodes of two adjacent versions
     share one database through a rolling upgrade (issue #47).
   - Index round trips outside the CPU permits, once the index is
@@ -1647,8 +1660,10 @@ release of the open-source build: it runs the released build (§15).
   never crediting dedup across tenants, since a bill that drops when
   another tenant holds the same chunks would reveal that they exist
   (S12). It ships the agent features on the hosted service: delegated
-  tokens, approval gates and MCP (§7.1). Load and capacity tests run
-  before launch. Anything it needs from the core ships in the
+  tokens, approval gates and MCP (§7.1). Load and capacity tests, with
+  the M3 harness against a production-size staging stack, run before
+  launch and before each scale step, and verify per-tenant rate limits
+  under abuse load (issue [#55](https://github.com/stubbi/openxet/issues/55)). Anything it needs from the core ships in the
   open-source build first (§15).
 
 ## 13. Left to the builder
@@ -1747,7 +1762,7 @@ guilt/xet-server.
 | Dimension | Bar | Proof |
 |---|---|---|
 | Protocol correctness | Byte-exact with `xet-core`; every spec MUST implemented and tested | Reference-file golden tests; real-client suite (pinned, latest, oldest supported); nightly against huggingface.co; spec-section traceability (each MUST maps to a test) |
-| Performance | Fastest Xet server on upload, download, dedup ratio and metadata latency | Public benchmark suite run in CI against competitors on identical hardware; regressions fail CI; results published per release |
+| Performance | Fastest Xet server on upload, download, dedup ratio and metadata latency | Public benchmark suite run in CI against competitors on identical hardware; regressions fail CI; results published per release; the load test suite (`loadtest/`, issue [#55](https://github.com/stubbi/openxet/issues/55)) runs in full on the release rig for every release and briefly every night, and a regression past its threshold fails the release |
 | Code quality | Small, readable, reviewed code with no slop | Strict clippy and `forbid(unsafe)`; mutation testing (`cargo-mutants`) on core crates; fuzzing continuously (OSS-Fuzz once eligible); lines of code tracked as a cost, not a goal |
 | Architecture | Every decision recorded and reversible | ADRs for every significant choice; crate boundaries enforced (no cyclic or upward deps, checked in CI); bucket-as-truth and stateless invariants have dedicated tests |
 | Security | Secure by default, with a verifiable supply chain | The §5.9 requirements, each with its test; `SECURITY.md` with a response SLA; OpenSSF Scorecard ≥ 9; signed releases with SLSA provenance; reproducible builds; `cargo-deny` + `cargo-vet`; a third-party audit before 1.0 |
