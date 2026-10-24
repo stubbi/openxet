@@ -31,9 +31,9 @@ uv run --directory compat pytest --collect-only -q > /tmp/compat-tests.txt
 scripts/check-security-tests-map.py --nextest /tmp/tests.json --pytest /tmp/compat-tests.txt
 ```
 
-`assert_no_credential_logged` runs at the teardown of every server started
-through the compatibility suite's `openxet_serve` fixture, which the
-`storage_only` leg uses; the `agent` leg's servers are not scanned.
+Every server the compatibility suite starts, in both the `agent` and the
+`storage_only` legs, has its log scanned at teardown for every credential
+its clients sent (`assert_no_credential_in_log`).
 
 ## Requirements and their tests
 
@@ -82,8 +82,8 @@ Notes on what some tests cover:
 - `credentials_never_logged` runs a server at `trace` level through
   uploads, downloads and every kind of refusal, then scans its whole log
   for each credential, signature and key. The compatibility suite repeats
-  the scan for every server its `openxet_serve` fixture starts
-  (`assert_no_credential_logged` below).
+  the scan for every server it starts (`assert_no_credential_in_log`
+  below).
 
 ## Supporting tests
 
@@ -100,4 +100,4 @@ requirement that the named tests don't.
 | 4 | `per_scope_shard_cannot_reference_foreign_xorb` | `crates/cas/tests/shards.rs` | Shard verification's xorb lookups under `per-scope`. |
 | 6 | `auth_errors_never_contain_the_credential` | `crates/auth/tests/auth.rs` | Credential errors never carry the credential. |
 | 6 | `signed_urls_are_never_logged` | `crates/cas/tests/reconstruction.rs` | A transfer URL's signature never reaches the log. |
-| 6 | `assert_no_credential_logged` | `compat/conftest.py` | The log of every server the `openxet_serve` fixture starts is scanned for the credentials its clients sent. |
+| 6 | `assert_no_credential_in_log` | `compat/conftest.py` | The log of every server the compatibility suite starts, in the `agent` and `storage_only` legs, is scanned for the credentials its clients sent. |
