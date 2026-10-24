@@ -35,6 +35,7 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate
 fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
 cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: each of xorb_upload, xorb_chunks, upload_shard, verify_shard)
 cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace's own dependencies (CI, with the fuzz job)
+cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null # fuzz/Cargo.lock is current (CI, with the fuzz job)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
