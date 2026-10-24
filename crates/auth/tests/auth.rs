@@ -190,7 +190,13 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
     let s = signer();
     let day = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
     let long_scope = "s".repeat(1025);
+    // Found by fuzz/cas_token: within every claim rule, yet the token would
+    // be longer than MAX_TOKEN_BYTES (a backslash is escaped in JSON).
+    let long_subject = "a".repeat(MAX_TOKEN_BYTES);
+    let escaped_subject = "\\".repeat(MAX_TOKEN_BYTES * 2 / 5);
     let refused = [
+        (long_subject.as_str(), "org/model", NOW + 60),
+        (escaped_subject.as_str(), "org/model", NOW + 60),
         ("", "org/model", NOW + 60),
         ("alice\n", "org/model", NOW + 60),
         ("alice", "", NOW + 60),
@@ -222,6 +228,14 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
             .sign("alice", "org/model", Mode::Read, exp, NOW)
             .expect("valid claims");
         assert!(auth.authenticate(&token, NOW).is_ok(), "{exp}");
+    }
+    // Every token the signer mints, up to the size cap, verifies.
+    for len in [4000, 5000, 5800, 5900, 6000] {
+        let subject = "a".repeat(len);
+        if let Ok(token) = s.sign(&subject, "org/model", Mode::Read, NOW + 60, NOW) {
+            assert!(token.len() <= MAX_TOKEN_BYTES, "{len}");
+            assert!(auth.authenticate(&token, NOW).is_ok(), "{len}");
+        }
     }
 
     let hourly = signer()
