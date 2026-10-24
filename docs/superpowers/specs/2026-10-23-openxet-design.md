@@ -30,12 +30,14 @@ clear seams, no opinions forced on the operator.
 - A **bucket** holds mutable objects under keys, with no Git history.
   Its objects are still Xet files, chunked and deduplicated.
 
-Hugging Face's repo types (`model`, `dataset`, `space`, `kernel`) are
-labels on a repository, not separate primitives. They keep the Hub
-routes stock clients need (`/api/models/…`, `/api/datasets/…`), so
-compatibility is unchanged. openxet serves anyone storing large
-versioned or deduplicated files, so it doesn't mirror one field's
-artefact taxonomy.
+Both are addressed by `{namespace}/{name}` and carry generic,
+owner-defined **labels** (none, one or several, such as `checkpoint` or
+`eval-logs`). Hugging Face's repo types (`model`, `dataset`, `space`,
+`kernel`) are just the labels the Hub layer reads and writes: its typed
+routes (`/api/models/…`, `/api/datasets/…`) are views of the same
+repository, so stock clients work unchanged. openxet serves anyone
+storing large versioned or deduplicated files, so it doesn't mirror one
+field's artefact taxonomy.
 
 ### Who it is for
 
@@ -340,6 +342,21 @@ test suite (§8) is the lasting source of truth.
   `/api/buckets/{id}/xet-{read|write}-token` with no revision. `bucket` is
   a URI type there, not one of `REPO_TYPES`. openxet serves them in v1 as
   its bucket primitive (§10.4).
+- **Repo types in `huggingface_hub` 2.2.0** are route prefixes, which
+  openxet serves as typed views of one repository (§6, ADR 0010):
+  - `/api/{type}s/…` for `model`, `dataset`, `space` and `kernel`, and
+    the `datasets/`, `spaces/` and `kernels/` prefixes of resolve and Git
+    URLs (`REPO_TYPES_URL_PREFIXES`).
+  - A missing repository is `404` with `X-Error-Code: RepoNotFound`,
+    which `hf_raise_for_status` turns into `RepositoryNotFoundError`
+    (`utils/_http.py`; S3 fixture `24-repo-info-not-found`).
+  - A repository that exists answers `POST /api/repos/create` with `409`
+    and `{"error", "url"}`; `create_repo(exist_ok=True)` treats it as
+    success and returns the `url` (`hf_api.py` `create_repo`; S3 fixtures
+    `05` and `06`).
+  - `kernel` repositories are created, read and downloaded, but the
+    commit and upload functions accept only `REPO_TYPES`, which has no
+    `kernel`.
 - `xet-core` crates (`xet-core-structures`, `xet-data`, `xet-client`) are
   Apache-2.0 and contain the reference merklehash, xorb, shard and chunking
   code.
@@ -542,9 +559,10 @@ with a configured key. It then stores Xet file hashes in its own database.
 
 **Scopes and tenants (builder-check call, ruling M1-R38):**
 - A **scope** is the unit of access. In the Hub layer a scope is a
-  repository (`{label}/{namespace}/{name}`), matching HF's repo-scoped
-  Xet tokens, or a bucket (`bucket/{namespace}/{name}`). `bucket` is
-  never a label, so the two never collide. Scope strings are persisted
+  repository (`{namespace}/{name}`), matching HF's repo-scoped Xet
+  tokens, or a bucket (`bucket/{namespace}/{name}`); two path segments
+  against three, so the two never collide. Labels are not part of a
+  scope. Scope strings are persisted
   (their SHA-256 keys every registration record, §5.3), so both kinds
   map to an immutable scope id, which the M2 plan defines, and a rename
   never orphans their data. In
@@ -816,19 +834,48 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
 - branch and tag create/delete
 - `HEAD|GET /{[datasets/|spaces/|kernels/]}{id}/resolve/{rev}/{path}`
 
-The label prefixes (`REPO_TYPES_URL_PREFIXES` in `huggingface_hub`
-2.2.0: `datasets/`, `spaces/`, `kernels/`, and none for models) apply to
-resolve URLs, Git URLs (`https://openxet.example/datasets/{namespace}/{name}`,
-§10.9) and the implicit LFS endpoint alike. `huggingface_hub` 2.2.0
-creates, reads and downloads `kernel` repositories but won't commit or
-upload to them (its commit and upload functions accept only
-`REPO_TYPES`), so kernels are written over Git with `git-xet`
-([ADR 0010](../../adr/0010-two-storage-primitives.md)).
+**Addressing and typed views**
+([ADR 0010](../../adr/0010-two-storage-primitives.md)):
+- A repository is addressed by `{namespace}/{name}` only. Its labels are
+  generic (§10.4); `model`, `dataset`, `space` and `kernel` are the ones
+  the Hub layer reads and writes.
+- The typed routes are views of the same repository through one label:
+  `/api/{type}s/…`, and the prefixed resolve and Git URLs
+  (`REPO_TYPES_URL_PREFIXES` in `huggingface_hub` 2.2.0: `datasets/`,
+  `spaces/`, `kernels/`, none for models), e.g.
+  `https://openxet.example/datasets/{namespace}/{name}` and its implicit
+  LFS endpoint. The unprefixed resolve route is the `model` view, as on
+  huggingface.co; the unprefixed Git URL `/{namespace}/{name}.git` is
+  openxet's own address and serves the repository whatever its labels.
+- `POST /api/repos/create` with a `type` adds that type's label, and
+  listing through a typed route (`/api/models?…`) returns only
+  repositories with its label.
+- Reading or writing a repository through a typed route whose label it
+  lacks answers exactly as a missing one does: `404`, `X-Error-Code:
+  RepoNotFound`, `{"error":"Repository not found"}` (S3 fixture
+  `24-repo-info-not-found`). Stock clients raise
+  `RepositoryNotFoundError`, as huggingface.co makes them do for a wrong
+  `repo_type`.
+- Names are unique across labels, unlike huggingface.co. Creating
+  `datasets/foo/bar` while `foo/bar` exists answers `409` in the shape
+  `create_repo` reads (S3 fixtures `05` and `06`): `{"error", "url"}`,
+  the message in `X-Error-Message`, naming the existing repository. With
+  `exist_ok=True` that reads as success, and the next call through the
+  `dataset` view gets the `404` above; relabel the repository or choose
+  another name.
+- Labels are changed through openxet's own API and CLI, never the Hub
+  API.
+- `huggingface_hub` 2.2.0 creates, reads and downloads `kernel`
+  repositories but won't commit or upload to them (its commit and upload
+  functions accept only `REPO_TYPES`), so kernels are written over Git
+  with `git-xet`.
+- Compatibility tests planned for M2: `typed_route_view_filters_by_label`,
+  `wrong_type_route_is_repo_not_found` and
+  `create_collision_answers_409_with_url`, with stock `huggingface_hub`.
 
 **Model:**
-- Repositories, each labelled `model`, `dataset`, `space` or `kernel`
-  (§10.4). The label picks the route prefix and is part of the address;
-  it changes no behaviour. Buckets have their own routes (§3, §10.4).
+- Repositories and buckets are separate primitives; buckets have their
+  own routes (§3, §10.4).
 - Every commit is a **real Git commit**, just as on huggingface.co. Small
   files are Git blobs. Large files are Git LFS pointer files whose sha256 maps
   to a Xet file hash. Commits made through the Hub API (`hf upload`) and
@@ -1187,11 +1234,17 @@ chunking, so the hashes are identical to client-side uploads.
 The two storage primitives of §1
 ([ADR 0010](../../adr/0010-two-storage-primitives.md)).
 
-**Repositories** carry one label, `model`, `dataset`, `space` (files
-only; nothing is run) or `kernel`, chosen at creation. Every label
-behaves the same; labels need nothing beyond M2's Hub API and Git
-hosting. Stock `huggingface_hub` can't commit to a `kernel`, so kernels
-are written over Git (§6).
+**Labels**, on repositories and buckets alike, are free-form and
+owner-defined: none, one or several, such as `model`, `dataset`,
+`checkpoint` or `eval-logs`. A label is a lowercase slug (`a`–`z`,
+`0`–`9` and `-`) of at most 64 bytes, at most 32 per object. Labels are
+added and removed through openxet's API and CLI, each change with an
+audit entry, and reach the object store before the change is
+acknowledged, so `reindex` restores them. They never change the address
+or any behaviour: a `space` label runs nothing. The Hub layer reads and
+writes the four Hugging Face types as labels (§6); stock
+`huggingface_hub` can't commit to a `kernel`, so kernels are written over
+Git.
 
 **Buckets** (mutable, non-versioned) serve the HF Storage Buckets API
 (§3). Keys map to Xet files with last-writer-wins and optional object
@@ -1322,6 +1375,9 @@ mechanics to be recorded in ADR 0006:*
     private or 404 answer hides it.
   - Repos HF removes are hidden, and their data is reclaimed only by GC.
 - **Mirrored namespaces are read-only.**
+- **Colliding names.** openxet names are unique across labels (§6), so a
+  mirror or import that meets two Hub repositories of different types
+  under one name maps the second to `{name}-{type}` and reports it.
 - **Seeding.** `openxet mirror pull` pre-seeds through the same ingest
   path. Mirrored commit metadata lives in the bucket, so moving bucket
   objects plus `reindex` carries a mirror across an air gap.
@@ -1393,8 +1449,9 @@ binaries. The client must run on Windows; the server need not.
 ### 10.9 Git hosting *(decided by the user: v1)*
 
 `git clone https://openxet.example/org/model` (and `git@openxet.example:org/model`)
-works as it does on huggingface.co, with the label prefix for other labels
-(`https://openxet.example/datasets/org/data`, §6). This sits alongside §6.1, where the repo
+works as it does on huggingface.co. The prefixed URLs
+(`https://openxet.example/datasets/org/data`) are typed views of the same
+repository (§6). This sits alongside §6.1, where the repo
 lives elsewhere and openxet is only its LFS store; both modes are supported.
 
 **Behaviour:**
@@ -1670,12 +1727,17 @@ release of the open-source build: it runs the released build (§15).
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
-  - Repositories under all four labels, `model`, `dataset`, `space` and
-    `kernel`, on their Hub routes and their prefixed resolve and Git URLs
-    (§6, §10.4, ADR 0010). Each label is read with stock
+  - Generic labels on repositories (§10.4, ADR 0010): add, remove and
+    list through openxet's API and CLI, with validation and audit
+    entries.
+  - The typed-route views of §6 for `model`, `dataset`, `space` and
+    `kernel`: typed create adds the label, typed listing filters by it,
+    a missing label is a `404 RepoNotFound`, and a name taken under
+    another label is a `409`. Each type is read with stock
     `huggingface_hub` and written with the stock client that supports
     it: Hub commits for `model`, `dataset` and `space`, Git with
-    `git-xet` for `kernel`.
+    `git-xet` for `kernel`. The compatibility tests of §6 cover a
+    typed-route view, a wrong-type `404` and a create collision.
   - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
     `basic` download `href`s point at it (ADR 0003).
   - **M2-URI: resource-address contract** (ADR 0009), after the Hub resource
@@ -1744,7 +1806,7 @@ release of the open-source build: it runs the released build (§15).
 - **M5:** reach.
   - The bucket primitive (§10.4): the HF Storage Buckets routes, mutable
     keys with last-writer-wins and optional versioning, and GC, `reindex`
-    and metering for bucket keys. Repository labels need no M5 work.
+    and metering for bucket keys, with the generic labels of §10.4.
   - The bucket log and snapshots of §10.4, with `reindex` restoring every
     acknowledged key, and a small-object write benchmark: at least 200
     one-key `batch` commits per second per deployment (§5.8's shard

@@ -15,9 +15,11 @@ systems people already own, and as a hosted service at **openxet.com**.
 
 It has two storage primitives (ADR 0010): the **repository**, versioned
 and Git and Hub compatible, and the **bucket**, mutable objects under keys
-with no Git history, still Xet-chunked and deduplicated. Hugging Face's
-repo types (`model`, `dataset`, `space`, `kernel`) are labels on a
-repository, served on the Hub routes stock clients call.
+with no Git history, still Xet-chunked and deduplicated. Both are
+addressed by `{namespace}/{name}` and carry generic, owner-defined
+labels. Hugging Face's repo types (`model`, `dataset`, `space`,
+`kernel`) are just labels; the Hub routes stock clients call are views
+of a repository through one of them.
 
 The design is the source of truth for scope and decisions:
 `docs/superpowers/specs/2026-10-23-openxet-design.md`. Architecture decisions
