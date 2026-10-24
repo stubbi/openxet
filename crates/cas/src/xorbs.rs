@@ -114,8 +114,14 @@ async fn store(
     scope: &str,
     request: Request,
 ) -> Result<bool, Response> {
-    let (body, reserved) =
-        body::buffer(request, MAX_XORB_BODY_BYTES, too_large, &state.budget).await?;
+    let (body, reserved) = body::buffer(
+        request,
+        MAX_XORB_BODY_BYTES,
+        too_large,
+        &state.budget,
+        body::Class::Upload,
+    )
+    .await?;
     // The work runs in its own task, which owns the body's budget share and
     // takes the commit permit, so both are held until it ends (review I-1
     // of ruling M1-R40). A client that disconnects drops this handler, but
@@ -427,6 +433,24 @@ mod tests {
             StatusCode::BAD_REQUEST,
             "read and validated"
         );
+    }
+
+    #[tokio::test]
+    async fn a_body_longer_than_it_declared_is_refused() {
+        // Review M-1 of M1-R40: the reservation is the declared length, so
+        // a body may not grow past it, whatever the transport lets through.
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_support::state(dir.path(), vec![write_token()]).await;
+        let (mut tx, body) = test_support::declared_body(10);
+        tx.send_data(Bytes::from(vec![0; 20])).await.unwrap();
+        drop(tx);
+
+        let response = router(state.clone()).oneshot(post(body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "bad_request", "{json}");
+        assert_eq!(state.budget.available(), state.budget.bytes());
     }
 
     #[tokio::test]

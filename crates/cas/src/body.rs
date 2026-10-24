@@ -25,34 +25,57 @@ use crate::{CasError, MemoryBudget};
 /// - The reservation is the declared length, or the limit for a body that
 ///   declares none, and the buffer is allocated to it once, so buffering
 ///   never holds a second copy while it grows.
+/// - An upload's body queues for the budget as uploads do; a read request's
+///   body (a batch's list of files) as answers do, so it never waits behind
+///   uploads ([`Class`]).
 /// - A full budget refuses the body unread with `503 memory_busy`, closing
 ///   the connection; stock clients retry it (S10 "Status codes and
 ///   retries").
+/// - A body longer than it declared is refused with `400`: the reservation
+///   is its declared length, whatever the transport lets through.
 pub(crate) async fn buffer(
     request: Request,
     limit: u64,
     too_large: fn() -> CasError,
     budget: &MemoryBudget,
+    class: Class,
 ) -> Result<(Bytes, Reservation), Response> {
     let hint = request.body().size_hint();
     if hint.lower() > limit {
         return Err(closing(too_large()));
     }
     let declared = hint.upper().unwrap_or(limit).min(limit);
-    let reservation = budget.reserve_upload(declared).await.map_err(closing)?;
+    let reservation = match class {
+        Class::Upload => budget.reserve_upload(declared).await,
+        Class::Read => budget.reserve_answer(declared).await,
+    }
+    .map_err(closing)?;
     let mut body = request.into_body();
     let capacity = usize::try_from(declared).map_err(|e| CasError::internal(e).into_response())?;
     let mut buffer = Vec::with_capacity(capacity);
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|err| unreadable(&err))?;
         if let Some(data) = frame.data_ref() {
-            if (buffer.len() + data.len()) as u64 > limit {
-                return Err(closing(too_large()));
+            if (buffer.len() + data.len()) as u64 > declared {
+                return Err(closing(if declared < limit {
+                    CasError::UnreadableBody
+                } else {
+                    too_large()
+                }));
             }
             buffer.extend_from_slice(data);
         }
     }
     Ok((Bytes::from(buffer), reservation))
+}
+
+/// Which queue a body waits in for the memory budget.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Class {
+    /// An upload, which may queue up to the upload wait.
+    Upload,
+    /// A read request's body, which waits as its answer does.
+    Read,
 }
 
 /// The answer to a body that failed while being read: `408` if it fell

@@ -187,6 +187,7 @@ async fn accept(
         MAX_UPLOAD_SHARD_BYTES,
         too_large,
         &state.budget,
+        body::Class::Upload,
     )
     .await?;
     Ok((principal.scope, shard, reserved))

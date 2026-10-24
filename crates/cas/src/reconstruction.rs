@@ -205,6 +205,7 @@ async fn batch_post(State(state): State<AppState>, request: Request) -> Result<R
         BATCH_BODY_LIMIT,
         batch_too_long,
         &state.budget,
+        body::Class::Read,
     )
     .await?;
     let keys: Vec<BatchKey> =
@@ -922,6 +923,37 @@ mod tests {
         assert_eq!(json["code"], "answer_too_large", "{json}");
         assert_eq!(index.file_loads.load(Ordering::SeqCst), 0);
         assert_eq!(state.budget.available(), 1 << 20);
+    }
+
+    #[tokio::test]
+    async fn a_batch_body_waits_for_memory_as_an_answer_does() {
+        // Review M-4 of M1-R40: a read request's small body must not queue
+        // behind uploads for their 120 s.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, _) = one_file(dir.path()).await;
+        state.budget = crate::MemoryBudget::new(1 << 20)
+            .with_waits(Duration::from_mins(1), Duration::from_millis(200));
+        let _full = state.budget.reserve_upload(1 << 20).await.unwrap();
+        let body = format!(
+            r#"[{{"prefix":"default","hash":"{}"}}]"#,
+            hash_to_hex(&openxet_protocol::chunk_hash(b"file"))
+        );
+
+        let started = std::time::Instant::now();
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            router(state.clone()).oneshot(
+                Request::post("/v1/reconstructions")
+                    .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("the batch body queued as an upload")
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[tokio::test]
