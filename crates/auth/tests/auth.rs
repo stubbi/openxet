@@ -229,14 +229,22 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
             .expect("valid claims");
         assert!(auth.authenticate(&token, NOW).is_ok(), "{exp}");
     }
-    // Every token the signer mints, up to the size cap, verifies.
-    for len in [4000, 5000, 5800, 5900, 6000] {
-        let subject = "a".repeat(len);
-        if let Ok(token) = s.sign(&subject, "org/model", Mode::Read, NOW + 60, NOW) {
-            assert!(token.len() <= MAX_TOKEN_BYTES, "{len}");
-            assert!(auth.authenticate(&token, NOW).is_ok(), "{len}");
-        }
-    }
+    // The signer's size cap is the verifier's: the longest subject it
+    // signs makes a token the verifier accepts, within 3 bytes (one
+    // base64url quantum) of MAX_TOKEN_BYTES, and one byte more is refused.
+    let sign_len = |len: usize| s.sign(&"a".repeat(len), "org/model", Mode::Read, NOW + 60, NOW);
+    let longest = (5000..MAX_TOKEN_BYTES)
+        .take_while(|&len| sign_len(len).is_ok())
+        .last()
+        .expect("a 5000-byte subject signs");
+    let token = sign_len(longest).expect("the longest subject signs");
+    assert!(token.len() <= MAX_TOKEN_BYTES, "{}", token.len());
+    assert!(token.len() > MAX_TOKEN_BYTES - 4, "{}", token.len());
+    assert!(auth.authenticate(&token, NOW).is_ok());
+    assert!(matches!(
+        sign_len(longest + 1),
+        Err(AuthError::InvalidClaims { .. })
+    ));
 
     let hourly = signer()
         .with_max_token_lifetime(Duration::from_hours(1))
