@@ -130,6 +130,41 @@ fn exists_error(path: &Path) -> CliError {
 ///
 /// `exists` if the file already exists: nothing is ever overwritten.
 pub fn create_with_mode(path: &Path, contents: &[u8], mode: u32) -> Result<(), CliError> {
+    create_linked(path, contents, mode, |from, to| fs::hard_link(from, to))
+}
+
+/// Whether a failed hard link means the filesystem can't link at all, so
+/// an exclusive plain write is the best left; any other failure (no space,
+/// no permission) is reported instead.
+fn links_unsupported(err: &io::Error) -> bool {
+    if err.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        err.raw_os_error().is_some_and(|code| {
+            [
+                libc::EPERM,
+                libc::EXDEV,
+                libc::ENOTSUP,
+                libc::EOPNOTSUPP,
+                libc::EMLINK,
+            ]
+            .contains(&code)
+        })
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+/// [`create_with_mode`], linking the temporary file into place with
+/// `link`, which tests replace to inject its errors.
+fn create_linked(
+    path: &Path,
+    contents: &[u8],
+    mode: u32,
+    link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> Result<(), CliError> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(parent) = parent {
         create_private_dir_all(parent).map_err(|err| {
@@ -145,7 +180,7 @@ pub fn create_with_mode(path: &Path, contents: &[u8], mode: u32) -> Result<(), C
         .file_name()
         .map_or_else(|| "secret".into(), |n| n.to_string_lossy().into_owned());
     let suffix = hex(&random_bytes()?[..8]);
-    let tmp = path.with_file_name(format!(".{name}.{suffix}.tmp"));
+    let tmp = path.with_file_name(format!(".{name}.{suffix}{TEMP_SUFFIX}"));
     let written = create_new_file(&tmp, mode).and_then(|mut file| {
         file.write_all(contents)?;
         file.sync_all()
@@ -159,14 +194,14 @@ pub fn create_with_mode(path: &Path, contents: &[u8], mode: u32) -> Result<(), C
             "Check free space and permissions.",
         ));
     }
-    let linked = fs::hard_link(&tmp, path);
+    let linked = link(&tmp, path);
     let _ = fs::remove_file(&tmp);
     match linked {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Err(exists_error(path)),
         // A filesystem without hard links: fall back to an exclusive,
         // non-atomic write.
-        Err(_) => {
+        Err(err) if links_unsupported(&err) => {
             let mut file = create_new_file(path, mode).map_err(|err| {
                 if err.kind() == io::ErrorKind::AlreadyExists {
                     exists_error(path)
@@ -180,12 +215,62 @@ pub fn create_with_mode(path: &Path, contents: &[u8], mode: u32) -> Result<(), C
                     io_error("write", path, &err, "Check free space and permissions.")
                 })?;
         }
+        Err(err) => {
+            return Err(io_error(
+                "link into place",
+                path,
+                &err,
+                "Check free space and permissions.",
+            ));
+        }
     }
     // The new name survives a power loss only once its directory is synced.
     if let Some(dir) = parent.and_then(|p| File::open(p).ok()) {
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+/// The suffix of a secret's temporary file, `.{name}.{16 hex}.tmp`.
+const TEMP_SUFFIX: &str = ".tmp";
+
+/// Temporary secret files older than this are leftovers from a crash
+/// between writing and linking; no healthy write takes an hour. The bucket
+/// sweeps its own temporary files by the same rule.
+const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_hours(1);
+
+/// Whether `name` is a temporary secret file's: `.{name}.{16 hex}.tmp`.
+fn is_temp_name(name: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|rest| rest.strip_suffix(TEMP_SUFFIX))
+        .and_then(|rest| rest.rsplit_once('.'))
+        .is_some_and(|(stem, hex)| {
+            !stem.is_empty() && hex.len() == 16 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+}
+
+/// Removes temporary secret files in `dir` older than an hour, which a
+/// crash between writing and linking left behind; each holds a secret.
+/// Younger ones may belong to a process creating its secret right now.
+/// Best effort: what can't be removed now is tried at the next start.
+pub fn sweep_stale_temps(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !is_temp_name(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > STALE_TEMP_AGE);
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// [`create_with_mode`] with mode `0600`.
@@ -421,6 +506,65 @@ mod tests {
             handles.into_iter().map(|h| h.join().unwrap()).collect()
         });
         assert!(tokens.iter().all(|t| *t == tokens[0]), "{tokens:?}");
+    }
+
+    fn os_error(code: i32) -> io::Error {
+        io::Error::from_raw_os_error(code)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_unsupported_links_fall_back_to_a_plain_write() {
+        let dir = tempfile::tempdir().unwrap();
+        for code in [
+            libc::EXDEV,
+            libc::EPERM,
+            libc::ENOTSUP,
+            libc::EOPNOTSUPP,
+            libc::EMLINK,
+        ] {
+            let path = dir.path().join(format!("fallback-{code}"));
+            create_linked(&path, b"x", 0o600, |_, _| Err(os_error(code))).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"x", "errno {code}");
+        }
+        for code in [libc::EACCES, libc::ENOSPC, libc::EIO] {
+            let path = dir.path().join(format!("error-{code}"));
+            let err = create_linked(&path, b"x", 0o600, |_, _| Err(os_error(code))).unwrap_err();
+            assert_eq!(err.code, "io", "errno {code}");
+            assert!(!path.exists(), "errno {code} fell back");
+        }
+        // No temporary file is left behind either way.
+        assert!(
+            fs::read_dir(dir.path()).unwrap().all(|e| !e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp"))
+        );
+    }
+
+    #[test]
+    fn stale_temp_files_are_swept_and_fresh_ones_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(".dev-token.0123456789abcdef.tmp");
+        let fresh = dir.path().join(".transfer.key.fedcba9876543210.tmp");
+        let other = dir.path().join(".notes.tmp");
+        for path in [&stale, &fresh, &other] {
+            fs::write(path, b"secret").unwrap();
+        }
+        let old = std::time::SystemTime::now() - std::time::Duration::from_hours(2);
+        for path in [&stale, &other] {
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        sweep_stale_temps(dir.path());
+        assert!(!stale.exists());
+        assert!(fresh.exists(), "a concurrent starter's file was removed");
+        assert!(other.exists(), "a file openxet didn't write was removed");
     }
 
     #[test]

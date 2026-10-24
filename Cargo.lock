@@ -1552,6 +1552,7 @@ dependencies = [
  "getrandom",
  "hyper",
  "hyper-util",
+ "libc",
  "openxet-auth",
  "openxet-cas",
  "openxet-index",
@@ -1632,6 +1633,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -49,7 +49,10 @@ data directory can be written; `transfer.key` and `dev-token` are well
 formed and private), and reports either every problem or every effective
 setting with its source. Values under `[auth]` are always `<redacted>`.
 `warnings` lists what `serve` accepts but warns about, such as a data
-directory other users may enter. Exit code 0 if the configuration is valid,
+directory other users may enter. To prove the data directory (or, if
+it doesn't exist yet, its nearest existing parent) can be written, it
+creates one empty file named `.openxet-check-<16 hex>` there with
+`O_CREAT|O_EXCL` and removes it at once; nothing else is written. Exit code 0 if the configuration is valid,
 1 with error code `config` if not.
 
 ```json

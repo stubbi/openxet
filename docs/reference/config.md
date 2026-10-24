@@ -13,7 +13,9 @@ openxet config check --config openxet.toml --json   # the same as openxet.config
 `config check` reports every problem at once, each with its key path,
 value, source (`file …`, `env …`, `flag …` or `default`), the rule it
 breaks and a hint. For a valid configuration it also checks the files it
-names, as `serve` would: that `data_dir` can be written, and that
+names, as `serve` would: that `data_dir` can be written (it creates and
+at once removes one empty `.openxet-check-<16 hex>` file there, the only
+write it makes), that `data_dir` is not a symbolic link to nothing, and that
 `transfer.key` and `dev-token`, if present, are well formed and private. A
 data directory other users may enter is a warning. `serve` refuses an
 invalid configuration with exit code 1 and error code `config`, and points
@@ -135,7 +137,15 @@ openxet creates secret files whole (written to a temporary file, synced,
 then linked into place) and never overwrites them. Of two servers starting
 at once on one data directory, both use the first one's `dev-token` and
 `transfer.key`. openxet refuses to start if a secret file can be read by
-group or other users, and names the `chmod 600` that fixes it.
+group or other users, and names the `chmod 600` that fixes it. A crash
+between writing and linking can leave a temporary `.<name>.<16 hex>.tmp`
+file holding the secret; `serve` removes those older than an hour at its
+next start, and never a younger one another server may be writing.
+
+Servers starting together on one data directory open the index one at a
+time, under an advisory lock on `index.sqlite-lock`. A server that waits
+for it logs so at info level, naming the lock file, and again when it gets
+the lock; `/readyz` answers `503` meanwhile. It gives up after a minute.
 
 `transfer.key` holds 32 random bytes as 64 hex characters, and signs
 transfer URLs. Every node behind one `public_url` must share the same key;

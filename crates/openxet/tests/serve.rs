@@ -1338,3 +1338,145 @@ fn config_check_checks_files_and_the_data_dir() {
     assert_eq!(report["valid"], false, "{report}");
     assert_eq!(report["problems"][0]["key"], "server.data_dir", "{report}");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_data_dir_symlink_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("data");
+    std::os::unix::fs::symlink(dir.path().join("gone"), &link).unwrap();
+
+    let report = json_stdout(&run(openxet()
+        .args(["config", "check", "--json"])
+        .env("OPENXET_SERVER__DATA_DIR", &link)));
+    assert_eq!(report["valid"], false, "{report}");
+    assert_eq!(report["problems"][0]["key"], "server.data_dir");
+    assert!(
+        report["problems"][0]["rule"]
+            .as_str()
+            .unwrap()
+            .contains("symbolic link"),
+        "{report}"
+    );
+
+    let out = run(openxet()
+        .args(["serve", "--json", "--port", "0", "--data-dir"])
+        .arg(&link));
+    assert_eq!(out.status.code(), Some(1));
+    let error = json_stderr(&out);
+    assert_eq!(error["code"], "data_dir");
+    assert!(
+        error["message"].as_str().unwrap().contains("symbolic link"),
+        "{error}"
+    );
+    assert!(error["hint"].as_str().unwrap().contains("gone"), "{error}");
+}
+
+#[test]
+fn waiting_for_the_index_lock_is_logged() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("data")).unwrap();
+    let lock = std::fs::File::create(dir.path().join("data/index.sqlite-lock")).unwrap();
+    lock.lock().unwrap();
+
+    let mut child = openxet()
+        .args(["serve", "--json", "--port", "0", "--data-dir"])
+        .arg(dir.path().join("data"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let guard = KillOnDrop(child.id().to_string());
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let next_about_the_lock = || loop {
+        let line = rx
+            .recv_timeout(PATIENCE)
+            .expect("no log about the index lock");
+        if line.contains("index.sqlite-lock") {
+            break line;
+        }
+    };
+    let waiting = next_about_the_lock();
+    assert!(waiting.contains("waiting"), "{waiting}");
+
+    drop(lock);
+    let got = next_about_the_lock();
+    assert!(got.contains("got the index lock"), "{got}");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.contains("openxet.serve.v1"), "{line}");
+    drop(guard);
+    let _ = child.wait();
+}
+
+/// Kills the process with this pid on drop, so a failing test leaves no
+/// server behind.
+struct KillOnDrop(String);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = Command::new("kill").args(["-9", &self.0]).status();
+    }
+}
+
+#[test]
+fn a_missing_required_argument_is_named() {
+    let out = run(openxet().args(["token", "generate", "--json", "--mode", "read"]));
+    assert_eq!(out.status.code(), Some(2));
+    let error = json_stderr(&out);
+    assert_eq!(error["code"], "usage");
+    assert!(
+        error["message"].as_str().unwrap().contains("--subject"),
+        "{error}"
+    );
+    assert!(
+        !error["message"].as_str().unwrap().contains("Usage:"),
+        "{error}"
+    );
+}
+
+#[test]
+fn raw_token_hints_fit_the_key() {
+    let token = json_stdout(&run(openxet().args([
+        "token",
+        "generate",
+        "--json",
+        "--mode",
+        "read",
+        "--subject",
+        "a",
+    ])))["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let report = json_stdout(&run(openxet()
+        .args(["config", "check", "--json"])
+        .env("OPENXET_SERVER__BIND", &token)));
+    let hint = report["problems"][0]["hint"].as_str().unwrap();
+    assert!(hint.contains("looks like a raw token"), "{hint}");
+    assert!(!hint.contains("SHA-256"), "{hint}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_shared_dir_warning_names_its_chmod_once() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let report = json_stdout(&run(openxet()
+        .args(["config", "check", "--json"])
+        .env("OPENXET_SERVER__DATA_DIR", dir.path())));
+    let warning = &report["warnings"][0];
+    let text = format!("{} {}", warning["rule"], warning["hint"]);
+    assert_eq!(text.matches("chmod 700").count(), 1, "{text}");
+}

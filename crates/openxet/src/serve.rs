@@ -366,10 +366,15 @@ fn prepare_data_dir(dir: &Path) -> Result<(), CliError> {
             "Pass `--data-dir` with a writable directory, or set server.data_dir.",
         )
     };
+    if let Some(err) = preflight::dangling_symlink(dir) {
+        return Err(err);
+    }
     if dir.is_dir() {
         if let Some(warning) = preflight::shared_data_dir(dir) {
-            tracing::warn!("{warning}");
+            let fix = preflight::shared_data_dir_fix(dir);
+            tracing::warn!("{warning}. {fix}");
         }
+        secret::sweep_stale_temps(dir);
     } else {
         secret::create_private_dir_all(dir).map_err(unwritable)?;
     }
@@ -385,6 +390,9 @@ fn prepare_data_dir(dir: &Path) -> Result<(), CliError> {
 /// node behind one endpoint needs the same key (ruling M1-R29).
 fn transfer_key(config: &Config) -> Result<Zeroizing<[u8; 32]>, CliError> {
     let path = &config.transfer_key_file;
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        secret::sweep_stale_temps(parent);
+    }
     if let Some(key) = secret::read_transfer_key(path)? {
         return Ok(key);
     }

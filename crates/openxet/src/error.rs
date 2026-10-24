@@ -45,14 +45,22 @@ impl CliError {
         }
     }
 
+    /// clap's message, on one line: its first paragraph, which names
+    /// what is wrong (a missing argument is listed on the lines after the
+    /// first), without the usage line and the `--help` tip that follow.
     pub fn usage(err: &clap::Error) -> Self {
         let rendered = err.to_string();
-        let message = rendered.lines().next().unwrap_or_default();
+        let message = rendered
+            .lines()
+            .take_while(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ");
         Self {
             exit: ExitCode::USAGE,
             ..Self::new(
                 "usage",
-                message.strip_prefix("error: ").unwrap_or(message),
+                message.strip_prefix("error: ").unwrap_or(&message),
                 "Run `openxet --help` to list commands and options.",
             )
         }

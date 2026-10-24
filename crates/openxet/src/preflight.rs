@@ -22,7 +22,7 @@ pub struct Findings {
 }
 
 /// The warning for a data directory other users may enter, if `dir` is
-/// one.
+/// one. The fix is [`shared_data_dir_fix`].
 pub fn shared_data_dir(dir: &Path) -> Option<String> {
     #[cfg(unix)]
     {
@@ -31,10 +31,9 @@ pub fn shared_data_dir(dir: &Path) -> Option<String> {
         (mode & 0o077 != 0).then(|| {
             format!(
                 "the data directory {} is accessible to other users (mode {:o}), who can read \
-                 every stored file; run `chmod 700 {}`",
+                 every stored file",
                 dir.display(),
                 mode & 0o777,
-                dir.display()
             )
         })
     }
@@ -43,6 +42,32 @@ pub fn shared_data_dir(dir: &Path) -> Option<String> {
         let _ = dir;
         None
     }
+}
+
+/// What fixes [`shared_data_dir`].
+pub fn shared_data_dir_fix(dir: &Path) -> String {
+    format!("Run `chmod 700 {}`.", dir.display())
+}
+
+/// The error for a `dir` that is a symbolic link to nothing: it can be
+/// neither used nor created.
+pub fn dangling_symlink(dir: &Path) -> Option<CliError> {
+    let is_link = fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link || dir.exists() {
+        return None;
+    }
+    let target = fs::read_link(dir).map_or_else(|_| "?".to_owned(), |t| t.display().to_string());
+    Some(CliError::new(
+        "data_dir",
+        format!(
+            "the data directory {} is a symbolic link to {target}, which does not exist",
+            dir.display()
+        ),
+        format!(
+            "Create {target} (`mkdir -m 700 {target}`), or pass `--data-dir` with another \
+             directory."
+        ),
+    ))
 }
 
 /// The error for a `cas.transfer_key_file` that was named but is missing.
@@ -80,7 +105,7 @@ pub fn check(config: &Config) -> Findings {
             value: Some(dir.display().to_string()),
             source: "the file system".to_owned(),
             rule: warning,
-            hint: format!("Run `chmod 700 {}`.", dir.display()),
+            hint: shared_data_dir_fix(dir),
             quoted: true,
         });
     }
@@ -112,6 +137,9 @@ pub fn check(config: &Config) -> Findings {
 /// Checks that `dir`, or the nearest existing directory above it, accepts
 /// new files.
 fn writable(dir: &Path) -> Result<(), CliError> {
+    if let Some(err) = dangling_symlink(dir) {
+        return Err(err);
+    }
     let mut existing: PathBuf = dir.to_owned();
     while !existing.exists() {
         match existing.parent() {

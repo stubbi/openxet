@@ -67,8 +67,13 @@ pub struct Problem {
 /// often pasted by mistake).
 pub const REDACTED: &str = "<redacted>";
 
-const RAW_TOKEN_HINT: &str = "This looks like a raw token, not its SHA-256; rotate it and \
-     configure its hash (`openxet token generate`).";
+/// The hint for a token pasted where its hash belongs.
+const RAW_TOKEN_IN_SHA256_HINT: &str = "This looks like a raw token, not its SHA-256; rotate \
+     it and configure its hash (`openxet token generate`).";
+
+/// The hint for a token in any other setting.
+const RAW_TOKEN_HINT: &str = "This looks like a raw token, which no setting holds; rotate it, \
+     since it may have been seen.";
 
 /// One effective setting, for `openxet config check`.
 #[derive(Debug, Clone, Serialize)]
@@ -280,7 +285,12 @@ impl Raw {
                 quoted = false;
             }
             if holds_token {
-                hint = format!("{RAW_TOKEN_HINT} {hint}");
+                let raw = if key.ends_with("sha256") {
+                    RAW_TOKEN_IN_SHA256_HINT
+                } else {
+                    RAW_TOKEN_HINT
+                };
+                hint = format!("{raw} {hint}");
             }
         }
         self.problems.push(Problem {
