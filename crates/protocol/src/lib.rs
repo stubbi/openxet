@@ -29,12 +29,12 @@ pub use shard::{
     UploadShard, VerifyError, VerifyLimits, XorbChunkLookup, read_upload_shard, shard_hash,
     stored_shard, verify_segment, verify_shard,
 };
-#[cfg(feature = "test-support")]
-pub use xorb::decode_fetched_chunks;
 pub use xorb::{
     MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS, StoredXorb, XorbChunks,
     read_xorb_chunks, xorb_hash, xorb_with_footer,
 };
+#[cfg(feature = "test-support")]
+pub use xorb::{decode_fetched_chunks, lz4_xorb_body};
 
 /// Errors from parsing protocol data.
 #[derive(Debug, thiserror::Error)]

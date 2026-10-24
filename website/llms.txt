@@ -11,6 +11,7 @@ openxet is an independent project, not affiliated with or endorsed by Hugging Fa
 - [CLI reference](https://github.com/stubbi/openxet/blob/main/docs/reference/cli.md): every command, with its `--json` schema
 - [Configuration](https://github.com/stubbi/openxet/blob/main/docs/reference/config.md): config file, environment overrides and dev mode
 - [Exit codes](https://github.com/stubbi/openxet/blob/main/docs/reference/exit-codes.md): stable exit codes and structured errors
+- [Benchmarks](https://github.com/stubbi/openxet/blob/main/docs/reference/benchmarks.md): the reconstruction latency gate, the benchmarks and their last results
 - [Architecture decisions](https://github.com/stubbi/openxet/tree/main/docs/adr): ADRs in force
 
 ## Contributing

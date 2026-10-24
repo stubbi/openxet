@@ -334,6 +334,22 @@ pub fn xorb_hash(chunks: &XorbChunks) -> MerkleHash {
     merklehash::xorb_hash(&chunks.hashes)
 }
 
+/// A footer-less xorb body of `chunks`, each serialized with LZ4 by
+/// upstream's `serialize_chunk`, as `hf_xet` 1.7.0 compresses uploads: for
+/// benchmarks of the ingest path on realistic bodies.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn lz4_xorb_body(chunks: &[&[u8]]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for chunk in chunks {
+        // Upstream falls back to no compression where LZ4 doesn't shrink a
+        // chunk, as `hf_xet` does.
+        xet_core_structures::xorb_object::serialize_chunk(chunk, &mut body, CompressionScheme::LZ4)
+            .unwrap_or_else(|e| unreachable!("serializing into a Vec can't fail: {e}"));
+    }
+    body
+}
+
 /// Decodes `bytes`, one fetched xorb range, as `hf_xet` 1.7.0 decodes a
 /// data URL's body: upstream's `deserialize_chunks` over the chunk headers
 /// and payloads (`xet-client` 1.7.0, `remote_client.rs`). Returns the
