@@ -12,6 +12,8 @@ import subprocess
 
 import pytest
 
+from conftest import isolated_env
+
 pytestmark = pytest.mark.agent
 
 # `{tmp}` is a fresh directory per command, and `{key}` a signing key
@@ -37,7 +39,7 @@ NEEDS_SERVER = {"upload", "download"}
 LONG_RUNNING = {"serve"}
 
 
-def run(openxet_bin, *args, env=None):
+def run(openxet_bin, *args, env):
     return subprocess.run(
         [openxet_bin, *args],
         capture_output=True,
@@ -47,10 +49,10 @@ def run(openxet_bin, *args, env=None):
     )
 
 
-def expand(openxet_bin, args, tmp_path, env=None):
+def expand(openxet_bin, args, tmp_path, env):
     if any("{key}" in a for a in args):
         key = tmp_path / "mint.key"
-        out = run(openxet_bin, "token", "keygen", "--key", str(key), "--json")
+        out = run(openxet_bin, "token", "keygen", "--key", str(key), "--json", env=env)
         assert out.returncode == 0, out.stderr.decode()
         args = [a.replace("{key}", str(key)) for a in args]
     if any("{hash}" in a for a in args):
@@ -66,32 +68,30 @@ def dev_server(openxet_bin, tmp_path):
     """The environment for a client of a dev-mode server, while it runs."""
     proc = subprocess.Popen(
         [openxet_bin, "serve", "--data-dir", str(tmp_path / "server"), "--port", "0", "--json"],
+        env=isolated_env(tmp_path / "server-env"),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     try:
         ready = json.loads(proc.stdout.readline())
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if not k.startswith(("OPENXET_", "HF_")) and not k.lower().endswith("_proxy")
-        }
-        env.update(
+        env = isolated_env(
+            tmp_path / "client-env",
             OPENXET_ENDPOINT=ready["endpoint"],
             OPENXET_TOKEN=ready["token"],
-            HF_XET_CACHE=str(tmp_path / "xet-cache"),
         )
-        yield env
+        # The server is local; a proxy from the shell would intercept it.
+        yield {k: v for k, v in env.items() if not k.lower().endswith("_proxy")}
     finally:
         proc.kill()
         proc.wait()
 
 
-def run_long(openxet_bin, *args):
+def run_long(openxet_bin, *args, env):
     """The first stdout line, and the exit code after SIGTERM."""
     proc = subprocess.Popen(
         [openxet_bin, *args],
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -110,13 +110,13 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
     # stdin is closed and there is no tty: a command that prompts would hang
     # until the timeout and fail here.
     with contextlib.ExitStack() as stack:
-        env = None
+        env = isolated_env(tmp_path / "env")
         if args[0] in NEEDS_SERVER:
             env = stack.enter_context(dev_server(openxet_bin, tmp_path))
             (tmp_path / "upload.bin").write_bytes(os.urandom(4096))
         args = expand(openxet_bin, args, tmp_path, env)
         if args[0] in LONG_RUNNING:
-            stdout, returncode, stderr = run_long(openxet_bin, *args)
+            stdout, returncode, stderr = run_long(openxet_bin, *args, env=env)
         else:
             out = run(openxet_bin, *args, env=env)
             stdout, returncode, stderr = out.stdout, out.returncode, out.stderr
@@ -126,8 +126,18 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
     assert schema.startswith("openxet.") and schema.endswith(".v1")
 
 
-def test_usage_error_with_json_is_structured(openxet_bin):
-    out = run(openxet_bin, "nope", "--json")
+def test_dev_server_ignores_the_developers_openxet_configuration(
+    openxet_bin, tmp_path, monkeypatch
+):
+    # Leaked into the server, an [auth] key would turn dev mode off.
+    monkeypatch.setenv("OPENXET_AUTH__JWT_PUBLIC_KEYS", '["/nonexistent/issuer.pub"]')
+
+    with dev_server(openxet_bin, tmp_path) as env:
+        assert env["OPENXET_TOKEN"], "the server left dev mode"
+
+
+def test_usage_error_with_json_is_structured(openxet_bin, tmp_path):
+    out = run(openxet_bin, "nope", "--json", env=isolated_env(tmp_path))
 
     assert out.returncode == 2
     error = json.loads(out.stderr)

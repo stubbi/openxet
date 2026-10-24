@@ -37,10 +37,12 @@ OPENXET_BIN=$PWD/target/release/openxet uv run --frozen --directory compat pytes
 
 The storage-only leg starts its own `openxet serve` per test, on a free
 port with a temporary data directory, and counts requests from the
-server's JSON debug log. Every child process gets its environment from an
-allowlist: no `HF_XET_*`, `HF_HUB_*` or `OPENXET_*` variable from your
-shell reaches a client or the server except those the harness sets itself
-(`HARNESS_ENV` in `conftest.py`). Numbers worth watching but not yet
+server's JSON debug log. A test fails if that log holds any token it
+sent. In both the storage-only and the agent leg, every child process
+gets its environment from an allowlist: no `HF_XET_*`, `HF_HUB_*` or
+`OPENXET_*` variable from your shell reaches a client or the server
+except those the harness sets itself (`HARNESS_ENV` in `conftest.py`).
+Numbers worth watching but not yet
 asserted are printed under "measurements (informational)" at the end of
 the run.
 
