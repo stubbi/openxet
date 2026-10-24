@@ -6,7 +6,8 @@ in, so a reviewer can check that a requirement is enforced and see what
 runs when one of its tests fails.
 
 A test is planned for the milestone that builds the surface it guards:
-M1 for the CAS, M2 for the Hub and Git, M5 for caches and the mirror.
+M1 for the CAS, M2 for the Hub and Git, M5 for buckets, caches and the
+mirror.
 Pending rows name tests that are not written yet; their surface does not
 exist yet either.
 
@@ -44,6 +45,12 @@ its clients sent (`assert_no_credential_in_log`).
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
 | 2 | `credential_scoped_to_repo`, Hub routes | pending | M2 |
 | 2 | `repo_create_authorized_per_namespace` | pending | M2 |
+| 2 | `wrong_type_without_read_access_matches_unknown_repo` | pending | M2 |
+| 2 | `create_collision_authorized_first` | pending | M2 |
+| 2 | `credential_scoped_to_repo`, bucket routes | pending | M5 |
+| 2 | `bucket_create_authorized_per_namespace` | pending | M5 |
+| 2 | `bucket_add_file_hash_must_be_readable` | pending | M5 |
+| 2 | `bucket_copy_file_requires_source_read` | pending | M5 |
 | 3 | `cache_keyed_by_caller` | pending | M5 |
 | 3 | `cache_fails_closed` | pending | M5 |
 | 4 | `dedup_response_hmac_keyed` | `crates/cas/tests/dedup.rs` | M1 |
@@ -64,6 +71,7 @@ its clients sent (`assert_no_credential_in_log`).
 | 7 | `acknowledged_xorb_write_is_visible` | `crates/cas/tests/xorbs.rs` | M1 |
 | 7 | `acknowledged_shard_write_is_visible` | `crates/cas/tests/shards.rs` | M1 |
 | 7 | `acked_write_survives_sigkill` | `crates/openxet/tests/serve.rs` | M1 |
+| 7 | `acknowledged_bucket_key_write_is_visible` | pending | M5 |
 | 8 | `v2_want_unreachable_refused` | pending | M2 |
 | 8 | `hub_read_by_sha_obeys_r22` | pending | M2 |
 | 8 | `writer_cannot_make_unreachable_reachable` | pending | M2 |
@@ -77,6 +85,25 @@ Notes on what some tests cover:
   extends to the HTTP read gateway and LFS `href`s.
 - `credential_scoped_to_repo` sends another scope's read and write
   credentials to every CAS route, aimed at the first scope's data.
+- `bucket_add_file_hash_must_be_readable` and
+  `bucket_copy_file_requires_source_read` send `batch` calls naming a hash
+  registered only to another scope, one the caller has no read credential
+  for, and, under `per-tenant`, one another tenant uploaded. Each must
+  answer exactly as an unknown hash does.
+- `acknowledged_bucket_key_write_is_visible` acknowledges key writes,
+  kills the server, deletes the database, runs `reindex` from the
+  object-store bucket alone, and expects every acknowledged key with its
+  last writer. It also stalls a writer between allocating its `seq` and
+  creating its record until a sweeper aborts that `seq`, and expects the
+  write to fail and to stay absent after `reindex`.
+- `wrong_type_without_read_access_matches_unknown_repo` reads a
+  repository through a typed route whose label it lacks, with a
+  credential that can't read it, and compares status, headers (apart
+  from per-request ids and dates) and body with an unknown repository's.
+- `create_collision_authorized_first` creates a taken name in a
+  namespace the caller may not create in and expects the same `403` as
+  for a free name; with create but no read access, the `409` carries no
+  labels.
 - `per_tenant_existence_checks_hide_other_tenants` checks that, to another
   tenant, a `per-tenant` server holding a tenant's data answers every CAS
   route exactly as an empty server would.

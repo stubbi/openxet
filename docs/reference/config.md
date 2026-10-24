@@ -98,6 +98,10 @@ Requests that don't fit wait for bytes to come free:
   any queued upload, so uploads never hold up downloads. One that doesn't
   fit waits up to 5 s. A batch's own body waits the same way.
 
+Answers that fit go ahead of queued uploads, so under read load that
+holds nearly the whole budget, uploads can wait their full 120 s and get
+`503`.
+
 After its wait a request is refused with `503 memory_busy` and
 `Retry-After: 1`; stock clients retry it. An upload refused so is not
 read, and its connection is closed.
@@ -407,6 +411,11 @@ again.
   limits come with rate limiting in M3.
 - The server speaks HTTP/1.1, which is what stock clients use. Put TLS in
   front of it with a proxy, and set `public_url` to the proxy's URL.
+  Choose a proxy that negotiates the hybrid post-quantum key exchange
+  `X25519MLKEM768` ([ADR 0011](../adr/0011-post-quantum-readiness.md)):
+  one built on OpenSSL 3.5 or later, or on Go 1.24 or later, does by
+  default unless its config overrides the key exchange groups (for
+  nginx, `ssl_ecdh_curve`).
 
 ## Example
 

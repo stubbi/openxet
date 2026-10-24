@@ -29,6 +29,8 @@
   - [0007: CAS tokens are EdDSA JWTs](adr/0007-cas-tokens-are-eddsa-jwts.md)
   - [0008: Hosted waitlist](adr/0008-hosted-waitlist.md)
   - [0009: xet resource URIs](adr/0009-xet-resource-uris.md)
+  - [0010: Two storage primitives](adr/0010-two-storage-primitives.md)
+  - [0011: Post-quantum readiness](adr/0011-post-quantum-readiness.md)
 - [Research notes]()
   - [Website design research](research/website-design-2026-10-24.md)
   - [Resource URI research](research/resource-uris-2026-10-24.md)

@@ -13,6 +13,14 @@ tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`, `git-lfs`,
 `huggingface.js`) work against it unmodified. It runs on storage and identity
 systems people already own, and as a hosted service at **openxet.com**.
 
+It has two storage primitives (ADR 0010): the **repository**, versioned
+and Git and Hub compatible, and the **bucket**, mutable objects under keys
+with no Git history, still Xet-chunked and deduplicated. Both are
+addressed by `{namespace}/{name}` and carry generic, owner-defined
+labels. Hugging Face's repo types (`model`, `dataset`, `space`,
+`kernel`) are just labels; the Hub routes stock clients call are views
+of a repository through one of them.
+
 The design is the source of truth for scope and decisions:
 `docs/superpowers/specs/2026-10-23-openxet-design.md`. Architecture decisions
 made since are in `docs/adr/`.
@@ -64,6 +72,13 @@ faster path, a doc example that actually runs) rather than what is
 convenient for us. Failure looks like this, even if the code works:
 slow, hard to set up, or users' feedback going nowhere.
 
+**Visitors become fans** (the owner's bar, design §1): first-time
+visitors must become loyal fans, of the open-source project as much as
+of openxet.com. Judge each change by what a first-time visitor, human or
+agent, meets: a working upload within minutes, no dead ends, only
+measured claims, no lock-in, and feedback visibly acted on. Design §16
+lists the proofs and the metrics we publish.
+
 ## The bar: best in class on every dimension
 
 No other project should come remotely close, in protocol correctness,
@@ -79,7 +94,7 @@ change would lower any of those measures, it isn't done.
    match the Xet spec and `xet-core` byte for byte. Data written by openxet is
    readable by stock clients and huggingface.co tooling, and vice versa. Any
    divergence is a release blocker.
-2. **The bucket is the source of truth.** The database is a rebuildable
+2. **The object-store bucket is the source of truth.** The database is a rebuildable
    index. Losing the database must never lose data.
 3. **Nothing is deleted outside garbage collection,** which is explicit,
    logged, and has a grace period.
