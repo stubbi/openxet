@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 use bytes::Bytes;
 use openxet_protocol::hash_to_hex;
 
-use crate::{Bucket, Key, StorageError};
+use crate::{Bucket, Key, RangeStream, STREAM_BLOCK_BYTES, StorageError};
 
 const TMP_DIR: &str = ".tmp";
 /// Temp files older than this are leftovers from a crash; no healthy write
@@ -216,13 +216,15 @@ fn write_and_publish(
     Ok(())
 }
 
-fn get_range_blocking(
+/// Opens the object at `path` and checks `start..=end_inclusive` against its
+/// size, returning the file and the size.
+fn open_range(
     path: &Path,
     key: Key,
     start: u64,
     end_inclusive: u64,
-) -> Result<Bytes, StorageError> {
-    let mut file = match File::open(path) {
+) -> Result<(File, u64), StorageError> {
+    let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(StorageError::NotFound { key });
@@ -230,23 +232,77 @@ fn get_range_blocking(
         Err(e) => return Err(io("open", path)(e)),
     };
     let size = file.metadata().map_err(io("stat", path))?.len();
-    let out_of_bounds = StorageError::RangeOutOfBounds {
-        key,
-        start,
-        end_inclusive,
-        size,
-    };
     if start > end_inclusive || end_inclusive >= size {
-        return Err(out_of_bounds);
+        return Err(StorageError::RangeOutOfBounds {
+            key,
+            start,
+            end_inclusive,
+            size,
+        });
     }
+    Ok((file, size))
+}
+
+fn get_range_blocking(
+    path: &Path,
+    key: Key,
+    start: u64,
+    end_inclusive: u64,
+) -> Result<Bytes, StorageError> {
+    let (mut file, size) = open_range(path, key, start, end_inclusive)?;
     let Ok(len) = usize::try_from(end_inclusive - start + 1) else {
-        return Err(out_of_bounds);
+        return Err(StorageError::RangeOutOfBounds {
+            key,
+            start,
+            end_inclusive,
+            size,
+        });
     };
     file.seek(SeekFrom::Start(start))
         .map_err(io("seek", path))?;
     let mut buf = vec![0u8; len];
     file.read_exact(&mut buf).map_err(io("read", path))?;
     Ok(Bytes::from(buf))
+}
+
+/// Reads `len` bytes of `file` from its position into `blocks`, one
+/// [`STREAM_BLOCK_BYTES`] block at a time. The channel holds one block, so
+/// with the one being read at most two exist at once; a reader that went
+/// away stops the read at its next block.
+fn stream_blocking(
+    mut file: File,
+    path: &Path,
+    mut len: u64,
+    blocks: &tokio::sync::mpsc::Sender<Result<Bytes, StorageError>>,
+) {
+    while len > 0 {
+        // At most one block, which fits a usize.
+        let n = usize::try_from(len.min(STREAM_BLOCK_BYTES as u64)).unwrap_or(STREAM_BLOCK_BYTES);
+        let mut buf = vec![0u8; n];
+        let block = file
+            .read_exact(&mut buf)
+            .map(|()| Bytes::from(buf))
+            .map_err(io("read", path));
+        let failed = block.is_err();
+        if blocks.blocking_send(block).is_err() || failed {
+            return;
+        }
+        len -= n as u64;
+    }
+}
+
+/// The receiving end of [`stream_blocking`], as a stream.
+struct Blocks(tokio::sync::mpsc::Receiver<Result<Bytes, StorageError>>);
+
+impl futures_core::Stream for Blocks {
+    type Item = Result<Bytes, StorageError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx)
+    }
 }
 
 fn join_error(e: &tokio::task::JoinError) -> StorageError {
@@ -279,6 +335,30 @@ impl Bucket for LocalBucket {
         tokio::task::spawn_blocking(move || get_range_blocking(&path, key, start, end_inclusive))
             .await
             .map_err(|e| join_error(&e))?
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        start: u64,
+        end_inclusive: u64,
+    ) -> Result<RangeStream, StorageError> {
+        let (key, path) = (*key, self.path(key));
+        let (file, size, path) = tokio::task::spawn_blocking(move || {
+            let (mut file, size) = open_range(&path, key, start, end_inclusive)?;
+            file.seek(SeekFrom::Start(start))
+                .map_err(io("seek", &path))?;
+            Ok::<_, StorageError>((file, size, path))
+        })
+        .await
+        .map_err(|e| join_error(&e))??;
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let len = end_inclusive - start + 1;
+        tokio::task::spawn_blocking(move || stream_blocking(file, &path, len, &tx));
+        Ok(RangeStream {
+            size,
+            blocks: Box::pin(Blocks(rx)),
+        })
     }
 
     async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
@@ -441,5 +521,71 @@ mod tests {
             sync_dirs(&events).contains(&prefix_parent.as_path()),
             "{events:?}"
         );
+    }
+
+    /// Every block of `stream`, read to the end.
+    async fn blocks(mut stream: crate::RangeStream) -> Vec<Bytes> {
+        let mut out = Vec::new();
+        while let Some(block) =
+            std::future::poll_fn(|cx| stream.blocks.as_mut().poll_next(cx)).await
+        {
+            out.push(block.unwrap());
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn range_stream_matches_get_range_in_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let bucket = LocalBucket::open(dir.path()).unwrap();
+        let block = crate::STREAM_BLOCK_BYTES;
+        let object: Vec<u8> = (0..3 * block + 17)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let size = object.len() as u64;
+        let key = Key::Xorb(chunk_hash(b"stream"));
+        bucket.put(&key, Bytes::from(object)).await.unwrap();
+
+        let b = block as u64;
+        for (start, end) in [
+            (5, 5 + b - 2),       // under one block
+            (0, b - 1),           // exactly one
+            (3, 3 + 2 * b + 10),  // more than two
+            (0, size - 1),        // the whole object
+            (size - 1, size - 1), // its last byte
+        ] {
+            let stream = bucket.get_range_stream(&key, start, end).await.unwrap();
+            assert_eq!(stream.size, size);
+            let blocks = blocks(stream).await;
+            assert!(blocks.iter().all(|b| !b.is_empty() && b.len() <= block));
+            assert_eq!(
+                blocks.concat(),
+                bucket.get_range(&key, start, end).await.unwrap(),
+                "{start}..={end}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn range_stream_refuses_a_bad_range_before_any_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let bucket = LocalBucket::open(dir.path()).unwrap();
+        let key = Key::Xorb(chunk_hash(b"bounds"));
+        bucket
+            .put(&key, Bytes::from_static(b"0123456789"))
+            .await
+            .unwrap();
+
+        for (start, end) in [(0, 10), (5, 4), (10, 10)] {
+            assert!(matches!(
+                bucket.get_range_stream(&key, start, end).await,
+                Err(StorageError::RangeOutOfBounds { size: 10, .. })
+            ));
+        }
+        let missing = Key::Xorb(chunk_hash(b"missing"));
+        assert!(matches!(
+            bucket.get_range_stream(&missing, 0, 0).await,
+            Err(StorageError::NotFound { .. })
+        ));
     }
 }

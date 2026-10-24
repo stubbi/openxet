@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 axum = "0.8.9"
+futures-core = "0.3.34"
 getrandom = "0.4.3"
 http-body-util = { version = "0.1.5", features = ["channel"] }
 openxet-auth = { path = "../auth", version = "0.0.0" }

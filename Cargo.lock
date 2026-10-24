@@ -1579,6 +1579,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "axum",
+ "futures-core",
  "getrandom",
  "http-body-util",
  "openxet-auth",
@@ -1630,6 +1631,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "futures-core",
  "openxet-protocol",
  "tempfile",
  "thiserror",

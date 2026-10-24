@@ -603,6 +603,15 @@ mod tests {
             self.inner.get_range(key, start, end).await
         }
 
+        async fn get_range_stream(
+            &self,
+            key: &Key,
+            start: u64,
+            end: u64,
+        ) -> Result<openxet_storage::RangeStream, StorageError> {
+            self.inner.get_range_stream(key, start, end).await
+        }
+
         async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
             self.inner.size(key).await
         }

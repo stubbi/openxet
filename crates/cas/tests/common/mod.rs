@@ -27,12 +27,13 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 use axum::body::Bytes;
+use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, CasConfig, Clock, SystemClock, router};
 use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
-use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
+use openxet_storage::{Bucket, Key, LocalBucket, RangeStream, StorageError};
 use reqwest::Method;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -802,6 +803,99 @@ impl Index for TablelessIndex {
     }
 }
 
+/// A bucket that records how it is read: how many whole-range reads
+/// (`get_range`) it served, and the largest block any range stream yielded.
+/// Everything else is the wrapped bucket's.
+pub struct CountingBucket {
+    inner: Arc<dyn Bucket>,
+    whole_reads: Arc<AtomicU64>,
+    largest_block: Arc<AtomicU64>,
+}
+
+impl CountingBucket {
+    /// Wraps `inner`.
+    pub fn new(inner: Arc<dyn Bucket>) -> Self {
+        Self {
+            inner,
+            whole_reads: Arc::default(),
+            largest_block: Arc::default(),
+        }
+    }
+
+    /// The `get_range` calls served.
+    pub fn whole_reads(&self) -> u64 {
+        self.whole_reads.load(Ordering::SeqCst)
+    }
+
+    /// The largest block a range stream yielded, in bytes.
+    pub fn largest_block(&self) -> usize {
+        usize::try_from(self.largest_block.load(Ordering::SeqCst)).unwrap()
+    }
+}
+
+#[async_trait::async_trait]
+impl Bucket for CountingBucket {
+    async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.inner.put(key, bytes).await
+    }
+
+    async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
+        self.whole_reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.get_range(key, start, end).await
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        start: u64,
+        end: u64,
+    ) -> Result<RangeStream, StorageError> {
+        let RangeStream { size, mut blocks } = self.inner.get_range_stream(key, start, end).await?;
+        let largest = Arc::clone(&self.largest_block);
+        let stream = futures_core_stream(move |cx| {
+            let next = blocks.as_mut().poll_next(cx);
+            if let std::task::Poll::Ready(Some(Ok(block))) = &next {
+                largest.fetch_max(block.len() as u64, Ordering::SeqCst);
+            }
+            next
+        });
+        Ok(RangeStream {
+            size,
+            blocks: stream,
+        })
+    }
+
+    async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
+        self.inner.size(key).await
+    }
+}
+
+/// A stream whose `poll_next` is `poll`.
+fn futures_core_stream<F>(poll: F) -> BoxStream<'static, Result<Bytes, StorageError>>
+where
+    F: FnMut(&mut std::task::Context<'_>) -> std::task::Poll<Option<Result<Bytes, StorageError>>>
+        + Send
+        + 'static,
+{
+    struct PollFn<F>(F);
+    impl<F> Unpin for PollFn<F> {}
+    impl<F> futures_core::Stream for PollFn<F>
+    where
+        F: FnMut(
+            &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<Bytes, StorageError>>>,
+    {
+        type Item = Result<Bytes, StorageError>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            (self.0)(cx)
+        }
+    }
+    Box::pin(PollFn(poll))
+}
+
 /// A bucket whose every write fails as a full disk would, and which holds
 /// nothing.
 #[derive(Debug, Default)]
@@ -818,6 +912,15 @@ impl Bucket for FailingBucket {
     }
 
     async fn get_range(&self, key: &Key, _: u64, _: u64) -> Result<Bytes, StorageError> {
+        Err(StorageError::NotFound { key: *key })
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        _: u64,
+        _: u64,
+    ) -> Result<RangeStream, StorageError> {
         Err(StorageError::NotFound { key: *key })
     }
 

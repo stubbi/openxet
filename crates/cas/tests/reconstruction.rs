@@ -15,9 +15,9 @@ use std::sync::Arc;
 use common::shard::{Event, hf_xet_files, hf_xet_shard, lines, terminal};
 use common::xorb::{HF_XET_XORB, hf_xet_xorb, stored, xorb_of, xorb_path};
 use common::{
-    Access, BATCH_GET_PATH, BATCH_POST_PATH, DEDUP_MERKLEDB_PATH, DEDUP_PATH, FILE_PATH,
-    RECONSTRUCTION_V1_PATH, RECONSTRUCTION_V2_PATH, ROUTES, Reply, Route, SCOPE_A, TRANSFER_PATH,
-    TablelessIndex, TestServer, XORB_PATH, bearer, config,
+    Access, BATCH_GET_PATH, BATCH_POST_PATH, CountingBucket, DEDUP_MERKLEDB_PATH, DEDUP_PATH,
+    FILE_PATH, RECONSTRUCTION_V1_PATH, RECONSTRUCTION_V2_PATH, ROUTES, Reply, Route, SCOPE_A,
+    TRANSFER_PATH, TablelessIndex, TestServer, XORB_PATH, bearer, config,
 };
 use openxet_auth::UrlSigner;
 use openxet_cas::{Clock as _, MAX_BATCH_FILES};
@@ -26,6 +26,7 @@ use openxet_protocol::{
     MerkleHash, chunk_hash, decode_fetched_chunks, file_hash, hash_from_hex, hash_to_hex,
     read_upload_shard,
 };
+use openxet_storage::{LocalBucket, STREAM_BLOCK_BYTES};
 use reqwest::Method;
 use reqwest::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE,
@@ -1094,6 +1095,31 @@ async fn transfer_requires_signature() {
         assert_eq!(body.to_vec(), stored_range(&server, xorb, s, e).await);
     }
 
+    // Two `Range` headers are no range at all.
+    let two = server
+        .http
+        .get(&url)
+        .header(RANGE, exact().unwrap())
+        .header(RANGE, exact().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(two.status(), 400);
+    assert!(two.text().await.unwrap().contains("\"bad_range\""));
+
+    // `HEAD` is not served: no client sends it, and it would read the range
+    // for nothing.
+    let head = server
+        .http
+        .head(&url)
+        .header(RANGE, exact().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 405);
+    assert_eq!(head.headers()[CACHE_CONTROL], "no-store");
+    assert_eq!(head.headers()["allow"], "GET");
+
     // Expired: `403`, on which the client asks for a fresh reconstruction.
     server.clock.advance(UrlSigner::DEFAULT_LIFETIME.as_secs());
     let got = fetch(&server, &url, exact()).await;
@@ -1121,8 +1147,9 @@ async fn transfer_past_the_stored_xorb_is_an_integrity_fault() {
         Some(format!("bytes={}-{}", size - 10, size + 10)),
     )
     .await;
-    assert_eq!(got.status, 416);
-    assert_eq!(got.headers[CONTENT_RANGE], format!("bytes */{size}"));
+    // Not the caller's fault and not the end of a file: a `500`, logged.
+    assert_eq!(got.status, 500);
+    assert!(String::from_utf8_lossy(&got.body).contains("\"internal\""));
     assert!(server.logs().contains("integrity"), "{}", server.logs());
 
     let absent = chunk_hash(b"absent");
@@ -1130,6 +1157,60 @@ async fn transfer_past_the_stored_xorb_is_an_integrity_fault() {
     let got = fetch(&server, missing.as_str(), Some("bytes=0-9".to_owned())).await;
     assert_eq!(got.status, 500);
     assert!(String::from_utf8_lossy(&got.body).contains("\"internal\""));
+}
+
+#[tokio::test]
+async fn transfer_streams_a_64_mib_range_in_bounded_blocks() {
+    // Ruling M1-R27: a transfer holds one block of its range at a time,
+    // never the range.
+    let dir = tempfile::tempdir().unwrap();
+    let counting = Arc::new(CountingBucket::new(Arc::new(
+        LocalBucket::open(dir.path()).unwrap(),
+    )));
+    let server = TestServer::start_with(config(Visibility::Global), counting.clone()).await;
+    let len = 64 * 1024 * 1024;
+    let object: Vec<u8> = (0..len + 100)
+        .map(|i| u8::try_from(i % 253).unwrap())
+        .collect();
+    let xorb = chunk_hash(b"a large stored xorb");
+    {
+        let (bucket, object) = (Arc::clone(&server.bucket), object.clone());
+        server
+            .on_server(async move {
+                bucket
+                    .put(&openxet_storage::Key::Xorb(xorb), object.into())
+                    .await
+                    .unwrap();
+            })
+            .await;
+    }
+    let signer = UrlSigner::new(TRANSFER_KEY, UrlSigner::DEFAULT_LIFETIME).unwrap();
+    let (start, end) = (50, 50 + len as u64 - 1);
+    let url = signer
+        .sign_xorb_range(
+            &Url::parse(&server.base_url).unwrap(),
+            &xorb,
+            start,
+            end,
+            server.clock.now(),
+        )
+        .unwrap();
+
+    let got = fetch(&server, url.as_str(), Some(format!("bytes={start}-{end}"))).await;
+
+    assert_eq!(got.status, 206);
+    assert_eq!(got.headers[CONTENT_LENGTH], len.to_string());
+    assert!(
+        got.body == object[50..50 + len],
+        "the streamed bytes differ"
+    );
+    assert_eq!(counting.whole_reads(), 0, "the range was read whole");
+    assert!(counting.largest_block() > 0);
+    assert!(
+        counting.largest_block() <= STREAM_BLOCK_BYTES,
+        "a block of {} bytes",
+        counting.largest_block()
+    );
 }
 
 #[tokio::test]
