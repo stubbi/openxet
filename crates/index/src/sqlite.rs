@@ -13,9 +13,9 @@ use sqlx::sqlite::{
 use sqlx::{AssertSqlSafe, Row, Sqlite, Transaction};
 
 use crate::types::{
-    decode_chunk_layout, decode_chunk_table, decode_layout_of_chunk_table, decode_term_bytes,
-    decode_terms, encode_chunk_layout, encode_chunk_table, encode_term_bytes, encode_terms,
-    hash_from,
+    TERM_LEN, decode_chunk_layout, decode_chunk_table, decode_layout_of_chunk_table,
+    decode_term_bytes, decode_terms, encode_chunk_layout, encode_chunk_table, encode_term_bytes,
+    encode_terms, hash_from,
 };
 use crate::{
     ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
@@ -647,6 +647,37 @@ impl Index for SqliteIndex {
             }
         }
         Ok(records)
+    }
+
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        let unique: Vec<&MerkleHash> = {
+            let mut seen = HashSet::with_capacity(files.len());
+            files.iter().filter(|h| seen.insert(**h)).collect()
+        };
+        let mut bytes = 0u64;
+        for batch in unique.chunks(HASHES_PER_QUERY) {
+            // SQLite reads a column used only by `length()` without loading
+            // a large blob's content (`OP_Column` with `OPFLAG_LENGTHARG`,
+            // in the bundled SQLite 3.46.0), so this loads no term list.
+            let mut query = sqlx::query_scalar::<_, i64>(with_placeholders(
+                "SELECT COALESCE(SUM(length(terms)), 0) FROM file_scopes \
+                 WHERE scope = ? AND file IN (",
+                "?",
+                batch.len(),
+                ")",
+            ))
+            .bind(scope);
+            for hash in batch {
+                query = query.bind(hash.as_bytes());
+            }
+            bytes += to_u64(query.fetch_one(&self.reader).await?, "term list length")?;
+        }
+        if !bytes.is_multiple_of(TERM_LEN as u64) {
+            return Err(IndexError::Corrupt(format!(
+                "term lists total {bytes} bytes, not a multiple of {TERM_LEN}"
+            )));
+        }
+        Ok(bytes / TERM_LEN as u64)
     }
 
     async fn dedup_xorb(
