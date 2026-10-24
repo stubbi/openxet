@@ -3,14 +3,19 @@
 //! On-disk layout under the root (what `openxet reindex` walks, issue #26):
 //!
 //! ```text
-//! {root}/xorbs/default/{hex[0..2]}/{hex}   Key::Xorb
-//! {root}/shards/{hex[0..2]}/{hex}          Key::Shard
-//! {root}/.tmp/{uuid}                       in-flight writes
+//! {root}/xorbs/default/{hex[0..2]}/{hex}                          Key::Xorb
+//! {root}/shards/{hex[0..2]}/{hex}                                 Key::Shard
+//! {root}/registrations/{scope}/{tenant}/{hex[0..2]}/{hex}         Key::Registration
+//! {root}/xorb-owners/{tenant}/{hex[0..2]}/{hex}                   Key::XorbOwner
+//! {root}/.tmp/{uuid}                                              in-flight writes
 //! ```
 //!
-//! `hex` is [`hash_to_hex`]. The two-character prefix directory keeps any one
+//! `hex` is [`hash_to_hex`] of the key's xorb or shard; `{scope}` and
+//! `{tenant}` are [`NameHash`]es, 64 hex digits, so no name ever becomes a
+//! path of its own. The two-character prefix directory keeps any one
 //! directory from growing unbounded. `.tmp` lives under the root so the final
-//! rename never crosses a filesystem and stays atomic.
+//! rename (or, for [`Bucket::create`], hard link) never crosses a filesystem
+//! and stays atomic.
 //!
 //! On unix, every directory the bucket creates is mode `0700` and every
 //! object `0600`: the bucket holds every scope's data, and only the server
@@ -23,11 +28,18 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
-use openxet_protocol::hash_to_hex;
+use openxet_protocol::{MerkleHash, hash_from_hex, hash_to_hex};
 
-use crate::{Bucket, Key, RangeStream, STREAM_BLOCK_BYTES, StorageError, create_private_dir_all};
+use crate::{
+    Bucket, Key, KeyKind, NameHash, RangeStream, STREAM_BLOCK_BYTES, StorageError,
+    create_private_dir_all,
+};
 
 const TMP_DIR: &str = ".tmp";
+const XORBS_DIR: &str = "xorbs/default";
+const SHARDS_DIR: &str = "shards";
+const REGISTRATIONS_DIR: &str = "registrations";
+const XORB_OWNERS_DIR: &str = "xorb-owners";
 /// Temp files older than this are leftovers from a crash; no healthy write
 /// stays in flight for an hour.
 const STALE_TEMP_AGE: Duration = Duration::from_hours(1);
@@ -37,6 +49,7 @@ const STALE_TEMP_AGE: Duration = Duration::from_hours(1);
 pub(crate) trait Durability: Send + Sync + std::fmt::Debug + 'static {
     fn sync_file(&self, file: &File) -> std::io::Result<()>;
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    fn hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()>;
     fn sync_dir(&self, dir: &Path) -> std::io::Result<()>;
 }
 
@@ -49,6 +62,9 @@ impl Durability for RealFs {
     }
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         fs::rename(from, to)
+    }
+    fn hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::hard_link(from, to)
     }
     fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
         File::open(dir)?.sync_all()
@@ -76,7 +92,13 @@ impl LocalBucket {
     pub(crate) fn open_with(root: &Path, fs: Arc<dyn Durability>) -> Result<Self, StorageError> {
         let tmp = root.join(TMP_DIR);
         let xorbs = root.join("xorbs");
-        let skeleton = [tmp.clone(), root.join("shards"), xorbs.join("default")];
+        let skeleton = [
+            tmp.clone(),
+            root.join(SHARDS_DIR),
+            root.join(XORBS_DIR),
+            root.join(REGISTRATIONS_DIR),
+            root.join(XORB_OWNERS_DIR),
+        ];
         for dir in &skeleton {
             create_private_dir_all(dir).map_err(io("create bucket directory", dir))?;
         }
@@ -96,13 +118,40 @@ impl LocalBucket {
         })
     }
 
-    fn path(&self, key: &Key) -> PathBuf {
-        let (dir, hash) = match key {
-            Key::Xorb(h) => (self.root.join("xorbs").join("default"), h),
-            Key::Shard(h) => (self.root.join("shards"), h),
+    fn place(&self, key: &Key) -> Place {
+        let (base, dir, hash) = match key {
+            Key::Xorb(h) => {
+                let base = self.root.join(XORBS_DIR);
+                (base.clone(), base, h)
+            }
+            Key::Shard(h) => {
+                let base = self.root.join(SHARDS_DIR);
+                (base.clone(), base, h)
+            }
+            Key::Registration {
+                scope,
+                tenant,
+                shard,
+            } => {
+                let base = self.root.join(REGISTRATIONS_DIR);
+                let dir = base.join(scope.to_string()).join(tenant.to_string());
+                (base, dir, shard)
+            }
+            Key::XorbOwner { tenant, xorb } => {
+                let base = self.root.join(XORB_OWNERS_DIR);
+                let dir = base.join(tenant.to_string());
+                (base, dir, xorb)
+            }
         };
         let hex = hash_to_hex(hash);
-        dir.join(&hex[..2]).join(hex)
+        Place {
+            base,
+            path: dir.join(&hex[..2]).join(hex),
+        }
+    }
+
+    fn path(&self, key: &Key) -> PathBuf {
+        self.place(key).path
     }
 }
 
@@ -160,45 +209,111 @@ fn existing_size(path: &Path) -> Result<Option<u64>, StorageError> {
     }
 }
 
-/// Makes the object's directory entries durable: the prefix directory in its
-/// parent, and the object in the prefix directory. Whichever put created
-/// them, no put returns `Ok` before they are on disk.
-fn sync_object_dirs(durable: &dyn Durability, final_path: &Path) -> Result<(), StorageError> {
-    let prefix_dir = final_path.parent().unwrap_or(final_path);
-    if let Some(grandparent) = prefix_dir.parent() {
-        fsync_dir(durable, grandparent)?;
+/// Where an object lives: its kind's skeleton directory, which `open` made
+/// durable, and its path somewhere below it.
+#[derive(Debug, Clone)]
+struct Place {
+    base: PathBuf,
+    path: PathBuf,
+}
+
+impl Place {
+    /// The directory holding the object.
+    fn dir(&self) -> &Path {
+        self.path.parent().unwrap_or(&self.path)
     }
-    fsync_dir(durable, prefix_dir)
+
+    /// The directories from `base` down to, not including, [`Place::dir`]:
+    /// each holds the entry of the next, so each is fsynced once the next
+    /// exists.
+    fn ancestors(&self) -> Vec<&Path> {
+        let mut dirs: Vec<&Path> = self
+            .dir()
+            .ancestors()
+            .skip(1)
+            .take_while(|d| d.starts_with(&self.base))
+            .collect();
+        dirs.reverse();
+        dirs
+    }
+}
+
+/// Makes every directory entry leading to the object durable, from its
+/// kind's skeleton directory down, then the object's own entry. Whichever
+/// write created them, no write returns `Ok` before they are on disk.
+fn sync_object_dirs(durable: &dyn Durability, place: &Place) -> Result<(), StorageError> {
+    for dir in place.ancestors() {
+        fsync_dir(durable, dir)?;
+    }
+    fsync_dir(durable, place.dir())
+}
+
+/// How a written temp file becomes the object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Publish {
+    /// [`Bucket::put`]: rename over the path. Content-addressed keys mean a
+    /// concurrent writer renames the same bytes.
+    Rename,
+    /// [`Bucket::create`]: hard-link to the path, which fails if it exists,
+    /// so the first writer's bytes stay.
+    Link,
 }
 
 fn put_blocking(
     durable: &dyn Durability,
     root: &Path,
     key: Key,
-    final_path: &Path,
+    place: &Place,
     bytes: &[u8],
 ) -> Result<(), StorageError> {
     let new = bytes.len() as u64;
-    let check = |existing: u64| {
-        if existing == new {
-            Ok(())
-        } else {
-            Err(StorageError::SizeConflict { key, existing, new })
+    if let Some(existing) = existing_size(&place.path)? {
+        if existing != new {
+            return Err(StorageError::SizeConflict {
+                key: Box::new(key),
+                existing,
+                new,
+            });
         }
-    };
-    if let Some(existing) = existing_size(final_path)? {
-        check(existing)?;
         // The object may come from a concurrent put that has not finished its
         // fsyncs; our Ok must not outrun them.
-        return sync_object_dirs(durable, final_path);
+        return sync_object_dirs(durable, place);
     }
+    publish_new(durable, root, place, bytes, Publish::Rename).map(drop)
+}
 
+fn create_blocking(
+    durable: &dyn Durability,
+    root: &Path,
+    place: &Place,
+    bytes: &[u8],
+) -> Result<bool, StorageError> {
+    if existing_size(&place.path)?.is_some() {
+        // As in `put_blocking`: the creator may not have finished its fsyncs.
+        sync_object_dirs(durable, place)?;
+        return Ok(false);
+    }
+    publish_new(durable, root, place, bytes, Publish::Link)
+}
+
+/// Writes `bytes` to a temp file and publishes it at `place`. Returns
+/// whether this call's bytes are the object's: always for a rename, and
+/// for a link unless another writer's object was there first.
+fn publish_new(
+    durable: &dyn Durability,
+    root: &Path,
+    place: &Place,
+    bytes: &[u8],
+    how: Publish,
+) -> Result<bool, StorageError> {
     let tmp_path = root
         .join(TMP_DIR)
         .join(uuid::Uuid::new_v4().simple().to_string());
-    let result = write_and_publish(durable, &tmp_path, final_path, bytes);
-    if result.is_err() {
-        // Best effort: a leftover is also swept by the next `open`.
+    let result = write_and_publish(durable, &tmp_path, place, bytes, how);
+    // A renamed temp file is gone already. After a link, or a failure, the
+    // temp name is removed on a best-effort basis: a leftover is swept by the
+    // next `open`, and the object never depends on it.
+    if how == Publish::Link || result.is_err() {
         let _ = fs::remove_file(&tmp_path);
     }
     result
@@ -207,9 +322,10 @@ fn put_blocking(
 fn write_and_publish(
     durable: &dyn Durability,
     tmp_path: &Path,
-    final_path: &Path,
+    place: &Place,
     bytes: &[u8],
-) -> Result<(), StorageError> {
+    how: Publish,
+) -> Result<bool, StorageError> {
     let mut file = create_private_file(tmp_path).map_err(io("create temp file", tmp_path))?;
     file.write_all(bytes)
         .map_err(io("write temp file", tmp_path))?;
@@ -218,18 +334,109 @@ fn write_and_publish(
         .map_err(io("fsync temp file", tmp_path))?;
     drop(file);
 
-    let prefix_dir = final_path.parent().unwrap_or(final_path);
-    create_private_dir_all(prefix_dir).map_err(io("create directory", prefix_dir))?;
-    // Before the rename, so a crash never leaves the object under a prefix
+    let dir = place.dir();
+    create_private_dir_all(dir).map_err(io("create directory", dir))?;
+    // Before publishing, so a crash never leaves the object under a
     // directory whose own entry was lost.
-    if let Some(grandparent) = prefix_dir.parent() {
-        fsync_dir(durable, grandparent)?;
+    for ancestor in place.ancestors() {
+        fsync_dir(durable, ancestor)?;
     }
-    durable
-        .rename(tmp_path, final_path)
-        .map_err(io("rename into place", final_path))?;
-    fsync_dir(durable, prefix_dir)?;
-    Ok(())
+    let final_path = &place.path;
+    let created = match how {
+        Publish::Rename => {
+            durable
+                .rename(tmp_path, final_path)
+                .map_err(io("rename into place", final_path))?;
+            true
+        }
+        Publish::Link => match durable.hard_link(tmp_path, final_path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(e) => return Err(io("link into place", final_path)(e)),
+        },
+    };
+    fsync_dir(durable, dir)?;
+    Ok(created)
+}
+
+/// The keys of `kind` stored under `root`.
+fn list_blocking(root: &Path, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
+    let (base, depth) = match kind {
+        KeyKind::Xorb => (root.join(XORBS_DIR), 2),
+        KeyKind::Shard => (root.join(SHARDS_DIR), 2),
+        KeyKind::Registration => (root.join(REGISTRATIONS_DIR), 4),
+        KeyKind::XorbOwner => (root.join(XORB_OWNERS_DIR), 3),
+    };
+    let mut keys = Vec::new();
+    for names in files_at_depth(&base, depth)? {
+        let [dirs @ .., prefix, file] = names.as_slice() else {
+            continue;
+        };
+        let Some(hash) = object_hash(prefix, file) else {
+            continue;
+        };
+        let key = match (kind, dirs) {
+            (KeyKind::Xorb, []) => Key::Xorb(hash),
+            (KeyKind::Shard, []) => Key::Shard(hash),
+            (KeyKind::Registration, [scope, tenant]) => {
+                match (NameHash::from_hex(scope), NameHash::from_hex(tenant)) {
+                    (Some(scope), Some(tenant)) => Key::Registration {
+                        scope,
+                        tenant,
+                        shard: hash,
+                    },
+                    _ => continue,
+                }
+            }
+            (KeyKind::XorbOwner, [tenant]) => match NameHash::from_hex(tenant) {
+                Some(tenant) => Key::XorbOwner { tenant, xorb: hash },
+                None => continue,
+            },
+            _ => continue,
+        };
+        keys.push(key);
+    }
+    Ok(keys)
+}
+
+/// The hash a file named `file` in prefix directory `prefix` stores, if the
+/// names are the ones [`LocalBucket`] writes.
+fn object_hash(prefix: &str, file: &str) -> Option<MerkleHash> {
+    let hash = hash_from_hex(file).ok()?;
+    (hash_to_hex(&hash) == file && file.get(..2) == Some(prefix)).then_some(hash)
+}
+
+/// The names leading from `base` to every regular file exactly `depth`
+/// levels below it. Names that aren't UTF-8 are skipped: the bucket never
+/// writes one.
+fn files_at_depth(base: &Path, depth: usize) -> Result<Vec<Vec<String>>, StorageError> {
+    let mut found = Vec::new();
+    let mut pending = vec![(base.to_path_buf(), Vec::<String>::new())];
+    while let Some((dir, names)) = pending.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            // Removed between listing its parent and here.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io("list directory", &dir)(e)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(io("list directory", &dir))?;
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let file_type = entry.file_type().map_err(io("stat", &entry.path()))?;
+            let mut path = names.clone();
+            path.push(name);
+            if path.len() == depth {
+                if file_type.is_file() {
+                    found.push(path);
+                }
+            } else if file_type.is_dir() {
+                pending.push((entry.path(), path));
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Opens the object at `path` and checks `start..=end_inclusive` against its
@@ -243,14 +450,14 @@ fn open_range(
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(StorageError::NotFound { key });
+            return Err(StorageError::NotFound { key: Box::new(key) });
         }
         Err(e) => return Err(io("open", path)(e)),
     };
     let size = file.metadata().map_err(io("stat", path))?.len();
     if start > end_inclusive || end_inclusive >= size {
         return Err(StorageError::RangeOutOfBounds {
-            key,
+            key: Box::new(key),
             start,
             end_inclusive,
             size,
@@ -268,7 +475,7 @@ fn get_range_blocking(
     let (mut file, size) = open_range(path, key, start, end_inclusive)?;
     let Ok(len) = usize::try_from(end_inclusive - start + 1) else {
         return Err(StorageError::RangeOutOfBounds {
-            key,
+            key: Box::new(key),
             start,
             end_inclusive,
             size,
@@ -375,13 +582,30 @@ fn join_error(e: &tokio::task::JoinError) -> StorageError {
 #[async_trait::async_trait]
 impl Bucket for LocalBucket {
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
-        let (root, key, path) = (self.root.clone(), *key, self.path(key));
+        let (root, key, place) = (self.root.clone(), *key, self.place(key));
         let durable = Arc::clone(&self.fs);
         tokio::task::spawn_blocking(move || {
-            put_blocking(durable.as_ref(), &root, key, &path, &bytes)
+            put_blocking(durable.as_ref(), &root, key, &place, &bytes)
         })
         .await
         .map_err(|e| join_error(&e))?
+    }
+
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        let (root, place) = (self.root.clone(), self.place(key));
+        let durable = Arc::clone(&self.fs);
+        tokio::task::spawn_blocking(move || {
+            create_blocking(durable.as_ref(), &root, &place, &bytes)
+        })
+        .await
+        .map_err(|e| join_error(&e))?
+    }
+
+    async fn list(&self, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || list_blocking(&root, kind))
+            .await
+            .map_err(|e| join_error(&e))?
     }
 
     async fn get_range(
@@ -435,10 +659,11 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     enum Event {
         SyncFile,
         Rename,
+        Link,
         SyncDir(PathBuf),
     }
 
@@ -462,6 +687,10 @@ mod tests {
         fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
             self.0.0.lock().unwrap().push(Event::Rename);
             RealFs.rename(from, to)
+        }
+        fn hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            self.0.0.lock().unwrap().push(Event::Link);
+            RealFs.hard_link(from, to)
         }
         fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
             self.0
@@ -500,6 +729,8 @@ mod tests {
             r.join(".tmp"),
             r.join("shards"),
             r.join("xorbs/default"),
+            r.join("registrations"),
+            r.join("xorb-owners"),
             r.join("xorbs"),
             r.to_path_buf(),
         ] {
@@ -556,6 +787,56 @@ mod tests {
             rec.take(),
             [Event::SyncDir(prefix_parent), Event::SyncDir(object_parent)]
         );
+    }
+
+    /// A record sits three directories below its skeleton directory, each
+    /// new: every entry on the way is fsynced before the link, and the
+    /// object's after it. A second `create` loses but syncs the same chain.
+    #[tokio::test]
+    async fn create_syncs_every_new_directory_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bucket, rec) = recording_bucket(dir.path());
+        rec.take();
+        let key = Key::registration("scope", "tenant", chunk_hash(b"create"));
+        assert!(
+            bucket
+                .create(&key, Bytes::from_static(b"first"))
+                .await
+                .unwrap()
+        );
+
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
+        let tenant_dir = object_parent.parent().unwrap().to_path_buf();
+        let scope_dir = tenant_dir.parent().unwrap().to_path_buf();
+        let base = dir.path().join(REGISTRATIONS_DIR);
+        assert_eq!(scope_dir.parent().unwrap(), base);
+        let chain = [
+            Event::SyncDir(base),
+            Event::SyncDir(scope_dir),
+            Event::SyncDir(tenant_dir),
+        ];
+        let mut first = vec![Event::SyncFile];
+        first.extend(chain.iter().cloned());
+        first.extend([Event::Link, Event::SyncDir(object_parent.clone())]);
+        assert_eq!(rec.take(), first);
+
+        assert!(
+            !bucket
+                .create(&key, Bytes::from_static(b"second"))
+                .await
+                .unwrap()
+        );
+        let mut again = chain.to_vec();
+        again.push(Event::SyncDir(object_parent));
+        assert_eq!(rec.take(), again);
+        assert!(files_in(&dir.path().join(TMP_DIR)).is_empty());
+    }
+
+    fn files_in(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect()
     }
 
     #[tokio::test]

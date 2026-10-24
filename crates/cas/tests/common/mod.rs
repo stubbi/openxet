@@ -38,7 +38,7 @@ use openxet_index::{
 };
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
-use openxet_storage::{Bucket, Key, LocalBucket, RangeStream, StorageError};
+use openxet_storage::{Bucket, Key, KeyKind, LocalBucket, RangeStream, StorageError};
 use reqwest::Method;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -936,6 +936,18 @@ impl Bucket for CountingBucket {
         self.inner.put(key, bytes).await
     }
 
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        self.inner.create(key, bytes).await
+    }
+
+    async fn get(&self, key: &Key) -> Result<Option<Bytes>, StorageError> {
+        self.inner.get(key).await
+    }
+
+    async fn list(&self, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
+        self.inner.list(kind).await
+    }
+
     async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
         self.whole_reads.fetch_add(1, Ordering::SeqCst);
         self.inner.get_range(key, start, end).await
@@ -1008,8 +1020,18 @@ impl Bucket for FailingBucket {
         })
     }
 
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        self.put(key, bytes).await.map(|()| true)
+    }
+
+    async fn list(&self, _: KeyKind) -> Result<Vec<Key>, StorageError> {
+        Ok(Vec::new())
+    }
+
     async fn get_range(&self, key: &Key, _: u64, _: u64) -> Result<Bytes, StorageError> {
-        Err(StorageError::NotFound { key: *key })
+        Err(StorageError::NotFound {
+            key: Box::new(*key),
+        })
     }
 
     async fn get_range_stream(
@@ -1018,7 +1040,9 @@ impl Bucket for FailingBucket {
         _: u64,
         _: u64,
     ) -> Result<RangeStream, StorageError> {
-        Err(StorageError::NotFound { key: *key })
+        Err(StorageError::NotFound {
+            key: Box::new(*key),
+        })
     }
 
     async fn size(&self, _: &Key) -> Result<Option<u64>, StorageError> {

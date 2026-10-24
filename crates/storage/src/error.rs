@@ -27,7 +27,7 @@ pub enum StorageError {
     )]
     NotFound {
         /// The missing key.
-        key: Key,
+        key: Box<Key>,
     },
 
     /// The key exists with a different size than the bytes being stored.
@@ -39,11 +39,32 @@ pub enum StorageError {
     )]
     SizeConflict {
         /// The conflicting key.
-        key: Key,
+        key: Box<Key>,
         /// Size of the stored object.
         existing: u64,
         /// Size of the rejected bytes.
         new: u64,
+    },
+
+    /// A record object doesn't decode, or names a different key than the one
+    /// it is stored under.
+    #[error(
+        "record {key} in the bucket is unreadable: {reason}{hint}",
+        hint = if *.newer {
+            "; it was written by a newer openxet, so run that version"
+        } else {
+            "; the bucket may be corrupt or written by another program. Restore the object \
+             from a backup, or report this at https://github.com/stubbi/openxet/issues"
+        }
+    )]
+    CorruptRecord {
+        /// The record's key.
+        key: Box<Key>,
+        /// What is wrong with it.
+        reason: String,
+        /// Whether the record has a newer format version than this build
+        /// reads.
+        newer: bool,
     },
 
     /// The requested range is empty or extends past the end of the object.
@@ -53,7 +74,7 @@ pub enum StorageError {
     )]
     RangeOutOfBounds {
         /// The key read.
-        key: Key,
+        key: Box<Key>,
         /// First requested byte.
         start: u64,
         /// Last requested byte (inclusive).

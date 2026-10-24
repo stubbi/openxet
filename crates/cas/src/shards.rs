@@ -541,6 +541,14 @@ mod tests {
             out
         }
 
+        async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+            self.inner.create(key, bytes).await
+        }
+
+        async fn list(&self, kind: openxet_storage::KeyKind) -> Result<Vec<Key>, StorageError> {
+            self.inner.list(kind).await
+        }
+
         async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
             self.inner.get_range(key, start, end).await
         }

@@ -379,7 +379,7 @@ impl From<StorageError> for CasError {
             // Every supported bucket is read-after-write consistent (ruling
             // M1-R21), so an object the index names but the bucket lacks is
             // data loss or a bug. A retry would only hide it.
-            StorageError::NotFound { key } => {
+            StorageError::NotFound { ref key } => {
                 tracing::error!(
                     %key,
                     "integrity fault: the index names an object the bucket lacks"
@@ -390,6 +390,8 @@ impl From<StorageError> for CasError {
             StorageError::RangeOutOfBounds { .. } | StorageError::SizeConflict { .. } => {
                 Self::internal(e)
             }
+            // A record in the bucket doesn't decode: the operator must look.
+            StorageError::CorruptRecord { .. } => Self::internal(e),
             _ => Self::internal(e),
         }
     }
@@ -1043,7 +1045,7 @@ mod tests {
             .finish();
 
         let error = tracing::subscriber::with_default(subscriber, || {
-            CasError::from(StorageError::NotFound { key })
+            CasError::from(StorageError::NotFound { key: Box::new(key) })
         });
 
         let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
@@ -1065,7 +1067,7 @@ mod tests {
     async fn storage_range_out_of_bounds_is_500_internal() {
         assert_maps(
             StorageError::RangeOutOfBounds {
-                key: Key::Xorb(MerkleHash::default()),
+                key: Box::new(Key::Xorb(MerkleHash::default())),
                 start: 1,
                 end_inclusive: 2,
                 size: 1,
@@ -1080,7 +1082,7 @@ mod tests {
     async fn storage_size_conflict_is_500_internal() {
         assert_maps(
             StorageError::SizeConflict {
-                key: Key::Shard(MerkleHash::default()),
+                key: Box::new(Key::Shard(MerkleHash::default())),
                 existing: 1,
                 new: 2,
             },
