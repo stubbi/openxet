@@ -343,6 +343,40 @@ async fn dedup_responses_use_fresh_keys() {
     assert_ne!(first.body, second.body);
 }
 
+#[tokio::test]
+async fn percent_encoded_paths_are_400_invalid_path() {
+    // One object, one URL (S10 "Conventions for every route"): a decoded
+    // `%64efault` or `%37c1...` would name the same object as its plain
+    // form.
+    let server = TestServer::start_default().await;
+    let (body, eligible, _) = mixed_xorb();
+    let xorb = upload_xorb(&server, body, &server.write_token).await;
+    let (chunk, xorb) = (hash_to_hex(&eligible), hash_to_hex(&xorb));
+
+    for (method, path) in [
+        ("GET", format!("/v1/chunks/%64efault/{chunk}")),
+        (
+            "GET",
+            format!(
+                "/v1/chunks/default/%{:x}{}",
+                chunk.as_bytes()[0],
+                &chunk[1..]
+            ),
+        ),
+        ("HEAD", format!("/v1/xorbs/%64efault/{xorb}")),
+    ] {
+        let head = format!(
+            "{method} {path} HTTP/1.1\r\nAuthorization: {}",
+            bearer(&server.read_token)
+        );
+        let answer = server.raw(&head, b"", false).await;
+        assert!(answer.starts_with("HTTP/1.1 400"), "{path}: {answer}");
+        if method == "GET" {
+            assert!(answer.contains("\"invalid_path\""), "{path}: {answer}");
+        }
+    }
+}
+
 /// An index whose `chunk_tables` answers nothing, as if the offered xorb's
 /// row were gone between the two lookups, or whose `dedup_xorb` fails.
 struct BrokenIndex {

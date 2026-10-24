@@ -8,16 +8,24 @@ use openxet_protocol::{MerkleHash, hash_from_hex};
 use crate::{AppState, CasError};
 
 /// The hash of a `{prefix}/{hash}` route whose prefix is one of
-/// `prefixes`. Any other prefix is `404 not_found`, as for any route not
-/// served; a hash not in the spec's form is `400 invalid_hash`. Neither
-/// depends on the caller, so both are answered before authentication.
+/// `prefixes`, so that every object has exactly one URL:
+/// - a path with any percent-encoding is `400 invalid_path`. Clients send
+///   prefixes and hex hashes as they are, and axum would decode
+///   `%64efault` to `default`, giving one object a second URL.
+/// - any other prefix is `404 not_found`, as for any route not served
+/// - a hash not in the spec's form is `400 invalid_hash`
+///
+/// None depends on the caller, so all are answered before authentication.
 pub(crate) async fn prefixed_hash(
     parts: &mut Parts,
     state: &AppState,
     prefixes: &[&str],
 ) -> Result<MerkleHash, CasError> {
-    // Raw, still percent-encoded: no encoding of a prefix or of a hex hash
-    // is the canonical form, so none is accepted.
+    // The raw request path: `RawPathParams` holds segments already
+    // percent-decoded (axum 0.8.9, `extract/path/mod.rs`).
+    if parts.uri.path().contains('%') {
+        return Err(CasError::InvalidPath);
+    }
     let params = RawPathParams::from_request_parts(parts, state)
         .await
         .map_err(|_| CasError::NoRoute)?;

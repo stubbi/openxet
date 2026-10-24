@@ -91,6 +91,12 @@ pub enum CasError {
     #[error("the hash in the request path is not 64 lowercase hex characters")]
     InvalidHash,
 
+    /// A path that names an object holds a percent-encoded byte, which would
+    /// give the object a second URL. `400 invalid_path`. The path is never
+    /// echoed.
+    #[error("the request path is percent-encoded; object paths are sent unencoded")]
+    InvalidPath,
+
     /// No xorb with the path's hash is visible to the caller.
     /// `404 xorb_not_found`; under `PerScope` visibility another scope's
     /// xorb reads the same as a missing one.
@@ -364,6 +370,12 @@ impl CasError {
                 "invalid_hash",
                 "Write the hash as 64 lowercase hex characters in Xet byte order \
                  (https://huggingface.co/docs/xet/api#converting-hashes-to-strings).",
+            ),
+            Self::InvalidPath => (
+                StatusCode::BAD_REQUEST,
+                "invalid_path",
+                "Send the prefix and the 64-character lowercase hex hash as they are, without \
+                 percent-encoding (https://huggingface.co/docs/xet/api#converting-hashes-to-strings).",
             ),
             Self::XorbNotFound { .. } => (
                 StatusCode::NOT_FOUND,
