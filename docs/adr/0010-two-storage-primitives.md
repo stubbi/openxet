@@ -105,9 +105,12 @@ and then that labels are generic, not a fixed set.
        reads `X-Error-Message` and the JSON `error`, deduplicates them and
        adds them after its own "Repository Not Found" text), so the hint
        reaches the user of `hf` and `huggingface_hub`.
-     - Any other caller gets a body byte-identical to an unknown
-       repository's, `{"error":"Repository not found"}`, so existence
-       doesn't leak.
+     - Any other caller gets exactly an unknown repository's response:
+       the same status, `X-Error-Code`, `X-Error-Message`
+       (`Repository not found`) and body (`{"error":"Repository not
+       found"}`), and no other header that differs, apart from
+       per-request ids and dates. Any difference would reveal that the
+       repository exists.
    - The unprefixed resolve route and `/api/models/…` are the `model`
      view, as on huggingface.co. The unprefixed Git URL
      `/{namespace}/{name}.git` is openxet's own address and serves the
@@ -199,8 +202,9 @@ owner's decision. This ADR does not schedule it.
   `dataset` and `space`, Git with `git-xet` for `kernel`. In M2 it also
   checks a typed-route view, a create collision's `409`, a wrong-type
   `404` that shows the label hint to a caller with read access, and one
-  that is byte-identical to an unknown repository's for a caller without
-  it (design §6). It tests the Storage Buckets routes in M5 with stock
+  that matches an unknown repository's response (status, headers apart
+  from per-request ids and dates, and body) for a caller without it
+  (design §6). It tests the Storage Buckets routes in M5 with stock
   `huggingface_hub`.
 
 ## Alternatives considered

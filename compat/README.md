@@ -30,7 +30,8 @@ typed-route views (design §6, ADR 0010):
 - `wrong_type_with_read_access_shows_label_hint`: with read access, the
   raised error's text tells how to add the label
 - `wrong_type_without_read_access_matches_unknown_repo`: without read
-  access, the body is byte-identical to an unknown repository's
+  access, the response matches an unknown repository's: status, headers
+  (excluding per-request ids and dates) and body
 - `create_collision_answers_409_with_url`: a name taken under another
   label
 

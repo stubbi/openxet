@@ -859,10 +859,12 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   without the `dataset` label; add it with
   `openxet label add foo/bar dataset` (or the label API), or choose
   another name. `huggingface_hub` 2.2.0 appends both to the raised
-  error's text (`utils/_http.py`, `_format`). Any other caller gets a
-  body byte-identical to an unknown repository's,
-  `{"error":"Repository not found"}`, so existence doesn't leak (the
-  M1-R17 pattern).
+  error's text (`utils/_http.py`, `_format`). Any other caller gets
+  exactly an unknown repository's response: the same status,
+  `X-Error-Code`, `X-Error-Message` (`Repository not found`) and body
+  (`{"error":"Repository not found"}`), with no other header differing
+  apart from per-request ids and dates. Any difference would reveal
+  that the repository exists (the M1-R17 pattern).
 - Names are unique across labels, unlike huggingface.co. Creating
   `datasets/foo/bar` while `foo/bar` exists answers `409` in the shape
   `create_repo` reads (S3 fixtures `05` and `06`): `{"error", "url"}`,
@@ -880,8 +882,9 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   `typed_route_view_filters_by_label`,
   `wrong_type_route_is_repo_not_found`,
   `wrong_type_with_read_access_shows_label_hint`,
-  `wrong_type_without_read_access_matches_unknown_repo` (the body
-  byte-identical to an unknown repository's) and
+  `wrong_type_without_read_access_matches_unknown_repo` (compares
+  status, headers apart from per-request ids and dates, and body with an
+  unknown repository's) and
   `create_collision_answers_409_with_url`.
 
 **Model:**
