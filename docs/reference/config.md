@@ -98,6 +98,10 @@ Requests that don't fit wait for bytes to come free:
   any queued upload, so uploads never hold up downloads. One that doesn't
   fit waits up to 5 s. A batch's own body waits the same way.
 
+Answers that fit go ahead of queued uploads, so under read load that
+holds nearly the whole budget, uploads can wait their full 120 s and get
+`503`.
+
 After its wait a request is refused with `503 memory_busy` and
 `Retry-After: 1`; stock clients retry it. An upload refused so is not
 read, and its connection is closed.
