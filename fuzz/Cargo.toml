@@ -13,8 +13,13 @@ license = "Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
+base64 = "0.22.1"
+http = "1.5.0"
 libfuzzer-sys = "0.4"
+openxet-auth = { path = "../crates/auth", version = "0.0.0" }
+openxet-cas = { path = "../crates/cas", version = "0.0.0", features = ["fuzzing"] }
 openxet-protocol = { path = "../crates/protocol", version = "0.0.0" }
+url = "2.5.8"
 
 [[bin]]
 name = "xorb_upload"
@@ -40,6 +45,27 @@ bench = false
 [[bin]]
 name = "verify_shard"
 path = "fuzz_targets/verify_shard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cas_token"
+path = "fuzz_targets/cas_token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transfer_url"
+path = "fuzz_targets/transfer_url.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reconstruction_range"
+path = "fuzz_targets/reconstruction_range.rs"
 test = false
 doc = false
 bench = false

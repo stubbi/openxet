@@ -17,7 +17,8 @@ allow = [
     "Zlib",
     "MPL-2.0",
 ]
-# The fuzz workspace (fuzz/Cargo.lock) is checked in the fuzz-smoke job.
+# The fuzz workspace (fuzz/Cargo.lock, which fuzz/seed.sh derives from
+# Cargo.lock) is checked in the fuzz-smoke job.
 # webpki-root-certs is Mozilla's CA bundle as data, under the permissive
 # CDLA-Permissive-2.0; the client core's TLS stack (reqwest, rustls) needs it.
 exceptions = [

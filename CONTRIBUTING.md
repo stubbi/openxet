@@ -39,10 +39,9 @@ cargo fmt --check                                          # formatting (CI gate
 cargo deny check                                           # licenses, advisories, bans (CI gate)
 scripts/check-client-core-ban.sh                           # the ADR 0006 ban rejects xet-data & co. in a server crate (CI gate)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
-fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
-cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: each of xorb_upload, xorb_chunks, upload_shard, verify_shard)
+fuzz/seed.sh                                               # fill fuzz/corpus, and fuzz/Cargo.lock from Cargo.lock (before fuzzing; needs the reference files)
+cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: every target in fuzz/Cargo.toml)
 cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace's own dependencies (CI, with the fuzz job)
-cargo +nightly metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null # fuzz/Cargo.lock is current (CI, with the fuzz job)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
@@ -56,12 +55,16 @@ mdbook serve site --open                                   # live preview of the
 
 Fuzzing needs the nightly toolchain (`rustup toolchain install nightly`) and
 `cargo install cargo-fuzz --locked` once. `fuzz/` is its own workspace, and
-`fuzz/seed.sh` copies the seeds from `testdata/`; the corpus and any crash
-artifacts stay untracked. On macOS the default AddressSanitizer build fails to
+`fuzz/seed.sh` copies the seeds from `testdata/` and writes the text
+targets' seeds; the corpus and any crash artifacts stay untracked. It also
+writes `fuzz/Cargo.lock` from the workspace's `Cargo.lock`, so fuzzing
+runs the dependency versions openxet ships; rerun it after a dependency
+change. On macOS the default AddressSanitizer build fails to
 link, so add `-s none` (`cargo +nightly fuzz run -s none <target>`); Linux and
-CI use the default. A crash input becomes a regression test in
-`crates/protocol/tests/` together with its fix. CI's `fuzz-smoke` job runs
-each target for 60 s on PRs that touch `crates/protocol/` or `fuzz/`.
+CI use the default. A crash input becomes a regression test in the
+crashed crate's tests together with its fix. CI's `fuzz-smoke` job runs
+each target for 60 s on PRs that touch `crates/protocol/`, `crates/auth/`,
+`crates/cas/`, `fuzz/` or `Cargo.lock`.
 
 The legs marked `agent`, `storage_only` and `docs` need only the built
 `openxet`. The rest of the compatibility suite talks to huggingface.co, and

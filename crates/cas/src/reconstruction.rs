@@ -294,7 +294,7 @@ async fn head_file(
 
 /// A reconstruction `Range`, before the file's size is known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ByteRange {
+pub(crate) enum ByteRange {
     /// `bytes=start-end` (`end` inclusive) or `bytes=start-`.
     From { start: u64, end: Option<u64> },
     /// `bytes=-length`: the last `length` bytes.
@@ -306,7 +306,7 @@ enum ByteRange {
 /// upstream's reference server serves them (`xet-client` 1.7.0,
 /// `local_server/handlers.rs`). More than one range, another unit, or a
 /// `start` after `end` is `400 invalid_range`.
-fn requested_range(headers: &HeaderMap) -> Result<Option<ByteRange>, CasError> {
+pub(crate) fn requested_range(headers: &HeaderMap) -> Result<Option<ByteRange>, CasError> {
     let mut values = headers.get_all(RANGE).iter();
     let Some(value) = values.next() else {
         return Ok(None);
@@ -349,7 +349,7 @@ fn requested_range(headers: &HeaderMap) -> Result<Option<ByteRange>, CasError> {
 
 /// `range` as the inclusive byte range [`plan::plan`] takes for a file of
 /// `size` bytes; its end may lie past the file, which planning clamps.
-fn resolve(range: Option<ByteRange>, size: u64) -> Result<Option<(u64, u64)>, CasError> {
+pub(crate) fn resolve(range: Option<ByteRange>, size: u64) -> Result<Option<(u64, u64)>, CasError> {
     match range {
         None => Ok(None),
         Some(ByteRange::From { start, end }) => Ok(Some((start, end.unwrap_or(u64::MAX)))),

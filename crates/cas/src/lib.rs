@@ -224,6 +224,23 @@ pub fn endpoints() -> Vec<Endpoint> {
     served().into_endpoints()
 }
 
+/// The inclusive byte range a reconstruction serves for the `Range`
+/// headers in `headers` and a file of `size` bytes, as the reconstruction
+/// routes compute it; an end past the file is clamped later, by planning.
+/// Only with the `fuzzing` feature, for `fuzz/`.
+///
+/// # Errors
+///
+/// [`CasError::InvalidRange`] or [`CasError::RangeNotSatisfiable`], as the
+/// routes answer.
+#[cfg(feature = "fuzzing")]
+pub fn reconstruction_range(
+    headers: &axum::http::HeaderMap,
+    size: u64,
+) -> Result<Option<(u64, u64)>, CasError> {
+    reconstruction::resolve(reconstruction::requested_range(headers)?, size)
+}
+
 /// The CAS's routes, without middleware or state.
 fn served() -> routes::Routes {
     routes::Routes::new()
