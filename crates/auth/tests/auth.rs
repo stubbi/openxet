@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ed25519_dalek::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
+use ed25519_dalek::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _, EncodePrivateKey as _};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use openxet_auth::{
@@ -1252,6 +1252,43 @@ fn secret_holders_debug_is_redacted() {
             .expect("valid range"),
     );
     assert!(!format!("{q:?}").contains(&q.sig));
+}
+
+#[test]
+fn generated_private_key_is_pkcs8_v1() {
+    // A platform loads this key into its own JWT library. Python's
+    // `cryptography` (50.0.2, under PyJWT) refuses the v2 form with the
+    // public key attached ("ASN.1 parsing error: extra data"), so the key
+    // is written in the v1 form of RFC 8410 §7: version 0, the OID, and
+    // the 32-byte seed, nothing else.
+    const V1_PREFIX: [u8; 16] = [
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ];
+    let pair = generate_keypair().expect("generate keypair");
+    let der = pem_body(pair.private_pem());
+    // Only the structure is printed on failure, never the key.
+    assert_eq!(
+        der.len(),
+        V1_PREFIX.len() + 32,
+        "PKCS#8 version byte {}",
+        der[4]
+    );
+    assert_eq!(der[..V1_PREFIX.len()], V1_PREFIX);
+
+    let signer = TokenSigner::from_pem(pair.private_pem()).expect("parse private key");
+    assert_eq!(signer.kid(), pair.kid());
+
+    // Keys written before this change are v2; `token mint` still reads them.
+    let v2 = SigningKey::from_pkcs8_pem(pair.private_pem())
+        .expect("private key")
+        .to_pkcs8_pem(ed25519_dalek::pkcs8::spki::der::pem::LineEnding::LF)
+        .expect("v2 PEM");
+    assert_eq!(pem_body(&v2)[4], 1, "not a v2 key");
+    assert_eq!(
+        TokenSigner::from_pem(&v2).expect("parse v2").kid(),
+        pair.kid()
+    );
 }
 
 fn retarget_kid(token: &str, kid: &str) -> String {

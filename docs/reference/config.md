@@ -201,7 +201,10 @@ openxet accepts exactly this:
 
 - **Keys:** `jwt_public_keys` lists one or more Ed25519 public keys in SPKI
   PEM (`-----BEGIN PUBLIC KEY-----`, RFC 8410). Signing keys are PKCS#8 PEM
-  (`-----BEGIN PRIVATE KEY-----`). List several public keys to rotate: sign
+  (`-----BEGIN PRIVATE KEY-----`). `token keygen` writes the v1 form
+  (RFC 8410 §7), since Python's `cryptography` (checked with 50.0.2, under
+  PyJWT) refuses v2 with the public key attached; `token mint` reads both.
+  List several public keys to rotate: sign
   with the new key once every node trusts it, then remove the old one.
 - **`kid`:** the first 16 lowercase hex characters of the SHA-256 of the raw
   32-byte public key. `openxet token keygen` and `config check` print it.
