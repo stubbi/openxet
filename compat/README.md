@@ -24,10 +24,15 @@ Four legs:
 
 Planned for M2's Hub leg, with stock `huggingface_hub` against openxet's
 typed-route views (design §6, ADR 0010):
-`typed_route_view_filters_by_label`, `wrong_type_route_is_repo_not_found`
-(`RepositoryNotFoundError` for a repository read through a type it isn't
-labelled with) and `create_collision_answers_409_with_url` (a name taken
-under another label).
+- `typed_route_view_filters_by_label`
+- `wrong_type_route_is_repo_not_found`: `RepositoryNotFoundError` for a
+  repository read through a type it isn't labelled with
+- `wrong_type_with_read_access_shows_label_hint`: with read access, the
+  raised error's text tells how to add the label
+- `wrong_type_without_read_access_matches_unknown_repo`: without read
+  access, the body is byte-identical to an unknown repository's
+- `create_collision_answers_409_with_url`: a name taken under another
+  label
 
 Client version floor: `hf_xet==1.7.0`. It is the oldest `hf_xet` openxet
 supports (ruling M1-R9), and the version this suite pins, so the floor is

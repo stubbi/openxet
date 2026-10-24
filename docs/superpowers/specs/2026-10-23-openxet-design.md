@@ -851,27 +851,38 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   listing through a typed route (`/api/models?…`) returns only
   repositories with its label.
 - Reading or writing a repository through a typed route whose label it
-  lacks answers exactly as a missing one does: `404`, `X-Error-Code:
-  RepoNotFound`, `{"error":"Repository not found"}` (S3 fixture
-  `24-repo-info-not-found`). Stock clients raise
+  lacks answers `404` with `X-Error-Code: RepoNotFound` (S3 fixture
+  `24-repo-info-not-found`), so stock clients raise
   `RepositoryNotFoundError`, as huggingface.co makes them do for a wrong
-  `repo_type`.
+  `repo_type`. A caller who can read the repository gets an actionable
+  message in `X-Error-Message` and the body's `error`: `foo/bar` exists
+  without the `dataset` label; add it with
+  `openxet label add foo/bar dataset` (or the label API), or choose
+  another name. `huggingface_hub` 2.2.0 appends both to the raised
+  error's text (`utils/_http.py`, `_format`). Any other caller gets a
+  body byte-identical to an unknown repository's,
+  `{"error":"Repository not found"}`, so existence doesn't leak (the
+  M1-R17 pattern).
 - Names are unique across labels, unlike huggingface.co. Creating
   `datasets/foo/bar` while `foo/bar` exists answers `409` in the shape
   `create_repo` reads (S3 fixtures `05` and `06`): `{"error", "url"}`,
   the message in `X-Error-Message`, naming the existing repository. With
   `exist_ok=True` that reads as success, and the next call through the
-  `dataset` view gets the `404` above; relabel the repository or choose
-  another name.
+  `dataset` view gets the `404` above, whose hint says how to add the
+  label.
 - Labels are changed through openxet's own API and CLI, never the Hub
   API.
 - `huggingface_hub` 2.2.0 creates, reads and downloads `kernel`
   repositories but won't commit or upload to them (its commit and upload
   functions accept only `REPO_TYPES`), so kernels are written over Git
   with `git-xet`.
-- Compatibility tests planned for M2: `typed_route_view_filters_by_label`,
-  `wrong_type_route_is_repo_not_found` and
-  `create_collision_answers_409_with_url`, with stock `huggingface_hub`.
+- Compatibility tests planned for M2, with stock `huggingface_hub`:
+  `typed_route_view_filters_by_label`,
+  `wrong_type_route_is_repo_not_found`,
+  `wrong_type_with_read_access_shows_label_hint`,
+  `wrong_type_without_read_access_matches_unknown_repo` (the body
+  byte-identical to an unknown repository's) and
+  `create_collision_answers_409_with_url`.
 
 **Model:**
 - Repositories and buckets are separate primitives; buckets have their
@@ -1808,10 +1819,11 @@ release of the open-source build: it runs the released build (§15).
     keys with last-writer-wins and optional versioning, and GC, `reindex`
     and metering for bucket keys, with the generic labels of §10.4.
   - The bucket log and snapshots of §10.4, with `reindex` restoring every
-    acknowledged key, and a small-object write benchmark: at least 200
-    one-key `batch` commits per second per deployment (§5.8's shard
-    registration rate), with a one-key commit's p99 within 20 ms of the
-    object store's own PUT p99.
+    acknowledged key, and a small-object write benchmark. Its stated
+    target, to be confirmed by the M5 benchmark: at least 200 one-key
+    `batch` commits per second per deployment (§5.8's shard registration
+    rate), with a one-key commit's p99 within 20 ms of the object store's
+    own PUT p99.
   - Full export of repositories and buckets, the first milestone with
     both primitives: an operator or tenant can take everything out, tested
     by restoring the export into a fresh deployment (§1, no lock-in).

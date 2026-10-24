@@ -92,10 +92,22 @@ and then that labels are generic, not a fixed set.
    - Listing through a typed route (`/api/models?…`) returns only
      repositories with its label.
    - Reading or writing an existing repository through a typed route
-     whose label it lacks answers exactly as a missing repository does:
-     `404`, `X-Error-Code: RepoNotFound`, `{"error":"Repository not
-     found"}`. Stock clients raise `RepositoryNotFoundError`, as
-     huggingface.co makes them do for a wrong `repo_type`.
+     whose label it lacks answers `404` with `X-Error-Code:
+     RepoNotFound`, so stock clients raise `RepositoryNotFoundError`, as
+     huggingface.co makes them do for a wrong `repo_type`. Its message
+     depends on what the caller may read (the M1-R17 pattern):
+     - A caller who can read the repository gets an actionable message,
+       in `X-Error-Message` and the body's `error`: the repository
+       `foo/bar` exists without the `dataset` label; add it with
+       `openxet label add foo/bar dataset` (or the label API), or choose
+       another name. `hf_raise_for_status` appends both to the raised
+       error's text (`utils/_http.py`, `_format`, lines 1035–1101: it
+       reads `X-Error-Message` and the JSON `error`, deduplicates them and
+       adds them after its own "Repository Not Found" text), so the hint
+       reaches the user of `hf` and `huggingface_hub`.
+     - Any other caller gets a body byte-identical to an unknown
+       repository's, `{"error":"Repository not found"}`, so existence
+       doesn't leak.
    - The unprefixed resolve route and `/api/models/…` are the `model`
      view, as on huggingface.co. The unprefixed Git URL
      `/{namespace}/{name}.git` is openxet's own address and serves the
@@ -151,10 +163,11 @@ owner's decision. This ADR does not schedule it.
   huggingface.co doesn't do. We accept it for generic storage with Hub
   types as a compatibility view: the address stays stable while labels
   change, and nothing outside ML has to pick a type. With
-  `create_repo(exist_ok=True)`, a collision reads as success, and the
-  next call through that type's view gets `RepositoryNotFoundError`; the
-  `409`'s message names the existing repository so the caller can
-  relabel it or pick another name.
+  `create_repo(exist_ok=True)`, a collision reads as success, so
+  `hf upload --repo-type dataset foo/bar` onto a `foo/bar` without the
+  `dataset` label reaches the typed view's `404`. That `404` tells a
+  caller who can read the repository how to add the label or pick
+  another name, so it isn't a dead end.
 - A label change reaches the object store before it is acknowledged,
   like a commit object, so `reindex` restores labels; every change is an
   audit entry (M4's audit log).
@@ -184,8 +197,10 @@ owner's decision. This ADR does not schedule it.
   `huggingface_hub` (repo info, listing, `hf download`) and writes it
   with whichever stock client supports it: Hub commits for `model`,
   `dataset` and `space`, Git with `git-xet` for `kernel`. In M2 it also
-  checks a typed-route view, a wrong-type `404` and a create collision's
-  `409` (design §6). It tests the Storage Buckets routes in M5 with stock
+  checks a typed-route view, a create collision's `409`, a wrong-type
+  `404` that shows the label hint to a caller with read access, and one
+  that is byte-identical to an unknown repository's for a caller without
+  it (design §6). It tests the Storage Buckets routes in M5 with stock
   `huggingface_hub`.
 
 ## Alternatives considered
