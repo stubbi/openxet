@@ -408,17 +408,26 @@ async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, Cas
 
 /// Runs `work` on a blocking thread holding `permit` ([`blocking`]), for an
 /// answer of `terms` terms. `work` gets how many threads may write the
-/// answer: one, plus one per further `validate` permit free right now, up
-/// to what the answer is worth ([`answer::workers_for`]). Those permits are
-/// held until `work` returns, so the threads stay within the CPU bound of
-/// rulings M1-R8 and M1-R25, and a busy server writes the answer on one.
+/// answer: one, plus one per extra `validate` permit.
+///
+/// Extra permits (ruling M1-R34):
+/// - are taken only if free right now, never waited for, so a reconstruction
+///   never jumps uploads queued for a permit
+/// - number at most half of the permits free at that moment, rounded down,
+///   so uploads always keep capacity, and at most what the answer is worth
+///   ([`answer::workers_for`])
+/// - are held until `work` returns, error or not, so the threads stay
+///   within the CPU bound of rulings M1-R8 and M1-R25
+///
+/// A busy server, with one permit or none free, writes the answer on one
+/// thread.
 async fn render(
     state: &AppState,
     permit: OwnedSemaphorePermit,
     terms: usize,
     work: impl FnOnce(usize) -> Result<Vec<Bytes>, CasError> + Send + 'static,
 ) -> Result<Vec<Bytes>, CasError> {
-    let wanted = answer::workers_for(terms) - 1;
+    let wanted = (answer::workers_for(terms) - 1).min(state.validate.available_permits() / 2);
     let extra = (1..=wanted).rev().find_map(|n| {
         let n = u32::try_from(n).ok()?;
         let permits = Arc::clone(&state.validate).try_acquire_many_owned(n).ok()?;
@@ -658,6 +667,156 @@ mod tests {
             answer.abort();
         }
         drop(held);
+    }
+
+    /// The writer threads `render` grants a 100k-term answer when `held`
+    /// of 8 `validate` permits are taken elsewhere, and the permits free
+    /// while it writes; asserts every permit comes back after.
+    async fn writers_with(held: u32, fails: bool) -> (usize, usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![]).await;
+        state.validate = Arc::new(Semaphore::new(8));
+        let others = Arc::clone(&state.validate)
+            .acquire_many_owned(held)
+            .await
+            .unwrap();
+        let permit = validation_permit(&state).await.unwrap();
+        let validate = Arc::clone(&state.validate);
+        let seen = Arc::new(std::sync::Mutex::new((0, 0)));
+        let record = Arc::clone(&seen);
+        let result = render(&state, permit, 100_000, move |workers| {
+            *record.lock().unwrap() = (workers, validate.available_permits());
+            if fails {
+                return Err(CasError::internal("work failed"));
+            }
+            Ok(vec![Bytes::from_static(b"{}")])
+        })
+        .await;
+        assert_eq!(result.is_err(), fails);
+        assert_eq!(
+            state.validate.available_permits(),
+            8 - held as usize,
+            "render kept permits"
+        );
+        drop(others);
+        *seen.lock().unwrap()
+    }
+
+    #[tokio::test]
+    async fn extra_writers_take_at_most_half_the_free_permits_and_return_them() {
+        // Ruling M1-R34. With 3 of 8 held and the request's own taken, 4
+        // are free: 2 extra writers, and 2 permits stay free for uploads.
+        assert_eq!(writers_with(3, false).await, (3, 2));
+        assert_eq!(
+            writers_with(3, true).await,
+            (3, 2),
+            "an error returns them too"
+        );
+        // All 8 free: 7 after the request's own, 3 extra.
+        assert_eq!(writers_with(0, false).await, (4, 4));
+    }
+
+    #[tokio::test]
+    async fn a_busy_pool_writes_on_one_thread() {
+        // One permit free after the request's own: half of it is none.
+        assert_eq!(writers_with(6, false).await, (1, 1));
+        // None free.
+        assert_eq!(writers_with(7, false).await, (1, 0));
+    }
+
+    /// A clock stopped at one second, so two answers sign the same URLs.
+    struct Stopped;
+
+    impl crate::Clock for Stopped {
+        fn now(&self) -> u64 {
+            1_800_000_000
+        }
+    }
+
+    #[tokio::test]
+    async fn an_answer_written_on_one_thread_is_the_same_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.validate = Arc::new(Semaphore::new(8));
+        state.clock = Arc::new(Stopped);
+        let xorbs: Vec<MerkleHash> = (0..2u8)
+            .map(|x| openxet_protocol::chunk_hash(&[x]))
+            .collect();
+        let table = ChunkTable {
+            hashes: (0..1024u32)
+                .map(|c| (openxet_protocol::chunk_hash(&c.to_le_bytes()), 100))
+                .collect(),
+            offsets: (0..=1024u32).map(|c| c * 108).collect(),
+        };
+        for xorb in &xorbs {
+            state
+                .index
+                .put_xorb(xorb, 1024 * 108, &table, &[], "s")
+                .await
+                .unwrap();
+        }
+        // Enough terms for three writers, alternating xorbs so none merge.
+        let terms: Vec<Term> = (0..40_000u32)
+            .map(|i| Term {
+                xorb: xorbs[(i % 2) as usize],
+                chunk_start: (i / 2) % 1024,
+                chunk_end: (i / 2) % 1024 + 1,
+                unpacked_bytes: 100,
+            })
+            .collect();
+        let file = FileRecord {
+            hash: openxet_protocol::chunk_hash(b"large"),
+            size: 40_000 * 100,
+            terms,
+        };
+        let new = NewFile {
+            record: file.clone(),
+            sha256: None,
+            first_chunk: None,
+        };
+        state
+            .index
+            .register_shard(&xorbs[0], &[new], "s", Visibility::Global)
+            .await
+            .unwrap();
+        let get = |path: String| {
+            router(state.clone()).oneshot(
+                Request::get(path)
+                    .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        };
+        let paths = [
+            format!("/v2/reconstructions/{}", hash_to_hex(&file.hash)),
+            format!("/v1/reconstructions/{}", hash_to_hex(&file.hash)),
+            format!("/v1/reconstructions?file_id={}", hash_to_hex(&file.hash)),
+        ];
+        for path in paths {
+            let threaded = get(path.clone()).await.unwrap();
+            assert_eq!(threaded.status(), StatusCode::OK);
+            let threaded = axum::body::to_bytes(threaded.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            // All but the request's own permit held: one writer.
+            let held = Arc::clone(&state.validate)
+                .acquire_many_owned(7)
+                .await
+                .unwrap();
+            let single = get(path.clone()).await.unwrap();
+            assert_eq!(single.status(), StatusCode::OK);
+            let single = axum::body::to_bytes(single.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            drop(held);
+            assert!(threaded == single, "{path}: the bytes differ");
+        }
     }
 
     fn range(value: &str) -> Result<Option<ByteRange>, CasError> {
