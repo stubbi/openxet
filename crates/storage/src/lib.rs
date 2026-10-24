@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod dir;
 mod error;
 mod local;
 
@@ -16,6 +17,7 @@ use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 
+pub use dir::create_private_dir_all;
 pub use error::StorageError;
 pub use local::LocalBucket;
 
