@@ -4,21 +4,47 @@ Drives the official, unmodified Hugging Face clients against a target
 endpoint. It is the project's most important test asset: it never gets
 weaker to make a change pass.
 
-Today the target is huggingface.co, as a baseline. The agent leg drives the
-`openxet` CLI the way an agent would (JSON output, no prompts, stable exit
-codes).
+Three legs:
+
+- **HF baseline:** stock `huggingface_hub` and `hf_xet` against
+  huggingface.co.
+- **Agent leg** (`-m agent`): drives the `openxet` CLI the way an agent
+  would (JSON output, no prompts, stable exit codes).
+- **Storage-only leg** (`-m storage_only`, `tests/test_storage_only.py`):
+  stock `hf_xet` uploads to and downloads from `openxet serve` directly,
+  with no Hub, as a platform embedding openxet does. It also crosses
+  `hf_xet` with `openxet upload` / `download`, and signs CAS tokens with
+  PyJWT as a platform would.
+
+Client version floor: `hf_xet==1.7.0`. It is the oldest `hf_xet` openxet
+supports (ruling M1-R9), and the version this suite pins, so the floor is
+the version CI proves; `test_version_floor_recorded` keeps the two equal.
 
 ```bash
 cargo build
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest   # everything
-uv run --frozen --directory compat pytest -m "not agent"                           # HF baseline only
+uv run --frozen --directory compat pytest -m "not agent and not storage_only"      # HF baseline only
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent
+OPENXET_BIN=$PWD/target/release/openxet uv run --frozen --directory compat pytest -m storage_only
 ```
 
-- `OPENXET_COMPAT_TARGET`: endpoint under test (default
-  `https://huggingface.co`).
-- `OPENXET_BIN`: the built CLI. Tests marked `agent` fail, not skip, without
-  it.
+- `OPENXET_COMPAT_TARGET`: endpoint under test for the HF baseline
+  (default `https://huggingface.co`).
+- `OPENXET_BIN`: the built CLI. Tests marked `agent` or `storage_only` fail,
+  not skip, without it. The storage-only leg moves several hundred MB through the
+  server; a release build (`cargo build --release -p openxet`) runs it
+  faster.
+
+The storage-only leg starts its own `openxet serve` per test, on a free
+port with a temporary data directory, and counts requests from the
+server's JSON debug log. A test fails if that log holds any token it
+sent. In both the storage-only and the agent leg, every child process
+gets its environment from an allowlist: no `HF_XET_*`, `HF_HUB_*` or
+`OPENXET_*` variable from your shell reaches a client or the server
+except those the harness sets itself (`HARNESS_ENV` in `conftest.py`).
+Numbers worth watching but not yet
+asserted are printed under "measurements (informational)" at the end of
+the run.
 
 Client runs use an isolated `HF_HOME` and `HF_XET_CACHE` under pytest's
 `tmp_path`; the real `~/.cache/huggingface` is never touched. Downloads run in
@@ -31,7 +57,10 @@ and the assertion in `conftest.py` is updated.
 
 The client versions are pinned exactly in `pyproject.toml` and `uv.lock`.
 `huggingface_hub` 2.2.0 has no `cli` extra: the `hf` CLI ships in the base
-package. The nightly workflow also runs the latest releases.
+package. PyJWT and `cryptography`, which sign CAS tokens as a platform would,
+are pinned in the `dev` group. The nightly workflow also runs the latest
+releases, and the storage-only leg with the newest `hf-xet` release and
+pre-release.
 
 Add a CLI command to `JSON_COMMANDS` in `tests/test_agent_cli.py` whenever you
 add one.

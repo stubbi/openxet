@@ -26,7 +26,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signature;
 use ed25519_dalek::pkcs8::{
     DecodePrivateKey as _, DecodePublicKey as _, EncodePrivateKey as _, EncodePublicKey as _,
-    spki::der::pem::LineEnding,
+    KeypairBytes, spki::der::pem::LineEnding,
 };
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use serde::Deserialize;
@@ -248,11 +248,19 @@ impl fmt::Debug for GeneratedKeypair {
 pub fn generate_keypair() -> Result<GeneratedKeypair, AuthError> {
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).map_err(|_| AuthError::KeyGeneration)?;
-    let key = SigningKey::from_bytes(&seed);
+    let public = SigningKey::from_bytes(&seed).verifying_key();
+    // PKCS#8 v1 (RFC 8410 §7), without the optional public key: Python's
+    // `cryptography`, under PyJWT, refuses the v2 form `SigningKey` writes.
+    // `KeypairBytes` takes its own copy of the seed. It and the PKCS#8
+    // encoder's scratch copy are wiped by the `ed25519` crate's `zeroize`
+    // feature, enabled in Cargo.toml for that reason.
+    let private = KeypairBytes {
+        secret_key: seed,
+        public_key: None,
+    };
     seed.zeroize();
-    let public = key.verifying_key();
     Ok(GeneratedKeypair {
-        private_pem: key
+        private_pem: private
             .to_pkcs8_pem(LineEnding::LF)
             .map_err(|_| AuthError::KeyGeneration)?,
         public_pem: public

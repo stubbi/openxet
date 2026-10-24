@@ -748,6 +748,7 @@ checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
  "pkcs8",
  "signature",
+ "zeroize",
 ]
 
 [[package]]
@@ -1775,6 +1776,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "curve25519-dalek",
+ "ed25519",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac",

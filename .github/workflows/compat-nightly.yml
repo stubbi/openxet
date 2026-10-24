@@ -2,8 +2,10 @@ name: compat-nightly
 
 # Real HF clients against huggingface.co, anonymously. The "latest" leg runs
 # the newest HF client releases (httpx and pytest stay pinned) to catch
-# upstream drift before it reaches users (design section 8). The agent leg
-# runs on every PR, so it is excluded here.
+# upstream drift before it reaches users (design section 8). The storage-only
+# legs run the newest hf-xet release and pre-release against openxet serve.
+# The agent leg and the pinned storage-only leg run on every PR, so they are
+# excluded here.
 on:
   schedule:
     - cron: "0 4 * * *"
@@ -47,18 +49,20 @@ jobs:
         working-directory: compat
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.9.8"
       - name: Run suite with the locked client versions
         if: matrix.clients == 'pinned'
-        run: uv run --frozen pytest -m "not agent" | tee report.txt
+        run: uv run --frozen pytest -m "not agent and not storage_only" | tee report.txt
       - name: Run suite with the latest HF client releases
         if: matrix.clients == 'latest'
         run: >
           uv run --no-project --with huggingface_hub --with hf_xet
           --with httpx==0.28.1 --with pytest==9.1.1
-          pytest -m "not agent and not pinned" | tee report.txt
+          pytest -m "not agent and not storage_only and not pinned" | tee report.txt
       - name: Keep the version header
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -67,9 +71,60 @@ jobs:
           path: compat/report.txt
           if-no-files-found: ignore
 
+  # Needs no Hub, so it runs whether or not huggingface.co is reachable.
+  # The pre-release leg runs what hf_xet ships next, such as a pre-release
+  # that probes the upload-grant route and falls back on its 404 (ruling
+  # M1-R9). The resolved version is printed in the report header.
+  storage-only:
+    name: compat (storage-only, ${{ matrix.hf_xet }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        hf_xet: [release, prerelease]
+    defaults:
+      run:
+        shell: bash
+        working-directory: compat
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+      - run: cargo build --locked -p openxet
+      # A separate environment: the locked one keeps the floor, 1.7.0. The
+      # token-signing libraries keep the locked versions.
+      - name: Install the newest hf-xet ${{ matrix.hf_xet }}
+        env:
+          PRERELEASE: ${{ matrix.hf_xet == 'prerelease' && 'allow' || 'disallow' }}
+        run: |
+          uv venv "$RUNNER_TEMP/clients"
+          uv pip install --python "$RUNNER_TEMP/clients" --prerelease "$PRERELEASE" \
+            hf-xet httpx==0.28.1 pytest==9.1.1 pyjwt==2.15.1 cryptography==50.0.2
+          uv pip list --python "$RUNNER_TEMP/clients" | grep -i '^hf-xet '
+      - name: Run the storage-only leg
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+        run: >
+          "$RUNNER_TEMP/clients/bin/python" -m pytest tests/test_storage_only.py
+          -m "storage_only and not pinned" | tee report.txt
+      - name: Keep the version header and measurements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: report-storage-only-${{ matrix.hf_xet }}
+          path: compat/report.txt
+          if-no-files-found: ignore
+
   report:
-    needs: [preflight, compat]
-    if: failure() && needs.preflight.outputs.reachable == 'true'
+    needs: [preflight, compat, storage-only]
+    # A skipped compat job (huggingface.co unreachable) is not a failure.
+    if: failure()
     runs-on: ubuntu-latest
     permissions:
       issues: write

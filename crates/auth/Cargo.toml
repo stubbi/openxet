@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 base64 = "0.23.1"
+# Only for its `zeroize` feature, which ed25519-dalek doesn't enable: it
+# wipes `KeypairBytes` on drop and the PKCS#8 encoder's copy of the seed.
+ed25519 = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 ed25519-dalek = { version = "3.0.0", features = ["pem"] }
 getrandom = "0.4.3"
 hmac = { version = "0.13.0", features = ["zeroize"] }

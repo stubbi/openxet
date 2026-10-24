@@ -75,7 +75,8 @@ invalid one.
 openxet token keygen [--key FILE] [--json]
 ```
 
-Writes a new Ed25519 private key to `FILE` (mode `0600`, PKCS#8 PEM) and
+Writes a new Ed25519 private key to `FILE` (mode `0600`, PKCS#8 v1 PEM,
+RFC 8410 §7, which PyJWT loads as is) and
 its public key to `FILE.pub` (SPKI PEM), and prints the public key, its
 `kid` and the `[auth]` entry that trusts it. `FILE` defaults to
 `$XDG_CONFIG_HOME/openxet/token.key`, or `~/.config/openxet/token.key`, never
