@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, FromRequestParts, RawPathParams, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Request, State};
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_LENGTH;
 use axum::http::request::Parts;
@@ -12,13 +12,13 @@ use axum::routing::post;
 use openxet_auth::Principal;
 use openxet_index::ChunkTable;
 use openxet_protocol::{
-    MAX_XORB_BODY_BYTES, MerkleHash, ProtocolError, StoredXorb, hash_from_hex, hash_to_hex,
-    is_dedup_eligible, xorb_with_footer,
+    MAX_XORB_BODY_BYTES, MerkleHash, ProtocolError, StoredXorb, hash_to_hex, is_dedup_eligible,
+    xorb_with_footer,
 };
 use openxet_storage::Key;
 use serde::Serialize;
 
-use crate::{AppState, CasError, ReadAccess, WriteAccess, body};
+use crate::{AppState, CasError, ReadAccess, WriteAccess, body, path};
 
 /// The only xorb prefix: what clients send (`HF_XET_DATA_DEFAULT_PREFIX`;
 /// S10 "Conventions for every route") and where the bucket keeps xorbs.
@@ -41,45 +41,16 @@ pub(crate) fn routes() -> Router<AppState> {
     )
 }
 
-/// The xorb named by the path. A prefix other than [`PREFIX`] is
-/// `404 not_found`, as for any route not served; a hash not in the spec's
-/// form is `400 invalid_hash`. Neither depends on the caller, so both are
-/// answered before authentication.
+/// The xorb named by the path, under [`PREFIX`] only
+/// ([`path::prefixed_hash`]).
 struct XorbPath(MerkleHash);
 
 impl FromRequestParts<AppState> for XorbPath {
     type Rejection = CasError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, CasError> {
-        // Raw, still percent-encoded: no encoding of `default` or of a hex
-        // hash is the canonical form, so none is accepted.
-        let params = RawPathParams::from_request_parts(parts, state)
-            .await
-            .map_err(|_| CasError::NoRoute)?;
-        let (mut prefix, mut hash) = (None, None);
-        for (name, value) in &params {
-            match name {
-                "prefix" => prefix = Some(value),
-                "hash" => hash = Some(value),
-                _ => {}
-            }
-        }
-        if prefix != Some(PREFIX) {
-            return Err(CasError::NoRoute);
-        }
-        parse_hash(hash.unwrap_or_default()).map(Self)
+        path::prefixed_hash(parts, state, &[PREFIX]).await.map(Self)
     }
-}
-
-/// A path hash: exactly 64 lowercase hex characters (S10 "Conventions for
-/// every route"; <https://huggingface.co/docs/xet/api#converting-hashes-to-strings>).
-/// `hash_from_hex` alone also takes uppercase, which no client sends and
-/// which would give one xorb two URLs.
-fn parse_hash(s: &str) -> Result<MerkleHash, CasError> {
-    if !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-        return Err(CasError::InvalidHash);
-    }
-    hash_from_hex(s).map_err(|_| CasError::InvalidHash)
 }
 
 /// The upload answer (<https://huggingface.co/docs/xet/api#3-upload-xorb>).

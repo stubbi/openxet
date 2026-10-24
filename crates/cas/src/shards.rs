@@ -36,10 +36,11 @@ use openxet_protocol::{
 };
 use openxet_storage::Key;
 use serde::Serialize;
-use tokio::sync::{OwnedSemaphorePermit, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
+use crate::blocking::blocking;
 use crate::{AppState, CasError, RequestId, WriteAccess, body};
 
 /// [`MAX_UPLOAD_SHARD_BYTES`] as a buffer length.
@@ -402,23 +403,6 @@ async fn ingest(
     Ok(inserted)
 }
 
-/// Runs `work` on a blocking thread holding `permit`, and hands the permit
-/// back with the result. The blocking task holds it while the work runs: a
-/// blocking task can't be cancelled, so a permit held by the caller would be
-/// returned early if the caller were dropped while the work ran on (ruling
-/// M1-R8). A caller dropped meanwhile drops the permit as the work ends.
-async fn blocking<T: Send + 'static>(
-    permit: OwnedSemaphorePermit,
-    work: impl FnOnce() -> T + Send + 'static,
-) -> Result<(OwnedSemaphorePermit, T), CasError> {
-    tokio::task::spawn_blocking(move || {
-        let out = work();
-        (permit, out)
-    })
-    .await
-    .map_err(CasError::internal)
-}
-
 /// The files of a verified shard as the index registers them: terms map
 /// one to one from segments, the size is their unpacked total, and the
 /// first chunk is the dedup candidate for the first term's xorb (S10 §2).
@@ -516,7 +500,7 @@ fn shard_error(reason: ProtocolError) -> CasError {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use openxet_index::{ChunkTable, Index, IndexError, Visibility};
     use openxet_storage::{Bucket, StorageError};
@@ -524,43 +508,6 @@ mod tests {
 
     use super::*;
     use crate::test_support;
-
-    #[tokio::test]
-    async fn the_permit_lives_as_long_as_the_blocking_work() {
-        // A dropped caller (a v1 client gone mid-verification) mustn't
-        // return the permit while the blocking work runs on (ruling M1-R8).
-        let dir = tempfile::tempdir().unwrap();
-        let validate = Arc::new(Semaphore::new(1));
-        let done = Arc::new(AtomicBool::new(false));
-
-        let caller = {
-            let (validate, done) = (Arc::clone(&validate), Arc::clone(&done));
-            tokio::spawn(async move {
-                let permit = validate.acquire_owned().await.unwrap();
-                blocking(permit, move || {
-                    std::thread::sleep(Duration::from_millis(200));
-                    done.store(true, Ordering::SeqCst);
-                })
-                .await
-                .map(|_| ())
-            })
-        };
-        while validate.available_permits() == 1 {
-            tokio::task::yield_now().await;
-        }
-        caller.abort();
-        assert!(caller.await.unwrap_err().is_cancelled());
-
-        assert_eq!(validate.available_permits(), 0);
-        let released = tokio::time::timeout(Duration::from_secs(30), async {
-            while validate.available_permits() == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        });
-        released.await.unwrap();
-        assert!(done.load(Ordering::SeqCst), "the permit came back first");
-        drop(dir);
-    }
 
     /// An index that records how many `validate` permits are free whenever
     /// chunk tables are loaded.

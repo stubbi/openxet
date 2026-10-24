@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use openxet_protocol::{
     MerkleHash, ProtocolError, Segment, ShardFileEntry, StoredXorb, UploadShard, VerifyError,
-    VerifyLimits, dedup_shard, hash_to_hex, is_dedup_eligible, read_upload_shard, read_xorb_chunks,
-    shard_hash, stored_shard, verify_shard, xorb_with_footer,
+    VerifyLimits, dedup_shard, hash_to_hex, is_dedup_eligible, read_dedup_answer,
+    read_upload_shard, read_xorb_chunks, shard_hash, stored_shard, verify_shard, xorb_with_footer,
 };
 // Only to read the produced shards back with upstream's own parsers.
 use xet_core_structures::metadata_shard::MDBShardInfo;
@@ -213,6 +213,33 @@ fn dedup_shard_hides_raw_chunk_hashes() {
         .map(|(chunk, _)| chunk.hmac(key))
         .collect();
     assert_eq!(keyed, expected);
+}
+
+#[test]
+fn read_dedup_answer_finds_every_offered_chunk_as_the_client_does() {
+    let xorb = capture_xorb();
+    let key = MerkleHash::random_from_seed(7);
+    let bytes = dedup_shard(&xorb.hash, &xorb.chunks.hashes, key, 1_900_000_000).unwrap();
+
+    for (chunk, _) in &xorb.chunks.hashes {
+        let answer = read_dedup_answer(&bytes, chunk).unwrap();
+        assert_eq!(answer.key, key);
+        assert_eq!(answer.expiry_unix, 1_900_000_000);
+        assert_eq!(answer.files, 0);
+        assert_eq!(answer.xorbs, vec![xorb.hash]);
+        // The capture repeats chunks; any position holding the chunk will do.
+        let (matched, index) = answer.matched.unwrap();
+        assert_eq!(matched, xorb.hash);
+        assert_eq!(xorb.chunks.hashes[index as usize].0, *chunk);
+    }
+    let absent = read_dedup_answer(&bytes, &MerkleHash::random_from_seed(8)).unwrap();
+    assert_eq!(absent.matched, None);
+    // The client reads the footer first (S10 §2): a body without one fails.
+    let footer_less = &bytes[..bytes.len() - 200];
+    assert!(matches!(
+        read_dedup_answer(footer_less, &xorb.chunks.hashes[0].0),
+        Err(ProtocolError::MalformedShard(_))
+    ));
 }
 
 #[test]

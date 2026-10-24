@@ -91,6 +91,12 @@ pub enum CasError {
     #[error("the hash in the request path is not 64 lowercase hex characters")]
     InvalidHash,
 
+    /// A path that names an object holds a percent-encoded byte, which would
+    /// give the object a second URL. `400 invalid_path`. The path is never
+    /// echoed.
+    #[error("the request path is percent-encoded; object paths are sent unencoded")]
+    InvalidPath,
+
     /// No xorb with the path's hash is visible to the caller.
     /// `404 xorb_not_found`; under `PerScope` visibility another scope's
     /// xorb reads the same as a missing one.
@@ -99,6 +105,14 @@ pub enum CasError {
         /// The xorb asked for.
         xorb: MerkleHash,
     },
+
+    /// No xorb visible to the caller offers the queried chunk for global
+    /// dedup. `404 not_found`, which `hf_xet` reads as "no match" and
+    /// continues the upload (S10 §2). The answer is the same whether the
+    /// chunk was never stored or, under `PerScope` visibility, is another
+    /// scope's, and it names nothing from the request.
+    #[error("no xorb on this server offers the chunk for deduplication")]
+    NoDedupMatch,
 
     /// An uploaded xorb's content hash is not the hash in its path.
     /// `400 xorb_hash_mismatch`, final.
@@ -357,11 +371,24 @@ impl CasError {
                 "Write the hash as 64 lowercase hex characters in Xet byte order \
                  (https://huggingface.co/docs/xet/api#converting-hashes-to-strings).",
             ),
+            Self::InvalidPath => (
+                StatusCode::BAD_REQUEST,
+                "invalid_path",
+                "Send the prefix and the 64-character lowercase hex hash as they are, without \
+                 percent-encoding (https://huggingface.co/docs/xet/api#converting-hashes-to-strings).",
+            ),
             Self::XorbNotFound { .. } => (
                 StatusCode::NOT_FOUND,
                 "xorb_not_found",
                 "Upload the xorb with `POST /v1/xorbs/default/{hash}` and a write token for this \
                  scope.",
+            ),
+            Self::NoDedupMatch => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Nothing to fix: upload the chunk's xorb as usual. Clients treat this as no match \
+                 and continue the upload \
+                 (https://huggingface.co/docs/xet/api#2-query-chunk-deduplication-global-deduplication).",
             ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,

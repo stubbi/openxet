@@ -14,9 +14,12 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod blocking;
 mod body;
+mod dedup;
 mod error;
 mod misc;
+mod path;
 mod request_id;
 mod shards;
 #[cfg(test)]
@@ -177,7 +180,8 @@ pub fn router(state: AppState) -> Router {
         Router::new()
             .merge(misc::routes())
             .merge(xorbs::routes())
-            .merge(shards::routes()),
+            .merge(shards::routes())
+            .merge(dedup::routes()),
         state,
     )
 }

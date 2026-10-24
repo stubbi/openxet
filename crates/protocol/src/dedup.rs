@@ -80,3 +80,72 @@ pub fn dedup_shard(
         .map_err(ProtocolError::ShardSerialization)?;
     Ok(keyed)
 }
+
+/// A global dedup answer as a stock client reads it, for tests of the
+/// servers that build one. Only with the `test-support` feature.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DedupAnswer {
+    /// The footer's `chunk_hash_hmac_key`.
+    pub key: MerkleHash,
+    /// The footer's `shard_key_expiry`, in Unix seconds.
+    pub expiry_unix: u64,
+    /// The entries of the file-info section.
+    pub files: usize,
+    /// The offered xorbs, in shard order.
+    pub xorbs: Vec<MerkleHash>,
+    /// Where the client's lookup finds the queried chunk: the xorb and the
+    /// chunk's index in it. `None` if the answer doesn't offer it.
+    pub matched: Option<(MerkleHash, u32)>,
+}
+
+/// Reads `body`, a global dedup answer, with upstream's readers, and looks
+/// `chunk` (raw, unkeyed) up in it as `hf_xet` does: by the truncated keyed
+/// hash in the shard's chunk index, then chunk by chunk from that position
+/// (`ShardFileManager::chunk_hash_dedup_query`, `xet-core-structures`
+/// 1.7.0). The footer is read as the client reads it, so a body without one
+/// fails.
+///
+/// # Errors
+///
+/// [`ProtocolError::MalformedShard`] if upstream's readers refuse `body`.
+#[cfg(feature = "test-support")]
+pub fn read_dedup_answer(body: &[u8], chunk: &MerkleHash) -> Result<DedupAnswer, ProtocolError> {
+    use xet_core_structures::metadata_shard::streaming_shard::MDBMinimalShard;
+    use xet_core_structures::metadata_shard::utils::truncate_hash;
+    use xet_core_structures::metadata_shard::xorb_structs::MDBXorbInfoView;
+
+    let mut reader = Cursor::new(body);
+    let info =
+        MDBShardInfo::load_from_reader(&mut reader).map_err(ProtocolError::MalformedShard)?;
+    let shard = MDBMinimalShard::from_reader(&mut &body[..], true, true)
+        .map_err(ProtocolError::MalformedShard)?;
+    let xorbs = (0..shard.num_xorb())
+        .filter_map(|i| shard.xorb(i).map(MDBXorbInfoView::xorb_hash))
+        .collect();
+
+    let wanted = truncate_hash(&info.keyed_chunk_hash(chunk));
+    let mut matched = None;
+    for (truncated, (xorb_index, chunk_offset)) in info
+        .read_all_truncated_hashes(&mut reader)
+        .map_err(ProtocolError::MalformedShard)?
+    {
+        if truncated != wanted {
+            continue;
+        }
+        if let Some((_, entry)) = info
+            .chunk_hash_dedup_query_direct(&mut reader, &[*chunk], xorb_index, chunk_offset)
+            .map_err(ProtocolError::MalformedShard)?
+        {
+            matched = Some((entry.xorb_hash, entry.chunk_index_start));
+            break;
+        }
+    }
+    Ok(DedupAnswer {
+        key: info.metadata.chunk_hash_hmac_key,
+        expiry_unix: info.metadata.shard_key_expiry,
+        files: shard.num_files(),
+        xorbs,
+        matched,
+    })
+}

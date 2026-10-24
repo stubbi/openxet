@@ -114,6 +114,21 @@ pub const ROUTES: &[Route] = &[
         authorized: 200,
         authorized_code: None,
     },
+    Route {
+        method: Method::GET,
+        path: DEDUP_PATH,
+        access: Access::Read,
+        // No stored xorb offers the chunk.
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
+    Route {
+        method: Method::GET,
+        path: DEDUP_MERKLEDB_PATH,
+        access: Access::Read,
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
 ];
 
 impl Route {
@@ -139,6 +154,20 @@ pub const XORB_PATH: &str =
 pub const OTHER_PREFIX_XORB_PATH: &str =
     "/v1/xorbs/other/0000000000000000000000000000000000000000000000000000000000000000";
 
+/// The global dedup route's path under the prefix clients send, for a
+/// chunk no test stores (S10 §2).
+pub const DEDUP_PATH: &str =
+    "/v1/chunks/default/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The global dedup route's path under the spec's prefix, which openxet
+/// also serves (S10 §2).
+pub const DEDUP_MERKLEDB_PATH: &str =
+    "/v1/chunks/default-merkledb/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// A dedup path under a prefix neither clients nor the spec use.
+pub const OTHER_PREFIX_DEDUP_PATH: &str =
+    "/v1/chunks/other/0000000000000000000000000000000000000000000000000000000000000000";
+
 /// Paths no route serves, each of which must answer `404` with the error
 /// body. Some are deliberate: stock clients treat `404` as "not here" and
 /// fall back (S10 "Status codes and retries"; ruling M1-R6).
@@ -147,6 +176,7 @@ pub const UNSERVED: &[(Method, &str)] = &[
     (Method::POST, XORB_GRANT_PATH),
     (Method::GET, FILE_CHUNK_HASHES_PATH),
     (Method::POST, OTHER_PREFIX_XORB_PATH),
+    (Method::GET, OTHER_PREFIX_DEDUP_PATH),
 ];
 
 /// The xorb-grant route of `hf_xet` 1.8 pre-releases. Its `404` makes the
