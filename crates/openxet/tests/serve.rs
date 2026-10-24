@@ -343,6 +343,24 @@ fn json_stderr(out: &Output) -> Value {
     error
 }
 
+/// The `openxet.error.v1` object a failed `serve` ends its stderr with.
+/// `serve` logs to stderr too (cli.md), so a log line may come first: on a
+/// slow CI disk, sqlx warned of a 1 s `PRAGMA journal_mode = WAL` before
+/// the error. The last line is the error, and no other line may be one.
+fn serve_error(out: &Output) -> Value {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let mut lines = stderr.lines().filter(|l| !l.trim().is_empty());
+    let last = lines.next_back().unwrap_or_default();
+    let error: Value = serde_json::from_str(last)
+        .unwrap_or_else(|err| panic!("stderr does not end with one JSON object ({err}): {stderr}"));
+    assert_eq!(error["schema"], "openxet.error.v1");
+    assert!(
+        !lines.any(|l| l.contains("openxet.error.v1")),
+        "more than one error on stderr: {stderr}"
+    );
+    error
+}
+
 #[tokio::test]
 async fn dev_mode_prints_working_token() {
     let dir = tempfile::tempdir().unwrap();
@@ -524,7 +542,7 @@ fn port_in_use_is_actionable() {
         .arg(dir.path()));
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
-    let error = json_stderr(&out);
+    let error = serve_error(&out);
     assert_eq!(error["code"], "address_in_use");
     assert!(error["message"].as_str().unwrap().contains(&port));
     assert!(error["hint"].as_str().unwrap().contains("--port"));
@@ -668,7 +686,7 @@ dedup_visibility = "everyone"
         .args(["serve", "--json", "--port", "0", "--config"])
         .arg(&config));
     assert_eq!(out.status.code(), Some(1));
-    let error = json_stderr(&out);
+    let error = serve_error(&out);
     assert_eq!(error["code"], "config");
     assert!(
         error["hint"]
@@ -1213,7 +1231,7 @@ fn an_explicit_transfer_key_file_must_exist() {
         .arg("--config")
         .arg(&config));
     assert_eq!(out.status.code(), Some(1));
-    let error = json_stderr(&out);
+    let error = serve_error(&out);
     assert_eq!(error["code"], "no_key");
     assert!(
         error["hint"]
@@ -1380,7 +1398,7 @@ fn a_dangling_data_dir_symlink_is_named() {
         .args(["serve", "--json", "--port", "0", "--data-dir"])
         .arg(&link));
     assert_eq!(out.status.code(), Some(1));
-    let error = json_stderr(&out);
+    let error = serve_error(&out);
     assert_eq!(error["code"], "data_dir");
     assert!(
         error["message"].as_str().unwrap().contains("symbolic link"),
