@@ -9,6 +9,7 @@ use crate::error::{CliError, ExitCode};
 use crate::output::{HumanDisplay, Output};
 use crate::serve::{self, ServeArgs};
 use crate::token_cmd::{self, TokenCommand};
+use crate::transfer_cmd::{self, DownloadArgs, UploadArgs};
 
 #[derive(Parser)]
 #[command(
@@ -41,6 +42,10 @@ enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Upload files to a Xet CAS and print their Xet hashes
+    Upload(UploadArgs),
+    /// Download a file from a Xet CAS by its Xet hash
+    Download(DownloadArgs),
 }
 
 #[derive(Serialize)]
@@ -97,6 +102,8 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Command::Serve(args) => serve::run(args, output),
         Command::Config { command } => config_cmd::run(command, output),
         Command::Token { command } => token_cmd::run(command, output),
+        Command::Upload(args) => transfer_cmd::upload(args, output),
+        Command::Download(args) => transfer_cmd::download(args, output),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -248,6 +255,8 @@ mod tests {
             r#"["token", "keygen""#,
             r#"["token", "mint""#,
             r#"["token", "generate""#,
+            r#"["upload""#,
+            r#"["download""#,
         ] {
             assert!(
                 listed.iter().any(|l| l == invocation),

@@ -20,7 +20,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use zeroize::Zeroizing;
 
-use crate::error::CliError;
+use crate::error::{CliError, ExitCode};
 
 /// The prefix of every token openxet generates.
 pub const TOKEN_PREFIX: &str = "oxt_";
@@ -116,12 +116,14 @@ pub fn create_new_file(path: &Path, mode: u32) -> io::Result<File> {
     options.open(path)
 }
 
+/// Refusing to overwrite is a usage-level refusal, as `output_exists` is.
 fn exists_error(path: &Path) -> CliError {
     CliError::new(
         "exists",
         format!("{} already exists", path.display()),
         "Nothing was overwritten. Remove the file first, or pass another path.",
     )
+    .with_exit(ExitCode::USAGE)
 }
 
 /// Writes `contents` to a new file at `path` with `mode`, atomically.

@@ -11,6 +11,7 @@ mod preflight;
 mod secret;
 mod serve;
 mod token_cmd;
+mod transfer_cmd;
 
 fn main() -> std::process::ExitCode {
     std::process::ExitCode::from(cli::run(std::env::args_os()))

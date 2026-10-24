@@ -18,11 +18,25 @@ allow = [
     "MPL-2.0",
 ]
 # The fuzz workspace (fuzz/Cargo.lock) is checked in the fuzz-smoke job.
-exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
+# webpki-root-certs is Mozilla's CA bundle as data, under the permissive
+# CDLA-Permissive-2.0; the client core's TLS stack (reqwest, rustls) needs it.
+exceptions = [
+    { allow = ["NCSA"], crate = "libfuzzer-sys" },
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# ADR 0006: the client core (HTTP client, sessions, runtime pool) is used by
+# openxet-client alone, never by a server crate. `wrappers` lists the only
+# crates allowed to depend on each directly; xet-core-structures needs
+# xet-runtime itself. scripts/check-client-core-ban.sh proves the rule bites.
+deny = [
+    { crate = "xet-data", wrappers = ["openxet-client"], reason = "ADR 0006: only openxet-client uses the client core" },
+    { crate = "xet-client", wrappers = ["openxet-client", "xet-data"], reason = "ADR 0006: only openxet-client uses the client core" },
+    { crate = "xet-runtime", wrappers = ["openxet-client", "xet-client", "xet-data", "xet-core-structures"], reason = "ADR 0006: only openxet-client uses the client core" },
+]
 skip = [
     # The CAS server uses tower-http 0.7; 0.6 is pulled by reqwest via
     # xet-runtime on the client side (openxet-protocol's xet-core-structures).

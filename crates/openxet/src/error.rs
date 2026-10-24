@@ -10,6 +10,8 @@ impl ExitCode {
     pub const SUCCESS: u8 = 0;
     pub const FAILURE: u8 = 1;
     pub const USAGE: u8 = 2;
+    /// Stopped by `SIGINT` or `SIGTERM`, as shells report 128 + `SIGINT`.
+    pub const INTERRUPTED: u8 = 130;
 }
 
 /// A failure reported to the user: one line of text, or with `--json` one
@@ -25,8 +27,20 @@ pub struct CliError {
     pub message: String,
     /// The next action to take.
     pub hint: Cow<'static, str>,
+    /// Per-file problems, for a command given several paths; absent when
+    /// empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<FileError>,
     #[serde(skip)]
     pub exit: u8,
+}
+
+/// One path's problem in [`CliError::files`].
+#[derive(Debug, Serialize)]
+pub struct FileError {
+    pub path: String,
+    /// Stable machine-readable kind, e.g. `not_found`.
+    pub problem: &'static str,
 }
 
 impl CliError {
@@ -41,8 +55,21 @@ impl CliError {
             code,
             message: message.into(),
             hint: hint.into(),
+            files: Vec::new(),
             exit: ExitCode::FAILURE,
         }
+    }
+
+    /// The same error with exit code `exit`.
+    #[must_use]
+    pub fn with_exit(self, exit: u8) -> Self {
+        Self { exit, ..self }
+    }
+
+    /// The same error with per-file problems.
+    #[must_use]
+    pub fn with_files(self, files: Vec<FileError>) -> Self {
+        Self { files, ..self }
     }
 
     /// clap's message, on one line: its first paragraph, which names
@@ -86,7 +113,11 @@ impl CliError {
                 let _ = writeln!(stderr, "{line}");
             }
         } else {
-            let _ = writeln!(stderr, "error: {}\nhint: {}", self.message, self.hint);
+            let _ = writeln!(stderr, "error: {}", self.message);
+            for file in &self.files {
+                let _ = writeln!(stderr, "  {}: {}", file.path, file.problem);
+            }
+            let _ = writeln!(stderr, "hint: {}", self.hint);
         }
         self.exit
     }
