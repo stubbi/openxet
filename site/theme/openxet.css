@@ -32,6 +32,21 @@
     --color-scheme: dark;
 }
 
+/* Without JavaScript mdBook can't switch themes, so follow the system. */
+@media (prefers-color-scheme: dark) {
+    html:not(.js) {
+        --bg: #0c0c0b;
+        --fg: #ededea;
+        --muted: #a3a29c;
+        --line: #2b2b28;
+        --faint: #1b1b19;
+        --card: #121211;
+        --accent: #4fd1a1;
+        --accent-soft: #11392b;
+        --color-scheme: dark;
+    }
+}
+
 .light, .rust, html:not(.js), .navy, .coal, .ayu {
     --sidebar-bg: var(--card);
     --sidebar-fg: var(--muted);
@@ -93,4 +108,9 @@ html {
     font-family: var(--mono-font);
     font-weight: 600;
     letter-spacing: -0.02em;
+}
+
+/* Notes for readers of docs/ on GitHub, such as docs/changelog.md's. */
+.github-only {
+    display: none;
 }

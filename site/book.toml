@@ -16,10 +16,12 @@ create-missing = false
 
 # Repository-relative links in docs/ (and in CHANGELOG.md, included by
 # docs/changelog.md) resolve to the published page, or to GitHub for files
-# outside the book; a link to a missing file fails the build.
+# outside the book; a link to a missing file fails the build. It expands
+# whole-file includes itself, so it runs before mdBook's `links`.
 [preprocessor.repo-links]
 command = "python3 -I repo_links.py"
-after = ["links", "index"]
+after = ["index"]
+before = ["links"]
 
 [output.html]
 site-url = "/docs/"

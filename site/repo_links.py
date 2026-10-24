@@ -5,13 +5,16 @@ The docs are written to be read on GitHub, so their relative links are
 relative to each file's place in the repository. On the site that holds for
 links between pages in the book, but not for links to files outside it
 (`../../CHANGELOG.md`, a source file, an implementation plan) or for links in
-a page included from elsewhere (docs/changelog.md includes CHANGELOG.md,
+a file included from elsewhere (docs/changelog.md includes CHANGELOG.md,
 whose links start at the repository root).
 
 Each relative link is resolved against the file it was written in. A target
 that is a page of the book becomes a link to that page; any other file in the
 repository becomes a link to it on GitHub; a target that does not exist fails
-the build, naming the page and the link.
+the build, naming the page and the link. Whole-file `{{#include FILE}}` lines
+are expanded here, before mdBook's `links` preprocessor, so the included
+file's links resolve against the included file, and a link to that file
+leads to the page that includes it.
 
 Protocol: https://rust-lang.github.io/mdBook/for_developers/preprocessors.html
 """
@@ -26,7 +29,7 @@ REPO = Path(__file__).resolve().parents[1]
 DOCS = "docs"
 GITHUB = "https://github.com/stubbi/openxet"
 
-INCLUDE_ONLY = re.compile(r"^\s*\{\{#include ([^}\s]+)\}\}\s*$")
+INCLUDE = re.compile(r"^\{\{#include ([^}:\s]+)\}\}\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
 INLINE_CODE = re.compile(r"(`+)(?:.+?)\1")
 INLINE_LINK = re.compile(r"(\]\()(<[^>]*>|[^)\s]+)")
@@ -43,13 +46,12 @@ def chapters(items):
         yield from chapters(chapter.get("sub_items", []))
 
 
-def origin(source_path: str) -> str:
-    """The repository path the chapter's text was written in."""
-    page = posixpath.join(DOCS, source_path)
-    match = INCLUDE_ONLY.match((REPO / page).read_text(encoding="utf-8"))
-    if match:
-        return posixpath.normpath(posixpath.join(posixpath.dirname(page), match.group(1)))
-    return page
+def resolve(link: str, written_in: str) -> str:
+    return posixpath.normpath(posixpath.join(posixpath.dirname(written_in), link))
+
+
+def included(content: str, written_in: str) -> list[str]:
+    return [resolve(m.group(1), written_in) for m in map(INCLUDE.match, content.split("\n")) if m]
 
 
 class Rewriter:
@@ -63,7 +65,8 @@ class Rewriter:
         if not bare or EXTERNAL.match(bare):
             return link
         path, hash_, fragment = bare.partition("#")
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(written_in), path))
+        path, mark, query = path.partition("?")
+        resolved = resolve(path, written_in)
         if resolved.startswith("../") or not (REPO / resolved).exists():
             self.errors.append(f"{written_in}: link `{bare}` points to `{resolved}`, which does not exist")
             return link
@@ -76,7 +79,7 @@ class Rewriter:
         else:
             kind = "tree" if (REPO / resolved).is_dir() else "blob"
             new = f"{GITHUB}/{kind}/main/{resolved}"
-        return new + hash_ + fragment
+        return new + mark + query + hash_ + fragment
 
     def rewrite(self, content: str, written_in: str, page: str) -> str:
         out, fence = [], None
@@ -90,6 +93,15 @@ class Rewriter:
             if opened:
                 fence = opened.group(1)
                 out.append(line)
+                continue
+            if include := INCLUDE.match(line):
+                source = resolve(include.group(1), written_in)
+                if not (REPO / source).is_file():
+                    self.errors.append(f"{written_in}: `{line.strip()}` names `{source}`, which does not exist")
+                    out.append(line)
+                    continue
+                text = (REPO / source).read_text(encoding="utf-8").rstrip("\n")
+                out.append(self.rewrite(text, source, page))
                 continue
             out.append(self.rewrite_line(line, written_in, page))
         return "\n".join(out)
@@ -113,11 +125,16 @@ def main() -> int:
     _context, book = json.load(sys.stdin)
     items = book.get("items", book.get("sections", []))
     all_chapters = [c for c in chapters(items) if c.get("source_path")]
-    pages = {origin(c["source_path"]): c["path"] for c in all_chapters}
+    pages: dict[str, str] = {}
+    for chapter in all_chapters:
+        written_in = posixpath.join(DOCS, chapter["source_path"])
+        for source in included(chapter["content"], written_in):
+            pages.setdefault(source, chapter["path"])
+    pages.update({posixpath.join(DOCS, c["source_path"]): c["path"] for c in all_chapters})
     rewriter = Rewriter(pages)
     for chapter in all_chapters:
         chapter["content"] = rewriter.rewrite(
-            chapter["content"], origin(chapter["source_path"]), chapter["path"]
+            chapter["content"], posixpath.join(DOCS, chapter["source_path"]), chapter["path"]
         )
     if rewriter.errors:
         for error in rewriter.errors:

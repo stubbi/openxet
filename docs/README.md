@@ -3,7 +3,8 @@
 openxet is the open-source server and client for the
 [Xet protocol](https://huggingface.co/docs/xet), Hugging Face's
 chunk-deduplicated storage for large, versioned files. The official Hugging
-Face clients work against it unmodified.
+Face clients work against it unmodified. openxet is an independent project,
+not affiliated with or endorsed by Hugging Face.
 
 - **Run it:** start with the [storage-only quickstart](quickstart-storage-only.md),
   then [configure the server](reference/config.md).
@@ -11,7 +12,7 @@ Face clients work against it unmodified.
   [exit codes](reference/exit-codes.md) are stable.
 - **Integrate with it:** the [CAS routes](reference/routes.md) are the API
   stock clients call.
-- **What changed:** the [changelog](changelog.md).
+- **What changed:** the [changelog](../CHANGELOG.md).
 - **Why it is built this way:** the [design](superpowers/specs/2026-10-23-openxet-design.md),
   the architecture decisions and the research notes, under Project.
 
