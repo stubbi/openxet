@@ -1007,6 +1007,56 @@ async fn credential_scoped_to_repo() {
 }
 
 #[tokio::test]
+async fn per_scope_existence_checks_hide_other_tenants() {
+    // Design §5.4 "Existence checks in per-scope mode", §5.9 req 4: to
+    // scope B, a server holding scope A's xorb, chunks and files answers
+    // exactly as an empty one, on every route: `HEAD` of xorbs and files,
+    // dedup lookups and the xorb lookups of shard verification included.
+    let holding = TestServer::start(config(Visibility::PerScope)).await;
+    upload_capture(&holding, &holding.write_token).await;
+    let empty = TestServer::start(config(Visibility::PerScope)).await;
+
+    for route in ROUTES {
+        for (holding_token, empty_token) in [
+            (
+                &holding.other_scope_read_token,
+                &empty.other_scope_read_token,
+            ),
+            (&holding.other_scope_token, &empty.other_scope_token),
+        ] {
+            let seen = send_aimed(&holding, route, Some(holding_token)).await;
+            let absent = send_aimed(&empty, route, Some(empty_token)).await;
+            let what = format!("{} {}", route.method, route.path);
+            assert_eq!(seen.status, absent.status, "{what}");
+            assert_eq!(
+                seen.headers.get(CONTENT_TYPE),
+                absent.headers.get(CONTENT_TYPE),
+                "{what}"
+            );
+            assert_eq!(seen.body, absent.body, "{what}");
+        }
+    }
+
+    // Uploading the xorb registers it to B's scope; then B's own shard
+    // names it and registers the files to B's scope too.
+    upload_capture(&holding, &holding.other_scope_token).await;
+    let xorb = hash_from_hex(HF_XET_XORB).unwrap();
+    let file = hf_xet_files()[1];
+    for path in [
+        xorb_path(&xorb),
+        format!("/v1/files/{}", hash_to_hex(&file)),
+    ] {
+        let reply = Reply::of(
+            holding
+                .request(Method::HEAD, &path)
+                .header(AUTHORIZATION, bearer(&holding.other_scope_read_token)),
+        )
+        .await;
+        assert_eq!(reply.status, 200, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn transfer_requires_signature() {
     // Design §5.9 req 1, ruling M1-R3: the signature is the credential, and
     // it is bound to one xorb, one range and an expiry.

@@ -107,7 +107,7 @@ async fn upload_then_head() {
 }
 
 #[tokio::test]
-async fn acknowledged_write_is_visible() {
+async fn acknowledged_xorb_write_is_visible() {
     // Design §5.9 req 7: a 200 means the bytes are in the bucket and the
     // xorb is in the index, before the response is sent.
     let server = TestServer::start_default().await;
