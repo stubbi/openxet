@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Fills fuzz/corpus/<target>/ from the canonical fixtures in testdata/, which
-# stay the single copy, and writes fuzz/Cargo.lock. Run before fuzzing, and
-# again after a dependency change; neither the corpus nor the lockfile is
-# committed.
+# stay the single copy, and rewrites fuzz/Cargo.lock. Run it before fuzzing,
+# and after a change to Cargo.lock, committing the new fuzz/Cargo.lock with
+# it (CI fails if they differ). The corpus is not committed.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 # Fuzz the dependency versions the workspace ships: the fuzz workspace's
 # lockfile starts from the workspace's, and cargo adds only what fuzzing
-# alone needs (libfuzzer-sys and the like). It is not committed.
+# alone needs, pinned exactly in fuzz/Cargo.toml.
 cp ../Cargo.lock Cargo.lock
 cargo +nightly metadata --format-version 1 --manifest-path Cargo.toml > /dev/null
 

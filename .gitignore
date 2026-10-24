@@ -6,6 +6,5 @@
 __pycache__/
 .pytest_cache/
 /fuzz/target
-/fuzz/Cargo.lock
 /fuzz/corpus
 /fuzz/artifacts

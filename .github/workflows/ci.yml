@@ -178,20 +178,28 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(crates/(protocol|auth|cas)/|fuzz/|Cargo\.lock$)'; then
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(crates/(protocol|auth|cas|index|storage)/|fuzz/|Cargo\.lock$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No change under crates/protocol/, crates/auth/, crates/cas/ or fuzz/, nor to Cargo.lock; skipping."
+            echo "No change to a fuzzed crate (protocol, auth, cas, index, storage), fuzz/ or Cargo.lock; skipping."
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.changed.outputs.run == 'true'
         run: rustup toolchain install nightly --profile minimal
       - if: steps.changed.outputs.run == 'true'
         run: scripts/fetch-reference-files.sh
-      # Also writes fuzz/Cargo.lock: Cargo.lock plus what only fuzzing needs,
-      # so it runs before the cache keys on that lockfile.
+      # Also rewrites fuzz/Cargo.lock from Cargo.lock, so it runs before the
+      # cache keys on that lockfile. The committed one must match: cargo-fuzz
+      # has no --locked, so this is what keeps the fuzz build locked.
       - if: steps.changed.outputs.run == 'true'
         run: fuzz/seed.sh
+      - if: steps.changed.outputs.run == 'true'
+        name: fuzz/Cargo.lock matches Cargo.lock
+        run: |
+          git diff --exit-code fuzz/Cargo.lock || {
+            echo "::error file=fuzz/Cargo.lock::fuzz/Cargo.lock is out of step with Cargo.lock; run fuzz/seed.sh and commit fuzz/Cargo.lock"
+            exit 1
+          }
       - if: steps.changed.outputs.run == 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:

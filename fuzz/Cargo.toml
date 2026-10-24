@@ -13,9 +13,13 @@ license = "Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
+# fuzz/Cargo.lock is derived from the workspace's Cargo.lock (fuzz/seed.sh),
+# which doesn't hold the crates only fuzzing needs; pinned exactly here, they
+# resolve the same on every run. Bump both together.
+arbitrary = "=1.5.0"
 base64 = "0.22.1"
 http = "1.5.0"
-libfuzzer-sys = "0.4"
+libfuzzer-sys = "=0.4.13"
 openxet-auth = { path = "../crates/auth", version = "0.0.0" }
 openxet-cas = { path = "../crates/cas", version = "0.0.0", features = ["fuzzing"] }
 openxet-protocol = { path = "../crates/protocol", version = "0.0.0" }

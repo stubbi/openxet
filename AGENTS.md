@@ -221,7 +221,7 @@ cargo fmt --check                                          # formatting (CI gate
 cargo deny check                                           # licenses, advisories, bans (CI gate)
 scripts/check-client-core-ban.sh                           # the ADR 0006 ban rejects xet-data & co. in a server crate (CI gate)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)
-fuzz/seed.sh                                               # fill fuzz/corpus, and fuzz/Cargo.lock from Cargo.lock (before fuzzing; needs the reference files)
+fuzz/seed.sh                                               # fill fuzz/corpus and rewrite fuzz/Cargo.lock from Cargo.lock (before fuzzing; commit the lock; needs the reference files)
 cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser 60 s (CI: every target in fuzz/Cargo.toml)
 cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace's own dependencies (CI, with the fuzz job)
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
