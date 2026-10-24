@@ -2,7 +2,8 @@
 # Builds https://openxet.com into target/site/public, as pages.yml deploys it:
 # the landing page from website/, the docs from docs/ rendered by mdBook
 # (site/book.toml) under /docs/ with each page's plain Markdown next to its
-# HTML, and /llms.txt and /sitemap.xml generated from docs/SUMMARY.md.
+# HTML. Page metadata and /llms.txt come from docs/SUMMARY.md and the rendered
+# Markdown; /sitemap.xml includes every indexable page's canonical URL.
 # Fails on a page missing from the navigation, a broken repository link, any
 # mdBook warning, or an llms.txt entry without a description. Needs mdbook
 # 0.5.4 and python3.
@@ -22,6 +23,7 @@ fi
 python3 -I "$root/scripts/check-docs-nav.py"
 # The link preprocessor must refuse includes from outside the repository.
 python3 -I "$root/site/test_repo_links.py" -q
+python3 -I "$root/site/test_site_output.py" -q
 
 rm -rf "$out"
 log="$(mktemp)"

@@ -15,6 +15,7 @@
 
 # Project
 
+- [Website and interface design](design.md)
 - [Design](superpowers/specs/2026-10-23-openxet-design.md)
 - [Architecture decisions]()
   - [0001: Build from scratch on xet-core](adr/0001-build-from-scratch-on-xet-core.md)
@@ -24,7 +25,9 @@
   - [0005: Xet-native client contract](adr/0005-xet-native-client-contract.md)
   - [0006: Client core on xet-data](adr/0006-client-core-on-xet-data.md)
   - [0007: CAS tokens are EdDSA JWTs](adr/0007-cas-tokens-are-eddsa-jwts.md)
+  - [0008: Hosted waitlist](adr/0008-hosted-waitlist.md)
 - [Research notes]()
+  - [Website design research](research/website-design-2026-10-24.md)
   - [S1 + S2: Direct downloads](research/S1-S2-direct-downloads.md)
   - [S3: Hub API shapes](research/S3-hub-api-shapes.md)
   - [S4: Analytics clients](research/S4-analytics-clients.md)

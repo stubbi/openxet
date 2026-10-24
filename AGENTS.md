@@ -17,6 +17,14 @@ The design is the source of truth for scope and decisions:
 `docs/superpowers/specs/2026-10-23-openxet-design.md`. Architecture decisions
 made since are in `docs/adr/`.
 
+For the website, docs presentation and self-service UI, also read root
+[`design.md`](design.md) before changing copy, navigation, styling or interaction.
+It defines the shared language, visual tokens, component states and human/agent
+experience. Reuse these choices. An intentional change to the language or visual
+identity updates `design.md` in the same PR, with a reason and visual evidence.
+Keep capability claims consistent with the current release; the hosted waitlist
+is not an active hosted storage service.
+
 ## Who we build for
 
 Every change should make at least one of these people's day better and none

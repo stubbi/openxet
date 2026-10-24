@@ -1,6 +1,16 @@
 # openxet
 
-> openxet is the open-source (Apache-2.0) server and client for the Xet protocol, Hugging Face's chunk-deduplicated storage for large, versioned files. The official clients (hf, huggingface_hub, hf_xet, git-xet, git-lfs, huggingface.js) work against it unmodified. It runs on storage and identity systems the operator already owns, and will be offered as a hosted service at openxet.com. Status: in active development before 1.0; the changelog says what works today.
+> openxet is the open-source (Apache-2.0) server and client for the Xet protocol, which reuses unchanged parts of large files to reduce repeated storage and uploads.
+
+Available now: the storage-only server on local disk with SQLite, stock `hf_xet`
+upload/download, and the `openxet` command line with versioned JSON and stable
+exit codes. Start with the storage-only quickstart below. There is no release
+yet; the quickstart builds from source.
+
+Planned: the Hub API for `hf` and `huggingface_hub`, Git and LFS support, cloud
+storage backends, external identity providers, the web UI, and MCP. The hosted
+service is not accepting sign-ups yet. The product design describes the target;
+the changelog and command reference describe what works today.
 
 openxet is an independent project, not affiliated with or endorsed by Hugging Face.
 
