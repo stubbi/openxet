@@ -1,4 +1,4 @@
-//! The SQLite index against the `Index` contract: idempotency, scope
+//! The SQLite index against the `Index` contract: idempotency, tenant
 //! visibility (design §5.4, §5.9 req 4), atomic shard registration and
 //! durability across a reopen.
 
@@ -6,9 +6,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use openxet_index::{
     ChunkLayout, ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, IndexError, NewFile,
-    SqliteIndex, Term, Visibility,
+    Registrant, SqliteIndex, Term, Visibility,
 };
 use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use tempfile::TempDir;
@@ -60,6 +62,16 @@ async fn open_at(path: &Path) -> SqliteIndex {
     }
 }
 
+/// A registration to `scope` as its own tenant, numbered in call order.
+fn reg(scope: &str) -> Registrant<'_> {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    Registrant {
+        scope,
+        tenant: scope,
+        seq: SEQ.fetch_add(1, Ordering::Relaxed),
+    }
+}
+
 fn ok<T, E: std::fmt::Display>(r: Result<T, E>) -> T {
     match r {
         Ok(v) => v,
@@ -67,13 +79,13 @@ fn ok<T, E: std::fmt::Display>(r: Result<T, E>) -> T {
     }
 }
 
-/// Stores xorb `label` with `n` chunks for `scope`; every chunk is eligible.
-async fn put(index: &dyn Index, label: &str, n: u32, scope: &str) -> (MerkleHash, ChunkTable) {
+/// Stores xorb `label` with `n` chunks for `tenant`; every chunk is eligible.
+async fn put(index: &dyn Index, label: &str, n: u32, tenant: &str) -> (MerkleHash, ChunkTable) {
     let xorb = h(&format!("xorb/{label}"));
     let t = table(label, n);
     let eligible: Vec<MerkleHash> = t.hashes.iter().map(|(c, _)| *c).collect();
     ok(index
-        .put_xorb(&xorb, u64::from(n) * 600 + 100, &t, &eligible, scope)
+        .put_xorb(&xorb, u64::from(n) * 600 + 100, &t, &eligible, tenant)
         .await);
     (xorb, t)
 }
@@ -89,16 +101,16 @@ async fn put_xorb_is_idempotent() {
     let other = table("other", 5);
     assert!(!ok(index.put_xorb(&xorb, 9999, &other, &[], A).await));
 
-    let tables = ok(index.chunk_tables(&[xorb], A, Visibility::PerScope).await);
+    let tables = ok(index.chunk_tables(&[xorb], A, Visibility::PerTenant).await);
     assert_eq!(tables.get(&xorb), Some(&t));
     assert_eq!(
-        ok(index.xorb_size(&xorb, A, Visibility::PerScope).await),
+        ok(index.xorb_size(&xorb, A, Visibility::PerTenant).await),
         Some(1900)
     );
 }
 
 #[tokio::test]
-async fn xorb_visible_per_scope_only_when_per_scope() {
+async fn xorb_visible_per_tenant_only_when_per_tenant() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;
     let (xorb, t) = put(&index, "x", 2, A).await;
@@ -108,18 +120,18 @@ async fn xorb_visible_per_scope_only_when_per_scope() {
         Some(1300)
     );
     assert_eq!(
-        ok(index.xorb_size(&xorb, B, Visibility::PerScope).await),
+        ok(index.xorb_size(&xorb, B, Visibility::PerTenant).await),
         None
     );
     assert_eq!(
-        ok(index.xorb_size(&xorb, A, Visibility::PerScope).await),
+        ok(index.xorb_size(&xorb, A, Visibility::PerTenant).await),
         Some(1300)
     );
 
     // Uploading the same xorb to B is new for B and makes it visible there.
     assert!(ok(index.put_xorb(&xorb, 1300, &t, &[], B).await));
     assert_eq!(
-        ok(index.xorb_size(&xorb, B, Visibility::PerScope).await),
+        ok(index.xorb_size(&xorb, B, Visibility::PerTenant).await),
         Some(1300)
     );
 }
@@ -133,21 +145,21 @@ async fn register_shard_is_idempotent_per_scope() {
     let files = [file("f1", xorb, 2), file("f2", xorb, 4)];
 
     assert!(ok(index
-        .register_shard(&shard, &files, A, Visibility::Global)
+        .register_shard(&shard, &files, reg(A), Visibility::Global)
         .await));
     assert!(!ok(index
-        .register_shard(&shard, &files, A, Visibility::Global)
+        .register_shard(&shard, &files, reg(A), Visibility::Global)
         .await));
     assert!(ok(index
-        .register_shard(&shard, &files, B, Visibility::Global)
+        .register_shard(&shard, &files, reg(B), Visibility::Global)
         .await));
     assert!(!ok(index
-        .register_shard(&shard, &files, B, Visibility::Global)
+        .register_shard(&shard, &files, reg(B), Visibility::Global)
         .await));
 
     // A new shard naming already-registered files is still new for the scope.
     assert!(ok(index
-        .register_shard(&h("shard2"), &files, A, Visibility::Global)
+        .register_shard(&h("shard2"), &files, reg(A), Visibility::Global)
         .await));
 }
 
@@ -161,8 +173,8 @@ async fn file_only_readable_in_registered_scope() {
         .register_shard(
             &h("shard"),
             std::slice::from_ref(&f),
-            A,
-            Visibility::PerScope,
+            reg(A),
+            Visibility::PerTenant,
         )
         .await);
 
@@ -188,14 +200,14 @@ async fn files_answer_each_scopes_own_registrations_in_one_call() {
     let only_b = file("only-b", xb, 2);
     let registered = [fa.clone(), fa2.clone()];
     ok(index
-        .register_shard(&h("shard-a"), &registered, A, Visibility::PerScope)
+        .register_shard(&h("shard-a"), &registered, reg(A), Visibility::PerTenant)
         .await);
     ok(index
         .register_shard(
             &h("shard-b"),
             &[fb.clone(), only_b.clone()],
-            B,
-            Visibility::PerScope,
+            reg(B),
+            Visibility::PerTenant,
         )
         .await);
     let unknown = h("file/unknown");
@@ -231,7 +243,7 @@ async fn files_handles_more_files_than_one_query_binds() {
     let (xorb, _) = put(&index, "x", 1, A).await;
     let files: Vec<NewFile> = (0..1200).map(|i| file(&format!("f{i}"), xorb, 1)).collect();
     ok(index
-        .register_shard(&h("shard"), &files, A, Visibility::PerScope)
+        .register_shard(&h("shard"), &files, reg(A), Visibility::PerTenant)
         .await);
     let asked: Vec<MerkleHash> = files.iter().map(|f| f.record.hash).collect();
     let records = ok(index.files(&asked, A).await);
@@ -239,6 +251,63 @@ async fn files_handles_more_files_than_one_query_binds() {
     for f in &files {
         assert_eq!(records.get(&f.record.hash), Some(&f.record));
     }
+}
+
+#[tokio::test]
+async fn term_count_sums_the_scopes_files_once_each() {
+    // Batch reconstruction checks its term cap with this before decoding
+    // any file (ruling M1-R40), so it must count exactly what `files`
+    // would return.
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, _) = put(&index, "a", 8, A).await;
+    let (xb, _) = put(&index, "b", 2, B).await;
+    let mut three = file("three", xa, 1);
+    three.record.terms = (0..3)
+        .map(|i| Term {
+            xorb: xa,
+            chunk_start: i,
+            chunk_end: i + 1,
+            unpacked_bytes: 1000,
+        })
+        .collect();
+    three.record.size = 3000;
+    let one = file("one", xa, 4);
+    ok(index
+        .register_shard(
+            &h("shard-a"),
+            &[three.clone(), one.clone()],
+            reg(A),
+            Visibility::PerTenant,
+        )
+        .await);
+    let other = file("other", xb, 2);
+    ok(index
+        .register_shard(
+            &h("shard-b"),
+            std::slice::from_ref(&other),
+            reg(B),
+            Visibility::PerTenant,
+        )
+        .await);
+    let asked = [
+        three.record.hash,
+        h("file/unknown"),
+        other.record.hash,
+        one.record.hash,
+        three.record.hash,
+    ];
+
+    assert_eq!(ok(index.term_count(&asked, A).await), 4);
+    assert_eq!(ok(index.term_count(&asked, B).await), 1);
+    assert_eq!(ok(index.term_count(&[], A).await), 0);
+
+    let many: Vec<NewFile> = (0..1200).map(|i| file(&format!("f{i}"), xa, 1)).collect();
+    ok(index
+        .register_shard(&h("shard-many"), &many, reg(A), Visibility::PerTenant)
+        .await);
+    let asked: Vec<MerkleHash> = many.iter().map(|f| f.record.hash).collect();
+    assert_eq!(ok(index.term_count(&asked, A).await), 1200);
 }
 
 #[tokio::test]
@@ -255,16 +324,16 @@ async fn same_file_two_scopes_keeps_each_scopes_terms() {
         .register_shard(
             &h("shard-a"),
             std::slice::from_ref(&fa),
-            A,
-            Visibility::PerScope,
+            reg(A),
+            Visibility::PerTenant,
         )
         .await);
     ok(index
         .register_shard(
             &h("shard-b"),
             std::slice::from_ref(&fb),
-            B,
-            Visibility::PerScope,
+            reg(B),
+            Visibility::PerTenant,
         )
         .await);
 
@@ -282,7 +351,7 @@ async fn same_file_two_scopes_keeps_each_scopes_terms() {
         .register_shard(
             &h("shard-a2"),
             std::slice::from_ref(&fb),
-            A,
+            reg(A),
             Visibility::Global,
         )
         .await);
@@ -301,8 +370,8 @@ async fn register_shard_rejects_invisible_xorb_without_revealing_existence() {
         Err(IndexError::UnknownXorb { xorb }) => xorb,
         other => panic!("expected UnknownXorb, got {other:?}"),
     };
-    // Under PerScope a stored-but-invisible xorb answers exactly like one
-    // that isn't stored, so registration can't probe other scopes.
+    // Under PerTenant a stored-but-invisible xorb answers exactly like one
+    // that isn't stored, so registration can't probe other tenants.
     let mut answers = Vec::new();
     for xorb in [foreign, missing] {
         let mut f = file("f", own, 2);
@@ -316,8 +385,8 @@ async fn register_shard_rejects_invisible_xorb_without_revealing_existence() {
             .register_shard(
                 &h("shard"),
                 std::slice::from_ref(&f),
-                B,
-                Visibility::PerScope,
+                reg(B),
+                Visibility::PerTenant,
             )
             .await;
         let message = match &err {
@@ -330,16 +399,16 @@ async fn register_shard_rejects_invisible_xorb_without_revealing_existence() {
     }
     assert_eq!(answers[0], answers[1]);
 
-    // Under Global, another scope's xorb is usable and only a missing one fails.
+    // Under Global, another tenant's xorb is usable and only a missing one fails.
     let over_foreign = file("g", foreign, 2);
     assert!(ok(index
-        .register_shard(&h("shard"), &[over_foreign], B, Visibility::Global)
+        .register_shard(&h("shard"), &[over_foreign], reg(B), Visibility::Global)
         .await));
     let over_missing = file("m", missing, 1);
     assert_eq!(
         unknown(
             index
-                .register_shard(&h("shard-m"), &[over_missing], B, Visibility::Global)
+                .register_shard(&h("shard-m"), &[over_missing], reg(B), Visibility::Global)
                 .await
         ),
         missing
@@ -360,12 +429,12 @@ async fn sha256_mapping_is_scope_local() {
         .register_shard(
             &h("shard-a"),
             std::slice::from_ref(&fa),
-            A,
+            reg(A),
             Visibility::Global,
         )
         .await);
     ok(index
-        .register_shard(&h("shard-b"), &[fb], B, Visibility::Global)
+        .register_shard(&h("shard-b"), &[fb], reg(B), Visibility::Global)
         .await);
     drop(index);
 
@@ -398,16 +467,16 @@ async fn dedup_xorb_prefers_newest_and_respects_visibility() {
         Some(new)
     );
     assert_eq!(
-        ok(index.dedup_xorb(&shared, A, Visibility::PerScope).await),
+        ok(index.dedup_xorb(&shared, A, Visibility::PerTenant).await),
         Some(old)
     );
     assert_eq!(
-        ok(index.dedup_xorb(&shared, B, Visibility::PerScope).await),
+        ok(index.dedup_xorb(&shared, B, Visibility::PerTenant).await),
         Some(new)
     );
     assert_eq!(
         ok(index
-            .dedup_xorb(&shared, "other", Visibility::PerScope)
+            .dedup_xorb(&shared, "other", Visibility::PerTenant)
             .await),
         None
     );
@@ -415,7 +484,7 @@ async fn dedup_xorb_prefers_newest_and_respects_visibility() {
     // Re-uploading the old xorb doesn't make it newer.
     ok(index.put_xorb(&old, 700, &t, &[shared], B).await);
     assert_eq!(
-        ok(index.dedup_xorb(&shared, B, Visibility::PerScope).await),
+        ok(index.dedup_xorb(&shared, B, Visibility::PerTenant).await),
         Some(new)
     );
 
@@ -431,11 +500,11 @@ async fn dedup_xorb_prefers_newest_and_respects_visibility() {
     let f = file("f", old, 1);
     let first = f.first_chunk;
     ok(index
-        .register_shard(&h("shard"), &[f], A, Visibility::PerScope)
+        .register_shard(&h("shard"), &[f], reg(A), Visibility::PerTenant)
         .await);
     assert_eq!(
         ok(index
-            .dedup_xorb(&first.unwrap_or_default(), A, Visibility::PerScope)
+            .dedup_xorb(&first.unwrap_or_default(), A, Visibility::PerTenant)
             .await),
         Some(old)
     );
@@ -450,8 +519,8 @@ async fn chunk_tables_returns_only_present_visible() {
     let missing = h("xorb/missing");
     let asked = [xa, xb, missing, xa];
 
-    let per_scope = ok(index.chunk_tables(&asked, A, Visibility::PerScope).await);
-    assert_eq!(per_scope, HashMap::from([(xa, ta.clone())]));
+    let per_tenant = ok(index.chunk_tables(&asked, A, Visibility::PerTenant).await);
+    assert_eq!(per_tenant, HashMap::from([(xa, ta.clone())]));
 
     let global = ok(index.chunk_tables(&asked, A, Visibility::Global).await);
     assert_eq!(global, HashMap::from([(xa, ta), (xb, tb)]));
@@ -467,9 +536,9 @@ async fn chunk_tables_and_layouts_handle_more_xorbs_than_one_query_binds() {
     for i in 0..1200 {
         asked.push(put(&index, &format!("x{i}"), 1, A).await.0);
     }
-    let tables = ok(index.chunk_tables(&asked, A, Visibility::PerScope).await);
+    let tables = ok(index.chunk_tables(&asked, A, Visibility::PerTenant).await);
     assert_eq!(tables.len(), 1200);
-    let layouts = ok(index.chunk_layouts(&asked, A, Visibility::PerScope).await);
+    let layouts = ok(index.chunk_layouts(&asked, A, Visibility::PerTenant).await);
     assert_eq!(layouts.len(), 1200);
 }
 
@@ -516,8 +585,8 @@ async fn chunk_layouts_answer_as_chunk_tables_do_without_hashes() {
     let missing = h("xorb/missing");
     let asked = [xa, xb, missing, xa];
 
-    let per_scope = ok(index.chunk_layouts(&asked, A, Visibility::PerScope).await);
-    assert_eq!(per_scope, HashMap::from([(xa, layout_of(&ta))]));
+    let per_tenant = ok(index.chunk_layouts(&asked, A, Visibility::PerTenant).await);
+    assert_eq!(per_tenant, HashMap::from([(xa, layout_of(&ta))]));
     let global = ok(index.chunk_layouts(&asked, A, Visibility::Global).await);
     assert_eq!(
         global,
@@ -541,7 +610,7 @@ async fn chunk_layouts_of_xorbs_stored_before_layouts_come_from_their_tables() {
 
     let index = open_at(&path).await;
     assert_eq!(
-        ok(index.chunk_layouts(&[xorb], A, Visibility::PerScope).await),
+        ok(index.chunk_layouts(&[xorb], A, Visibility::PerTenant).await),
         HashMap::from([(xorb, layout_of(&t))])
     );
 }
@@ -575,7 +644,7 @@ async fn registration_records_where_each_term_is_stored() {
         first_chunk: None,
     };
     ok(index
-        .register_shard(&h("shard/bytes"), &[new], A, Visibility::PerScope)
+        .register_shard(&h("shard/bytes"), &[new], reg(A), Visibility::PerTenant)
         .await);
     let expected: Vec<(u32, u32)> = terms
         .iter()
@@ -612,7 +681,12 @@ async fn a_term_past_its_xorbs_chunks_is_refused_at_registration() {
     let mut f = file("past", xorb, 3);
     f.record.terms[0].chunk_end = 4;
     let refused = index
-        .register_shard(&h("shard/past"), &[f.clone()], A, Visibility::PerScope)
+        .register_shard(
+            &h("shard/past"),
+            &[f.clone()],
+            reg(A),
+            Visibility::PerTenant,
+        )
         .await;
     assert!(
         matches!(refused, Err(IndexError::InvalidInput(_))),
@@ -634,7 +708,7 @@ async fn register_shard_is_atomic() {
             .register_shard(
                 &shard,
                 &files,
-                FAULT_AFTER_FIRST_FILE_SCOPE,
+                reg(FAULT_AFTER_FIRST_FILE_SCOPE),
                 Visibility::Global
             )
             .await
@@ -658,13 +732,13 @@ async fn register_shard_is_atomic() {
         None,
         "the shard_xorbs rows rolled back"
     );
-    // The shard_scopes row rolled back too: registering the shard again in
+    // The shard_registrations row rolled back too: registering the shard again in
     // the same scope is new. No files means the fault point isn't reached.
     assert!(ok(index
         .register_shard(
             &shard,
             &[],
-            FAULT_AFTER_FIRST_FILE_SCOPE,
+            reg(FAULT_AFTER_FIRST_FILE_SCOPE),
             Visibility::Global
         )
         .await));
@@ -672,7 +746,7 @@ async fn register_shard_is_atomic() {
         .register_shard(
             &shard,
             &[],
-            FAULT_AFTER_FIRST_FILE_SCOPE,
+            reg(FAULT_AFTER_FIRST_FILE_SCOPE),
             Visibility::Global
         )
         .await));
@@ -689,8 +763,8 @@ async fn reopen_keeps_everything() {
         .register_shard(
             &h("shard"),
             std::slice::from_ref(&f),
-            A,
-            Visibility::PerScope,
+            reg(A),
+            Visibility::PerTenant,
         )
         .await);
     let first = t.hashes[0].0;
@@ -698,11 +772,11 @@ async fn reopen_keeps_everything() {
 
     let index: Arc<dyn Index> = Arc::new(open_at(&path).await);
     assert_eq!(
-        ok(index.xorb_size(&xorb, A, Visibility::PerScope).await),
+        ok(index.xorb_size(&xorb, A, Visibility::PerTenant).await),
         Some(1900)
     );
     assert_eq!(
-        ok(index.chunk_tables(&[xorb], A, Visibility::PerScope).await),
+        ok(index.chunk_tables(&[xorb], A, Visibility::PerTenant).await),
         HashMap::from([(xorb, t)])
     );
     assert_eq!(
@@ -710,11 +784,11 @@ async fn reopen_keeps_everything() {
         Some(f.record.clone())
     );
     assert_eq!(
-        ok(index.dedup_xorb(&first, A, Visibility::PerScope).await),
+        ok(index.dedup_xorb(&first, A, Visibility::PerTenant).await),
         Some(xorb)
     );
     assert!(!ok(index
-        .register_shard(&h("shard"), &[f], A, Visibility::PerScope)
+        .register_shard(&h("shard"), &[f], reg(A), Visibility::PerTenant)
         .await));
 }
 
@@ -806,11 +880,11 @@ async fn dedup_shard_xorbs_lists_the_shards_xorbs_in_term_order() {
         file_over("f2", &[(x3, 1), (x1, 1), (x4, 2)]),
     ];
     ok(index
-        .register_shard(&h("shard"), &files, A, Visibility::PerScope)
+        .register_shard(&h("shard"), &files, reg(A), Visibility::PerTenant)
         .await);
 
     for xorb in [x1, x2, x3, x4] {
-        for vis in [Visibility::Global, Visibility::PerScope] {
+        for vis in [Visibility::Global, Visibility::PerTenant] {
             assert_eq!(
                 ok(index.dedup_shard_xorbs(&xorb, A, vis).await),
                 Some(vec![x2, x1, x3, x4])
@@ -829,12 +903,12 @@ async fn dedup_shard_xorbs_none_without_a_shard() {
         .register_shard(
             &h("shard"),
             &[file_over("f", &[(x2, 2)])],
-            A,
+            reg(A),
             Visibility::Global,
         )
         .await);
 
-    for vis in [Visibility::Global, Visibility::PerScope] {
+    for vis in [Visibility::Global, Visibility::PerTenant] {
         assert_eq!(ok(index.dedup_shard_xorbs(&x1, A, vis).await), None);
         assert_eq!(ok(index.dedup_shard_xorbs(&h("never"), A, vis).await), None);
     }
@@ -850,17 +924,17 @@ async fn dedup_shard_xorbs_prefers_the_newest_shard() {
     let old = [file_over("old", &[(x1, 2), (x2, 2)])];
     let new = [file_over("new", &[(x3, 2), (x1, 2)])];
     ok(index
-        .register_shard(&h("old"), &old, A, Visibility::PerScope)
+        .register_shard(&h("old"), &old, reg(A), Visibility::PerTenant)
         .await);
     ok(index
-        .register_shard(&h("new"), &new, A, Visibility::PerScope)
+        .register_shard(&h("new"), &new, reg(A), Visibility::PerTenant)
         .await);
     // Registering the older shard again changes nothing, so it stays older.
     assert!(!ok(index
-        .register_shard(&h("old"), &old, A, Visibility::PerScope)
+        .register_shard(&h("old"), &old, reg(A), Visibility::PerTenant)
         .await));
 
-    for vis in [Visibility::Global, Visibility::PerScope] {
+    for vis in [Visibility::Global, Visibility::PerTenant] {
         assert_eq!(
             ok(index.dedup_shard_xorbs(&x1, A, vis).await),
             Some(vec![x3, x1])
@@ -871,19 +945,19 @@ async fn dedup_shard_xorbs_prefers_the_newest_shard() {
         );
     }
 
-    // Under `PerScope` only the caller's registrations count: B registers
+    // Under `PerTenant` only the caller's registrations count: B registers
     // the old shard later, which makes it the newest for B and, under
-    // `Global`, for everyone, but not for A under `PerScope`.
+    // `Global`, for everyone, but not for A under `PerTenant`.
     for x in [x1, x2] {
         ok(index
             .put_xorb(&x, 1300, &table(&format!("{x}"), 2), &[], B)
             .await);
     }
     ok(index
-        .register_shard(&h("old"), &old, B, Visibility::PerScope)
+        .register_shard(&h("old"), &old, reg(B), Visibility::PerTenant)
         .await);
     assert_eq!(
-        ok(index.dedup_shard_xorbs(&x1, B, Visibility::PerScope).await),
+        ok(index.dedup_shard_xorbs(&x1, B, Visibility::PerTenant).await),
         Some(vec![x1, x2])
     );
     assert_eq!(
@@ -891,31 +965,31 @@ async fn dedup_shard_xorbs_prefers_the_newest_shard() {
         Some(vec![x1, x2])
     );
     assert_eq!(
-        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerScope).await),
+        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerTenant).await),
         Some(vec![x3, x1])
     );
 }
 
 #[tokio::test]
-async fn dedup_shard_xorbs_respects_scope_and_visibility() {
+async fn dedup_shard_xorbs_respects_tenant_and_visibility() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;
     let (x1, _) = put(&index, "x1", 2, A).await;
     let (x2, _) = put(&index, "x2", 2, B).await;
 
-    // Another scope's shard is never offered under `PerScope`, even when
+    // Another tenant's shard is never offered under `PerTenant`, even when
     // the caller holds the xorb itself.
     ok(index
         .register_shard(
             &h("a-only"),
             &[file_over("a", &[(x1, 2)])],
-            A,
-            Visibility::PerScope,
+            reg(A),
+            Visibility::PerTenant,
         )
         .await);
     ok(index.put_xorb(&x1, 1300, &table("x1", 2), &[], B).await);
     assert_eq!(
-        ok(index.dedup_shard_xorbs(&x1, B, Visibility::PerScope).await),
+        ok(index.dedup_shard_xorbs(&x1, B, Visibility::PerTenant).await),
         None
     );
     assert_eq!(
@@ -923,42 +997,384 @@ async fn dedup_shard_xorbs_respects_scope_and_visibility() {
         Some(vec![x1])
     );
 
-    // A shard registered under `Global` may mix xorbs of several scopes;
-    // read under `PerScope` it lists only the caller's.
+    // A shard registered under `Global` may mix xorbs of several tenants.
+    // Registering it makes its tenant an owner of all of them (ruling
+    // M1-R39), so read under `PerTenant` it lists them all to that tenant,
+    // and still none to a tenant without a registration.
     ok(index
         .register_shard(
             &h("mixed"),
             &[file_over("m", &[(x2, 2), (x1, 2)])],
-            A,
+            reg(A),
             Visibility::Global,
         )
         .await);
     assert_eq!(
-        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerScope).await),
-        Some(vec![x1])
+        ok(index.dedup_shard_xorbs(&x1, A, Visibility::PerTenant).await),
+        Some(vec![x2, x1])
     );
     assert_eq!(
         ok(index.dedup_shard_xorbs(&x1, A, Visibility::Global).await),
         Some(vec![x2, x1])
     );
+    assert_eq!(
+        ok(index
+            .dedup_shard_xorbs(&x1, "c", Visibility::PerTenant)
+            .await),
+        None
+    );
 }
 
-/// `register_shard` derives the next `registered_seq` from the current
-/// maximum under the write lock, like `ingested_seq`.
+/// Registration numbers count up across reopens and processes: the index
+/// hands each out once, and a registration's bucket record carries it.
 #[tokio::test]
-async fn next_registered_seq_is_an_index_lookup() {
+async fn registration_seq_counts_up_across_reopens() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    let index = open_at(&path).await;
+    let first = ok(index.next_registration_seq().await);
+    assert_eq!(ok(index.next_registration_seq().await), first + 1);
+    drop(index);
+    let other = open_at(&path).await;
+    assert_eq!(ok(other.next_registration_seq().await), first + 2);
+}
+
+/// The newest registration a dedup answer looks up is found through the
+/// index on `registered_seq`, not by visiting every registration.
+#[tokio::test]
+async fn newest_registration_is_an_index_lookup() {
     let dir = ok(TempDir::new());
     let path = dir.path().join("index.sqlite");
     drop(open_at(&path).await);
     let pool = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
     let plan: Vec<(i64, i64, i64, String)> = ok(sqlx::query_as(
-        "EXPLAIN QUERY PLAN SELECT COALESCE(MAX(registered_seq), 0) + 1 FROM shard_scopes WHERE true",
+        "EXPLAIN QUERY PLAN SELECT shard FROM shard_registrations ORDER BY registered_seq DESC \
+         LIMIT 1",
     )
     .fetch_all(&pool)
     .await);
     let details: Vec<&str> = plan.iter().map(|row| row.3.as_str()).collect();
     assert!(
-        details.iter().any(|d| d.contains("USING COVERING INDEX")),
-        "plan visits every shard registration: {details:?}"
+        details
+            .iter()
+            .any(|d| d.contains("shard_registrations_registered_seq")),
+        "plan sorts every shard registration: {details:?}"
     );
+}
+
+/// Ruling M1-R39 (M1 final review I2): a file registered under `Global`
+/// over another tenant's xorb stays readable to its own tenant after the
+/// operator switches to `PerTenant`, and dedup still offers its upload.
+#[tokio::test]
+async fn global_registration_stays_readable_under_per_tenant() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x, _) = put(&index, "x", 2, A).await;
+    ok(index
+        .register_shard(
+            &h("shard-b"),
+            &[file_over("b", &[(x, 2)])],
+            reg(B),
+            Visibility::Global,
+        )
+        .await);
+
+    let layouts = ok(index.chunk_layouts(&[x], B, Visibility::PerTenant).await);
+    assert_eq!(layouts.len(), 1, "B's file needs its xorb's layout");
+    assert_eq!(
+        ok(index.dedup_shard_xorbs(&x, B, Visibility::PerTenant).await),
+        Some(vec![x])
+    );
+    assert!(
+        ok(index.xorb_size(&x, B, Visibility::PerTenant).await).is_some(),
+        "B owns the xorb its file references"
+    );
+    assert!(
+        ok(index.chunk_layouts(&[x], "c", Visibility::PerTenant).await).is_empty(),
+        "a third tenant is still isolated"
+    );
+}
+
+/// Scopes are the unit of access, tenants of isolation (ruling M1-R38):
+/// two scopes of one tenant share xorbs under `PerTenant`, while files stay
+/// per scope; another tenant sees neither.
+#[tokio::test]
+async fn scopes_of_one_tenant_share_xorbs_under_per_tenant() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x, _) = put(&index, "x", 2, "org").await;
+    let f = file_over("f", &[(x, 2)]);
+    let in_org = |scope| Registrant {
+        scope,
+        tenant: "org",
+        seq: reg(scope).seq,
+    };
+    ok(index
+        .register_shard(
+            &h("base"),
+            std::slice::from_ref(&f),
+            in_org("org/base"),
+            Visibility::PerTenant,
+        )
+        .await);
+    ok(index
+        .register_shard(
+            &h("fine-tune"),
+            std::slice::from_ref(&f),
+            in_org("org/fine-tune"),
+            Visibility::PerTenant,
+        )
+        .await);
+    assert!(ok(index.file(&f.record.hash, "org/fine-tune").await).is_some());
+    assert_eq!(
+        ok(index
+            .dedup_xorb(&h("x/chunk0"), "org", Visibility::PerTenant)
+            .await),
+        Some(x)
+    );
+    assert!(ok(index.file(&f.record.hash, "other/repo").await).is_none());
+    assert_eq!(
+        ok(index
+            .dedup_xorb(&h("x/chunk0"), "other", Visibility::PerTenant)
+            .await),
+        None
+    );
+    let err = index
+        .register_shard(
+            &h("other"),
+            std::slice::from_ref(&f),
+            reg("other/repo"),
+            Visibility::PerTenant,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, IndexError::UnknownXorb { xorb } if xorb == x),
+        "{err}"
+    );
+}
+
+/// Of two registrations of one file to one scope, the lower-numbered one's
+/// reconstruction is kept, whichever commits first: the row a rebuild from
+/// the bucket's records picks (ruling M1-R37).
+#[tokio::test]
+async fn lowest_numbered_registration_of_a_file_wins() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (x1, _) = put(&index, "x1", 2, A).await;
+    let (x2, _) = put(&index, "x2", 2, A).await;
+    let mut over_x1 = file_over("f", &[(x1, 2)]);
+    over_x1.sha256 = Some([1; 32]);
+    let mut over_x2 = file_over("f", &[(x2, 2)]);
+    over_x2.sha256 = Some([2; 32]);
+    let at = |seq| Registrant {
+        scope: A,
+        tenant: A,
+        seq,
+    };
+    ok(index
+        .register_shard(
+            &h("later"),
+            &[over_x2.clone()],
+            at(20),
+            Visibility::PerTenant,
+        )
+        .await);
+    ok(index
+        .register_shard(
+            &h("earlier"),
+            &[over_x1.clone()],
+            at(10),
+            Visibility::PerTenant,
+        )
+        .await);
+    assert_eq!(
+        ok(index.file(&over_x1.record.hash, A).await),
+        Some(over_x1.record.clone())
+    );
+    ok(index
+        .register_shard(&h("latest"), &[over_x2], at(30), Visibility::PerTenant)
+        .await);
+    assert_eq!(
+        ok(index.file(&over_x1.record.hash, A).await),
+        Some(over_x1.record)
+    );
+}
+
+/// Sequence numbers can repeat once an index is lost or restored from an
+/// older backup and its counter starts below the bucket's records. A tie
+/// then breaks on the shard's bytes, then the tenant, in either commit
+/// order, as a rebuild from the bucket breaks it (F-A review m-3).
+#[tokio::test]
+async fn ties_on_the_number_break_on_shard_then_tenant() {
+    let (s1, s2) = (h("shard-1"), h("shard-2"));
+    let (low, high) = if s1.as_bytes() < s2.as_bytes() {
+        (s1, s2)
+    } else {
+        (s2, s1)
+    };
+    for (first, second) in [(low, high), (high, low)] {
+        for (tenant_first, tenant_second) in [("t1", "t2"), ("t2", "t1")] {
+            let dir = ok(TempDir::new());
+            let index = open(&dir).await;
+            let (x1, _) = put(&index, "x1", 2, "t1").await;
+            let (x2, _) = put(&index, "x2", 2, "t1").await;
+            ok(index.put_xorb(&x1, 1300, &table("x1", 2), &[], "t2").await);
+            ok(index.put_xorb(&x2, 1300, &table("x2", 2), &[], "t2").await);
+            let over = |shard| file_over("f", &[(if shard == low { x1 } else { x2 }, 2)]);
+            // Same shard and number, two tenants: the lower tenant's row.
+            let by = |tenant| Registrant {
+                scope: A,
+                tenant,
+                seq: 5,
+            };
+            ok(index
+                .register_shard(&first, &[over(first)], by(tenant_first), Visibility::Global)
+                .await);
+            ok(index
+                .register_shard(
+                    &second,
+                    &[over(second)],
+                    by(tenant_second),
+                    Visibility::Global,
+                )
+                .await);
+            let file = h("file/f");
+            assert_eq!(
+                ok(index.file(&file, A).await),
+                Some(over(low).record),
+                "the lower shard wins a tie on the number"
+            );
+        }
+    }
+    for order in [["t2", "t1"], ["t1", "t2"]] {
+        let dir = ok(TempDir::new());
+        let path = dir.path().join("index.sqlite");
+        let index = open_at(&path).await;
+        let (x, _) = put(&index, "x", 2, "t1").await;
+        ok(index.put_xorb(&x, 1300, &table("x", 2), &[], "t2").await);
+        for tenant in order {
+            ok(index
+                .register_shard(
+                    &low,
+                    &[file_over("g", &[(x, 2)])],
+                    Registrant {
+                        scope: A,
+                        tenant,
+                        seq: 5,
+                    },
+                    Visibility::Global,
+                )
+                .await);
+        }
+        let db = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+        let tenant: String = ok(sqlx::query_scalar(
+            "SELECT registered_tenant FROM file_scopes WHERE scope = ?",
+        )
+        .bind(A)
+        .fetch_one(&db)
+        .await);
+        assert_eq!(
+            tenant, "t1",
+            "the lower tenant wins a tie on number and shard"
+        );
+        db.close().await;
+    }
+}
+
+/// Migration 0005 carries a database written before tenants existed: each
+/// scope becomes its own tenant, `scope:` and its name (ruling M1-R43),
+/// owning the xorbs it uploaded and those its registered shards reference
+/// (ruling M1-R39), and registration numbers continue past the highest one
+/// recorded.
+#[tokio::test]
+async fn migration_0005_makes_each_scope_its_own_tenant() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+    let db = ok(sqlx::SqlitePool::connect(&url).await);
+    ok(sqlx::migrate!("./migrations").run_to(4, &db).await);
+    let (x1, x2, shard, f) = (h("x1"), h("x2"), h("shard"), h("file"));
+    let mut table = h("chunk").as_bytes().to_vec();
+    table.extend_from_slice(&1000u32.to_le_bytes());
+    table.extend_from_slice(&0u32.to_le_bytes());
+    table.extend_from_slice(&600u32.to_le_bytes());
+    for (seq, xorb) in [(1, x1), (2, x2)] {
+        ok(sqlx::query(
+            "INSERT INTO xorbs (hash, size, chunk_count, chunk_table, ingested_seq) \
+             VALUES (?, 700, 1, ?, ?)",
+        )
+        .bind(xorb.as_bytes())
+        .bind(&table)
+        .bind(seq)
+        .execute(&db)
+        .await);
+    }
+    ok(
+        sqlx::query("INSERT INTO xorb_scopes (xorb, scope) VALUES (?, 'uploader')")
+            .bind(x1.as_bytes())
+            .execute(&db)
+            .await,
+    );
+    ok(
+        sqlx::query("INSERT INTO shard_scopes (shard, scope, registered_seq) VALUES (?, ?, 7)")
+            .bind(shard.as_bytes())
+            .bind(A)
+            .execute(&db)
+            .await,
+    );
+    for (pos, xorb) in [(0, x1), (1, x2)] {
+        ok(
+            sqlx::query("INSERT INTO shard_xorbs (shard, pos, xorb) VALUES (?, ?, ?)")
+                .bind(shard.as_bytes())
+                .bind(pos)
+                .bind(xorb.as_bytes())
+                .execute(&db)
+                .await,
+        );
+    }
+    ok(sqlx::query(
+        "INSERT INTO file_scopes (file, scope, size, terms, sha256, shard) \
+         VALUES (?, ?, 0, x'', NULL, ?)",
+    )
+    .bind(f.as_bytes())
+    .bind(A)
+    .bind(shard.as_bytes())
+    .execute(&db)
+    .await);
+    db.close().await;
+
+    let index = open_at(&path).await;
+    // A credential for scope `s` naming no tenant is in tenant `scope:s`
+    // (ruling M1-R43).
+    let tenant_a = format!("scope:{A}");
+    for (xorb, tenant) in [(x1, "scope:uploader"), (x1, &tenant_a), (x2, &tenant_a)] {
+        assert!(
+            ok(index.xorb_size(&xorb, tenant, Visibility::PerTenant).await).is_some(),
+            "{tenant} owns {xorb}"
+        );
+    }
+    assert!(
+        ok(index
+            .xorb_size(&x2, "scope:uploader", Visibility::PerTenant)
+            .await)
+        .is_none()
+    );
+    assert_eq!(
+        ok(index
+            .dedup_shard_xorbs(&x1, &tenant_a, Visibility::PerTenant)
+            .await),
+        Some(vec![x1, x2])
+    );
+    assert!(ok(index.xorb_size(&x1, A, Visibility::PerTenant).await).is_none());
+    assert_eq!(ok(index.next_registration_seq().await), 8);
+    let db = ok(sqlx::SqlitePool::connect(&url).await);
+    let seq: i64 = ok(sqlx::query_scalar("SELECT registered_seq FROM file_scopes")
+        .fetch_one(&db)
+        .await);
+    assert_eq!(seq, 7);
+    let tenant: String = ok(sqlx::query_scalar("SELECT tenant FROM shard_registrations")
+        .fetch_one(&db)
+        .await);
+    assert_eq!(tenant, tenant_a);
 }

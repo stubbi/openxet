@@ -132,6 +132,22 @@ pub(crate) fn batch(
     ))
 }
 
+/// An upper bound on the bytes of an answer of `terms` terms for `files`
+/// files, whose URLs start with `base`: what its buffers are allocated to
+/// before it is written, so what writing it can make resident. Each term
+/// is at most one term entry, one fetch descriptor with its URL and one
+/// xorb key; each file, at most one key.
+pub(crate) fn bound(terms: usize, files: usize, base: &Url) -> u64 {
+    let per_term = TERM_BYTES + FETCH_BYTES + base.as_str().len() + NAME_BYTES;
+    (terms as u64)
+        .saturating_mul(per_term as u64)
+        .saturating_add((files as u64).saturating_mul(NAME_BYTES as u64))
+        .saturating_add(HEAD_BYTES)
+}
+
+/// The bytes around an answer's lists: its keys, brackets and offset.
+const HEAD_BYTES: u64 = 256;
+
 /// How many threads should write an answer of `terms` terms: one per
 /// [`TERMS_PER_WORKER`], at least one. Each thread past the first runs
 /// under a `validate` permit of its own (rulings M1-R8, M1-R25).

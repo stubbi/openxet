@@ -47,8 +47,14 @@ pub enum Mode {
 pub struct Principal {
     /// Who the credential acts for (a JWT's `sub`, a static token's subject).
     pub subject: String,
-    /// The scope the credential is limited to (design §5.4).
+    /// The scope the credential is limited to (design §5.4). Files are read
+    /// and registered per scope.
     pub scope: String,
+    /// The tenant the scope belongs to: the unit of isolation for xorbs and
+    /// dedup under `per-tenant` visibility (design §5.4, ruling M1-R38).
+    /// A JWT's optional `tenant` claim, a static token's configured tenant,
+    /// or else [`default_tenant`] of the scope (ruling M1-R43).
+    pub tenant: String,
     /// What the credential may do within `scope`.
     pub mode: Mode,
 }
@@ -101,9 +107,9 @@ impl Authenticator {
     /// [`Authenticator::MIN_TOKEN_LIFETIME`] to
     /// [`Authenticator::MAX_TOKEN_LIFETIME`]: `ZERO` would refuse every
     /// token and `Duration::MAX` would disable the cap.
-    /// [`AuthError::InvalidStaticToken`] if a static token's subject or
-    /// scope fails the checks CAS-token claims must pass: non-empty, no
-    /// control characters, scope at most [`MAX_SCOPE_BYTES`].
+    /// [`AuthError::InvalidStaticToken`] if a static token's subject, scope
+    /// or tenant fails the checks CAS-token claims must pass: non-empty, no
+    /// control characters, scope and tenant at most [`MAX_SCOPE_BYTES`].
     pub fn new(
         static_tokens: Vec<StaticToken>,
         jwt_keys: Vec<PublicKey>,
@@ -112,6 +118,7 @@ impl Authenticator {
         check_token_lifetime(max_token_lifetime)?;
         for (index, token) in static_tokens.iter().enumerate() {
             check_identity(&token.subject, &token.scope)
+                .and_then(|()| token.tenant.as_deref().map_or(Ok(()), check_tenant))
                 .map_err(|reason| AuthError::InvalidStaticToken { index, reason })?;
         }
         Ok(Self {
@@ -144,8 +151,44 @@ impl Authenticator {
     }
 }
 
-/// The longest accepted scope, in bytes.
+/// The longest accepted scope or tenant, in bytes.
 pub const MAX_SCOPE_BYTES: usize = 1024;
+
+/// What starts the tenant of a credential that names none (ruling M1-R43).
+/// No explicit tenant may start with it, so a scope's name can never put a
+/// token into a tenant someone named explicitly.
+pub const DEFAULT_TENANT_PREFIX: &str = "scope:";
+
+/// The tenant of a credential for `scope` that names no tenant:
+/// [`DEFAULT_TENANT_PREFIX`] and the scope, so each such scope is a tenant
+/// of its own.
+#[must_use]
+pub fn default_tenant(scope: &str) -> String {
+    format!("{DEFAULT_TENANT_PREFIX}{scope}")
+}
+
+/// Checks an explicit tenant as [`check_identity`] checks a scope (ruling
+/// M1-R38): something other than whitespace, at most [`MAX_SCOPE_BYTES`],
+/// and none of the [`is_disallowed`] characters. It may not start with
+/// [`DEFAULT_TENANT_PREFIX`], which only defaulted tenants carry (ruling
+/// M1-R43).
+pub(crate) fn check_tenant(tenant: &str) -> Result<(), &'static str> {
+    if tenant.trim().is_empty() {
+        return Err("the tenant is empty or only whitespace");
+    }
+    if tenant.starts_with(DEFAULT_TENANT_PREFIX) {
+        return Err(
+            "the tenant starts with `scope:`, which is reserved for tenants defaulted from a scope",
+        );
+    }
+    if tenant.len() > MAX_SCOPE_BYTES {
+        return Err("the tenant is longer than 1024 bytes");
+    }
+    if tenant.chars().any(is_disallowed) {
+        return Err("the tenant contains control, format or line-separator characters");
+    }
+    Ok(())
+}
 
 /// Checks a principal's subject and scope (ruling M1-R19): both must
 /// contain something other than whitespace, and neither may contain

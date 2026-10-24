@@ -128,7 +128,7 @@ pub enum CasError {
     InvalidBatch,
 
     /// A shard's file references a xorb that isn't visible to the caller:
-    /// missing, or under `PerScope` another scope's, which reads the same
+    /// missing, or under `PerTenant` another tenant's, which reads the same
     /// (ruling M1-R17). `400 unknown_xorb`, which clients don't retry.
     ///
     /// The message carries the stale-cache note (ruling M1-R5): on
@@ -158,7 +158,7 @@ pub enum CasError {
     InvalidPath,
 
     /// No xorb with the path's hash is visible to the caller.
-    /// `404 xorb_not_found`; under `PerScope` visibility another scope's
+    /// `404 xorb_not_found`; under `PerTenant` visibility another tenant's
     /// xorb reads the same as a missing one.
     #[error("xorb {} is not stored on this server", hash_to_hex(.xorb))]
     XorbNotFound {
@@ -169,8 +169,8 @@ pub enum CasError {
     /// No xorb visible to the caller offers the queried chunk for global
     /// dedup. `404 not_found`, which `hf_xet` reads as "no match" and
     /// continues the upload (S10 §2). The answer is the same whether the
-    /// chunk was never stored or, under `PerScope` visibility, is another
-    /// scope's, and it names nothing from the request.
+    /// chunk was never stored or, under `PerTenant` visibility, is another
+    /// tenant's, and it names nothing from the request.
     #[error("no xorb on this server offers the chunk for deduplication")]
     NoDedupMatch,
 
@@ -180,6 +180,42 @@ pub enum CasError {
     /// the upload continues without this dedup answer.
     #[error("the server is busy answering other dedup queries")]
     DedupBusy,
+
+    /// The process's memory budget stayed full for the whole wait (ruling
+    /// M1-R40). `503 memory_busy` with `Retry-After: 1`, which stock
+    /// clients retry with backoff (S10 "Status codes and retries").
+    #[error("the server is holding as much request data in memory as it may; try again shortly")]
+    MemoryBusy,
+
+    /// The request needs more memory than the process's whole budget
+    /// (ruling M1-R40). `413 exceeds_memory_budget`, final: no retry can
+    /// succeed, and clients retry a `503` (S10 "Status codes and
+    /// retries").
+    #[error(
+        "the request needs about {needed} bytes of server memory, more than the server's whole \
+         memory budget of {budget} bytes"
+    )]
+    ExceedsMemoryBudget {
+        /// The bytes the request needs.
+        needed: u64,
+        /// The budget, `server.memory_budget`.
+        budget: u64,
+    },
+
+    /// One reconstruction answer would hold more than its share of the
+    /// process's memory budget, an eighth (review I-5 of ruling M1-R40).
+    /// `413 answer_too_large`, final. Stock clients never reach it: they
+    /// ask for a file by `Range`, at most 8 GB at a time (S10 §1).
+    #[error(
+        "the answer needs about {needed} bytes of server memory; one answer may hold at most \
+         {limit}, an eighth of the server's memory budget"
+    )]
+    AnswerTooLarge {
+        /// The bytes the answer needs.
+        needed: u64,
+        /// An eighth of `server.memory_budget`.
+        limit: u64,
+    },
 
     /// An uploaded xorb's content hash is not the hash in its path.
     /// `400 xorb_hash_mismatch`, final.
@@ -343,7 +379,7 @@ impl From<StorageError> for CasError {
             // Every supported bucket is read-after-write consistent (ruling
             // M1-R21), so an object the index names but the bucket lacks is
             // data loss or a bug. A retry would only hide it.
-            StorageError::NotFound { key } => {
+            StorageError::NotFound { ref key } => {
                 tracing::error!(
                     %key,
                     "integrity fault: the index names an object the bucket lacks"
@@ -354,6 +390,8 @@ impl From<StorageError> for CasError {
             StorageError::RangeOutOfBounds { .. } | StorageError::SizeConflict { .. } => {
                 Self::internal(e)
             }
+            // A record in the bucket doesn't decode: the operator must look.
+            StorageError::CorruptRecord { .. } => Self::internal(e),
             _ => Self::internal(e),
         }
     }
@@ -521,6 +559,25 @@ impl CasError {
                 "Nothing to fix: clients treat this as no match and continue the upload. If it \
                  persists, the server needs more CPUs for dedup answers.",
             ),
+            Self::MemoryBusy => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "memory_busy",
+                "Retry after the `Retry-After` delay; stock clients do so automatically. If it \
+                 persists, upload fewer files at once, or the operator can raise \
+                 `server.memory_budget`.",
+            ),
+            Self::ExceedsMemoryBudget { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "exceeds_memory_budget",
+                "Send a smaller body, as stock clients do (xorbs and shards of at most 64 MiB). \
+                 The operator can raise `server.memory_budget`.",
+            ),
+            Self::AnswerTooLarge { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "answer_too_large",
+                "Ask for the file by range, with `Range: bytes={start}-{end}`, as hf_xet does, \
+                 or put fewer files in a batch. The operator can raise `server.memory_budget`.",
+            ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,
                 "xorb_hash_mismatch",
@@ -596,9 +653,13 @@ impl CasError {
     }
 
     /// Whether a retry may succeed: the index or the bucket was
-    /// unavailable. A request's fault or a server bug stays on retry.
+    /// unavailable, or the memory budget full. A request's fault, one over
+    /// the whole budget, or a server bug stays on retry.
     pub(crate) fn is_retryable(&self) -> bool {
-        matches!(self, Self::Unavailable { .. } | Self::NotReady)
+        matches!(
+            self,
+            Self::Unavailable { .. } | Self::NotReady | Self::MemoryBusy
+        )
     }
 
     /// Logs the failure inside the request's span, so under its request id:
@@ -618,6 +679,11 @@ impl CasError {
                 tracing::warn!(code, reason = %reason.detail(), "shard rejected");
             }
             Self::UnknownXorb { .. } => tracing::warn!(code, reason = %self, "shard rejected"),
+            // The server's state, not a fault: one line per refusal, without
+            // an error's alarm.
+            Self::MemoryBusy | Self::ExceedsMemoryBudget { .. } | Self::AnswerTooLarge { .. } => {
+                tracing::warn!(code, reason = %self, "request refused");
+            }
             _ if status.is_server_error() => {
                 tracing::error!(code, error = self as &dyn StdError, "request failed");
             }
@@ -644,7 +710,7 @@ impl IntoResponse for CasError {
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
-        if let Self::NotReady | Self::DedupBusy = self {
+        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy = self {
             response
                 .headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
@@ -755,6 +821,44 @@ mod tests {
             message.contains("7s") && message.contains("512"),
             "{message}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_full_memory_budget_is_a_retryable_503_with_retry_after() {
+        assert!(CasError::MemoryBusy.is_retryable());
+        let reply = assert_maps(
+            CasError::MemoryBusy,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "memory_busy",
+        )
+        .await;
+        assert_eq!(reply.headers[RETRY_AFTER], "1");
+    }
+
+    #[tokio::test]
+    async fn an_answer_over_its_share_of_the_budget_is_a_final_413() {
+        let e = CasError::AnswerTooLarge {
+            needed: 2048,
+            limit: 1024,
+        };
+        assert!(!e.is_retryable());
+        let reply = assert_maps(e, StatusCode::PAYLOAD_TOO_LARGE, "answer_too_large").await;
+        assert!(!reply.headers.contains_key(RETRY_AFTER));
+        let hint = reply.body["hint"].as_str().unwrap();
+        assert!(hint.contains("Range"), "{hint}");
+    }
+
+    #[tokio::test]
+    async fn a_request_over_the_whole_memory_budget_is_a_final_413() {
+        let e = CasError::ExceedsMemoryBudget {
+            needed: 2048,
+            budget: 1024,
+        };
+        assert!(!e.is_retryable());
+        let reply = assert_maps(e, StatusCode::PAYLOAD_TOO_LARGE, "exceeds_memory_budget").await;
+        assert!(!reply.headers.contains_key(RETRY_AFTER));
+        let hint = reply.body["hint"].as_str().unwrap();
+        assert!(hint.contains("server.memory_budget"), "{hint}");
     }
 
     #[tokio::test]
@@ -941,7 +1045,7 @@ mod tests {
             .finish();
 
         let error = tracing::subscriber::with_default(subscriber, || {
-            CasError::from(StorageError::NotFound { key })
+            CasError::from(StorageError::NotFound { key: Box::new(key) })
         });
 
         let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
@@ -963,7 +1067,7 @@ mod tests {
     async fn storage_range_out_of_bounds_is_500_internal() {
         assert_maps(
             StorageError::RangeOutOfBounds {
-                key: Key::Xorb(MerkleHash::default()),
+                key: Box::new(Key::Xorb(MerkleHash::default())),
                 start: 1,
                 end_inclusive: 2,
                 size: 1,
@@ -978,7 +1082,7 @@ mod tests {
     async fn storage_size_conflict_is_500_internal() {
         assert_maps(
             StorageError::SizeConflict {
-                key: Key::Shard(MerkleHash::default()),
+                key: Box::new(Key::Shard(MerkleHash::default())),
                 existing: 1,
                 new: 2,
             },

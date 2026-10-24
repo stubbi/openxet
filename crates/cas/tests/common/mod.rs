@@ -33,12 +33,12 @@ use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
 use openxet_index::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, TermBytes,
-    Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, SqliteIndex,
+    TermBytes, Visibility,
 };
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
-use openxet_storage::{Bucket, Key, LocalBucket, RangeStream, StorageError};
+use openxet_storage::{Bucket, Key, KeyKind, LocalBucket, RangeStream, StorageError};
 use reqwest::Method;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -274,7 +274,8 @@ pub fn config(visibility: Visibility) -> CasConfig {
         verify_limits: VerifyLimits::default(),
         heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
         body_deadline: BodyDeadline::DEFAULT,
-        dedup_send: openxet_cas::SendDeadline::DEFAULT,
+        send_deadline: openxet_cas::SendDeadline::DEFAULT,
+        memory_budget: openxet_cas::MemoryBudget::DEFAULT_BYTES,
     }
 }
 
@@ -508,6 +509,30 @@ impl TestServer {
         Self::start(config(Visibility::Global)).await
     }
 
+    /// Stops this server and starts another with `cfg` on the same index
+    /// and bucket, as an operator restarting with a new configuration
+    /// would. The new server has new credentials.
+    pub async fn restart(mut self, cfg: CasConfig) -> Self {
+        let dir = std::mem::replace(&mut self.dir, tempfile::tempdir().unwrap());
+        let bucket = Arc::clone(&self.bucket);
+        drop(self);
+        Self::start_in(dir, cfg, bucket, Box::new(|index| index)).await
+    }
+
+    /// The server's index file, which another `SqliteIndex` may open too.
+    pub fn index_path(&self) -> PathBuf {
+        self.dir.path().join("index.sqlite")
+    }
+
+    /// A CAS token for `scope` in `mode`, naming `tenant` if given, valid
+    /// for a minute on the server's clock.
+    pub fn token(&self, scope: &str, tenant: Option<&str>, mode: Mode) -> String {
+        let now = self.clock.now();
+        self.signer
+            .sign_with_tenant("test", scope, tenant, mode, now + 60, now)
+            .unwrap()
+    }
+
     /// Runs `work` on the server's runtime, where the index's connections
     /// live, and returns its output.
     pub async fn on_server<T: Send + 'static>(
@@ -599,6 +624,7 @@ fn static_token(token: &str, scope: &str, mode: Mode) -> StaticToken {
         scope: scope.to_owned(),
         mode,
         subject: format!("test-{scope}-{mode:?}"),
+        tenant: None,
     }
 }
 
@@ -732,14 +758,18 @@ impl Index for SlowIndex {
         self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
@@ -752,6 +782,10 @@ impl Index for SlowIndex {
         scope: &str,
     ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
         self.inner.files(files, scope).await
+    }
+
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        self.inner.term_count(files, scope).await
     }
 
     async fn file_with_bytes(
@@ -839,14 +873,18 @@ impl Index for TablelessIndex {
         Ok(HashMap::new())
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
@@ -859,6 +897,10 @@ impl Index for TablelessIndex {
         scope: &str,
     ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
         self.inner.files(files, scope).await
+    }
+
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        self.inner.term_count(files, scope).await
     }
 
     async fn file_with_bytes(
@@ -924,6 +966,18 @@ impl CountingBucket {
 impl Bucket for CountingBucket {
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         self.inner.put(key, bytes).await
+    }
+
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        self.inner.create(key, bytes).await
+    }
+
+    async fn get(&self, key: &Key) -> Result<Option<Bytes>, StorageError> {
+        self.inner.get(key).await
+    }
+
+    async fn list(&self, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
+        self.inner.list(kind).await
     }
 
     async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
@@ -998,8 +1052,18 @@ impl Bucket for FailingBucket {
         })
     }
 
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        self.put(key, bytes).await.map(|()| true)
+    }
+
+    async fn list(&self, _: KeyKind) -> Result<Vec<Key>, StorageError> {
+        Ok(Vec::new())
+    }
+
     async fn get_range(&self, key: &Key, _: u64, _: u64) -> Result<Bytes, StorageError> {
-        Err(StorageError::NotFound { key: *key })
+        Err(StorageError::NotFound {
+            key: Box::new(*key),
+        })
     }
 
     async fn get_range_stream(
@@ -1008,7 +1072,9 @@ impl Bucket for FailingBucket {
         _: u64,
         _: u64,
     ) -> Result<RangeStream, StorageError> {
-        Err(StorageError::NotFound { key: *key })
+        Err(StorageError::NotFound {
+            key: Box::new(*key),
+        })
     }
 
     async fn size(&self, _: &Key) -> Result<Option<u64>, StorageError> {

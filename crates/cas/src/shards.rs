@@ -16,40 +16,34 @@
 //! shard after a lost answer or a retryable failure (S10 §4): a repeat
 //! stores the same bytes under the same hash and registers nothing new.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, FromRequestParts as _, Request, State};
-use axum::handler::Handler as _;
+use axum::extract::{FromRequestParts as _, Request, State};
 use axum::http::Method;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use http_body_util::channel::{Channel, Sender};
-use openxet_index::{FileRecord, NewFile, Term};
+use openxet_auth::Principal;
+use openxet_index::{FileRecord, NewFile, Registrant, Term};
 use openxet_protocol::{
     MAX_UPLOAD_SHARD_BYTES, MerkleHash, ProtocolError, UploadShard, VerifyError, hash_to_hex,
     read_upload_shard, shard_hash, stored_shard, verify_shard,
 };
-use openxet_storage::Key;
+use openxet_storage::{Key, Registration};
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
 use crate::blocking::blocking;
+use crate::budget::Reservation;
 use crate::routes::{Routes, on};
 use crate::{AppState, CasError, RequestId, WriteAccess, body};
-
-/// [`MAX_UPLOAD_SHARD_BYTES`] as a buffer length.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "64 MiB fits the usize of every target with a 32-bit or wider address space"
-)]
-const BODY_LIMIT: usize = MAX_UPLOAD_SHARD_BYTES as usize;
 
 /// Event lines buffered for a client that reads slowly. The work never
 /// waits on the client: progress reaches the stream over an unbounded
@@ -62,20 +56,8 @@ type Lookup = HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>>;
 /// `POST /v1/shards` and `POST /v2/shards` (S10 §4).
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route(
-            "/v1/shards",
-            on(
-                Method::POST,
-                upload_v1.layer(DefaultBodyLimit::max(BODY_LIMIT)),
-            ),
-        )
-        .route(
-            "/v2/shards",
-            on(
-                Method::POST,
-                upload_v2.layer(DefaultBodyLimit::max(BODY_LIMIT)),
-            ),
-        )
+        .route("/v1/shards", on(Method::POST, upload_v1))
+        .route("/v2/shards", on(Method::POST, upload_v2))
 }
 
 /// The v1 answer. `hf_xet` decodes `result` as a `u8` enum, `0` "exists"
@@ -96,9 +78,25 @@ async fn upload_v1(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Registered>, Response> {
-    let (scope, shard) = accept(&state, request).await?;
-    let inserted = ingest(&state, &scope, shard, &Progress::none())
+    let (principal, shard, reserved) = accept(&state, request).await?;
+    // Ingest runs in its own task, which owns the body's budget share, so
+    // it and the commit permit ingest takes are held until the work ends,
+    // even if the client leaves and drops this handler: its parsing and its
+    // put run on blocking threads that can't be cancelled (review I-1 of
+    // ruling M1-R40). The upload then completes, as a v2 upload does.
+    let work = tokio::spawn(
+        {
+            let state = state.clone();
+            async move {
+                let _reserved = reserved;
+                ingest(&state, &principal, shard, &Progress::none()).await
+            }
+        }
+        .instrument(tracing::Span::current()),
+    );
+    let inserted = work
         .await
+        .map_err(|e| CasError::internal(e).into_response())?
         .map_err(IntoResponse::into_response)?;
     Ok(Json(Registered {
         result: u8::from(inserted),
@@ -132,13 +130,16 @@ async fn upload_v1(
 /// finds it registered and gets `result: 0`.
 async fn upload_v2(State(state): State<AppState>, request: Request) -> Result<Response, Response> {
     let request_id = request.extensions().get::<RequestId>().copied();
-    let (scope, shard) = accept(&state, request).await?;
+    let (principal, shard, reserved) = accept(&state, request).await?;
     let (progress, events) = mpsc::unbounded_channel();
     let span = tracing::Span::current();
     let work = tokio::spawn({
         let state = state.clone();
         async move {
-            let outcome = ingest(&state, &scope, shard, &Progress(Some(progress))).await;
+            // The body's share of the memory budget stays with the work,
+            // which outlives a client that leaves (ruling M1-R40).
+            let _reserved = reserved;
+            let outcome = ingest(&state, &principal, shard, &Progress(Some(progress))).await;
             if let Err(e) = &outcome {
                 e.log();
             }
@@ -167,10 +168,14 @@ async fn upload_v2(State(state): State<AppState>, request: Request) -> Result<Re
         .into_response())
 }
 
-/// The caller's scope and the shard body: the credential first, then the
-/// body within [`MAX_UPLOAD_SHARD_BYTES`]. A refusal is a status on both
-/// versions, final for the client (S10 §4).
-async fn accept(state: &AppState, request: Request) -> Result<(String, Bytes), Response> {
+/// The caller, the shard body and its share of the memory budget:
+/// the credential first, then the body within [`MAX_UPLOAD_SHARD_BYTES`]
+/// ([`body::buffer`]). A refusal is a status on both versions: final for
+/// the client, but for `503 memory_busy`, which it retries (S10 §4).
+async fn accept(
+    state: &AppState,
+    request: Request,
+) -> Result<(Principal, Bytes, Reservation), Response> {
     let (mut parts, body) = request.into_parts();
     let principal = match WriteAccess::from_request_parts(&mut parts, state).await {
         Ok(WriteAccess(principal)) => principal,
@@ -178,13 +183,15 @@ async fn accept(state: &AppState, request: Request) -> Result<(String, Bytes), R
             return Err(body::refuse_unread(e, &parts.headers, body, MAX_UPLOAD_SHARD_BYTES).await);
         }
     };
-    let shard = body::buffer(
+    let (shard, reserved) = body::buffer(
         Request::from_parts(parts, body),
         MAX_UPLOAD_SHARD_BYTES,
         too_large,
+        &state.budget,
+        body::Class::Upload,
     )
     .await?;
-    Ok((principal.scope, shard))
+    Ok((principal, shard, reserved))
 }
 
 fn too_large() -> CasError {
@@ -318,11 +325,11 @@ fn error_event(e: &CasError, request_id: Option<RequestId>) -> Event {
     }
 }
 
-/// Parses, verifies, stores and registers the shard `body` for `scope`.
-/// Returns whether anything was new to `scope`.
+/// Parses, verifies, stores and registers the shard `body` to `caller`'s
+/// scope for its tenant. Returns whether anything was new to the scope.
 async fn ingest(
     state: &AppState,
-    scope: &str,
+    caller: &Principal,
     body: Bytes,
     progress: &Progress,
 ) -> Result<bool, CasError> {
@@ -347,11 +354,12 @@ async fn ingest(
     let limits = state.cfg.verify_limits;
     limits.check(&shard).map_err(verification_failed)?;
     let referenced: Vec<MerkleHash> = shard.referenced_xorbs().copied().collect();
-    // A xorb missing from the answer is missing or not visible to `scope`;
-    // verification reports both as the same unknown xorb (ruling M1-R17).
+    // A xorb missing from the answer is missing or not visible to the
+    // caller's tenant; verification reports both as the same unknown xorb
+    // (ruling M1-R17).
     let lookup: Lookup = state
         .index
-        .chunk_tables(&referenced, scope, state.cfg.visibility)
+        .chunk_tables(&referenced, &caller.tenant, state.cfg.visibility)
         .await?
         .into_iter()
         .map(|(xorb, table)| (xorb, table.hashes))
@@ -394,12 +402,21 @@ async fn ingest(
     // retries the whole upload: the put repeats as a no-op and the
     // registration completes. A stored shard no index row names costs only
     // space until garbage collection; the reverse never happens.
+    let seq = registration_record(state, caller, hash).await?;
+    // The registration is durable in the bucket from here, so a lost index
+    // can be rebuilt with it (ruling M1-R37). If the index write fails, the
+    // retry reads the same record back and registers with its number.
     progress.report(Event::Committing {
         stage: Stage::Syncing,
     });
+    let by = Registrant {
+        scope: &caller.scope,
+        tenant: &caller.tenant,
+        seq,
+    };
     let inserted = state
         .index
-        .register_shard(&hash, &files, scope, state.cfg.visibility)
+        .register_shard(&hash, &files, by, state.cfg.visibility)
         .await?;
     tracing::info!(
         shard = %hash_to_hex(&hash),
@@ -410,13 +427,49 @@ async fn ingest(
     Ok(inserted)
 }
 
+/// The sequence number of `caller`'s registration of `shard`, from its
+/// bucket record, which this writes first if there is none (ruling
+/// M1-R37). The record is created only if absent, so every attempt at
+/// one registration, on any node, reads the first writer's number: the
+/// index and a rebuild from the bucket then agree on it.
+async fn registration_record(
+    state: &AppState,
+    caller: &Principal,
+    shard: MerkleHash,
+) -> Result<u64, CasError> {
+    let key = Key::registration(&caller.scope, &caller.tenant, shard);
+    if let Some(bytes) = state.bucket.get(&key).await? {
+        return Ok(Registration::from_bytes(&key, &bytes)?.seq);
+    }
+    let record = Registration {
+        scope: caller.scope.clone(),
+        tenant: caller.tenant.clone(),
+        shard,
+        seq: state.index.next_registration_seq().await?,
+    };
+    if state.bucket.create(&key, record.to_bytes()).await? {
+        return Ok(record.seq);
+    }
+    let bytes = state.bucket.get(&key).await?.ok_or_else(|| {
+        CasError::internal("a registration record vanished right after it was created")
+    })?;
+    Ok(Registration::from_bytes(&key, &bytes)?.seq)
+}
+
 /// The files of a verified shard as the index registers them: terms map
 /// one to one from segments, the size is their unpacked total, and the
 /// first chunk is the dedup candidate for the first term's xorb (S10 §2).
+///
+/// They come as the stored shard holds them (`stored_shard`): in file-hash
+/// order, the first entry of a repeated file hash only. So the index records
+/// the term order a rebuild from the stored shard derives (ruling M1-R37).
 fn new_files(shard: &UploadShard, lookup: &Lookup) -> Result<Vec<NewFile>, CasError> {
-    shard
-        .files
-        .iter()
+    let mut stored_order = BTreeMap::new();
+    for file in &shard.files {
+        stored_order.entry(file.file_hash).or_insert(file);
+    }
+    stored_order
+        .into_values()
         .map(|file| {
             let first_chunk = file
                 .segments
@@ -535,6 +588,14 @@ mod tests {
             out
         }
 
+        async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+            self.inner.create(key, bytes).await
+        }
+
+        async fn list(&self, kind: openxet_storage::KeyKind) -> Result<Vec<Key>, StorageError> {
+            self.inner.list(kind).await
+        }
+
         async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
             self.inner.get_range(key, start, end).await
         }
@@ -553,6 +614,16 @@ mod tests {
         }
     }
 
+    /// A writer of `scope` naming no tenant.
+    fn writer(scope: &str) -> Principal {
+        Principal {
+            subject: "test".to_owned(),
+            scope: scope.to_owned(),
+            tenant: openxet_auth::default_tenant(scope),
+            mode: openxet_auth::Mode::Write,
+        }
+    }
+
     fn capture(name: &str) -> Vec<u8> {
         std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -560,6 +631,49 @@ mod tests {
                 .join(name),
         )
         .unwrap()
+    }
+
+    /// The index gets the files as the stored shard holds them, file-hash
+    /// order with the first of a repeated hash only, whatever order the
+    /// client sent: so its term order is the one a rebuild from the stored
+    /// shard derives (ruling M1-R37).
+    #[test]
+    fn files_register_in_the_stored_shards_order() {
+        let xorb = openxet_protocol::chunk_hash(b"xorb");
+        let chunk = openxet_protocol::chunk_hash(b"chunk");
+        let lookup: Lookup = HashMap::from([(xorb, Arc::from(vec![(chunk, 10)]))]);
+        let entry = |label: &[u8], sha: u8| openxet_protocol::ShardFileEntry {
+            file_hash: openxet_protocol::chunk_hash(label),
+            segments: vec![openxet_protocol::Segment {
+                xorb,
+                chunk_start: 0,
+                chunk_end: 1,
+                unpacked_bytes: 10,
+                verification: None,
+            }],
+            sha256: Some([sha; 32]),
+        };
+        let (a, b) = (entry(b"a", 1), entry(b"b", 2));
+        let (first, second) = if a.file_hash < b.file_hash {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let mut repeat = second.clone();
+        repeat.sha256 = Some([9; 32]);
+        let shard = UploadShard {
+            files: vec![second.clone(), first.clone(), repeat],
+            xorbs: Vec::new(),
+        };
+        let files = new_files(&shard, &lookup).unwrap();
+        let got: Vec<_> = files.iter().map(|f| (f.record.hash, f.sha256)).collect();
+        assert_eq!(
+            got,
+            [
+                (first.file_hash, first.sha256),
+                (second.file_hash, second.sha256)
+            ]
+        );
     }
 
     #[tokio::test]
@@ -594,14 +708,126 @@ mod tests {
         let shard = Bytes::from(capture("upload.shard"));
 
         let silent = Progress::none();
+        let (writer_a, writer_b) = (writer("a"), writer("b"));
         let (a, b) = tokio::join!(
-            ingest(&state, "a", shard.clone(), &silent),
-            ingest(&state, "b", shard, &silent),
+            ingest(&state, &writer_a, shard.clone(), &silent),
+            ingest(&state, &writer_b, shard, &silent),
         );
 
         assert!(a.unwrap() && b.unwrap());
         assert_eq!(bucket.most.load(Ordering::SeqCst), 1);
         assert_eq!(state.commit.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_detached_v2_upload_keeps_its_memory_budget_until_its_work_ends() {
+        // Ruling M1-R40: a `/v2/shards` upload's work outlives a client
+        // that leaves, and so does the body it holds, so its share of the
+        // memory budget goes back only when the work ends.
+        use axum::http::header::AUTHORIZATION;
+        use openxet_auth::{Mode, StaticToken};
+        use tower::ServiceExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest("oxt_unit_write"),
+            scope: "s".to_owned(),
+            mode: Mode::Write,
+            subject: "unit".to_owned(),
+            tenant: None,
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.validate = Arc::new(Semaphore::new(1));
+        let budget = state.budget.bytes();
+        let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
+
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::post("/v2/shards")
+                    .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
+                    .body(Body::from(vec![0u8; 4096]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        drop(response);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            state.budget.available(),
+            budget - 4096,
+            "the queued work holds its body's share"
+        );
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state.budget.available() < budget {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the share is returned when the work ends");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_v1_client_that_leaves_mid_put_releases_nothing_until_the_put_ends() {
+        // Review I-1 of M1-R40: a v1 upload's handler is dropped when its
+        // client leaves, but its shard's put can't be cancelled; the commit
+        // permit and the body's budget share stay taken until it ends.
+        use axum::http::header::AUTHORIZATION;
+        use openxet_auth::{Mode, StaticToken};
+        use tower::ServiceExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest("oxt_unit_write"),
+            scope: "s".to_owned(),
+            mode: Mode::Write,
+            subject: "unit".to_owned(),
+            tenant: None,
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.commit = Arc::new(Semaphore::new(2));
+        let xorb = openxet_protocol::xorb_with_footer(&capture(
+            "43dcdd6c959fc72d974ab1a08aeaa67de0d43fec6b5694598419af0be2f7040c.xorb",
+        ))
+        .unwrap();
+        let table = ChunkTable {
+            hashes: xorb.chunks.hashes.into(),
+            offsets: xorb.chunk_offsets.into(),
+        };
+        state
+            .index
+            .put_xorb(&xorb.hash, xorb.bytes.len() as u64, &table, &[], "s")
+            .await
+            .unwrap();
+        let bucket = test_support::BlockingBucket::install(&mut state, Duration::from_secs(1));
+        let whole = state.budget.bytes();
+
+        let upload = tokio::spawn(
+            crate::router(state.clone()).oneshot(
+                Request::post("/v1/shards")
+                    .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
+                    .body(Body::from(capture("upload.shard")))
+                    .unwrap(),
+            ),
+        );
+        test_support::eventually("the put starts", || {
+            bucket.started.load(Ordering::SeqCst) == 1
+        })
+        .await;
+        upload.abort();
+        assert!(upload.await.unwrap_err().is_cancelled());
+
+        assert_eq!(bucket.finished.load(Ordering::SeqCst), 0);
+        assert_eq!(state.commit.available_permits(), 1, "commit released early");
+        assert!(state.budget.available() < whole, "budget released early");
+        test_support::eventually("the put ends and releases both", || {
+            bucket.finished.load(Ordering::SeqCst) == 1
+                && state.commit.available_permits() == 2
+                && state.budget.available() == whole
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -621,7 +847,7 @@ mod tests {
 
         // The capture's xorb isn't stored here, so verification fails; the
         // tables were loaded all the same.
-        let outcome = ingest(&state, "s", Bytes::from(shard), &Progress::none()).await;
+        let outcome = ingest(&state, &writer("s"), Bytes::from(shard), &Progress::none()).await;
 
         assert!(
             matches!(outcome, Err(CasError::UnknownXorb { .. })),

@@ -48,9 +48,10 @@ its clients sent (`assert_no_credential_in_log`).
 | 3 | `cache_fails_closed` | pending | M5 |
 | 4 | `dedup_response_hmac_keyed` | `crates/cas/tests/dedup.rs` | M1 |
 | 4 | `dedup_answer_never_contains_raw_hashes_or_file_info` | `crates/cas/tests/dedup.rs` | M1 |
-| 4 | `per_scope_dedup_isolates_tenants` | `crates/cas/tests/dedup.rs` | M1 |
-| 4 | `per_scope_multi_xorb_answer_hides_foreign_xorbs` | `crates/cas/tests/dedup.rs` | M1 |
-| 4 | `per_scope_existence_checks_hide_other_tenants` | `crates/cas/tests/reconstruction.rs` | M1 |
+| 4 | `per_tenant_dedup_isolates_tenants` | `crates/cas/tests/dedup.rs` | M1 |
+| 4 | `per_tenant_multi_xorb_answer_hides_foreign_xorbs` | `crates/cas/tests/dedup.rs` | M1 |
+| 4 | `per_tenant_existence_checks_hide_other_tenants` | `crates/cas/tests/reconstruction.rs` | M1 |
+| 4 | `per_tenant_scopes_of_one_tenant_share_dedup` | `crates/cas/tests/dedup.rs` | M1 |
 | 5 | the S6 rule tests of `verify_shard` | `crates/protocol/tests/reference_files.rs` | M0 |
 | 5 | `shard_with_missing_xorb_rejected` | `crates/cas/tests/shards.rs` | M1 |
 | 5 | `shard_verify_work_capped` | `crates/cas/tests/shards.rs` | M1 |
@@ -76,9 +77,13 @@ Notes on what some tests cover:
   extends to the HTTP read gateway and LFS `href`s.
 - `credential_scoped_to_repo` sends another scope's read and write
   credentials to every CAS route, aimed at the first scope's data.
-- `per_scope_existence_checks_hide_other_tenants` checks that, to another
-  scope, a `per-scope` server holding a tenant's data answers every CAS
+- `per_tenant_existence_checks_hide_other_tenants` checks that, to another
+  tenant, a `per-tenant` server holding a tenant's data answers every CAS
   route exactly as an empty server would.
+- `per_tenant_scopes_of_one_tenant_share_dedup` checks the other side of
+  isolation by tenant (ruling M1-R38): two scopes of one tenant share dedup
+  and shard verification while files stay per scope, and a second tenant
+  still sees none of it.
 - `credentials_never_logged` runs a server at `trace` level through
   uploads, downloads and every kind of refusal, then scans its whole log
   for each credential, signature and key. The compatibility suite repeats
@@ -96,8 +101,12 @@ requirement that the named tests don't.
 | 1, 2, 6 | `router_serves_exactly_its_endpoints` | `crates/cas/tests/routes_misc.rs` | The route list matches the methods the router really answers. |
 | 1 | `transfer_requires_signature` | `crates/cas/tests/reconstruction.rs` | A transfer URL's signature binds one xorb, one range and an expiry. |
 | 1 | `probes_need_no_credential_and_name_no_data` | `crates/cas/tests/routes_misc.rs` | The probes, the only unauthenticated routes, name nothing stored. |
-| 4 | `head_under_per_scope_hides_other_scopes_xorbs` | `crates/cas/tests/xorbs.rs` | `HEAD` of a xorb under `per-scope`. |
-| 4 | `per_scope_shard_cannot_reference_foreign_xorb` | `crates/cas/tests/shards.rs` | Shard verification's xorb lookups under `per-scope`. |
+| 4 | `head_under_per_tenant_hides_other_tenants_xorbs` | `crates/cas/tests/xorbs.rs` | `HEAD` of a xorb under `per-tenant`. |
+| 4 | `per_tenant_shard_cannot_reference_foreign_xorb` | `crates/cas/tests/shards.rs` | Shard verification's xorb lookups under `per-tenant`. |
+| 4 | `switching_global_to_per_tenant_keeps_reads_and_dedup` | `crates/cas/tests/reconstruction.rs` | After a switch from `global`, a tenant keeps its reads and dedup over xorbs another tenant uploaded, and a third tenant stays isolated (ruling M1-R39). |
+| 4 | `jwt_rejects_empty_or_malformed_tenant` | `crates/auth/tests/auth.rs` | A token's `tenant`, which decides isolation, passes the scope's checks and doesn't start with the reserved `scope:`, or the token is refused. |
+| 4 | `a_scope_named_like_a_tenant_stays_out_of_it` | `crates/cas/tests/dedup.rs` | A credential naming no tenant is in tenant `scope:{scope}`, so a scope named like a tenant never sees that tenant's xorbs, nor the other way round (ruling M1-R43). |
+| 7 | `index_scope_tables_rebuild_from_the_bucket` | `crates/cas/tests/bucket_truth.rs` | Every acknowledged registration and ownership is in the bucket: the index's scope tables rebuild from it alone (ruling M1-R37). |
 | 6 | `auth_errors_never_contain_the_credential` | `crates/auth/tests/auth.rs` | Credential errors never carry the credential. |
 | 6 | `signed_urls_are_never_logged` | `crates/cas/tests/reconstruction.rs` | A transfer URL's signature never reaches the log. |
 | 6 | `assert_no_credential_in_log` | `compat/conftest.py` | The log of every server the compatibility suite starts, in the `agent` and `storage_only` legs, is scanned for the credentials its clients sent. |

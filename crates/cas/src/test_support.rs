@@ -4,16 +4,22 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
+
+use axum::body::{Body, Bytes};
+use http_body::{Frame, SizeHint};
+use http_body_util::channel::{Channel, Sender};
 
 use openxet_auth::{Authenticator, StaticToken, UrlSigner};
 use openxet_index::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, TermBytes,
-    Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, SqliteIndex,
+    TermBytes, Visibility,
 };
 use openxet_protocol::{MerkleHash, VerifyLimits};
-use openxet_storage::LocalBucket;
+use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
 use tokio::sync::Semaphore;
 use url::Url;
 
@@ -34,7 +40,8 @@ pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {
             verify_limits: VerifyLimits::default(),
             heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
             body_deadline: crate::BodyDeadline::DEFAULT,
-            dedup_send: crate::SendDeadline::DEFAULT,
+            send_deadline: crate::SendDeadline::DEFAULT,
+            memory_budget: crate::MemoryBudget::DEFAULT_BYTES,
         },
     )
 }
@@ -109,14 +116,18 @@ impl Index for PermitProbe {
         self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
@@ -129,6 +140,10 @@ impl Index for PermitProbe {
         scope: &str,
     ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
         self.inner.files(files, scope).await
+    }
+
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        self.inner.term_count(files, scope).await
     }
 
     async fn file_with_bytes(
@@ -156,4 +171,111 @@ impl Index for PermitProbe {
     ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
         self.inner.dedup_shard_xorbs(xorb, scope, vis).await
     }
+}
+
+/// A request body declaring `len` bytes, as hyper's body for a
+/// `Content-Length` does, whose bytes the test sends by hand.
+pub(crate) fn declared_body(len: u64) -> (Sender<Bytes>, Body) {
+    let (tx, body) = Channel::<Bytes>::new(16);
+    (tx, Body::new(Declared { inner: body, len }))
+}
+
+struct Declared {
+    inner: Channel<Bytes>,
+    len: u64,
+}
+
+impl http_body::Body for Declared {
+    type Data = Bytes;
+    type Error = <Channel<Bytes> as http_body::Body>::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.len)
+    }
+}
+
+/// A bucket whose puts block a thread for `delay` first, as a slow disk
+/// does under `LocalBucket`'s `spawn_blocking`: a dropped caller can't
+/// cancel them. Counts the puts finished.
+pub(crate) struct BlockingBucket {
+    inner: Arc<dyn Bucket>,
+    delay: std::time::Duration,
+    pub(crate) started: AtomicUsize,
+    pub(crate) finished: Arc<AtomicUsize>,
+}
+
+impl BlockingBucket {
+    /// Wraps `state`'s bucket.
+    pub(crate) fn install(state: &mut AppState, delay: std::time::Duration) -> Arc<Self> {
+        let bucket = Arc::new(Self {
+            inner: Arc::clone(&state.bucket),
+            delay,
+            started: AtomicUsize::new(0),
+            finished: Arc::new(AtomicUsize::new(0)),
+        });
+        state.bucket = Arc::clone(&bucket) as Arc<dyn Bucket>;
+        bucket
+    }
+}
+
+#[async_trait::async_trait]
+impl Bucket for BlockingBucket {
+    async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        let (delay, finished) = (self.delay, Arc::clone(&self.finished));
+        let inner = Arc::clone(&self.inner);
+        let key = *key;
+        let handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            std::thread::sleep(delay);
+            let out = handle.block_on(inner.put(&key, bytes));
+            finished.fetch_add(1, Ordering::SeqCst);
+            out
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        self.inner.create(key, bytes).await
+    }
+
+    async fn list(&self, kind: openxet_storage::KeyKind) -> Result<Vec<Key>, StorageError> {
+        self.inner.list(kind).await
+    }
+
+    async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
+        self.inner.get_range(key, start, end).await
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        start: u64,
+        end: u64,
+    ) -> Result<openxet_storage::RangeStream, StorageError> {
+        self.inner.get_range_stream(key, start, end).await
+    }
+
+    async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
+        self.inner.size(key).await
+    }
+}
+
+/// Polls `done` every 5 ms for up to 30 s.
+pub(crate) async fn eventually(what: &str, done: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !done() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting until {what}"));
 }

@@ -22,10 +22,10 @@ use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
 use openxet_cas::{AppState, router, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
 use openxet_index::SqliteIndex;
-use openxet_storage::{LocalBucket, create_private_dir_all};
+use openxet_storage::{LocalBucket, StorageError, create_private_dir_all};
 use serde::Serialize;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tower::ServiceExt as _;
 use url::Url;
 use zeroize::Zeroizing;
@@ -96,6 +96,12 @@ pub fn run(args: &ServeArgs, output: Output) -> Result<(), CliError> {
         .config
         .ok_or_else(|| CliError::config(&loaded.problems))?;
     logging::init(config.log_format, config.log_level);
+    if let Some(warning) = config::memory_budget_warning(config.memory_budget, config.host_memory) {
+        tracing::warn!(
+            "{warning}. Lower server.memory_budget to at most half, or leave it unset for a \
+             quarter."
+        );
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -139,7 +145,10 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
         Arc::clone(&app),
         http,
         stop.clone(),
-        config.shutdown_grace,
+        Limits {
+            connections: config.max_connections as usize,
+            grace: config.shutdown_grace,
+        },
     ));
 
     let (state, dev_token) = open(&config, public_url.clone()).await?;
@@ -238,21 +247,43 @@ fn bind_error(addr: SocketAddr, err: &io::Error) -> CliError {
     }
 }
 
-/// Accepts connections until `stop`, then waits up to `grace` for open
-/// connections to finish their requests. Requests go to the CAS once `app`
-/// is set, and to [`starting_router`] before.
+/// The bounds of [`accept`].
+struct Limits {
+    /// `server.max_connections`.
+    connections: usize,
+    /// `server.shutdown_grace`.
+    grace: Duration,
+}
+
+/// Accepts connections until `stop`, then waits up to `limits.grace` for
+/// open connections to finish their requests. Requests go to the CAS once
+/// `app` is set, and to [`starting_router`] before.
+///
+/// At most `limits.connections` are open at once (ruling M1-R40). Past
+/// that, the next is not accepted until one closes: it waits in the
+/// kernel's listen backlog, its handshake done and its request unread, and
+/// is served then. Accepting it only to refuse it would cost the file
+/// descriptor the cap protects, and an answer sent with its request unread
+/// reaches the client as a reset. Stock clients wait on a connection for
+/// their 300 s read timeout and retry a connect error (S10 "Status codes
+/// and retries").
 async fn accept(
     listener: TcpListener,
     app: Arc<OnceLock<Router>>,
     http: http1::Builder,
     mut stop: watch::Receiver<bool>,
-    grace: Duration,
+    limits: Limits,
 ) {
     let starting = starting_router();
     let graceful = GracefulShutdown::new();
+    let slots = Arc::new(Semaphore::new(limits.connections));
     loop {
-        let accepted = tokio::select! {
-            accepted = listener.accept() => accepted,
+        let next = async {
+            let slot = Arc::clone(&slots).acquire_owned().await;
+            (slot, listener.accept().await)
+        };
+        let (slot, accepted) = tokio::select! {
+            next = next => next,
             stopped = stop.wait_for(|stopped| *stopped) => {
                 // An error means the signal task is gone: the runtime is
                 // shutting down after a failed startup, and has nothing to
@@ -262,6 +293,9 @@ async fn accept(
                 }
                 break;
             }
+        };
+        let Ok(slot) = slot else {
+            unreachable!("the connection slots are never closed");
         };
         let stream = match accepted {
             Ok((stream, _)) => stream,
@@ -281,6 +315,7 @@ async fn accept(
         });
         let connection = graceful.watch(http.serve_connection(TokioIo::new(stream), service));
         tokio::spawn(async move {
+            let _slot = slot;
             if let Err(err) = connection.await {
                 // A client that left, or a header read timeout.
                 tracing::debug!(error = %err, "connection closed with an error");
@@ -290,8 +325,8 @@ async fn accept(
     drop(listener);
     tokio::select! {
         () = graceful.shutdown() => tracing::info!("every connection finished; exiting"),
-        () = tokio::time::sleep(grace) => tracing::warn!(
-            grace = ?grace,
+        () = tokio::time::sleep(limits.grace) => tracing::warn!(
+            grace = ?limits.grace,
             "the shutdown grace period ended with connections still open; closing them"
         ),
     }
@@ -316,10 +351,16 @@ async fn open(
             )
         })?;
     let bucket = LocalBucket::open(&dir.join("bucket")).map_err(|err| {
+        let hint = if matches!(err, StorageError::NoHardLinks { .. }) {
+            "Move the data directory to a filesystem with hard links, such as ext4, XFS, APFS \
+             or NTFS (--data-dir or server.data_dir)."
+        } else {
+            "Check that the data directory is writable."
+        };
         CliError::new(
             "storage",
             format!("could not open the bucket in {}: {err}", dir.display()),
-            "Check that the data directory is writable.",
+            hint,
         )
     })?;
     let key = transfer_key(config)?;
@@ -334,6 +375,7 @@ async fn open(
             scope: DEV_SCOPE.to_owned(),
             mode: Mode::Write,
             subject: DEV_SUBJECT.to_owned(),
+            tenant: None,
         };
         let auth = Authenticator::new(vec![dev], vec![], config.max_token_lifetime)
             .map_err(|err| CliError::new("config", err.to_string(), "Fix [auth]."))?;

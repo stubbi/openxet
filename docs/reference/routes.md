@@ -68,6 +68,9 @@ These answers can come from any route:
 | `408` | `body_timeout` | The body stalled for `server.body_read_timeout`, or fell below `server.body_min_rate` ([config](config.md#server)). The answer closes the connection. Clients retry. |
 | `503` | `not_ready` | The server is starting; the index and bucket are not open yet. `Retry-After: 1`; clients retry. |
 | `503` | `unavailable` | The index or bucket failed in a way a retry may fix. Clients retry. |
+| `503` | `memory_busy` | The server's memory budget stayed full for the request's wait: 120 s for an upload, 5 s for a reconstruction that doesn't fit at once ([config](config.md#memory)). `Retry-After: 1`; clients retry. A refused upload's body is not read, and the answer closes the connection. |
+| `413` | `answer_too_large` | One reconstruction answer would hold more than an eighth of the server's memory budget. Final: ask for the file by range, as `hf_xet` does, or put fewer files in a batch; the operator can raise `server.memory_budget`. |
+| `413` | `exceeds_memory_budget` | An upload larger than the server's whole memory budget. Final; stock clients' uploads never are. |
 | `500` | `internal` | A server bug or an inconsistency between the index and the bucket, logged under the request id. |
 
 ## Routes
@@ -108,11 +111,12 @@ fixed body that names nothing stored.
 
 Upload one xorb: its chunks as stock clients serialize them, with or
 without a footer (<https://huggingface.co/docs/xet/xorb>). The body is
-validated, and its computed xorb hash must be `{hash}`. Bytes are stored
-before the index names them. Uploading again is safe.
+validated, and its computed xorb hash must be `{hash}`. Bytes, and a
+record that the caller's tenant owns the xorb, are stored before the index
+names them. Uploading again is safe.
 
-`200 {"was_inserted": true}` if the xorb is new to the caller's scope,
-`{"was_inserted": false}` if the scope already had it.
+`200 {"was_inserted": true}` if the xorb is new to the caller's tenant,
+`{"was_inserted": false}` if the tenant already had it.
 
 | Status | `code` | Meaning |
 | ------ | ------ | ------- |
@@ -133,9 +137,9 @@ don't retry a `400`.
 ### `HEAD /v1/xorbs/default/{hash}`
 
 `200` with the stored size as `Content-Length` and no body, or
-`404 xorb_not_found` if the xorb isn't visible to the caller's scope (with
-`dedup_visibility = "per-scope"`, another scope's xorb reads as missing;
-[config](config.md#dedup-visibility)).
+`404 xorb_not_found` if the xorb isn't visible to the caller's tenant (with
+`dedup_visibility = "per-tenant"`, a xorb the tenant doesn't own reads as
+missing; [config](config.md#dedup-visibility)).
 
 ### `POST /v2/shards`
 
@@ -143,7 +147,9 @@ Register the files of one upload shard
 (<https://huggingface.co/docs/xet/api#5-streaming-shard-upload>). The
 shard is parsed, checked against the verification limits, verified against
 the stored chunk hashes of every xorb it references, stored, then its files
-are registered to the caller's scope. Uploading again is safe.
+are registered to the caller's scope: first in a registration record in
+the bucket, then in the index. The caller's tenant then owns every xorb
+the files reference. Uploading again is safe.
 
 Before the body is read, a refusal is a status: the credential errors, and
 `413 shard_too_large` for a body over 64 MiB. Once the body is read, the
@@ -195,7 +201,7 @@ the scope, `{"result": 0}` if not. Failures are statuses:
 | ------ | ------ | ------- |
 | `400` | `shard_malformed` | The body doesn't parse as an upload shard. The message names what is wrong. Final. |
 | `400` | `shard_verification_failed` | The shard parses but doesn't verify against the stored xorbs (a range hash, a length or a file hash doesn't match, a verification entry is missing, an empty file's SHA-256 is wrong), or it exceeds the verification limits. The message names the rule and the file or xorb; values derived from stored chunks are only logged. Final. |
-| `400` | `unknown_xorb` | A file references a xorb that isn't stored, or isn't visible to the scope. The message names the xorb and says that if the server was reset, the client's Xet cache for this endpoint (`~/.cache/huggingface/xet` or `$HF_XET_CACHE`) must be cleared before uploading again ([stale client caches](config.md#stale-client-caches)). Final. |
+| `400` | `unknown_xorb` | A file references a xorb that isn't stored, or isn't visible to the tenant. The message names the xorb and says that if the server was reset, the client's Xet cache for this endpoint (`~/.cache/huggingface/xet` or `$HF_XET_CACHE`) must be cleared before uploading again ([stale client caches](config.md#stale-client-caches)). Final. |
 | `413` | `shard_too_large` | The body is over 64 MiB. |
 | `503` | `unavailable` | Storage or index failure. Clients retry. |
 
@@ -213,7 +219,7 @@ xorb holding the chunk and the other xorbs of the newest shard that
 references it, in that shard's order starting at the matched one, up to
 16 MiB of answer. Its chunk hashes are HMAC-keyed with a fresh key per
 answer that expires in 7 days, so the answer never reveals a raw chunk
-hash. Which scopes' xorbs are offered follows `cas.dedup_visibility`
+hash. Which tenants' xorbs are offered follows `cas.dedup_visibility`
 ([config](config.md#dedup-visibility)).
 
 Shards registered before index migration 0002 have no xorb list: a match
@@ -222,7 +228,7 @@ again (see the [changelog](../../CHANGELOG.md)).
 
 | Status | `code` | Meaning |
 | ------ | ------ | ------- |
-| `404` | `not_found` | No visible xorb offers the chunk. `hf_xet` reads it as no match and uploads the chunk. The answer is the same for a chunk never stored and another scope's. |
+| `404` | `not_found` | No visible xorb offers the chunk. `hf_xet` reads it as no match and uploads the chunk. The answer is the same for a chunk never stored and another tenant's. |
 | `429` | `dedup_busy` | Every dedup slot stayed busy for 1 s. `Retry-After: 1`. `hf_xet` reads it as no match, without retrying, and the upload goes on without this answer. If it persists, the server needs more CPUs for dedup. |
 
 A dedup answer must be sent within 30 s plus 1 s per MiB; a client that
@@ -285,7 +291,7 @@ left out, the same as one never stored.
 
 | Status | `code` | Meaning |
 | ------ | ------ | ------- |
-| `400` | `batch_too_large` | More than 1000 distinct files, or files with more than 1,000,000 terms in total. Split the batch. |
+| `400` | `batch_too_large` | More than 1000 distinct files, or files with more than 100,000 terms in total. Split the batch. |
 | `400` | `invalid_batch` | The `POST` body is not a JSON list of `{"prefix": "default", "hash": …}` keys. The body is never echoed. |
 | `400` | `invalid_hash` | A hash is not 64 lowercase hex characters. |
 | `413` | `payload_too_large` | The `POST` body is over 256 KiB. |

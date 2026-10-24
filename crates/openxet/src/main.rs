@@ -5,11 +5,13 @@ mod config;
 mod config_cmd;
 mod duration;
 mod error;
+mod host_memory;
 mod logging;
 mod output;
 mod preflight;
 mod secret;
 mod serve;
+mod size;
 mod token_cmd;
 mod transfer_cmd;
 

@@ -29,6 +29,7 @@ fn static_token(secret: &str, mode: Mode) -> StaticToken {
         scope: "org/model".to_owned(),
         mode,
         subject: "ci".to_owned(),
+        tenant: None,
     }
 }
 
@@ -64,11 +65,58 @@ fn static_token_matches_by_hash() {
         Principal {
             subject: "ci".to_owned(),
             scope: "org/model".to_owned(),
+            tenant: "scope:org/model".to_owned(),
             mode: Mode::Write,
         }
     );
     assert!(principal.can_read());
     assert!(principal.can_write());
+}
+
+/// A static token's tenant is the configured one, or `scope:` and its scope
+/// (rulings M1-R38, M1-R43).
+#[test]
+fn static_token_tenant_is_configured_or_the_scope() {
+    let mut org = static_token("org secret", Mode::Read);
+    org.tenant = Some("org".to_owned());
+    let auth = Authenticator::new(
+        vec![static_token(STATIC_SECRET, Mode::Read), org],
+        vec![],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static");
+    assert_eq!(principal.tenant, "scope:org/model");
+    let principal = auth.authenticate("org secret", NOW).expect("static");
+    assert_eq!(principal.scope, "org/model");
+    assert_eq!(principal.tenant, "org");
+}
+
+#[test]
+fn static_tokens_with_invalid_tenant_are_rejected_at_construction() {
+    let long = "t".repeat(1025);
+    for tenant in [
+        "",
+        " ",
+        "org\n",
+        "org\u{200B}",
+        long.as_str(),
+        "scope:org/model",
+        "scope:",
+    ] {
+        let mut token = static_token(STATIC_SECRET, Mode::Read);
+        token.tenant = Some(tenant.to_owned());
+        let error = Authenticator::new(
+            vec![token],
+            vec![],
+            Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+        )
+        .expect_err("invalid tenant");
+        assert!(
+            matches!(error, AuthError::InvalidStaticToken { index: 0, .. }),
+            "{tenant:?}: {error:?}"
+        );
+    }
 }
 
 #[test]
@@ -509,6 +557,99 @@ fn jwt_rejects_unknown_claims() {
     let aud_list = with_claim("aud", serde_json::json!(["openxet"]));
     let token = sign_raw(&key, &header, &b64(&aud_list.to_string()));
     assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
+}
+
+/// The optional `tenant` claim names the unit of isolation; without it the
+/// tenant is `scope:` and the scope, a name no explicit tenant can take (ADR
+/// 0007 as amended, rulings M1-R38, M1-R43).
+#[test]
+fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    let token = sign_raw(&key, &header, &b64(&valid_claims().to_string()));
+    let principal = auth.authenticate(&token, NOW).expect("no tenant claim");
+    assert_eq!(principal.tenant, "scope:org/model");
+
+    let max = "t".repeat(1024);
+    for tenant in ["org", "org with space", max.as_str()] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("tenant", tenant.into()).to_string()),
+        );
+        let principal = auth.authenticate(&token, NOW).expect("valid tenant");
+        assert_eq!(principal.tenant, tenant);
+        assert_eq!(principal.scope, "org/model");
+    }
+
+    let s = signer();
+    let auth = Authenticator::new(
+        vec![],
+        vec![s.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let token = s
+        .sign_with_tenant(
+            "alice",
+            "org/model",
+            Some("org"),
+            Mode::Write,
+            NOW + 60,
+            NOW,
+        )
+        .expect("valid claims");
+    assert_eq!(auth.authenticate(&token, NOW).expect("valid").tenant, "org");
+    let token = s
+        .sign_with_tenant("alice", "org/model", None, Mode::Write, NOW + 60, NOW)
+        .expect("valid claims");
+    assert_eq!(
+        auth.authenticate(&token, NOW).expect("valid").tenant,
+        "scope:org/model"
+    );
+}
+
+#[test]
+fn jwt_rejects_empty_or_malformed_tenant() {
+    let (auth, key, header) = auth_for_raw_tokens();
+    let long = "t".repeat(1025);
+    for tenant in [
+        serde_json::json!(""),
+        serde_json::json!("   "),
+        serde_json::json!("org\n"),
+        serde_json::json!("org\u{202E}"),
+        serde_json::json!(long),
+        serde_json::json!(null),
+        serde_json::json!(7),
+        serde_json::json!(["org"]),
+    ] {
+        let token = sign_raw(
+            &key,
+            &header,
+            &b64(&with_claim("tenant", tenant.clone()).to_string()),
+        );
+        assert_eq!(
+            auth.authenticate(&token, NOW),
+            Err(AuthError::Invalid),
+            "{tenant}"
+        );
+    }
+    let s = signer();
+    for tenant in ["", "org\n", long.as_str(), "scope:org"] {
+        assert!(
+            matches!(
+                s.sign_with_tenant(
+                    "alice",
+                    "org/model",
+                    Some(tenant),
+                    Mode::Read,
+                    NOW + 60,
+                    NOW
+                ),
+                Err(AuthError::InvalidClaims { .. })
+            ),
+            "{tenant:?}"
+        );
+    }
 }
 
 #[test]
