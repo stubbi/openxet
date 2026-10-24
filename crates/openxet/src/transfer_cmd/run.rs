@@ -3,7 +3,7 @@
 
 use std::io::{self, Write as _};
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Once;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use openxet_client::{ClientError, Progress};
@@ -15,6 +15,35 @@ use crate::error::{CliError, ExitCode};
 /// Set by the panic hook: some thread panicked, so the failure is a bug.
 static PANICKED: AtomicBool = AtomicBool::new(false);
 
+/// The transfer being run, to say what a stop left behind.
+#[derive(Clone, Copy)]
+pub(super) enum Transfer<'a> {
+    Upload,
+    Download { output: &'a Path },
+}
+
+impl Transfer<'_> {
+    /// What an interrupted or failed run left, as far as openxet can know.
+    /// A stop during an upload's finalize may come after the server took
+    /// the shard; a download is landed last, so its output is untouched.
+    fn outcome(self) -> String {
+        match self {
+            Self::Upload => "the upload may or may not have been registered".to_owned(),
+            Self::Download { output } => format!("nothing was written to {}", output.display()),
+        }
+    }
+
+    fn rerun_hint(self) -> &'static str {
+        match self {
+            Self::Upload => {
+                "Re-running `openxet upload` is safe: uploads are idempotent and skip what the \
+                 server already has."
+            }
+            Self::Download { .. } => "Run the command again.",
+        }
+    }
+}
+
 /// Runs `fut` on a multi-thread runtime, which the client core needs to
 /// share rather than start its own pool (S10 "Context"), then ends the
 /// progress line.
@@ -24,6 +53,7 @@ static PANICKED: AtomicBool = AtomicBool::new(false);
 /// `internal`, never with its payload, which may hold request data.
 pub(super) fn block_on<F: Future>(
     fut: F,
+    transfer: Transfer<'_>,
     progress: Option<&ProgressLine>,
 ) -> Result<F::Output, CliError> {
     install_panic_hook();
@@ -57,28 +87,31 @@ pub(super) fn block_on<F: Future>(
         Ok(Ok(out)) => Ok(out),
         Ok(Err(signal)) => Err(CliError::new(
             "interrupted",
-            format!("interrupted by {signal}; nothing was registered or written"),
-            "Run the command again; uploads skip data the server already has.",
+            format!("interrupted by {signal}; {}", transfer.outcome()),
+            transfer.rerun_hint(),
         )
         .with_exit(ExitCode::INTERRUPTED)),
-        Err(_) => Err(internal()),
+        Err(_) => Err(internal(transfer)),
     }
 }
 
 /// A client failure as the user sees it, or `internal` if it followed a
 /// panic in the client core.
-pub(super) fn failure(err: &ClientError) -> CliError {
+pub(super) fn failure(err: &ClientError, transfer: Transfer<'_>) -> CliError {
     if PANICKED.load(Ordering::Relaxed) {
-        internal()
+        internal(transfer)
     } else {
         client_error(err)
     }
 }
 
-fn internal() -> CliError {
+fn internal(transfer: Transfer<'_>) -> CliError {
     CliError::new(
         "internal",
-        "openxet hit a bug (a panic) and stopped; nothing was registered or written",
+        format!(
+            "openxet hit a bug (a panic) and stopped; {}",
+            transfer.outcome()
+        ),
         "This is a bug; please report it with the command you ran.",
     )
 }
@@ -86,10 +119,7 @@ fn internal() -> CliError {
 /// Records a panic and prints nothing: the default hook would print the
 /// payload on stderr, raw even under `--json`.
 fn install_panic_hook() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        panic::set_hook(Box::new(|_| PANICKED.store(true, Ordering::Relaxed)));
-    });
+    panic::set_hook(Box::new(|_| PANICKED.store(true, Ordering::Relaxed)));
 }
 
 /// The first `SIGINT` or `SIGTERM` (Ctrl-C off Unix), by name.
@@ -162,16 +192,43 @@ impl ProgressLine {
 mod tests {
     use super::*;
 
-    // nextest runs each test in its own process, so the hook this installs
-    // reaches no other test.
     #[test]
     fn a_panic_is_internal_and_its_payload_is_withheld() {
-        let err = block_on(async { panic!("payload-marker") }, None)
+        // The panic hook is process-wide: hold the lock every test that
+        // replaces it takes, and restore it, so tests sharing a process
+        // (as under `cargo test`) neither race nor lose their panic output.
+        let _hook = crate::logging::PANIC_HOOK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = panic::take_hook();
+        let output = Path::new("out.bin");
+        let transfer = Transfer::Download { output };
+        let err = block_on(async { panic!("payload-marker") }, transfer, None)
             .map_or_else(|e| e, |()| unreachable!());
+        let later = failure(&ClientError::InvalidHash, transfer);
+        let panicked = PANICKED.swap(false, Ordering::Relaxed);
+        panic::set_hook(previous);
+
         assert_eq!(err.code, "internal");
         assert!(!err.message.contains("payload-marker"));
-        assert!(PANICKED.load(Ordering::Relaxed));
-        let later = failure(&ClientError::InvalidHash);
+        assert!(
+            err.message.ends_with("nothing was written to out.bin"),
+            "{}",
+            err.message
+        );
+        assert!(panicked);
         assert_eq!(later.code, "internal");
+    }
+
+    #[test]
+    fn an_upload_stop_never_claims_nothing_was_registered() {
+        let err = internal(Transfer::Upload);
+        assert!(
+            err.message
+                .ends_with("the upload may or may not have been registered"),
+            "{}",
+            err.message
+        );
+        assert!(Transfer::Upload.rerun_hint().contains("idempotent"));
     }
 }

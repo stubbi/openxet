@@ -882,7 +882,16 @@ fn interrupted_download(sig: &str) {
     signal(server.child.id(), "CONT");
 
     assert_eq!(out.status.code(), Some(130), "{out:?}");
-    assert_eq!(json_stderr(&out)["code"], "interrupted");
+    let error = json_stderr(&out);
+    assert_eq!(error["code"], "interrupted");
+    let target = out_dir.join("a.out");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("nothing was written to {}", target.display())),
+        "{error}"
+    );
     assert!(out.stdout.is_empty(), "{out:?}");
     assert_eq!(partials(&out_dir), Vec::<PathBuf>::new());
     assert!(!out_dir.join("a.out").exists());
@@ -927,7 +936,21 @@ fn an_interrupted_upload_exits_130() {
         signal(server.child.id(), "CONT");
 
         assert_eq!(out.status.code(), Some(130), "{sig}: {out:?}");
-        assert_eq!(json_stderr(&out)["code"], "interrupted", "{sig}");
+        let error = json_stderr(&out);
+        assert_eq!(error["code"], "interrupted", "{sig}");
+        // A signal during finalize may land after the server took the
+        // shard: the message must not claim nothing was registered.
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("the upload may or may not have been registered"),
+            "{error}"
+        );
+        assert!(
+            error["hint"].as_str().unwrap().contains("idempotent"),
+            "{error}"
+        );
         assert!(out.stdout.is_empty(), "{out:?}");
     }
 }

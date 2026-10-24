@@ -28,6 +28,11 @@ fn filter(level: Level) -> Targets {
     )
 }
 
+/// Held by every test that replaces the process-wide panic hook, so tests
+/// sharing a process (as under `cargo test`) don't race over it.
+#[cfg(test)]
+pub static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Logs to stderr in `format` at `level`, and replaces the panic hook
 /// with [`log_panic`].
 pub fn init(format: LogFormat, level: Level) {
@@ -92,6 +97,9 @@ mod tests {
             .with_current_span(true)
             .with_writer(move || writer.clone())
             .finish();
+        let _hook = PANIC_HOOK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(log_panic));
         tracing::subscriber::with_default(subscriber, || {

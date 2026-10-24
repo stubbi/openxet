@@ -251,8 +251,10 @@ written.
   control characters.
 - **Interrupts.** `SIGINT` (Ctrl-C) or `SIGTERM` stops the transfer, removes
   a partial download, and exits 130 with error code `interrupted`. An
-  interrupted upload registers nothing; running it again skips what the
-  server already has.
+  interrupted download wrote nothing to its output. An interrupted upload
+  may or may not have been registered, if the signal came as the server
+  took its shard; re-running `openxet upload` is safe, since uploads are
+  idempotent and skip what the server already has.
 
 Other `HF_XET_*` variables tune the client core as they tune `hf_xet`, for
 example `HF_XET_CLIENT_RETRY_MAX_ATTEMPTS`.

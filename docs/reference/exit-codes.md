@@ -48,7 +48,7 @@ object with a stable `code` and a `hint` naming the next action:
 | `not_found` | 1 | `download`: no file with this hash in the token's scope. |
 | `no_clobber_unsupported` | 1 | `download` without `--force` on a filesystem that can neither rename without replacing nor hard-link. Nothing was written. The hint names `--force`. |
 | `size_mismatch` | 1 | `download --size` doesn't match the file's size: the size or the hash is wrong. Nothing was written. |
-| `interrupted` | 130 | `upload` or `download` was stopped by a signal. |
+| `interrupted` | 130 | `upload` or `download` was stopped by a signal. The message says what is known: a download wrote nothing to its output; an upload may or may not have been registered, and re-running it is safe. |
 | `upload_rejected` | 1 | The server refused the upload's shard. The message is the server's reason, without control characters, e.g. a stale client cache after a server reset. |
 | `server_error` | 1 | The server kept answering with an error status after the client's retries. |
 | `transfer_failed` | 1 | The transfer failed for another reason; the message names its kind. |

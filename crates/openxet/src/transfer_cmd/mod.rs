@@ -20,7 +20,7 @@ use crate::error::CliError;
 use crate::output::Output;
 use failure::{client_error, usage_error};
 use report::{DownloadResult, UploadResult};
-use run::ProgressLine;
+use run::{ProgressLine, Transfer};
 
 const ENDPOINT_VAR: &str = "OPENXET_ENDPOINT";
 const TOKEN_VAR: &str = "OPENXET_TOKEN";
@@ -74,9 +74,10 @@ pub fn upload(args: &UploadArgs, output: Output) -> Result<(), CliError> {
     let (endpoint, options, progress) = resolve(&args.remote, output, "Uploading", false)?;
     let uploads = run::block_on(
         openxet_client::upload(&endpoint, &args.paths, &options),
+        Transfer::Upload,
         progress.as_deref(),
     )?
-    .map_err(|err| run::failure(&err))?;
+    .map_err(|err| run::failure(&err, Transfer::Upload))?;
     output
         .emit(&UploadResult::from(uploads))
         .map_err(|err| CliError::output(&err))
@@ -87,11 +88,15 @@ pub fn download(args: &DownloadArgs, output: Output) -> Result<(), CliError> {
         return Err(client_error(&ClientError::InvalidHash));
     }
     let (endpoint, options, progress) = resolve(&args.remote, output, "Downloading", args.force)?;
+    let transfer = Transfer::Download {
+        output: &args.output,
+    };
     let size = run::block_on(
         openxet_client::download(&endpoint, &args.hash, args.size, &args.output, &options),
+        transfer,
         progress.as_deref(),
     )?
-    .map_err(|err| run::failure(&err))?;
+    .map_err(|err| run::failure(&err, transfer))?;
     output
         .emit(&DownloadResult {
             schema: "openxet.download.v1",
