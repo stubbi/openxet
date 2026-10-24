@@ -68,6 +68,7 @@ These answers can come from any route:
 | `408` | `body_timeout` | The body stalled for `server.body_read_timeout`, or fell below `server.body_min_rate` ([config](config.md#server)). The answer closes the connection. Clients retry. |
 | `503` | `not_ready` | The server is starting; the index and bucket are not open yet. `Retry-After: 1`; clients retry. |
 | `503` | `unavailable` | The index or bucket failed in a way a retry may fix. Clients retry. |
+| `503` | `memory_busy` | An upload or a reconstruction found the server's memory budget full for 5 s, or needs more than the whole budget ([config](config.md#memory)). `Retry-After: 1`; clients retry. A refused upload's body is not read, and the answer closes the connection. |
 | `500` | `internal` | A server bug or an inconsistency between the index and the bucket, logged under the request id. |
 
 ## Routes

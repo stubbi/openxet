@@ -10,6 +10,7 @@ benchmark, and a speed regression fails CI.
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 | Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
+| Memory under attack, ruling M1-R40 | script, for humans; needs `cargo build --release -p openxet` | `python3 scripts/measure-memory-bounds.py --openxet "$PWD/target/release/openxet" --scenario reconstruct --connections 64` |
 
 Criterion keeps its last run under `target/criterion` and reports the
 change on the next one. The benches are not CI gates: shared runners vary
@@ -254,6 +255,48 @@ saturated the disk. Each durable index commit costs about 4–7 ms more
 with `F_FULLFSYNC`, and whole shard commits fall from about 115–126 to
 about 70–87 per second (table above). Durability of an acknowledged write
 (design §5.9 req 7) comes first.
+
+## Memory bounds
+
+Ruling M1-R40 bounds what requests hold in memory by one process-wide
+budget, `server.memory_budget` (1 GiB by default; config.md, "Memory").
+`scripts/measure-memory-bounds.py` attacks a fresh dev-mode
+`openxet serve` from many sockets for 20 s, stops it, and reports its peak:
+
+- **reconstruct:** each socket asks for the full reconstruction of the
+  latency gate's unmerged 100k-term file (a 42.3 MB answer) and never
+  reads it
+- **upload:** each socket posts a 64 MiB xorb, sends all of it but the
+  last byte, and stalls
+
+Local machine (above), default budget, one run each, peak in MiB:
+
+| Scenario | Before (`ff53a33`): footprint / RSS | After: footprint / RSS |
+|---|---|---|
+| reconstruct, 16 sockets | 712 / 1038 | 737 / 1084 |
+| reconstruct, 64 sockets | 2658 / 1243 | 1166 / 1632 |
+| upload, 32 sockets | 1983 / 1913 | 1040 / 1045 |
+
+On macOS the physical footprint is the number to read: it counts the
+memory the kernel compressed, which RSS leaves out, and leaves out freed
+memory the allocator has not yet returned, which RSS counts. The answers'
+JSON compresses well, so RSS understates the "before" rows.
+
+- 16 answers fit the budget (each reserves about 60 MB while it is built,
+  then its 42.3 MB), so the bound changes nothing there; they are freed by
+  the send deadline, 70 s for this answer, instead of whenever TCP gives
+  up.
+- 64 answers held 2.7 GB before. Now about 25 fit the budget at once, the
+  rest wait 5 s and get `503 memory_busy`, and the peak stays about
+  140 MB above the 1 GiB budget, the process's own baseline.
+- 32 stalled uploads held 32 × 64 MiB before. Now 16 fit, the rest are
+  refused unread after 5 s, and the peak is the budget plus the baseline.
+
+Sending an answer copies it out in 64 KiB frames, so a stalled client
+never pins the answer's buffers past its deadline. On the latency gate's
+full 100k-term answer that costs about 5 ms at p50 (local, at load
+average 13 to 21: p50 25.6 to 26.8 ms with the copy, 19.4 to 30.0 ms
+without).
 
 ## Stock client behaviour that sizes the server
 
