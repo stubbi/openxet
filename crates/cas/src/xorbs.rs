@@ -31,7 +31,9 @@ const PREFIX: &str = "default";
 )]
 const BODY_LIMIT: usize = MAX_XORB_BODY_BYTES as usize;
 
-/// `POST` and `HEAD /v1/xorbs/{prefix}/{hash}` (S10 §3).
+/// `POST` and `HEAD /v1/xorbs/{prefix}/{hash}` (S10 §3). Both answers
+/// depend on the caller's scope (`was_inserted`, and `HEAD` under
+/// `PerScope` visibility), so they are private.
 pub(crate) fn routes() -> Routes {
     Routes::new().route(
         "/v1/xorbs/{prefix}/{hash}",
@@ -39,7 +41,8 @@ pub(crate) fn routes() -> Routes {
             Method::POST,
             upload.layer(DefaultBodyLimit::max(BODY_LIMIT)),
         )
-        .on(Method::HEAD, head),
+        .on(Method::HEAD, head)
+        .private(),
     )
 }
 

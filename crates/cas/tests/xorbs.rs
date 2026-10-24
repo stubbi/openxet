@@ -20,7 +20,7 @@ use openxet_protocol::{
 };
 use openxet_storage::Key;
 use reqwest::Method;
-use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH};
+use reqwest::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH};
 
 /// Uploads `body` as xorb `hash` with `token`, as `hf_xet` does: with a
 /// `Content-Length` and no `Content-Type`.
@@ -89,10 +89,10 @@ async fn upload_then_head() {
     let expected = stored(&body);
 
     assert_eq!(head(&server, &hash, &server.read_token).await.status, 404);
-    assert_inserted(
-        &upload(&server, &hash, body, &server.write_token).await,
-        true,
-    );
+    let uploaded = upload(&server, &hash, body, &server.write_token).await;
+    assert_inserted(&uploaded, true);
+    // `was_inserted` is per scope (design §5.4).
+    assert_eq!(uploaded.headers[CACHE_CONTROL], "no-store");
 
     let reply = head(&server, &hash, &server.read_token).await;
     assert_eq!(reply.status, 200);
@@ -390,7 +390,13 @@ async fn head_under_per_scope_hides_other_scopes_xorbs() {
 
         assert_eq!(other.status, other_status, "{visibility:?}");
         assert!(other.body.is_empty());
-        assert_eq!(head(&server, &hash, &server.read_token).await.status, 200);
+        let own = head(&server, &hash, &server.read_token).await;
+        assert_eq!(own.status, 200);
+        // Both answers depend on the caller's scope, so no cache may keep
+        // either for another caller (design §5.9 req 3).
+        for reply in [&other, &own] {
+            assert_eq!(reply.headers[CACHE_CONTROL], "no-store", "{visibility:?}");
+        }
     }
 }
 
