@@ -8,7 +8,8 @@ stock hf_xet (each run a fresh process and Xet cache):
 - asks for a 1000-byte range in the middle of the file and sums the bytes
   its reconstruction plans to fetch;
 - sums what the bucket and the index hold, for storage overhead;
-- takes the server's peak RSS from its own rusage after it stops.
+- takes the server's peak RSS from its own rusage after it stops;
+- counts the `503 memory_busy` and other `5xx` answers in the server log.
 
 Run from the repository root, after `cargo build --release -p openxet`:
 
@@ -20,6 +21,7 @@ that is removed at the end; the token is never printed.
 """
 
 import argparse
+import ctypes
 import json
 import os
 import platform
@@ -73,6 +75,20 @@ def client(work: Path, name: str, script: str, *args: str) -> dict:
     return json.loads(out.stdout)
 
 
+def peak_footprint(pid: int) -> int | None:
+    """macOS only: the process's lifetime peak physical footprint, which,
+    unlike RSS, counts pages the kernel compressed; None elsewhere."""
+    if platform.system() != "Darwin":
+        return None
+    libc = ctypes.CDLL("libc.dylib")
+    info = (ctypes.c_uint64 * 64)()
+    # proc_pid_rusage(pid, RUSAGE_INFO_V4, &info): a 16-byte uuid, then
+    # u64 fields; ri_lifetime_max_phys_footprint is the 29th.
+    if libc.proc_pid_rusage(pid, 4, ctypes.byref(info)) != 0:
+        return None
+    return info[2 + 28]
+
+
 def tree_bytes(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
@@ -81,6 +97,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--openxet", required=True, help="the openxet binary (a release build)")
     parser.add_argument("--size-mib", type=int, default=1024)
+    parser.add_argument(
+        "--memory-budget", help="server.memory_budget, such as 1GiB; the server's default if unset"
+    )
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -90,7 +109,11 @@ def main() -> None:
         with ready.open("w") as out, (work / "serve.log").open("w") as log:
             server = subprocess.Popen(
                 [args.openxet, "serve", "--data-dir", str(data), "--port", "0", "--json"],
-                env={"PATH": os.environ["PATH"], "HOME": str(work / "server-home")},
+                env={
+                    "PATH": os.environ["PATH"],
+                    "HOME": str(work / "server-home"),
+                    **({"OPENXET_SERVER__MEMORY_BUDGET": args.memory_budget} if args.memory_budget else {}),
+                },
                 stdout=out,
                 stderr=log,
                 stdin=subprocess.DEVNULL,
@@ -127,10 +150,12 @@ def main() -> None:
                 for entry in entries
                 for r in entry["ranges"]
             )
+            footprint = peak_footprint(server.pid)
         finally:
             server.terminate()
             _, _, usage = os.wait4(server.pid, 0)
 
+        log_text = (work / "serve.log").read_text()
         xorbs = tree_bytes(data / "bucket" / "xorbs")
         shards = tree_bytes(data / "bucket") - xorbs
         index = sum(f.stat().st_size for f in data.glob("index.sqlite*"))
@@ -153,6 +178,11 @@ def main() -> None:
                     "index_bytes": index,
                     "overhead_percent": round((xorbs + shards + index - size) / size * 100, 2),
                     "server_peak_rss_mib": round(rss / MiB),
+                    "server_peak_footprint_mib": footprint and round(footprint / MiB),
+                    # Refusals for a full memory budget (ruling M1-R40), and
+                    # other 5xx answers; each makes hf_xet back off and retry.
+                    "server_memory_busy": log_text.count("memory_busy"),
+                    "server_5xx": log_text.count("request failed"),
                 },
                 indent=2,
             )

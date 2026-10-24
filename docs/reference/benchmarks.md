@@ -10,6 +10,8 @@ benchmark, and a speed regression fails CI.
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 | Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
+| Memory under attack, ruling M1-R40 | script, for humans; needs `cargo build --release -p openxet` | `python3 scripts/measure-memory-bounds.py --openxet "$PWD/target/release/openxet" --scenario reconstruct --connections 64 --memory-budget 1GiB` |
+| Stock client throughput, `503`s and peak memory | script, for humans; needs `cargo build --release -p openxet` | `uv run --frozen --directory compat python ../scripts/measure-storage-only.py --openxet "$PWD/target/release/openxet" --size-mib 4096` |
 
 Criterion keeps its last run under `target/criterion` and reports the
 change on the next one. The benches are not CI gates: shared runners vary
@@ -254,6 +256,87 @@ saturated the disk. Each durable index commit costs about 4–7 ms more
 with `F_FULLFSYNC`, and whole shard commits fall from about 115–126 to
 about 70–87 per second (table above). Durability of an acknowledged write
 (design §5.9 req 7) comes first.
+
+## Memory bounds
+
+Ruling M1-R40 bounds what requests hold in memory by one process-wide
+budget, `server.memory_budget` (a quarter of the host's memory;
+config.md, "Memory"). On the local machine (16 GB) the default is 4 GiB.
+The "after" numbers are from the code as amended by its review: answers
+pass queued uploads, one answer holds at most an eighth of the budget, and
+reservations outlive a client that leaves.
+
+### Under attack
+
+`scripts/measure-memory-bounds.py` attacks a fresh dev-mode
+`openxet serve` from many sockets for 20 s, stops it, and reports its peak:
+
+- **reconstruct:** each socket asks for the full reconstruction of the
+  latency gate's unmerged 100k-term file (a 42.3 MB answer) and never
+  reads it
+- **upload:** each socket posts a 64 MiB xorb, sends all of it but the
+  last byte, and stalls
+
+Local machine, one run each, peak in MiB. "Before" is `ff53a33`, which
+had no budget:
+
+| Scenario | Budget | Before: footprint / RSS | After: footprint / RSS |
+|---|---|---|---|
+| reconstruct, 16 sockets | 1 GiB | 712 / 1038 | 780 / 906 |
+| reconstruct, 64 sockets | 1 GiB | 2658 / 1243 | 1101 / 1102 |
+| upload, 32 sockets | 1 GiB | 1983 / 1913 | 1040 / 1045 |
+| reconstruct, 128 sockets | default, 4 GiB | | 4201 / 1078 |
+| upload, 96 sockets | default, 4 GiB | | 4143 / 3685 |
+
+On macOS the physical footprint is the number to read: it counts the
+memory the kernel compressed, which RSS leaves out, and leaves out freed
+memory the allocator has not yet returned, which RSS counts. The answers'
+JSON compresses well, so RSS understates the reconstruction rows.
+
+- 16 answers fit a 1 GiB budget (each reserves about 60 MB while it is
+  built, then its 42.3 MB), so the bound changes nothing there; they are
+  freed by the send deadline, 70 s for this answer, instead of whenever
+  TCP gives up.
+- 64 answers held 2.7 GB before. Now about 15 fit 1 GiB at once (each
+  reserves about 65 MB with its decoded record, within an answer's
+  eighth), the rest wait 5 s and get `503 memory_busy`, and the peak
+  stays within about 100 to 250 MB of the budget, the process's own
+  baseline. With the default budget, 128 answers peak at the budget plus
+  the same baseline.
+- 32 stalled uploads held 32 × 64 MiB before. Now 16 fit 1 GiB and the
+  rest queue, unread, so the peak is the budget plus the baseline; 96 on
+  the default budget peak at it.
+
+### Stock client throughput
+
+The budget must not cost a stock client anything: `hf_xet` sends up to 64
+xorbs at once, and uploads past the budget queue for up to 120 s instead
+of failing. `scripts/measure-storage-only.py` (`--size-mib 4096`) uploads
+and downloads a 4 GiB file with stock `hf_xet` 1.7.0 at its default
+concurrency against a default dev-mode server, and counts the server's
+`memory_busy` and other `5xx` answers. Local machine, at load average 5
+to 76 from other builds, so single runs vary by a factor of two;
+alternating runs, in MB/s, the last two of each row and the pinned
+budgets from the amended code:
+
+| Server | Upload | Download | Peak footprint (MiB) | `503 memory_busy` | Other `5xx` |
+|---|---|---|---|---|---|
+| before (`ff53a33`) | 443, 376, 203, 256, 274, 383 | 299, 166, 529, 380, 274, 235 | 271 to 804 | 0 | 0 |
+| after, default budget (4 GiB) | 297, 322, 422, 370, 322, 387 | 361, 324, 482, 554, 382, 384 | 376 to 1122 | 0 | 0 |
+| after, `memory_budget = "1GiB"` | 297, 428 | 165, 204 | 536 to 709 | 0 | 0 |
+| after, `memory_budget = "256MiB"` | 246, 338 | 514, 279 | 449 to 528 | 0 | 0 |
+
+Throughput is the same within the noise, and no upload was refused,
+even with the smallest budget allowed, where at most 3 xorbs are
+buffered at once and the rest queue.
+
+### The cost of the send deadline
+
+Sending an answer copies it out in 64 KiB frames, so a stalled client
+never pins the answer's buffers past its deadline. On the latency gate's
+full 100k-term answer that costs about 5 ms at p50 locally (at load
+average 13 to 21: p50 25.6 to 26.8 ms with the copy, 19.4 to 30.0 ms
+without).
 
 ## Stock client behaviour that sizes the server
 

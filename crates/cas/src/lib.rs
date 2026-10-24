@@ -17,10 +17,10 @@ mod answer;
 mod auth;
 mod blocking;
 mod body;
+mod budget;
 mod cache;
 mod deadline;
 mod dedup;
-mod dedup_body;
 mod error;
 mod health;
 mod misc;
@@ -29,6 +29,7 @@ mod plan;
 mod reconstruction;
 mod request_id;
 mod routes;
+mod send_body;
 mod shards;
 #[cfg(test)]
 mod test_support;
@@ -54,6 +55,7 @@ use tower_http::trace::TraceLayer;
 use url::Url;
 
 pub use auth::{ReadAccess, WriteAccess};
+pub use budget::MemoryBudget;
 pub use deadline::{BodyDeadline, SendDeadline};
 pub use error::CasError;
 pub use health::starting_router;
@@ -80,8 +82,12 @@ pub struct CasConfig {
     pub heartbeat_interval: Duration,
     /// The pace every request body must keep.
     pub body_deadline: BodyDeadline,
-    /// How long sending a dedup answer may take (ruling M1-R33).
-    pub dedup_send: SendDeadline,
+    /// How long sending a dedup or reconstruction answer may take
+    /// (rulings M1-R33, M1-R40).
+    pub send_deadline: SendDeadline,
+    /// The bytes buffered request bodies and built answers may hold at
+    /// once, process-wide (ruling M1-R40; [`MemoryBudget`]).
+    pub memory_budget: u64,
 }
 
 impl CasConfig {
@@ -128,9 +134,9 @@ pub struct AppState {
     /// Bounds concurrent xorb validation, which decompresses up to 2 × the
     /// xorb's size, and shard parsing and verification (ruling M1-R8).
     pub validate: Arc<Semaphore>,
-    /// Bounds concurrent shard commits, from the bucket write to the end of
-    /// index registration (ruling M1-R24), including v2 uploads whose client
-    /// has left. Separate from `validate`, so slow storage never holds a
+    /// Bounds concurrent xorb and shard commits, from the bucket write to
+    /// the end of index registration (rulings M1-R24, M1-R40), including v2
+    /// uploads whose client has left. Separate from `validate`, so slow storage never holds a
     /// CPU permit.
     ///
     /// With both, shard ingest's memory per process is at most `validate`'s
@@ -147,6 +153,11 @@ pub struct AppState {
     /// permits × about 150 MB (an answer of at most 16 MiB with its build;
     /// measured in S11: about 120 MB for one, about 300 MB with 2 busy).
     pub dedup: Arc<Semaphore>,
+    /// Bounds the bytes buffered upload bodies and built reconstruction
+    /// answers hold at once (ruling M1-R40), from
+    /// [`CasConfig::memory_budget`]. Each reserves its bytes here before
+    /// it takes any of the permits above.
+    pub budget: MemoryBudget,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,
 }
@@ -174,6 +185,7 @@ impl AppState {
         cfg: CasConfig,
     ) -> Self {
         let permits = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let budget = MemoryBudget::new(cfg.memory_budget);
         Self {
             index,
             bucket,
@@ -183,6 +195,7 @@ impl AppState {
             validate: Arc::new(Semaphore::new(permits)),
             commit: Arc::new(Semaphore::new(permits.saturating_mul(COMMITS_PER_CPU))),
             dedup: Arc::new(Semaphore::new(dedup_permits(permits))),
+            budget,
             clock: Arc::new(SystemClock),
         }
     }

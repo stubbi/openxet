@@ -169,6 +169,16 @@ pub trait Index: Send + Sync + 'static {
         scope: &str,
     ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError>;
 
+    /// The total terms of the reconstructions `scope` registered for
+    /// `files`, counting each file once, as [`Index::files`] would return
+    /// them, without loading or decoding any: a batch reconstruction checks
+    /// its term cap with it before it loads the files (ruling M1-R40).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError>;
+
     /// The xorb to offer for a global dedup query on `chunk`: of the visible
     /// xorbs that list `chunk` as a dedup candidate, the one first ingested
     /// most recently. `None` if there is none.

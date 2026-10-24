@@ -1062,6 +1062,50 @@ fn slow_request_headers_are_cut_off() {
     assert!(!String::from_utf8_lossy(&answer).contains("200 OK"));
 }
 
+/// Sends `GET /healthz` on `stream` and returns the start of the answer,
+/// or what arrived before `wait` passed.
+fn healthz(stream: &mut TcpStream, wait: Duration) -> String {
+    stream.set_read_timeout(Some(wait)).unwrap();
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+        .unwrap();
+    let mut answer = [0u8; 64];
+    let n = stream.read(&mut answer).unwrap_or(0);
+    String::from_utf8_lossy(&answer[..n]).into_owned()
+}
+
+#[test]
+fn connections_over_the_cap_wait_until_one_closes() {
+    // `server.max_connections` (ruling M1-R40): past the cap, a connection
+    // waits in the listen backlog, unaccepted, and is served once an open
+    // one closes.
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path(), &[], &[("OPENXET_SERVER__MAX_CONNECTIONS", "2")]);
+    let mut open: Vec<TcpStream> = (0..2)
+        .map(|_| {
+            let mut stream = TcpStream::connect(server.addr()).unwrap();
+            assert!(healthz(&mut stream, PATIENCE).starts_with("HTTP/1.1 200"));
+            stream
+        })
+        .collect();
+
+    let mut third = TcpStream::connect(server.addr()).unwrap();
+    assert_eq!(
+        healthz(&mut third, Duration::from_secs(1)),
+        "",
+        "a third connection was served"
+    );
+
+    drop(open.pop());
+    third.set_read_timeout(Some(PATIENCE)).unwrap();
+    let mut answer = [0u8; 64];
+    let n = third.read(&mut answer).unwrap();
+    assert!(
+        String::from_utf8_lossy(&answer[..n]).starts_with("HTTP/1.1 200"),
+        "the waiting connection was not served"
+    );
+}
+
 #[test]
 fn slow_request_bodies_are_cut_off() {
     let dir = tempfile::tempdir().unwrap();

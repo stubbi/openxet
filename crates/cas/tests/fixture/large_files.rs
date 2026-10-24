@@ -19,8 +19,8 @@ use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::header::{AUTHORIZATION, RANGE};
 use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
-use openxet_cas::{AppState, BodyDeadline, CasConfig, SendDeadline, router};
-use openxet_index::{ChunkTable, FileRecord, NewFile, SqliteIndex, Term, Visibility};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, router};
+use openxet_index::{ChunkTable, FileRecord, Index as _, NewFile, SqliteIndex, Term, Visibility};
 use openxet_protocol::{MerkleHash, VerifyLimits, hash_to_hex};
 use openxet_storage::LocalBucket;
 use tempfile::TempDir;
@@ -170,7 +170,8 @@ fn state(dir: &Path, index: SqliteIndex) -> AppState {
             verify_limits: VerifyLimits::default(),
             heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
             body_deadline: BodyDeadline::DEFAULT,
-            dedup_send: SendDeadline::DEFAULT,
+            send_deadline: SendDeadline::DEFAULT,
+            memory_budget: MemoryBudget::DEFAULT_BYTES,
         },
     )
 }
@@ -178,20 +179,27 @@ fn state(dir: &Path, index: SqliteIndex) -> AppState {
 /// A fixture whose files have `terms` terms each, a multiple of
 /// [`TERMS_PER_XORB`].
 pub async fn fixture(terms: u32) -> Fixture {
-    assert!(terms.is_multiple_of(TERMS_PER_XORB));
     let dir = tempfile::tempdir().unwrap();
-    let state = state(
-        dir.path(),
-        SqliteIndex::open(&dir.path().join("index.sqlite"))
-            .await
-            .unwrap(),
-    );
+    let index = SqliteIndex::open(&dir.path().join("index.sqlite"))
+        .await
+        .unwrap();
+    let files = seed(&index, SCOPE, terms).await;
+    Fixture {
+        state: state(dir.path(), index),
+        files,
+        _dir: dir,
+    }
+}
+
+/// Registers one file of each [`Shape`], of `terms` terms each (a multiple
+/// of [`TERMS_PER_XORB`]), and their xorbs to `scope` in `index`.
+pub async fn seed(index: &SqliteIndex, scope: &str, terms: u32) -> [(Shape, FileRecord); 2] {
+    assert!(terms.is_multiple_of(TERMS_PER_XORB));
     for x in 0..xorbs(terms) {
         let table = table(x);
         let size = u64::from(*table.offsets.last().unwrap()) + 1024;
-        state
-            .index
-            .put_xorb(&xorb(x), size, &table, &[], SCOPE)
+        index
+            .put_xorb(&xorb(x), size, &table, &[], scope)
             .await
             .unwrap();
     }
@@ -204,16 +212,11 @@ pub async fn fixture(terms: u32) -> Fixture {
             first_chunk: None,
         })
         .collect();
-    state
-        .index
-        .register_shard(&synthetic(4, terms, 0), &new, SCOPE, Visibility::PerScope)
+    index
+        .register_shard(&synthetic(4, terms, 0), &new, scope, Visibility::PerScope)
         .await
         .unwrap();
-    Fixture {
-        state,
-        files,
-        _dir: dir,
-    }
+    files
 }
 
 /// One `GET /v2/reconstructions/{file}` with `range` (inclusive) as its

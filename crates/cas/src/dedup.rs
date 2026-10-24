@@ -45,6 +45,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::body::Bytes;
 use axum::extract::{FromRequestParts, State};
 use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
@@ -56,8 +57,8 @@ use openxet_protocol::{
 };
 
 use crate::blocking::blocking;
-use crate::dedup_body::answer_body;
 use crate::routes::{Routes, on};
+use crate::send_body::send_body;
 use crate::{AppState, CasError, ReadAccess, path};
 
 /// The prefixes served: `default`, which `hf_xet` sends, and
@@ -157,8 +158,8 @@ async fn query(
         bytes = body.len(),
         "dedup match offered"
     );
-    let deadline = state.cfg.dedup_send.for_len(body.len() as u64);
-    let body = answer_body(body, permit, deadline);
+    let deadline = state.cfg.send_deadline.for_len(body.len() as u64);
+    let body = send_body(vec![Bytes::from(body)], permit, deadline);
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
 }
 

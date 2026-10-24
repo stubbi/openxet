@@ -274,7 +274,8 @@ pub fn config(visibility: Visibility) -> CasConfig {
         verify_limits: VerifyLimits::default(),
         heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
         body_deadline: BodyDeadline::DEFAULT,
-        dedup_send: openxet_cas::SendDeadline::DEFAULT,
+        send_deadline: openxet_cas::SendDeadline::DEFAULT,
+        memory_budget: openxet_cas::MemoryBudget::DEFAULT_BYTES,
     }
 }
 
@@ -754,6 +755,10 @@ impl Index for SlowIndex {
         self.inner.files(files, scope).await
     }
 
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        self.inner.term_count(files, scope).await
+    }
+
     async fn file_with_bytes(
         &self,
         file: &MerkleHash,
@@ -859,6 +864,10 @@ impl Index for TablelessIndex {
         scope: &str,
     ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
         self.inner.files(files, scope).await
+    }
+
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        self.inner.term_count(files, scope).await
     }
 
     async fn file_with_bytes(

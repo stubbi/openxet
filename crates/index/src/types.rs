@@ -95,7 +95,7 @@ pub enum Visibility {
 
 const HASH_LEN: usize = 32;
 const CHUNK_ENTRY_LEN: usize = HASH_LEN + 4 + 4;
-const TERM_LEN: usize = HASH_LEN + 4 + 4 + 4;
+pub(crate) const TERM_LEN: usize = HASH_LEN + 4 + 4 + 4;
 const LAYOUT_ENTRY_LEN: usize = 4 + 4;
 const TERM_BYTES_LEN: usize = 4 + 4;
 

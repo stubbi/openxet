@@ -44,7 +44,8 @@ Only variables with `__` are configuration: `OPENXET_ENDPOINT` and
 the file or the environment is a problem, not ignored.
 
 Durations are a whole number and one unit: `s`, `m`, `h` or `d`, such as
-`30s`, `60m`, `24h` or `30d`.
+`30s`, `60m`, `24h` or `30d`. Sizes are a whole number and one binary
+unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 
 ## Keys
 
@@ -60,11 +61,76 @@ Durations are a whole number and one unit: `s`, `m`, `h` or `d`, such as
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
 | `body_read_timeout` | `300s` | `1s` to `1h` | The longest gap allowed between two parts of a request body. It matches `hf_xet`'s own 300 s read timeout. |
 | `body_min_rate` | `4096` | `1` to `1048576` | The least average rate of a request body, in bytes per second, after a first `body_read_timeout`: a body of `n` bytes may take `body_read_timeout + n / body_min_rate`. The default lets a 64 MiB xorb take up to 4.6 hours over a very slow link. |
+| `memory_budget` | a quarter of the memory | `256MiB` to `1TiB` | The most memory request data may hold at once: upload bodies being buffered and reconstruction answers waiting to be sent. The default is a quarter of the host's physical memory, or on Linux of the smallest cgroup memory limit over the process if lower, rounded down to a MiB and at least `256MiB`; `1GiB` where the memory can't be read. `config check` shows the value in effect. See [Memory](#memory). |
+| `max_connections` | `4096` | `1` to `1000000` | The most connections open at once. Past it, a new connection waits unaccepted in the listen backlog until one closes, then is served. Keep it below the process's open-file limit (`ulimit -n`). |
 | `shutdown_grace` | `30s` | `1s` to `10m` | On `SIGTERM` or `SIGINT`, how long in-flight requests get to finish. |
 
 A body that breaks `body_read_timeout` or `body_min_rate` is refused with
 `408 body_timeout`, and the connection is closed. This also bounds how long
 a refused upload's body is read and discarded before the refusal is sent.
+
+### Memory
+
+The server bounds the memory that requests hold, however many clients
+connect, upload slowly or never read their answers (ruling M1-R40).
+Before it buffers anything, a request reserves its bytes from
+`memory_budget`, and holds them until the work they serve has ended,
+even if its client has left:
+
+- An upload (`POST /v1/xorbs/…`, `/v1/shards`, `/v2/shards`) reserves its
+  `Content-Length`, or the route's limit (64.5 MiB for a xorb, 64 MiB for
+  a shard) if it declares none, until it is stored and registered. A body
+  longer than it declared is refused with `400`.
+- A reconstruction (`/v1` and `/v2/reconstructions`, and the batch)
+  reserves its file's decoded record (52 bytes a term, from the stored
+  count) before loading it, then about 600 bytes a term of the answer once
+  the range is resolved, then keeps the answer's size (42 MB for 100,000
+  terms) until the answer has been sent. An answer not sent within 30 s
+  plus 1 s per MiB is cut off, and its share freed.
+
+Requests that don't fit wait for bytes to come free:
+
+- Uploads queue in arrival order, each up to 120 s, their bodies unread.
+  `hf_xet` sends up to 64 xorbs at once; past the budget they queue here
+  and are read as others finish, well inside the client's 300 s timeout.
+  A waiting upload holds only its connection.
+- A reconstruction that fits in the free bytes takes them at once, past
+  any queued upload, so uploads never hold up downloads. One that doesn't
+  fit waits up to 5 s. A batch's own body waits the same way.
+
+After its wait a request is refused with `503 memory_busy` and
+`Retry-After: 1`; stock clients retry it. An upload refused so is not
+read, and its connection is closed.
+
+Two refusals are final, since no retry could succeed:
+
+- One answer may reserve at most an eighth of the budget. A larger one
+  is refused at once with `413 answer_too_large`: ask for the file by
+  range, as `hf_xet` always does (at most 8 GB at a time), or put fewer
+  files in a batch. A batch holds at most 100,000 terms (about 65 MB).
+- An upload larger than the whole budget gets `413 exceeds_memory_budget`.
+  Stock clients' uploads (at most 64.5 MiB) never do, since the budget is
+  at least 256 MiB.
+
+The budget is per server, not per client: one credential can fill it, up
+to an answer's eighth at a time, and so can delay others' requests until
+its answers are sent or cut off. Per-credential shares of the budget come
+with rate limiting in M3.
+
+Size the budget to leave room for the rest of the process: the index's
+cache, the CPU-bound work each permit runs (about 150 MB per dedup answer
+being built) and the operating system. The default, a quarter of the
+memory, does; a budget over half of it is a warning at startup and in
+`config check`. Every refusal is logged at warn as `request refused` with
+its code; frequent `memory_busy` means the budget, or the server, is too
+small for its load.
+
+**Behind a proxy**, set its timeouts to at least 130 s: a queued upload
+waits up to 120 s before its body is read, and a large answer may take as
+long to send. With common defaults (nginx's `proxy_read_timeout` and
+`proxy_send_timeout`, an AWS load balancer's idle timeout, all 60 s), a
+queued upload becomes a `504` at 60 s. Clients retry it, but lose the
+queue's place.
 
 `public_url` must be the origin root, with no path, query, fragment or user
 info. Clients append `/v1/...` to it and resolve `/v1/telemetry` against
@@ -268,7 +334,7 @@ least one answer at a time). A query that waits 1 s for its turn answers
 sends those chunks. An answer not sent within its deadline (30 s plus 1 s
 per MiB) is cut off and its turn freed. At `log_level = "debug"` both are
 logged, the first as `request refused` with code `dedup_busy`, the second
-as `a dedup answer missed its send deadline`. Frequent `dedup_busy`
+as `an answer missed its send deadline`. Frequent `dedup_busy`
 means the server needs more CPUs.
 
 ## Stale client caches
@@ -292,6 +358,14 @@ again.
   connections, lets in-flight requests finish within `shutdown_grace`, and
   exits 0. A second signal exits at once with code 1. Every acknowledged
   write is already durable, so neither loses data.
+- **Connections:** at most `max_connections` are open at once. The next
+  one is not accepted until one closes: it waits in the kernel's listen
+  backlog with its request unread, and is served then. Refusing it
+  instead would cost the file descriptor the cap protects. A client whose
+  connect attempt times out meanwhile retries it. The cap is for the
+  whole server, not per client: one client can hold many slots, for as
+  long as its bodies keep `body_min_rate`. Per-client and per-credential
+  limits come with rate limiting in M3.
 - The server speaks HTTP/1.1, which is what stock clients use. Put TLS in
   front of it with a proxy, and set `public_url` to the proxy's URL.
 

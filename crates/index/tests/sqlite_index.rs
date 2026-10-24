@@ -242,6 +242,63 @@ async fn files_handles_more_files_than_one_query_binds() {
 }
 
 #[tokio::test]
+async fn term_count_sums_the_scopes_files_once_each() {
+    // Batch reconstruction checks its term cap with this before decoding
+    // any file (ruling M1-R40), so it must count exactly what `files`
+    // would return.
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, _) = put(&index, "a", 8, A).await;
+    let (xb, _) = put(&index, "b", 2, B).await;
+    let mut three = file("three", xa, 1);
+    three.record.terms = (0..3)
+        .map(|i| Term {
+            xorb: xa,
+            chunk_start: i,
+            chunk_end: i + 1,
+            unpacked_bytes: 1000,
+        })
+        .collect();
+    three.record.size = 3000;
+    let one = file("one", xa, 4);
+    ok(index
+        .register_shard(
+            &h("shard-a"),
+            &[three.clone(), one.clone()],
+            A,
+            Visibility::PerScope,
+        )
+        .await);
+    let other = file("other", xb, 2);
+    ok(index
+        .register_shard(
+            &h("shard-b"),
+            std::slice::from_ref(&other),
+            B,
+            Visibility::PerScope,
+        )
+        .await);
+    let asked = [
+        three.record.hash,
+        h("file/unknown"),
+        other.record.hash,
+        one.record.hash,
+        three.record.hash,
+    ];
+
+    assert_eq!(ok(index.term_count(&asked, A).await), 4);
+    assert_eq!(ok(index.term_count(&asked, B).await), 1);
+    assert_eq!(ok(index.term_count(&[], A).await), 0);
+
+    let many: Vec<NewFile> = (0..1200).map(|i| file(&format!("f{i}"), xa, 1)).collect();
+    ok(index
+        .register_shard(&h("shard-many"), &many, A, Visibility::PerScope)
+        .await);
+    let asked: Vec<MerkleHash> = many.iter().map(|f| f.record.hash).collect();
+    assert_eq!(ok(index.term_count(&asked, A).await), 1200);
+}
+
+#[tokio::test]
 async fn same_file_two_scopes_keeps_each_scopes_terms() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;

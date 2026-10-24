@@ -480,6 +480,10 @@ impl Index for BrokenIndex {
         self.inner.files(files, scope).await
     }
 
+    async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
+        self.inner.term_count(files, scope).await
+    }
+
     async fn file_with_bytes(
         &self,
         file: &MerkleHash,

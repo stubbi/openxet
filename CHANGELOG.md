@@ -34,6 +34,16 @@ once built.
   with its test ([security tests](docs/reference/security-tests.md)).
 - Reconstruction answers a 100k-term file within 50 ms at p99 on an idle
   node, gated in CI ([benchmarks](docs/reference/benchmarks.md)).
+- Memory and connection bounds that hold whatever clients do: upload
+  bodies and reconstruction answers reserve from one budget,
+  `server.memory_budget` (by default a quarter of the host's memory).
+  Uploads past it queue for up to 120 s, then get `503 memory_busy`,
+  which clients retry; reconstructions that fit pass the queue, and
+  others wait 5 s. One answer may hold at most an eighth of the budget,
+  else a final `413 answer_too_large` (ask by range); a batch holds at
+  most 100,000 terms. An answer not sent within 30 s plus 1 s per MiB is
+  cut off. `server.max_connections` (4096 by default) caps open
+  connections ([config](docs/reference/config.md#memory)).
 
 ### Upgrading
 

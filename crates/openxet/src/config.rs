@@ -15,12 +15,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openxet_auth::{AuthError, Authenticator, Mode, PublicKey, StaticToken, UrlSigner};
-use openxet_cas::{BodyDeadline, CasConfig};
+use openxet_cas::{BodyDeadline, CasConfig, MemoryBudget};
 use openxet_index::Visibility;
 use serde::Serialize;
 use url::Url;
 
-use crate::{duration, secret};
+use crate::{duration, host_memory, secret, size};
 
 /// Where a setting's value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +127,11 @@ pub struct Config {
     pub log_level: tracing::Level,
     pub header_read_timeout: Duration,
     pub body_deadline: BodyDeadline,
+    /// `server.memory_budget`, in bytes.
+    pub memory_budget: u64,
+    /// The memory this process may use, if it could be read.
+    pub host_memory: Option<u64>,
+    pub max_connections: u32,
     pub shutdown_grace: Duration,
     pub visibility: Visibility,
     pub url_lifetime: Duration,
@@ -149,7 +154,8 @@ impl Config {
             verify_limits: openxet_protocol::VerifyLimits::default(),
             heartbeat_interval: self.heartbeat_interval,
             body_deadline: self.body_deadline,
-            dedup_send: openxet_cas::SendDeadline::DEFAULT,
+            send_deadline: openxet_cas::SendDeadline::DEFAULT,
+            memory_budget: self.memory_budget,
         }
     }
 }
@@ -189,6 +195,8 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("header_read_timeout", Kind::Str),
             ("body_read_timeout", Kind::Str),
             ("body_min_rate", Kind::Int),
+            ("memory_budget", Kind::Str),
+            ("max_connections", Kind::Int),
             ("shutdown_grace", Kind::Str),
         ],
     ),
@@ -479,6 +487,24 @@ impl Checker<'_> {
         }
     }
 
+    /// A byte size within `min..=max`.
+    fn size(&mut self, key: &str, default: u64, (min, max): (u64, u64), hint: &str) -> Option<u64> {
+        let shown = size::format(default);
+        let rule = format!(
+            "must be {}, from {} to {} inclusive",
+            size::FORM,
+            size::format(min),
+            size::format(max)
+        );
+        self.parsed(
+            key,
+            (default, &shown),
+            |text| size::parse(text).filter(|n| (min..=max).contains(n)),
+            &rule,
+            hint,
+        )
+    }
+
     /// A duration within `min..=max`.
     fn duration(
         &mut self,
@@ -505,6 +531,36 @@ impl Checker<'_> {
 }
 
 const SECOND: Duration = Duration::from_secs(1);
+
+/// The default `server.memory_budget` for a host with `memory` bytes
+/// (ruling M1-R40, review I-3): a quarter of it, leaving the rest to the
+/// index, the CPU-bound work and the system, rounded down to a whole MiB,
+/// from [`MemoryBudget::MIN_BYTES`] to [`MemoryBudget::MAX_BYTES`]. Where
+/// the memory can't be read, [`MemoryBudget::DEFAULT_BYTES`].
+fn default_memory_budget(memory: Option<u64>) -> u64 {
+    memory.map_or(MemoryBudget::DEFAULT_BYTES, |m| {
+        ((m / 4) & !((1 << 20) - 1)).clamp(MemoryBudget::MIN_BYTES, MemoryBudget::MAX_BYTES)
+    })
+}
+
+/// A warning if `budget` is over half of the `memory` this process may
+/// use: request data alone could then crowd out the rest of the process.
+pub fn memory_budget_warning(budget: u64, memory: Option<u64>) -> Option<String> {
+    let memory = memory?;
+    (budget > memory / 2).then(|| {
+        format!(
+            "server.memory_budget is {}, more than half of the {} of memory this process may use; \
+             under load it may run out of memory",
+            size::format(budget),
+            size::format(memory & !((1 << 20) - 1)),
+        )
+    })
+}
+
+/// The default `server.max_connections`: far more than the few dozen
+/// connections a busy client opens, well below the open-file limits
+/// servers are given.
+const DEFAULT_MAX_CONNECTIONS: u32 = 4096;
 
 /// Loads the configuration from `file`, then `env` (only
 /// `OPENXET_<SECTION>__<KEY>` variables are read), then `overrides`.
@@ -627,6 +683,24 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "4096 (4 KiB/s) keeps uploads over slow links working; a higher rate frees stalled \
          connections sooner.",
     );
+    let host_memory = host_memory::total();
+    let memory_budget = c.size(
+        "server.memory_budget",
+        default_memory_budget(host_memory),
+        (MemoryBudget::MIN_BYTES, MemoryBudget::MAX_BYTES),
+        "Upload bodies and reconstruction answers reserve from it; uploads queue up to 120s \
+         for room, then get 503 memory_busy. The default is a quarter of this host's memory \
+         (1GiB if it can't be read); keep it under half.",
+    );
+    let max_connections = int(
+        c,
+        "server.max_connections",
+        DEFAULT_MAX_CONNECTIONS,
+        1..=1_000_000,
+        "must be a whole number from 1 to 1000000",
+        "Connections past it wait unaccepted until one closes. Keep it below the process's \
+         open-file limit (ulimit -n); 4096 is the default.",
+    );
     let shutdown_grace = c.duration(
         "server.shutdown_grace",
         Duration::from_secs(30),
@@ -721,6 +795,9 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         log_level: log_level?,
         header_read_timeout: header_read_timeout?,
         body_deadline: BodyDeadline::new(body_read_timeout?, body_min_rate?)?,
+        memory_budget: memory_budget?,
+        host_memory,
+        max_connections: max_connections?,
         shutdown_grace: shutdown_grace?,
         visibility: visibility?,
         url_lifetime: url_lifetime?,
@@ -1152,6 +1229,72 @@ mod tests {
             ]
         );
         assert!(loaded.config.is_none());
+    }
+
+    #[test]
+    fn the_memory_budget_is_a_size_within_its_bounds() {
+        let config = load_toml("", &[]).config.unwrap();
+        let default = default_memory_budget(host_memory::total());
+        assert_eq!(config.memory_budget, default);
+        assert_eq!(
+            config.cas(Url::parse("http://x").unwrap()).memory_budget,
+            default
+        );
+
+        let config = load_toml("[server]\nmemory_budget = \"3GiB\"\n", &[])
+            .config
+            .unwrap();
+        assert_eq!(config.memory_budget, 3 << 30);
+        let config = load_toml("", &[("OPENXET_SERVER__MEMORY_BUDGET", "512MiB")])
+            .config
+            .unwrap();
+        assert_eq!(config.memory_budget, 512 << 20);
+
+        for bad in ["255MiB", "2TiB", "1GB", "1073741824", "0MiB"] {
+            let loaded = load_toml(&format!("[server]\nmemory_budget = \"{bad}\"\n"), &[]);
+            assert_eq!(problem_keys(&loaded), ["server.memory_budget"], "{bad}");
+        }
+        let loaded = load_toml("[server]\nmemory_budget = 1073741824\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["server.memory_budget"]);
+    }
+
+    #[test]
+    fn the_default_memory_budget_is_a_quarter_of_detected_memory() {
+        // Review I-3 of M1-R40: the 1 GiB floor applies only where memory
+        // can't be read; a small host gets a quarter, at least 256 MiB.
+        const GIB: u64 = 1 << 30;
+        assert_eq!(default_memory_budget(Some(16 * GIB)), 4 * GIB);
+        assert_eq!(default_memory_budget(Some(2 * GIB)), GIB / 2);
+        assert_eq!(default_memory_budget(Some(GIB)), 256 << 20);
+        assert_eq!(default_memory_budget(Some(512 << 20)), 256 << 20);
+        assert_eq!(default_memory_budget(None), GIB);
+        assert_eq!(default_memory_budget(Some(8 << 40)), 1 << 40);
+        // Rounded down to a whole MiB, so `config check` shows a size.
+        assert_eq!(default_memory_budget(Some(16_303_312 * 1024)), 3980 << 20);
+    }
+
+    #[test]
+    fn a_budget_over_half_the_memory_is_warned_about() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(memory_budget_warning(4 * GIB, Some(16 * GIB)), None);
+        assert_eq!(memory_budget_warning(8 * GIB, Some(16 * GIB)), None);
+        let warning = memory_budget_warning(256 << 20, Some(400 << 20)).unwrap();
+        assert!(warning.contains("256MiB"), "{warning}");
+        assert!(memory_budget_warning(9 * GIB, Some(16 * GIB)).is_some());
+        assert_eq!(memory_budget_warning(64 * GIB, None), None);
+    }
+
+    #[test]
+    fn max_connections_is_a_count_within_its_bounds() {
+        assert_eq!(load_toml("", &[]).config.unwrap().max_connections, 4096);
+        let config = load_toml("", &[("OPENXET_SERVER__MAX_CONNECTIONS", "64")])
+            .config
+            .unwrap();
+        assert_eq!(config.max_connections, 64);
+        for bad in ["0", "1000001", "\"64\""] {
+            let loaded = load_toml(&format!("[server]\nmax_connections = {bad}\n"), &[]);
+            assert_eq!(problem_keys(&loaded), ["server.max_connections"], "{bad}");
+        }
     }
 
     #[test]
