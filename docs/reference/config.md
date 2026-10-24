@@ -62,6 +62,7 @@ unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | `body_read_timeout` | `300s` | `1s` to `1h` | The longest gap allowed between two parts of a request body. It matches `hf_xet`'s own 300 s read timeout. |
 | `body_min_rate` | `4096` | `1` to `1048576` | The least average rate of a request body, in bytes per second, after a first `body_read_timeout`: a body of `n` bytes may take `body_read_timeout + n / body_min_rate`. The default lets a 64 MiB xorb take up to 4.6 hours over a very slow link. |
 | `memory_budget` | `1GiB` | `256MiB` to `1TiB` | The most memory request data may hold at once: upload bodies being buffered and reconstruction answers waiting to be sent. See [Memory](#memory). |
+| `max_connections` | `4096` | `1` to `1000000` | The most connections open at once. Past it, a new connection waits unaccepted in the listen backlog until one closes, then is served. Keep it below the process's open-file limit (`ulimit -n`). |
 | `shutdown_grace` | `30s` | `1s` to `10m` | On `SIGTERM` or `SIGINT`, how long in-flight requests get to finish. |
 
 A body that breaks `body_read_timeout` or `body_min_rate` is refused with
@@ -325,6 +326,11 @@ again.
   connections, lets in-flight requests finish within `shutdown_grace`, and
   exits 0. A second signal exits at once with code 1. Every acknowledged
   write is already durable, so neither loses data.
+- **Connections:** at most `max_connections` are open at once. The next
+  one is not accepted until one closes: it waits in the kernel's listen
+  backlog with its request unread, and is served then. Refusing it
+  instead would cost the file descriptor the cap protects. A client whose
+  connect attempt times out meanwhile retries it.
 - The server speaks HTTP/1.1, which is what stock clients use. Put TLS in
   front of it with a proxy, and set `public_url` to the proxy's URL.
 

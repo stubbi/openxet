@@ -129,6 +129,7 @@ pub struct Config {
     pub body_deadline: BodyDeadline,
     /// `server.memory_budget`, in bytes.
     pub memory_budget: u64,
+    pub max_connections: u32,
     pub shutdown_grace: Duration,
     pub visibility: Visibility,
     pub url_lifetime: Duration,
@@ -193,6 +194,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("body_read_timeout", Kind::Str),
             ("body_min_rate", Kind::Int),
             ("memory_budget", Kind::Str),
+            ("max_connections", Kind::Int),
             ("shutdown_grace", Kind::Str),
         ],
     ),
@@ -528,6 +530,11 @@ impl Checker<'_> {
 
 const SECOND: Duration = Duration::from_secs(1);
 
+/// The default `server.max_connections`: far more than the few dozen
+/// connections a busy client opens, well below the open-file limits
+/// servers are given.
+const DEFAULT_MAX_CONNECTIONS: u32 = 4096;
+
 /// Loads the configuration from `file`, then `env` (only
 /// `OPENXET_<SECTION>__<KEY>` variables are read), then `overrides`.
 pub fn load(
@@ -657,6 +664,15 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
          wait up to 5s, then get 503 memory_busy, which clients retry. 1GiB is the default; \
          leave room for the rest of the process.",
     );
+    let max_connections = int(
+        c,
+        "server.max_connections",
+        DEFAULT_MAX_CONNECTIONS,
+        1..=1_000_000,
+        "must be a whole number from 1 to 1000000",
+        "Connections past it wait unaccepted until one closes. Keep it below the process's \
+         open-file limit (ulimit -n); 4096 is the default.",
+    );
     let shutdown_grace = c.duration(
         "server.shutdown_grace",
         Duration::from_secs(30),
@@ -752,6 +768,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         header_read_timeout: header_read_timeout?,
         body_deadline: BodyDeadline::new(body_read_timeout?, body_min_rate?)?,
         memory_budget: memory_budget?,
+        max_connections: max_connections?,
         shutdown_grace: shutdown_grace?,
         visibility: visibility?,
         url_lifetime: url_lifetime?,
@@ -1209,6 +1226,19 @@ mod tests {
         }
         let loaded = load_toml("[server]\nmemory_budget = 1073741824\n", &[]);
         assert_eq!(problem_keys(&loaded), ["server.memory_budget"]);
+    }
+
+    #[test]
+    fn max_connections_is_a_count_within_its_bounds() {
+        assert_eq!(load_toml("", &[]).config.unwrap().max_connections, 4096);
+        let config = load_toml("", &[("OPENXET_SERVER__MAX_CONNECTIONS", "64")])
+            .config
+            .unwrap();
+        assert_eq!(config.max_connections, 64);
+        for bad in ["0", "1000001", "\"64\""] {
+            let loaded = load_toml(&format!("[server]\nmax_connections = {bad}\n"), &[]);
+            assert_eq!(problem_keys(&loaded), ["server.max_connections"], "{bad}");
+        }
     }
 
     #[test]
