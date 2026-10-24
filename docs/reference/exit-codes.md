@@ -29,7 +29,7 @@ object with a stable `code` and a `hint` naming the next action:
 | `insecure_permissions` | 1 | A secret file (`dev-token`, `transfer.key`, a signing key) can be read by other users. The hint names the `chmod`. |
 | `invalid_key` | 1 | A key or token file doesn't hold what it should. |
 | `exists` | 1 | `token keygen` would overwrite a file. Nothing was written. |
-| `no_key` | 1 | `token mint` found no signing key at `--key`. |
+| `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |
 | `invalid_ttl` | 1 | `token mint --ttl` is outside `1m` to `30d`. |
 | `invalid_claims` | 1 | `token mint` or `token generate` was given an empty or invalid `--scope` or `--subject`. |
 | `key`, `random` | 1 | The operating system's random number generator failed. |

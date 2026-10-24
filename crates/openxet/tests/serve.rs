@@ -300,8 +300,26 @@ fn write_config(dir: &Path, toml: &str) -> PathBuf {
     path
 }
 
+/// Runs `cmd` to completion. A command still running after [`PATIENCE`]
+/// (a server that started when it should have failed) is killed, so a
+/// failing test never hangs.
 fn run(cmd: &mut Command) -> Output {
-    cmd.output().unwrap()
+    let child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id().to_string();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    if let Ok(out) = rx.recv_timeout(PATIENCE) {
+        out.unwrap()
+    } else {
+        let _ = Command::new("kill").args(["-9", &pid]).status();
+        panic!("the command was still running after {PATIENCE:?}");
+    }
 }
 
 fn json_stdout(out: &Output) -> Value {
@@ -408,6 +426,9 @@ async fn dev_mode_banner_is_ready_to_paste() {
     assert!(endpoint.starts_with("http://127.0.0.1:"), "{banner}");
     assert!(banner.contains(&token), "{banner}");
     assert!(banner.contains("scope \"default\" (write)"), "{banner}");
+    // Stock macOS and Debian have `python3`, not always `python`.
+    assert!(banner.contains("pip install hf_xet"), "{banner}");
+    assert!(banner.contains("  python3 -c 'import hf_xet;"), "{banner}");
     // hf_xet 1.7.0: upload_files(file_paths, endpoint, token_info,
     // token_refresher, progress_updater, _repo_type), token_info = (token, exp).
     assert!(
@@ -744,6 +765,13 @@ async fn token_mint_verifies() {
     let error = json_stderr(&out);
     assert_eq!(error["code"], "invalid_ttl");
     assert!(error["hint"].as_str().unwrap().contains("30d"));
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("--ttl 31d is outside 1m to 30d"),
+        "{error}"
+    );
 
     let config = write_config(
         dir.path(),
@@ -799,6 +827,10 @@ async fn token_generate_configures_a_static_token() {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one session of every credential kind, then one assertion over its log"
+)]
 async fn credentials_never_logged() {
     // Design §5.9: credentials are never echoed or logged, at any level.
     let dir = tempfile::tempdir().unwrap();
@@ -808,7 +840,15 @@ async fn credentials_never_logged() {
         .arg(&key)));
     let generate = |mode: &str| {
         json_stdout(&run(openxet().args([
-            "token", "generate", "--json", "--scope", "logs", "--mode", mode,
+            "token",
+            "generate",
+            "--json",
+            "--scope",
+            "logs",
+            "--mode",
+            mode,
+            "--subject",
+            "logs",
         ])))
     };
     let (write, read) = (generate("write"), generate("read"));
@@ -1015,4 +1055,286 @@ fn unspecified_bind_needs_a_public_url() {
     assert_eq!(out.status.code(), Some(1));
     let report = json_stdout(&out);
     assert_eq!(report["problems"][0]["key"], "server.public_url");
+}
+
+#[test]
+fn config_check_never_echoes_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let pasted = json_stdout(&run(openxet().args([
+        "token",
+        "generate",
+        "--json",
+        "--mode",
+        "write",
+        "--subject",
+        "a",
+    ])))["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let in_env = json_stdout(&run(openxet().args([
+        "token",
+        "generate",
+        "--json",
+        "--mode",
+        "read",
+        "--subject",
+        "b",
+    ])))["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The likeliest mistake: the token itself where its hash belongs.
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[[auth.static_tokens]]\nsha256 = \"{pasted}\"\nscope = \"s\"\nmode = \"write\"\n\
+             subject = \"x\"\n"
+        ),
+    );
+    let env_value = format!("[{{sha256 = \"{in_env}\""); // not valid TOML
+    for json in [true, false] {
+        let mut cmd = openxet();
+        cmd.args(["config", "check", "--config"]).arg(&config);
+        if json {
+            cmd.arg("--json");
+        }
+        let out = run(cmd.env("OPENXET_AUTH__STATIC_TOKENS", &env_value));
+        assert_eq!(out.status.code(), Some(1));
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        for secret in [&pasted, &in_env] {
+            assert!(!all.contains(secret.as_str()), "a token was echoed: {all}");
+        }
+        assert!(all.contains("<redacted>"), "{all}");
+        assert!(all.contains("looks like a raw token"), "{all}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_data_dir_is_private() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let server = Server::start(&data, &[], &[]);
+    let token = server.token();
+    assert_eq!(upload_xorb(&server, &token).await, 200);
+    assert_eq!(upload_shard(&server, &token).await, 200);
+    server.stop();
+
+    let mut dirs = vec![data.clone()];
+    let mut files = 0;
+    while let Some(dir) = dirs.pop() {
+        assert_eq!(mode_of(&dir), 0o700, "{}", dir.display());
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                assert_eq!(mode_of(&path), 0o600, "{}", path.display());
+                files += 1;
+            }
+        }
+    }
+    assert!(files >= 5, "index files, keys, a xorb and a shard");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shared_data_dir_is_warned_about() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let server = Server::start(&data, &[], &[]);
+    let stderr = server.stop();
+    assert!(
+        stderr.contains(&format!("chmod 700 {}", data.display())),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn configured_mode_generates_the_default_transfer_key_with_a_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let generated = json_stdout(&run(openxet().args([
+        "token",
+        "generate",
+        "--json",
+        "--mode",
+        "write",
+        "--subject",
+        "a",
+    ])));
+    let config = write_config(dir.path(), generated["config"].as_str().unwrap());
+    let data = dir.path().join("data");
+    let server = Server::start(&data, &["--config", config.to_str().unwrap()], &[]);
+    let stderr = server.stop();
+    assert!(data.join("transfer.key").is_file());
+    assert!(stderr.contains("every node"), "{stderr}");
+    assert!(
+        stderr.contains(data.join("transfer.key").to_str().unwrap()),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn an_explicit_transfer_key_file_must_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("keys/transfer.key");
+    let config = write_config(
+        dir.path(),
+        &format!("[cas]\ntransfer_key_file = \"{}\"\n", missing.display()),
+    );
+    let out = run(openxet()
+        .args(["serve", "--json", "--port", "0", "--data-dir"])
+        .arg(dir.path().join("data"))
+        .arg("--config")
+        .arg(&config));
+    assert_eq!(out.status.code(), Some(1));
+    let error = json_stderr(&out);
+    assert_eq!(error["code"], "no_key");
+    assert!(
+        error["hint"]
+            .as_str()
+            .unwrap()
+            .contains("openssl rand -hex 32"),
+        "{error}"
+    );
+    assert!(!missing.exists(), "the key was generated anyway");
+}
+
+#[test]
+fn mint_with_the_public_key_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("signing.key");
+    let keygen = json_stdout(&run(openxet()
+        .args(["token", "keygen", "--json", "--key"])
+        .arg(&key)));
+    let out = run(openxet()
+        .args([
+            "token", "mint", "--json", "--scope", "s", "--mode", "read", "--key",
+        ])
+        .arg(keygen["public_key"].as_str().unwrap()));
+    assert_eq!(out.status.code(), Some(1));
+    let error = json_stderr(&out);
+    assert_eq!(error["code"], "invalid_key", "{error}");
+    assert!(
+        error["hint"].as_str().unwrap().contains("public key"),
+        "{error}"
+    );
+}
+
+#[test]
+fn keygen_defaults_to_the_config_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run(openxet()
+        .args(["token", "keygen", "--json"])
+        .current_dir(dir.path())
+        .env("XDG_CONFIG_HOME", dir.path().join("cfg")));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let key = dir.path().join("cfg/openxet/token.key");
+    assert!(key.is_file());
+    assert!(PathBuf::from(format!("{}.pub", key.display())).is_file());
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "wrote into the cwd"
+    );
+    let out = run(openxet()
+        .args(["token", "mint", "--json", "--scope", "s", "--mode", "read"])
+        .env("XDG_CONFIG_HOME", dir.path().join("cfg")));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
+#[test]
+fn generate_requires_a_subject() {
+    let out = run(openxet().args(["token", "generate", "--json", "--mode", "read"]));
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn concurrent_first_starts_share_one_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let spawn = || {
+        let data = data.clone();
+        thread::spawn(move || Server::start(&data, &[], &[]))
+    };
+    let (a, b) = (spawn(), spawn());
+    let (a, b) = (a.join().unwrap(), b.join().unwrap());
+    assert_eq!(a.token(), b.token());
+    a.stop();
+    b.stop();
+}
+
+#[test]
+fn a_startup_failure_reports_only_the_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("not-a-dir");
+    std::fs::write(&file, b"").unwrap();
+    let out = run(openxet()
+        .args(["serve", "--port", "0", "--data-dir"])
+        .arg(file.join("data")));
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("connection"), "{stderr}");
+    assert!(stderr.contains("error: "), "{stderr}");
+}
+
+#[test]
+fn the_ready_line_names_the_data_dir_absolutely() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = openxet();
+    cmd.args(["serve", "--json", "--port", "0", "--data-dir", "rel"])
+        .current_dir(dir.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let server = Server::spawn(cmd);
+    let shown = PathBuf::from(server.line["data_dir"].as_str().unwrap());
+    assert!(shown.is_absolute(), "{shown:?}");
+    assert_eq!(
+        shown.canonicalize().unwrap(),
+        dir.path().join("rel").canonicalize().unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn config_check_checks_files_and_the_data_dir() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let key = data.join("transfer.key");
+    std::fs::write(&key, format!("{}\n", "a".repeat(64))).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let check = || {
+        json_stdout(&run(openxet()
+            .args(["config", "check", "--json"])
+            .env("OPENXET_SERVER__DATA_DIR", &data)))
+    };
+    let report = check();
+    assert_eq!(report["valid"], false);
+    assert_eq!(
+        report["problems"][0]["key"], "cas.transfer_key_file",
+        "{report}"
+    );
+    assert!(
+        report["problems"][0]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("chmod 600")
+    );
+
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let report = check();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(report["valid"], false, "{report}");
+    assert_eq!(report["problems"][0]["key"], "server.data_dir", "{report}");
 }

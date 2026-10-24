@@ -19,7 +19,7 @@ JSON_COMMANDS = [
     ["config", "check", "--json"],
     ["token", "keygen", "--key", "{tmp}/signing.key", "--json"],
     ["token", "mint", "--key", "{key}", "--scope", "agent", "--mode", "read", "--ttl", "1h", "--json"],
-    ["token", "generate", "--scope", "agent", "--mode", "write", "--json"],
+    ["token", "generate", "--scope", "agent", "--mode", "write", "--subject", "agent", "--json"],
     ["serve", "--data-dir", "{tmp}/data", "--port", "0", "--json"],
 ]
 

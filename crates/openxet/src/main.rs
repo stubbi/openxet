@@ -7,6 +7,7 @@ mod duration;
 mod error;
 mod logging;
 mod output;
+mod preflight;
 mod secret;
 mod serve;
 mod token_cmd;

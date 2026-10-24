@@ -32,7 +32,8 @@ line:
 {"schema":"openxet.serve.v1","version":"0.0.0","endpoint":"http://127.0.0.1:8080","data_dir":"./openxet-data","scope":"default","mode":"write","token":"oxt_REDACTED","token_exp":4611686018427387904}
 ```
 
-`scope`, `mode`, `token` and `token_exp` are `null` outside dev mode. Logs
+`data_dir` is absolute. `scope`, `mode`, `token` and `token_exp` are `null`
+outside dev mode. Logs
 go to stderr. Exit codes: 0 after a graceful stop, 1 if startup fails (the
 error names what to fix) or after a second stop signal.
 
@@ -43,15 +44,20 @@ openxet config check [--config FILE] [--json]
 ```
 
 Loads the configuration as `serve` would, from the file and the
-`OPENXET_<SECTION>__<KEY>` environment, and reports either every problem or
-every effective setting with its source. Exit code 0 if the configuration
-is valid, 1 with error code `config` if not.
+`OPENXET_<SECTION>__<KEY>` environment, checks the files it names (the
+data directory can be written; `transfer.key` and `dev-token` are well
+formed and private), and reports either every problem or every effective
+setting with its source. Values under `[auth]` are always `<redacted>`.
+`warnings` lists what `serve` accepts but warns about, such as a data
+directory other users may enter. Exit code 0 if the configuration is valid,
+1 with error code `config` if not.
 
 ```json
 {"schema":"openxet.config-check.v1","valid":false,"file":"openxet.toml","dev_mode":null,
  "problems":[{"key":"cas.url_lifetime","value":"5m","source":"file openxet.toml",
               "rule":"must be a whole number followed by s, m, h or d, such as 30s, 60m, 24h or 30d, from 30m to 24h inclusive",
               "hint":"Use 60m unless you need otherwise. …"}],
+ "warnings":[],
  "settings":[{"key":"server.bind","value":"127.0.0.1:8080","source":"default"}, …]}
 ```
 
@@ -64,14 +70,17 @@ invalid one.
 openxet token keygen [--key FILE] [--json]
 ```
 
-Writes a new Ed25519 private key to `FILE` (default `openxet-token.key`,
-mode `0600`, PKCS#8 PEM) and its public key to `FILE.pub` (SPKI PEM), and
-prints the public key, its `kid` and the `[auth]` entry that trusts it.
+Writes a new Ed25519 private key to `FILE` (mode `0600`, PKCS#8 PEM) and
+its public key to `FILE.pub` (SPKI PEM), and prints the public key, its
+`kid` and the `[auth]` entry that trusts it. `FILE` defaults to
+`$XDG_CONFIG_HOME/openxet/token.key`, or `~/.config/openxet/token.key`, never
+the working directory, where a key would be one `git add` from a commit.
 It never overwrites a file: if either exists, it fails with error code
-`exists` and writes nothing.
+`exists` and writes nothing. The public key is written first, so a failure
+never leaves a private key without its public half.
 
 ```json
-{"schema":"openxet.token-keygen.v1","kid":"8f1c2a3b4d5e6f70","private_key":"/abs/openxet-token.key","public_key":"/abs/openxet-token.key.pub","public_key_pem":"-----BEGIN PUBLIC KEY-----\n…"}
+{"schema":"openxet.token-keygen.v1","kid":"8f1c2a3b4d5e6f70","private_key":"/home/me/.config/openxet/token.key","public_key":"/home/me/.config/openxet/token.key.pub","public_key_pem":"-----BEGIN PUBLIC KEY-----\n…"}
 ```
 
 ## `openxet token mint`
@@ -80,8 +89,8 @@ It never overwrites a file: if either exists, it fails with error code
 openxet token mint --scope S --mode read|write [--ttl 1h] [--subject NAME] [--key FILE] [--json]
 ```
 
-Signs a CAS token with the key `token keygen` wrote (default
-`openxet-token.key`). `--ttl` is from `1m` to `30d` (default `1h`); a server
+Signs a CAS token with the key `token keygen` wrote (by default the one it
+writes by default). `--ttl` is from `1m` to `30d` (default `1h`); a server
 also refuses a token that expires beyond its `auth.max_token_lifetime`
 (`24h` by default). `--subject` (default `openxet-cli`) becomes the `sub`
 claim. Without `--json`, stdout is the token alone, so
@@ -94,14 +103,15 @@ claim. Without `--json`, stdout is the token alone, so
 ## `openxet token generate`
 
 ```
-openxet token generate --mode read|write [--scope S] [--subject NAME] [--json]
+openxet token generate --mode read|write --subject NAME [--scope S] [--json]
 ```
 
 Generates a static token (`oxt_` and 43 base64url characters; see
 [Token format](config.md#token-format)) and prints it with its
 `[[auth.static_tokens]]` entry, which holds only the token's SHA-256. The
-token is printed this once; openxet never stores it. `--scope` defaults to
-`default` and `--subject` to `static`.
+token is printed this once; openxet never stores it. `--subject` is
+required, so that each token's actions are attributed to it; `--scope`
+defaults to `default`.
 
 ```json
 {"schema":"openxet.token-generate.v1","token":"oxt_REDACTED","sha256":"…","scope":"ci","mode":"write","subject":"ci-bot","config":"[[auth.static_tokens]]\nsha256 = \"…\"\n…"}

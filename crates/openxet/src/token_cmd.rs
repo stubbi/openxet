@@ -14,16 +14,51 @@ use crate::error::CliError;
 use crate::output::{HumanDisplay, Output};
 use crate::secret;
 
-/// The default signing key file of `keygen` and `mint`.
-const DEFAULT_KEY: &str = "openxet-token.key";
+/// The default signing key of `keygen` and `mint`, under the user's config
+/// directory rather than the working directory, where it would sit one
+/// `git add` away from a commit.
+fn default_key(
+    xdg_config_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let config = xdg_config_home
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            home.map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .map(|h| h.join(".config"))
+        })?;
+    Some(config.join("openxet").join("token.key"))
+}
+
+/// `--key`, or the default signing key.
+fn key_path(key: Option<&Path>) -> Result<PathBuf, CliError> {
+    if let Some(key) = key {
+        return Ok(key.to_owned());
+    }
+    default_key(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+    .ok_or_else(|| {
+        CliError::new(
+            "no_key",
+            "neither XDG_CONFIG_HOME nor HOME names a directory for the signing key",
+            "Pass `--key FILE`.",
+        )
+    })
+}
 
 #[derive(Debug, clap::Subcommand)]
 pub enum TokenCommand {
     /// Write an Ed25519 key pair for signing CAS tokens and print the public key
     Keygen {
-        /// Where to write the private key (mode 0600); the public key goes to FILE.pub
-        #[arg(long, value_name = "FILE", default_value = DEFAULT_KEY)]
-        key: PathBuf,
+        /// Where to write the private key (mode 0600); the public key goes to
+        /// FILE.pub [default: `$XDG_CONFIG_HOME/openxet/token.key`, or
+        /// `~/.config/openxet/token.key`]
+        #[arg(long, value_name = "FILE")]
+        key: Option<PathBuf>,
     },
     /// Sign a CAS token (an `EdDSA` JWT) with a key from `token keygen`
     Mint {
@@ -39,9 +74,10 @@ pub enum TokenCommand {
         /// Who the token acts for (its `sub` claim)
         #[arg(long, default_value = "openxet-cli")]
         subject: String,
-        /// The private key from `token keygen`
-        #[arg(long, value_name = "FILE", default_value = DEFAULT_KEY)]
-        key: PathBuf,
+        /// The private key from `token keygen` [default: the one `keygen`
+        /// writes by default]
+        #[arg(long, value_name = "FILE")]
+        key: Option<PathBuf>,
     },
     /// Generate a static token and print its config entry, which holds only its hash
     Generate {
@@ -51,8 +87,9 @@ pub enum TokenCommand {
         /// What the token may do within its scope
         #[arg(long, value_enum)]
         mode: ModeArg,
-        /// Who the token acts for, as audit entries name it
-        #[arg(long, default_value = "static")]
+        /// Who the token acts for, as audit entries name it; give each token
+        /// its own
+        #[arg(long)]
         subject: String,
     },
 }
@@ -85,14 +122,21 @@ fn parse_ttl(text: &str) -> Result<Duration, String> {
 
 pub fn run(command: &TokenCommand, output: Output) -> Result<(), CliError> {
     match command {
-        TokenCommand::Keygen { key } => keygen(key, output),
+        TokenCommand::Keygen { key } => keygen(&key_path(key.as_deref())?, output),
         TokenCommand::Mint {
             scope,
             mode,
             ttl,
             subject,
             key,
-        } => mint(key, scope, *mode, *ttl, subject, output),
+        } => mint(
+            &key_path(key.as_deref())?,
+            scope,
+            *mode,
+            *ttl,
+            subject,
+            output,
+        ),
         TokenCommand::Generate {
             scope,
             mode,
@@ -127,13 +171,13 @@ impl HumanDisplay for Keygen {
         format!(
             "Wrote the signing key to {} (keep it secret) and the public key to {} (kid {}).\n\
              \nTrust it in the server's config:\n\
-             \n[auth]\njwt_public_keys = [\"{}\"]\n\
+             \n[auth]\njwt_public_keys = [{}]\n\
              \nMint a token with:\n  openxet token mint --key {} --scope <scope> --mode read --ttl 1h\n\
              \n{}",
             self.private_key,
             self.public_key,
             self.kid,
-            self.public_key,
+            toml::Value::String(self.public_key.clone()),
             self.private_key,
             self.public_key_pem.trim_end()
         )
@@ -163,14 +207,12 @@ fn keygen(key: &Path, output: Output) -> Result<(), CliError> {
         ));
     }
     let pair = generate_keypair().map_err(|err| auth_error(&err))?;
-    secret::create(key, pair.private_pem().as_bytes())?;
-    std::fs::write(&public, pair.public_pem()).map_err(|err| {
-        CliError::new(
-            "io",
-            format!("could not write {}: {err}", public.display()),
-            "Check the path and its permissions.",
-        )
-    })?;
+    // The public key first: a failure then never leaves a lone private key.
+    secret::create_with_mode(&public, pair.public_pem().as_bytes(), 0o644)?;
+    if let Err(err) = secret::create(key, pair.private_pem().as_bytes()) {
+        let _ = std::fs::remove_file(&public);
+        return Err(err);
+    }
     emit(
         output,
         &Keygen {
@@ -209,36 +251,47 @@ fn mint(
     subject: &str,
     output: Output,
 ) -> Result<(), CliError> {
-    let pem = secret::read(key)?.ok_or_else(|| {
+    let pem = secret::read_unchecked(key)?.ok_or_else(|| {
         CliError::new(
             "no_key",
             format!("{} does not exist", key.display()),
             "Create a signing key with `openxet token keygen`, or pass `--key` with its path.",
         )
     })?;
-    let signer = TokenSigner::from_pem(&pem)
-        .map_err(|err| {
-            CliError::new(
-                "invalid_key",
-                format!("{}: {err}", key.display()),
-                "Pass the private key `openxet token keygen` wrote (PKCS#8 PEM, -----BEGIN \
-                 PRIVATE KEY-----), not the .pub file.",
-            )
-        })?
-        .with_max_token_lifetime(ttl)
-        .map_err(|err| {
-            CliError::new(
-                "invalid_ttl",
-                err.to_string(),
-                format!(
-                    "Pass `--ttl` from {} to {}. Servers also refuse tokens that expire beyond \
-                     their auth.max_token_lifetime ({} by default).",
-                    duration::format(Authenticator::MIN_TOKEN_LIFETIME),
-                    duration::format(Authenticator::MAX_TOKEN_LIFETIME),
-                    duration::format(Authenticator::DEFAULT_MAX_TOKEN_LIFETIME)
-                ),
-            )
-        })?;
+    let signer = TokenSigner::from_pem(&pem).map_err(|err| {
+        let hint = if pem.contains("BEGIN PUBLIC KEY") {
+            "This is the public key. Pass the private key `openxet token keygen` wrote next to \
+             it: the same path without `.pub`."
+        } else {
+            "Pass the private key `openxet token keygen` wrote (PKCS#8 PEM, -----BEGIN \
+             PRIVATE KEY-----)."
+        };
+        CliError::new("invalid_key", format!("{}: {err}", key.display()), hint)
+    })?;
+    // Only a private key is held to private permissions.
+    secret::check_private(key)?;
+    let signer = signer.with_max_token_lifetime(ttl).map_err(|_| {
+        let (min, max) = (
+            Authenticator::MIN_TOKEN_LIFETIME,
+            Authenticator::MAX_TOKEN_LIFETIME,
+        );
+        CliError::new(
+            "invalid_ttl",
+            format!(
+                "--ttl {} is outside {} to {}",
+                duration::format(ttl),
+                duration::format(min),
+                duration::format(max)
+            ),
+            format!(
+                "Pass `--ttl` from {} to {}. Servers also refuse tokens that expire beyond \
+                 their auth.max_token_lifetime ({} by default).",
+                duration::format(min),
+                duration::format(max),
+                duration::format(Authenticator::DEFAULT_MAX_TOKEN_LIFETIME)
+            ),
+        )
+    })?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -339,4 +392,47 @@ fn generate(scope: &str, mode: ModeArg, subject: &str, output: Output) -> Result
             config,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn the_default_key_lives_in_the_config_directory() {
+        assert_eq!(
+            default_key(Some("/x/cfg".into()), Some("/home/u".into())),
+            Some(PathBuf::from("/x/cfg/openxet/token.key"))
+        );
+        assert_eq!(
+            default_key(Some("relative".into()), Some("/home/u".into())),
+            Some(PathBuf::from("/home/u/.config/openxet/token.key"))
+        );
+        assert_eq!(default_key(None, None), None);
+    }
+
+    #[test]
+    fn the_trust_snippet_escapes_the_path() {
+        let shown = Keygen {
+            schema: "openxet.token-keygen.v1",
+            kid: "k".to_owned(),
+            private_key: "/a/key".to_owned(),
+            public_key: r#"/a "quoted"\dir/key.pub"#.to_owned(),
+            public_key_pem: String::new(),
+        }
+        .human();
+        let snippet = shown
+            .lines()
+            .skip_while(|l| *l != "[auth]")
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let table: toml::Table = snippet.parse().unwrap();
+        assert_eq!(
+            table["auth"]["jwt_public_keys"][0].as_str(),
+            Some(r#"/a "quoted"\dir/key.pub"#)
+        );
+    }
 }

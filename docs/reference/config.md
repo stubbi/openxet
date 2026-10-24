@@ -12,8 +12,18 @@ openxet config check --config openxet.toml --json   # the same as openxet.config
 
 `config check` reports every problem at once, each with its key path,
 value, source (`file …`, `env …`, `flag …` or `default`), the rule it
-breaks and a hint. `serve` refuses an invalid configuration with exit code
-1 and error code `config`, and points at `config check`.
+breaks and a hint. For a valid configuration it also checks the files it
+names, as `serve` would: that `data_dir` can be written, and that
+`transfer.key` and `dev-token`, if present, are well formed and private. A
+data directory other users may enter is a warning. `serve` refuses an
+invalid configuration with exit code 1 and error code `config`, and points
+at `config check`.
+
+`config check` never shows a value under `[auth]`: it prints `<redacted>`
+instead, in text and JSON alike. A value that looks like an openxet token
+(`oxt_…`), such as a token pasted where its `sha256` belongs, is redacted
+wherever it appears, and the hint says to rotate the token and configure its
+hash.
 
 ## Sources
 
@@ -67,7 +77,7 @@ host name instead. A trailing `/` is allowed and ignored.
 | `dedup_visibility` | `global` | `global` or `per-scope` | Whether one scope's xorbs are visible to another. See [Dedup visibility](#dedup-visibility). |
 | `url_lifetime` | `60m` | `30m` to `24h` | How long a signed transfer URL is valid. See [Transfer URLs](#transfer-urls). |
 | `heartbeat_interval` | `5s` | `1s` to `2m` | How often a `/v2/shards` upload stream repeats its progress while the upload is verified and committed. `hf_xet` fails a stream that is silent for 300 s. |
-| `transfer_key_file` | `<data_dir>/transfer.key` | a file path | The key that signs transfer URLs. See [Keys and tokens on disk](#keys-and-tokens-on-disk). |
+| `transfer_key_file` | `<data_dir>/transfer.key` | a file path | The key that signs transfer URLs. Set explicitly, the file must exist. See [Keys and tokens on disk](#keys-and-tokens-on-disk). |
 
 ### `[auth]`
 
@@ -89,7 +99,7 @@ a fixed body that says nothing about stored data.
 Without a configuration file, or with one that has no `[auth]` section,
 `openxet serve` creates in `data_dir`, on first start:
 
-- `index.sqlite` and `bucket/`, the data
+- `index.sqlite` and `bucket/`, the data (see [Keys and tokens on disk](#keys-and-tokens-on-disk) for modes)
 - `dev-token` (mode `0600`): one static write token for scope `default`
 - `transfer.key` (mode `0600`)
 
@@ -110,14 +120,38 @@ one.
 
 ## Keys and tokens on disk
 
-openxet creates secret files with mode `0600` and never overwrites them.
-It refuses to start if a secret file can be read by group or other users,
-and names the `chmod 600` that fixes it.
+The data directory holds every scope's data, readable there without a
+credential, so on unix openxet keeps it private:
 
-`transfer.key` holds 32 random bytes as 64 hex characters. Every node
-behind one `public_url` must share the same key; copy the file, or create
-one with `openssl rand -hex 32`. Replacing it invalidates every transfer URL
+- It creates `data_dir` and every directory under it with mode `0700`, and
+  `index.sqlite` (with its `-wal`, `-shm` and `-lock` files), the bucket's
+  objects and the secret files with mode `0600`. The modes are set when
+  each is created; the umask can only narrow them.
+- If `data_dir` already exists and group or other users may enter it,
+  `serve` starts but logs a warning naming the `chmod 700` that fixes it,
+  and `config check` lists it under `warnings`.
+
+openxet creates secret files whole (written to a temporary file, synced,
+then linked into place) and never overwrites them. Of two servers starting
+at once on one data directory, both use the first one's `dev-token` and
+`transfer.key`. openxet refuses to start if a secret file can be read by
+group or other users, and names the `chmod 600` that fixes it.
+
+`transfer.key` holds 32 random bytes as 64 hex characters, and signs
+transfer URLs. Every node behind one `public_url` must share the same key;
+copy the file to each node. Replacing it invalidates every transfer URL
 already handed out.
+
+- With the default `cas.transfer_key_file`, a missing key is generated. In
+  dev mode this is silent. With `[auth]` configured, `serve` logs a warning
+  naming the file and saying that every node serving the deployment must
+  share it, since a node-local key makes other nodes refuse its URLs.
+- An explicitly set `cas.transfer_key_file` must exist: `serve` refuses to
+  start with error code `no_key`. Create the key once with
+  `(umask 077; openssl rand -hex 32 > /etc/openxet/transfer.key)` and copy
+  it to every node.
+- Remote bucket backends (M3) must require the key: with a shared bucket
+  there is no shared data directory to hold a generated one.
 
 ## Token format
 
@@ -141,7 +175,8 @@ subject = "ci-bot"  # who the token acts for
 ```
 
 `openxet token generate --scope ci --mode write --subject ci-bot` prints a
-new token and this entry. A presented token is hashed and compared against
+new token and this entry. Give each token its own `subject`, so the audit
+log tells them apart. A presented token is hashed and compared against
 every configured hash in constant time. `scope` and `subject` must not be
 empty or contain control characters, and `scope` is at most 1024 bytes.
 `write` may upload; `read` may download and query.
@@ -149,8 +184,9 @@ empty or contain control characters, and `scope` is at most 1024 bytes.
 ## CAS tokens
 
 CAS tokens are Ed25519-signed JWTs (ADR 0007), for platforms that issue
-short-lived, scoped tokens. `openxet token keygen` writes a key pair and
-`openxet token mint` signs one; any JWT library that does `EdDSA` can too.
+short-lived, scoped tokens. `openxet token keygen` writes a key pair (by default to
+`$XDG_CONFIG_HOME/openxet/token.key`, or `~/.config/openxet/token.key`, and
+`token.key.pub` beside it) and `openxet token mint` signs one; any JWT library that does `EdDSA` can too.
 openxet accepts exactly this:
 
 - **Keys:** `jwt_public_keys` lists one or more Ed25519 public keys in SPKI

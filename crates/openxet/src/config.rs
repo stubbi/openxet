@@ -20,7 +20,7 @@ use openxet_index::Visibility;
 use serde::Serialize;
 use url::Url;
 
-use crate::duration;
+use crate::{duration, secret};
 
 /// Where a setting's value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +47,8 @@ impl fmt::Display for Source {
 pub struct Problem {
     /// The key path, such as `cas.url_lifetime` or `auth.static_tokens[0].sha256`.
     pub key: String,
-    /// The rejected value as written, if there is one to show.
+    /// The rejected value as written, if there is one to show. A value
+    /// under `auth` or one that holds a token is `<redacted>`.
     pub value: Option<String>,
     /// Where the value came from.
     pub source: String,
@@ -55,7 +56,19 @@ pub struct Problem {
     pub rule: String,
     /// What to do about it.
     pub hint: String,
+    /// Whether `value` is text to show in quotes, rather than a TOML value
+    /// shown as written (`0`, `"abc"`) or a placeholder.
+    #[serde(skip)]
+    pub quoted: bool,
 }
+
+/// What a problem shows instead of a value under `auth`, which may be a
+/// credential (`auth.static_tokens[].sha256` is where a raw token is most
+/// often pasted by mistake).
+pub const REDACTED: &str = "<redacted>";
+
+const RAW_TOKEN_HINT: &str = "This looks like a raw token, not its SHA-256; rotate it and \
+     configure its hash (`openxet token generate`).";
 
 /// One effective setting, for `openxet config check`.
 #[derive(Debug, Clone, Serialize)]
@@ -114,6 +127,9 @@ pub struct Config {
     pub url_lifetime: Duration,
     pub heartbeat_interval: Duration,
     pub transfer_key_file: PathBuf,
+    /// Whether `cas.transfer_key_file` was set rather than defaulted: a
+    /// named key must exist, a default one is created.
+    pub transfer_key_explicit: bool,
     /// The configured credentials, or `None` in dev mode (no `[auth]`).
     pub auth: Option<Arc<Authenticator>>,
     pub max_token_lifetime: Duration,
@@ -230,12 +246,50 @@ impl Raw {
         rule: impl Into<String>,
         hint: impl Into<String>,
     ) {
+        self.push(key.into(), value, true, source, rule.into(), hint.into());
+    }
+
+    /// A problem whose value is shown as TOML writes it: `0`, `"abc"`.
+    fn problem_toml(
+        &mut self,
+        key: impl Into<String>,
+        value: Option<&toml::Value>,
+        source: &Source,
+        rule: impl Into<String>,
+        hint: impl Into<String>,
+    ) {
+        let value = value.map(ToString::to_string);
+        self.push(key.into(), value, false, source, rule.into(), hint.into());
+    }
+
+    /// Records a problem. Values under `auth` and values that hold a token
+    /// are never shown (design §5.9: credentials are never echoed).
+    fn push(
+        &mut self,
+        key: String,
+        mut value: Option<String>,
+        mut quoted: bool,
+        source: &Source,
+        rule: String,
+        mut hint: String,
+    ) {
+        let holds_token = value.as_deref().is_some_and(secret::contains_token);
+        if holds_token || key == "auth" || key.starts_with("auth.") {
+            if value.is_some() {
+                value = Some(REDACTED.to_owned());
+                quoted = false;
+            }
+            if holds_token {
+                hint = format!("{RAW_TOKEN_HINT} {hint}");
+            }
+        }
         self.problems.push(Problem {
-            key: key.into(),
+            key,
             value,
             source: source.to_string(),
-            rule: rule.into(),
-            hint: hint.into(),
+            rule,
+            hint,
+            quoted,
         });
     }
 
@@ -361,9 +415,9 @@ impl Raw {
         if let toml::Value::String(text) = value {
             Some((text, source))
         } else {
-            self.problem(
+            self.problem_toml(
                 key,
-                Some(value.to_string()),
+                Some(&value),
                 &source,
                 "must be a string",
                 format!("Quote the value, as in `{key} = \"…\"`. {DOCS}"),
@@ -594,6 +648,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         (SECOND, Duration::from_mins(2)),
         "hf_xet fails a shard upload stream that is silent for 300s; 5s is the default.",
     );
+    let transfer_key_explicit = c.raw.values.contains_key("cas.transfer_key_file");
     let transfer_key_file = match c.raw.string("cas.transfer_key_file") {
         Some((text, source)) if !text.is_empty() => {
             c.set("cas.transfer_key_file", &text, &source);
@@ -660,6 +715,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         url_lifetime: url_lifetime?,
         heartbeat_interval: heartbeat_interval?,
         transfer_key_file: transfer_key_file?,
+        transfer_key_explicit,
         auth: if c.raw.auth { Some(auth?) } else { None },
         max_token_lifetime: max_token_lifetime?,
     })
@@ -684,8 +740,7 @@ fn int(
     if let Some(n) = parsed {
         c.set(key, n.to_string(), &source);
     } else {
-        c.raw
-            .problem(key, Some(value.to_string()), &source, rule, hint);
+        c.raw.problem_toml(key, Some(&value), &source, rule, hint);
     }
     parsed
 }
@@ -848,9 +903,9 @@ fn static_token(
     let mut field = |name: &str| match table.get(name) {
         Some(toml::Value::String(text)) => Some(text.clone()),
         other => {
-            c.raw.problem(
+            c.raw.problem_toml(
                 format!("{at}.{name}"),
-                other.map(ToString::to_string),
+                other,
                 source,
                 "is required and must be a string",
                 STATIC_TOKEN_HINT,
@@ -928,13 +983,8 @@ fn jwt_public_keys(c: &mut Checker<'_>) -> Option<Vec<PublicKey>> {
     for (index, entry) in entries.iter().enumerate() {
         let at = format!("{KEY}[{index}]");
         let Some(text) = entry.as_str() else {
-            c.raw.problem(
-                &at,
-                Some(entry.to_string()),
-                &source,
-                "must be a string",
-                HINT,
-            );
+            c.raw
+                .problem_toml(&at, Some(entry), &source, "must be a string", HINT);
             ok = false;
             continue;
         };

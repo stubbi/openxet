@@ -9,7 +9,7 @@
 
 use std::io::{self, Write as _};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -33,7 +33,7 @@ use crate::config::{self, Config, LogFormat, Overrides, Problem};
 use crate::error::{CliError, ExitCode};
 use crate::logging;
 use crate::output::{HumanDisplay, Output};
-use crate::secret;
+use crate::{preflight, secret};
 
 /// The dev token's scope and the `exp` to hand `hf_xet` for it: static
 /// tokens never expire, and `hf_xet` requires an integer (S10 "Auth").
@@ -252,7 +252,15 @@ async fn accept(
     loop {
         let accepted = tokio::select! {
             accepted = listener.accept() => accepted,
-            _ = stop.wait_for(|stopped| *stopped) => break,
+            stopped = stop.wait_for(|stopped| *stopped) => {
+                // An error means the signal task is gone: the runtime is
+                // shutting down after a failed startup, and has nothing to
+                // drain or report.
+                if stopped.is_err() {
+                    return;
+                }
+                break;
+            }
         };
         let stream = match accepted {
             Ok((stream, _)) => stream,
@@ -295,17 +303,8 @@ async fn open(
     public_url: Url,
 ) -> Result<(AppState, Option<Zeroizing<String>>), CliError> {
     let dir = &config.data_dir;
-    std::fs::create_dir_all(dir).map_err(|err| {
-        CliError::new(
-            "data_dir",
-            format!(
-                "could not create the data directory {}: {err}",
-                dir.display()
-            ),
-            "Pass `--data-dir` with a writable directory, or set server.data_dir.",
-        )
-    })?;
-    let index = SqliteIndex::open(&dir.join("index.sqlite"))
+    prepare_data_dir(dir)?;
+    let index = SqliteIndex::open(&dir.join(INDEX_FILE))
         .await
         .map_err(|err| {
             CliError::new(
@@ -322,7 +321,7 @@ async fn open(
             "Check that the data directory is writable.",
         )
     })?;
-    let key = secret::transfer_key(&config.transfer_key_file)?;
+    let key = transfer_key(config)?;
     let urls = UrlSigner::new(*key, config.url_lifetime)
         .map_err(|err| CliError::new("config", err.to_string(), "Fix cas.url_lifetime."))?;
     let (auth, dev_token) = if let Some(auth) = &config.auth {
@@ -347,6 +346,60 @@ async fn open(
         config.cas(public_url),
     );
     Ok((state, dev_token))
+}
+
+const INDEX_FILE: &str = "index.sqlite";
+
+/// Creates the data directory mode `0700` if it is missing, and the index
+/// file mode `0600` (SQLite gives its `-wal` and `-shm` files the database
+/// file's mode). Warns if an existing directory is open to other users:
+/// the bucket holds every scope's data, readable there without a
+/// credential.
+fn prepare_data_dir(dir: &Path) -> Result<(), CliError> {
+    let unwritable = |err: io::Error| {
+        CliError::new(
+            "data_dir",
+            format!(
+                "could not create the data directory {}: {err}",
+                dir.display()
+            ),
+            "Pass `--data-dir` with a writable directory, or set server.data_dir.",
+        )
+    };
+    if dir.is_dir() {
+        if let Some(warning) = preflight::shared_data_dir(dir) {
+            tracing::warn!("{warning}");
+        }
+    } else {
+        secret::create_private_dir_all(dir).map_err(unwritable)?;
+    }
+    match secret::create_new_file(&dir.join(INDEX_FILE), 0o600) {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(unwritable(err)),
+    }
+}
+
+/// The transfer key. A named `cas.transfer_key_file` must exist; the
+/// default one is created, with a warning outside dev mode, since every
+/// node behind one endpoint needs the same key (ruling M1-R29).
+fn transfer_key(config: &Config) -> Result<Zeroizing<[u8; 32]>, CliError> {
+    let path = &config.transfer_key_file;
+    if let Some(key) = secret::read_transfer_key(path)? {
+        return Ok(key);
+    }
+    if config.transfer_key_explicit {
+        return Err(preflight::missing_transfer_key(path));
+    }
+    let (key, created) = secret::transfer_key(path)?;
+    if created && config.auth.is_some() {
+        tracing::warn!(
+            path = %path.display(),
+            "generated a new transfer key; every node serving this deployment must share this \
+             file, or transfer URLs signed by one node are refused by the others"
+        );
+    }
+    Ok(key)
 }
 
 /// The `openxet.serve.v1` line. The token fields are set in dev mode only.
@@ -378,8 +431,8 @@ impl HumanDisplay for Ready<'_> {
              \n  data dir  {data_dir}\
              \n  token     {token}\
              \n            scope \"{DEV_SCOPE}\" (write), kept in {data_dir}/dev-token\n\
-             \nUpload with hf_xet:\
-             \n  python -c 'import hf_xet; print(hf_xet.upload_files([\"model.bin\"], \"{endpoint}\", (\"{token}\", 2**62), None, None, None))'\n\
+             \nUpload with hf_xet (once: pip install hf_xet):\
+             \n  python3 -c 'import hf_xet; print(hf_xet.upload_files([\"model.bin\"], \"{endpoint}\", (\"{token}\", 2**62), None, None, None))'\n\
              \nUpload with openxet:\
              \n  export OPENXET_ENDPOINT={endpoint} OPENXET_TOKEN={token}\
              \n  openxet upload model.bin\n\
@@ -399,7 +452,10 @@ fn announce(output: Output, config: &Config, endpoint: &str, dev_token: Option<&
         schema: "openxet.serve.v1",
         version: env!("CARGO_PKG_VERSION"),
         endpoint,
-        data_dir: config.data_dir.display().to_string(),
+        data_dir: std::path::absolute(&config.data_dir)
+            .unwrap_or_else(|_| config.data_dir.clone())
+            .display()
+            .to_string(),
         scope: dev_token.map(|_| DEV_SCOPE),
         mode: dev_token.map(|_| "write"),
         token: dev_token,
