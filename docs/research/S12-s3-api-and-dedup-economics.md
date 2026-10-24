@@ -3,6 +3,9 @@
 <!-- description: Whether an S3-compatible API over openxet buckets is feasible, what CDC dedup saves on multi-tenant data, a cost model against S3, R2, B2, Wasabi and Hetzner, and the security and billing consequences. -->
 
 - Date: 2026-10-24. Every URL below was accessed on that date.
+- Status: the measurements and prices are a record. The recommendation
+  (an S3 API in M5, the price band) is a proposal pending the owner's
+  decision; the design schedules nothing from it until then.
 - Question (from the user): "does an S3-compatible API in front of buckets
   mean we could host a very cost-efficient S3 multi-tenancy for our
   users?" "Buckets" means openxet's planned generic bucket primitive
