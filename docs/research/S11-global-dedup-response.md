@@ -233,7 +233,8 @@ What this means for M1-R30:
 - **Granularity matches.** huggingface.co offers a shard's xorbs, not the
   single matched xorb and not a small fixed count; that is the content
   M1-R30 chose. The larger observed answer, 109 xorbs in 5.2 MB, is a
-  twelfth of openxet's 64 MiB budget, so openxet would offer it whole; a
+  third of openxet's 16 MiB budget (ruling M1-R32), so openxet would
+  offer it whole; a
   shard past the budget is where openxet's answer is cut, a size not seen
   here.
 - **Form matches:** no file info, no lookup tables, every chunk hash
@@ -406,25 +407,37 @@ answer at 14 ms while it was also ingesting the upload. The cost is about
 answers can't be cached, as each has a fresh key.
 
 **Memory** (ruling M1-R32, measured after review I1). Release build,
-Apple M3 with 8 CPUs, so 2 `dedup` permits; a scratch test (not
-committed) registers one shard of 200 xorbs of 8192 chunks, so every
-answer is a full 16.5 MB, and samples the process's resident size every
-5 ms while clients query its first chunk. The test's own HTTP clients
-are in the process and count too (observed):
+Apple M3 with 8 CPUs, so 2 `dedup` permits; one shard of 200 xorbs of
+8192 chunks, so every answer is a full 16.5 MB. True peak RSS, from
+`/usr/bin/time -l`, by the re-review; the idle process after setup is
+38.5 MB (observed, two runs each):
 
-| Load | Peak RSS over idle, after the fix | Before (64 MiB, `validate` permits; review) |
+| Load | Peak RSS after the fix | Before (64 MiB, `validate` permits) |
 |---|---|---|
-| 1 answer, cold process | 107 MB | about 0.55 GB |
-| 2 concurrent, reading | 103-107 MB | 0.93 GB |
-| 8 concurrent, reading | 160-188 MB | 2.05 GB |
-| 16 concurrent, reading | 150-180 MB | 2.8 GB |
-| 32 connections that never read | 132-198 MB | 2.68 GB |
-| 64 connections that never read | 82-101 MB | 3.2 GB |
+| 1 answer | 160 MB | about 0.55 GB |
+| 8 concurrent, reading | 292-337 MB | 2.05 GB |
+| 16 concurrent, reading | 308-310 MB | 2.8 GB |
+| 32 connections that never read | 241-258 MB | 2.68 GB |
+| 64 connections that never read | 246-248 MB | 3.2 GB |
 
-Ranges are two runs. The load beyond the permits waits for one and holds
-nothing but its request, so memory stays flat from 2 to 64 clients. Per
-process, dedup memory is at most the `dedup` permits × about 100 MB
-(the build peak plus allocator slack), whatever the number of clients.
+Over idle that is about 120 MB for one answer and about 250 to 300 MB
+with both permits busy. Load beyond the permits waits for one, holding
+only its request, so memory stays flat from 2 to 64 clients. Per process,
+dedup memory is at most the `dedup` permits × about 150 MB, whatever the
+number of clients. (The implementer's first figures, 5 ms RSS sampling,
+missed short peaks and read about a third lower.)
+
+**Stalled clients** (ruling M1-R33). With the permits held by bodies a
+client never reads, other queries would wait without limit, and stock
+`hf_xet` waits for its block's queries for up to its 300 s read timeout.
+So a query waits at most 1 s for a permit and then answers `429
+dedup_busy` (`Retry-After: 1`), which `hf_xet` takes as "no match"
+without retrying (S10 §2); and an answer must be sent within 30 s plus
+its length at 1 MiB/s (46 s for 16 MiB), after which a timer frees the
+answer and its permit. Observed with a scratch test (release, not
+committed; both permits held by sockets that never read; a 2 s test
+deadline): a third query answered `429` after 1.003 s, and after the
+deadline it answered `200` with the full 15.7 MB.
 
 ## Security
 

@@ -292,7 +292,9 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
   "no shard" and the upload continues (`remote_client.rs:191-200`): after
   6 attempts for `5xx` (observed with `503`), after one for `429`
   (`with_429_no_retry`, observed), and at once for other `4xx`. A
-  failing dedup endpoint therefore costs dedup, not uploads.
+  failing dedup endpoint therefore costs dedup, not uploads. openxet relies
+  on this: when its dedup permits stay taken for 1 s it answers `429
+  dedup_busy` (ruling M1-R33), so the upload goes on without that match.
 
 ### 3. Xorbs
 
