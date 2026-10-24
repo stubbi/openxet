@@ -1,0 +1,5 @@
+Contact: https://github.com/stubbi/openxet/security/advisories/new
+Expires: 2027-04-24T00:00:00Z
+Canonical: https://openxet.com/.well-known/security.txt
+Policy: https://github.com/stubbi/openxet/security/policy
+Preferred-Languages: en

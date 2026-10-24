@@ -71,3 +71,17 @@ When several tables share a heading, give each a factual title using
 The HTML build renders a native caption, and the Markdown keeps the annotation.
 Task-list checkboxes get accessible names from their own item's text, without
 including nested tasks.
+
+The public [security contact](https://openxet.com/.well-known/security.txt)
+points to the private reporting route in [SECURITY.md](../SECURITY.md).
+At each website release, verify that GitHub private vulnerability reporting is
+still enabled. Review and renew the six-month `Expires` date in
+`website/.well-known/security.txt` before it lapses; the build rejects an expired
+or invalid date, or one a year or more away. After deployment, check the public
+URL returns the contact as `text/plain`.
+
+Pages includes hidden files so this standard discovery URL works. The final
+artifact check permits only `.well-known/security.txt` and mdBook's
+`docs/.nojekyll`, with `.well-known` as their only hidden directory. Unexpected
+hidden paths and all symlinks fail the build; remove them from the source rather
+than widening the allowlist. An intentional new public path needs its own review.

@@ -112,15 +112,16 @@ cancellation link. Sign-up/sign-in remain unavailable.
 - [x] Test interaction math independently; test waitlist success/failure behavior
   where meaningful. Inspect actual page rendering and keyboard behavior.
 - [x] Align docs, 404, social metadata/image and privacy/contact information.
-- [ ] Run build/link checks and a local accessibility/performance review.
-- [ ] Review, PR, CI, merge, verify live page and waitlist; record release result.
+- [x] Run build/link checks, local accessibility review and payload budget checks.
+- [ ] Measure production field performance; artifact sizes are not Core Web Vitals.
+- [x] Review, PR, CI, merge, verify live page and waitlist; record release result.
 
 ## Task 5: Audit and refinement
 
-- [ ] Re-run Squirrel with full coverage; compare like-for-like findings with the
+- [x] Re-run Squirrel with full coverage; compare like-for-like findings with the
   initial sample, separating tool heuristics from confirmed defects.
 - [ ] Fix verified remaining defects in a focused follow-up release if needed.
-- [ ] Record measured outcomes, limitations, future launch steps and unresolved
+- [x] Record measured outcomes, limitations, future launch steps and unresolved
   evidence needs. Do not claim that a scan proves usability, compliance or loyalty.
 
 ## Baseline
@@ -147,3 +148,51 @@ credential-header detector interpreted the waitlist lockfile's npm dependency
    offset. Every other detector continues to inspect every original byte.
 4. Run the complete redaction guard and harness-isolation tests, independently
    review the change, then rerun CI without weakening the agent or core checks.
+
+## Third release: security contact and verification record
+
+PR #58 is published. The full public audit reports no failed checks; its missing
+security.txt warning identifies a useful discoverability improvement. GitHub
+private vulnerability reporting is enabled, so reuse that existing HTTPS contact.
+
+1. Add RFC 9116 contact, policy, canonical URL and a six-month expiry under
+   `website/.well-known/security.txt`; document renewal during release review.
+2. Before enabling hidden-file inclusion in the Pages artifact action, add a
+   failing regression for unexpected hidden output and symlinks. Permit only
+   `.well-known/security.txt` and mdBook's `docs/.nojekyll`, and validate the
+   final output tree after generation. The upload action dereferences symlinks.
+3. Run the site build and link checks, inspect an artifact produced with the
+   pinned action's packaging rules, and obtain independent review.
+4. Record the deployed waitlist revision, public browser/HTTP checks, measured
+   payloads, audit findings and limits. Publish through a reviewed PR and CI.
+5. Verify the security contact URL returns plain text after Pages deploys.
+
+Do not alter mdBook script ordering based on structural scan hints alone. The
+head TOC registration and inline sidebar initialization are order-dependent;
+measure cold mobile loading and sidebar/search interactions before that work.
+
+## Recorded release checks — 2026-10-24
+
+<!-- release-verification: 270ccd84bb9740ae5346fb059b0e256ff4df6e61 -->
+
+This appended record preserves the original task checklist and adds the verified
+release outcomes. See the [research record](../../research/website-design-2026-10-24.md)
+for audit counts, coverage, limitations and the observed browser interactions.
+
+- [x] Record PR #58 merge `270ccd84bb9740ae5346fb059b0e256ff4df6e61` and the successful [Pages run](https://github.com/stubbi/openxet/actions/runs/40125379486).
+- [x] Record the operator's live website/waitlist verification before this update.
+- [x] Record 20 Python site, 11 JavaScript behavior and 31 service tests passing;
+  site build/local links; waitlist TypeScript and production build.
+- [x] Record the 580-test redaction guard/harness run as pre-merge evidence.
+- [x] Record the independent reviews, tested Chrome sizes and narrow pre-release
+  public documentation search observation.
+- [x] Record payload sizes separately from unmeasured field performance.
+- [x] Copy the exact independently deployed waitlist v3 record into its operating guide.
+- [x] Record the final fresh full-coverage Squirrel report from its XML values.
+- [x] Triage all 27 listed warning rules, with dispositions in the research record.
+- [ ] Publish and verify the security-contact follow-up through PR, CI and Pages.
+- [ ] Collect first-time participant comprehension and task-success evidence.
+- [ ] Complete cross-browser, physical-device and assistive-technology evaluation.
+- [ ] Collect production field Core Web Vitals.
+
+The `xet://` decision remains scheduled M2/M6/M7 scope, not delivered URI support.
