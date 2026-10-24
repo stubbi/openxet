@@ -260,9 +260,11 @@ about 70–87 per second (table above). Durability of an acknowledged write
 ## Memory bounds
 
 Ruling M1-R40 bounds what requests hold in memory by one process-wide
-budget, `server.memory_budget` (a quarter of the host's memory, at least
-1 GiB; config.md, "Memory"). On the local machine (16 GB) the default is
-4 GiB.
+budget, `server.memory_budget` (a quarter of the host's memory;
+config.md, "Memory"). On the local machine (16 GB) the default is 4 GiB.
+The "after" numbers are from the code as amended by its review: answers
+pass queued uploads, one answer holds at most an eighth of the budget, and
+reservations outlive a client that leaves.
 
 ### Under attack
 
@@ -280,11 +282,11 @@ had no budget:
 
 | Scenario | Budget | Before: footprint / RSS | After: footprint / RSS |
 |---|---|---|---|
-| reconstruct, 16 sockets | 1 GiB | 712 / 1038 | 724 / 1026 |
-| reconstruct, 64 sockets | 1 GiB | 2658 / 1243 | 1279 / 1391 |
-| upload, 32 sockets | 1 GiB | 1983 / 1913 | 1040 / 1044 |
-| reconstruct, 128 sockets | default, 4 GiB | | 4324 / 1057 |
-| upload, 96 sockets | default, 4 GiB | | 3167 / 3171 |
+| reconstruct, 16 sockets | 1 GiB | 712 / 1038 | 780 / 906 |
+| reconstruct, 64 sockets | 1 GiB | 2658 / 1243 | 1101 / 1102 |
+| upload, 32 sockets | 1 GiB | 1983 / 1913 | 1040 / 1045 |
+| reconstruct, 128 sockets | default, 4 GiB | | 4201 / 1078 |
+| upload, 96 sockets | default, 4 GiB | | 4143 / 3685 |
 
 On macOS the physical footprint is the number to read: it counts the
 memory the kernel compressed, which RSS leaves out, and leaves out freed
@@ -295,12 +297,15 @@ JSON compresses well, so RSS understates the reconstruction rows.
   built, then its 42.3 MB), so the bound changes nothing there; they are
   freed by the send deadline, 70 s for this answer, instead of whenever
   TCP gives up.
-- 64 answers held 2.7 GB before. Now about 25 fit 1 GiB at once, the rest
-  wait 5 s and get `503 memory_busy`, and the peak stays within about
-  250 MB of the budget, the process's own baseline. With the default
-  budget, 128 answers peak at the budget plus the same baseline.
+- 64 answers held 2.7 GB before. Now about 15 fit 1 GiB at once (each
+  reserves about 65 MB with its decoded record, within an answer's
+  eighth), the rest wait 5 s and get `503 memory_busy`, and the peak
+  stays within about 100 to 250 MB of the budget, the process's own
+  baseline. With the default budget, 128 answers peak at the budget plus
+  the same baseline.
 - 32 stalled uploads held 32 × 64 MiB before. Now 16 fit 1 GiB and the
-  rest queue, unread, so the peak is the budget plus the baseline.
+  rest queue, unread, so the peak is the budget plus the baseline; 96 on
+  the default budget peak at it.
 
 ### Stock client throughput
 
@@ -309,16 +314,17 @@ xorbs at once, and uploads past the budget queue for up to 120 s instead
 of failing. `scripts/measure-storage-only.py` (`--size-mib 4096`) uploads
 and downloads a 4 GiB file with stock `hf_xet` 1.7.0 at its default
 concurrency against a default dev-mode server, and counts the server's
-`memory_busy` and other `5xx` answers. Local machine, at load average 6
-to 76 from other builds, so single runs vary by a factor of two; three
-alternating pairs and one more run each, in MB/s:
+`memory_busy` and other `5xx` answers. Local machine, at load average 5
+to 76 from other builds, so single runs vary by a factor of two;
+alternating runs, in MB/s, the last two of each row and the pinned
+budgets from the amended code:
 
 | Server | Upload | Download | Peak footprint (MiB) | `503 memory_busy` | Other `5xx` |
 |---|---|---|---|---|---|
-| before (`ff53a33`) | 443, 376, 203, 256 | 299, 166, 529, 380 | 271 to 712 | 0 | 0 |
-| after, default budget (4 GiB) | 297, 322, 422, 370 | 361, 324, 482, 554 | 376 to 1122 | 0 | 0 |
-| after, `memory_budget = "1GiB"` | 297 | 165 | 709 | 0 | 0 |
-| after, `memory_budget = "256MiB"` | 246 | 514 | 528 | 0 | 0 |
+| before (`ff53a33`) | 443, 376, 203, 256, 274, 383 | 299, 166, 529, 380, 274, 235 | 271 to 804 | 0 | 0 |
+| after, default budget (4 GiB) | 297, 322, 422, 370, 322, 387 | 361, 324, 482, 554, 382, 384 | 376 to 1122 | 0 | 0 |
+| after, `memory_budget = "1GiB"` | 297, 428 | 165, 204 | 536 to 709 | 0 | 0 |
+| after, `memory_budget = "256MiB"` | 246, 338 | 514, 279 | 449 to 528 | 0 | 0 |
 
 Throughput is the same within the noise, and no upload was refused,
 even with the smallest budget allowed, where at most 3 xorbs are
