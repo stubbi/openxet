@@ -24,6 +24,8 @@ Four legs:
 
 Planned for M2's Hub leg, with stock `huggingface_hub` against openxet's
 typed-route views (design §6, ADR 0010):
+- `untyped_create_is_model`: `hf upload foo/bar` with no `--repo-type`,
+  then `repo_info` and `snapshot_download` both work
 - `typed_route_view_filters_by_label`
 - `wrong_type_route_is_repo_not_found`: `RepositoryNotFoundError` for a
   repository read through a type it isn't labelled with

@@ -217,7 +217,9 @@ owner's decision. This ADR does not schedule it.
   `huggingface_hub` (repo info, listing, `hf download`) and writes it
   with whichever stock client supports it: Hub commits for `model`,
   `dataset` and `space`, Git with `git-xet` for `kernel`. In M2 it also
-  checks a typed-route view, a create collision's `409`, a wrong-type
+  checks that a create with no type is a model (`hf upload` with no
+  `--repo-type`, then `repo_info` and `snapshot_download`), a typed-route
+  view, a create collision's `409`, a wrong-type
   `404` that shows the label hint to a caller with read access, and one
   that matches an unknown repository's response (status, headers apart
   from per-request ids and dates, and body) for a caller without it
