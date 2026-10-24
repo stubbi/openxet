@@ -56,10 +56,27 @@ The owner decided on 2026-10-24 that openxet has two storage primitives.
    need no work beyond M2's Hub API.
 4. **Delivery.** M2 ships repositories with all four labels. M5 ships the
    bucket primitive (design §12).
-5. **Invariants hold for buckets too.** A bucket's keys are recorded in
-   the object store before a write is acknowledged, so `reindex` rebuilds
-   them (non-negotiable 2). Overwriting or deleting a key only drops a
-   reference; bytes leave through GC (non-negotiable 3).
+5. **Invariants hold for buckets too** (design §10.4 has the full
+   write path).
+   - Each write request (one `batch` call) creates, only if absent, one
+     log record `bucket-log/{sha256(scope)}/{seq}` holding all of its key
+     operations, before the acknowledgement. `seq` is allocated in an
+     index transaction. If the record exists, another node holds the
+     number, and the writer allocates a new one, so two nodes never both
+     win it.
+   - The index applies an operation to a key only if its `seq` is higher
+     than the key's current one, and keeps tombstones for deleted keys,
+     so the index and `reindex` pick the same last writer, and applying
+     a record twice changes nothing.
+   - A periodic snapshot `bucket-snapshot/{sha256(scope)}/{seq}` bounds
+     replay: `reindex` reads the latest snapshot plus the later records.
+   - Overwriting or deleting a key only drops a reference; bytes leave
+     through GC (non-negotiable 3).
+
+   The record is written synchronously, unlike spike S12's proposal of an
+   asynchronous log with up to 60 s of staleness: a bucket's key mapping
+   lives nowhere else, so an acknowledged write must already be in the
+   object store (non-negotiable 2).
 6. **Naming.** "The bucket is the source of truth" means the object-store
    bucket. Where the two could be confused, docs say "object-store
    bucket" or "bucket primitive".
@@ -76,6 +93,15 @@ schedule it.
   than a repo type.
 - The index, GC and metering deal with two kinds of reference: commits
   in a repository, and current keys (plus kept versions) in a bucket.
+- Each bucket write costs one extra object-store PUT, next to the xorb,
+  shard and registration writes it already makes. It uses the
+  create-only-if-absent write M1-R37 already requires, so it adds no new
+  store requirement. M5 benchmarks small-object writes.
+- Churn is stored through GC's grace (28 days minimum, 30 by default,
+  design §5.6). S12 estimates that a bucket keeping its last three hourly
+  10 GB dense checkpoints holds about 7.2 TB through the default grace,
+  240 times its live size. S12 asks whether xorbs never offered in a
+  dedup answer could take a shorter grace; that needs its own decision.
 - A repository's Hub scope is its label, namespace and name; a bucket's
   scope is the bucket.
 - The compatibility suite tests every label on the Hub routes in M2 and

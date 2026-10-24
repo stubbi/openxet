@@ -443,6 +443,14 @@ who may read what *(ruling M1-R37)*:
 - an **ownership record** per xorb a tenant uploaded
   (`xorb-owners/{tenant}/{xorb}`).
 
+A bucket primitive's keys are written there too (§10.4, ADR 0010):
+- a **bucket log record** per write request
+  (`bucket-log/{scope}/{seq}`, holding the request's key operations),
+  created only if absent and before the write is acknowledged;
+- a periodic **bucket snapshot** (`bucket-snapshot/{scope}/{seq}`,
+  holding every key's file and sequence number as of `seq`), which bounds
+  what `reindex` replays.
+
 Scopes and tenants appear in keys only as the SHA-256 of their name. The
 database is an index that `openxet reindex` can rebuild from the bucket:
 every scope table follows from these records with the stored shards and
@@ -1158,9 +1166,56 @@ behaves the same; labels need nothing beyond M2's Hub API.
 **Buckets** (mutable, non-versioned) serve the HF Storage Buckets API
 (§3). Keys map to Xet files with last-writer-wins and optional object
 versioning. Bucket tokens are not revision-scoped, matching
-`huggingface_hub`. A key's write is recorded in the object store before
-it is acknowledged, so `reindex` rebuilds every bucket (§5.3), and an
-overwritten or deleted object leaves only through GC (§5.6).
+`huggingface_hub`. An overwritten or deleted object only loses its
+reference; its bytes leave through GC (§5.6).
+
+**Writes reach the object store before the acknowledgement.**
+`huggingface_hub` 2.2.0 uploads all of a call's files in one Xet session,
+then sends their keys in one NDJSON `POST /api/buckets/{id}/batch`
+(`hf_api.py`, `batch_bucket_files`). Each such write request is one
+entry in the bucket's log:
+1. The node checks the request: the credential (§5.9 req 2) and every
+   hash it names (`addFile` and `copyFile`, §5.4).
+2. An index transaction allocates the request's `seq`, the bucket's next
+   sequence number, and records it as pending.
+3. The node creates `bucket-log/{sha256(scope)}/{seq}` in the object
+   store, only if absent, holding the request's key operations. If the
+   record already exists, another node holds that number (after an index
+   restore, for example), so the node allocates a new one and tries
+   again. Two nodes can never both win a number.
+4. An index transaction applies the operations. A key takes an operation
+   only if its `seq` is higher than the key's current one, and a deleted
+   key keeps a tombstone with its `seq`, so the index and `reindex` reach
+   the same last writer whatever order records are replayed in.
+5. The write is acknowledged.
+
+Retries stay idempotent:
+- Applying a record again changes nothing, because its `seq` is not
+  higher than the ones it already set.
+- A node that crashes after step 3 leaves a pending `seq` with a durable
+  record. Any node finishes it by applying the record, or drops the
+  number once the request deadline has passed with no record. A write
+  can thus become visible without its acknowledgement, never
+  acknowledged without being durable.
+- A client that retries a whole request writes a new record with the
+  same operations, which leaves the keys as one write would.
+
+The record is written synchronously. Spike S12 suggested an asynchronous
+ordered log with up to 60 s of staleness, like repository refs (§5.3).
+Buckets can't take that: a repository's commit objects reach the object
+store before its acknowledgement, so a reindex can place them again, but
+a bucket's key mapping lives nowhere else. An acknowledged key lost with
+the database would leave its data unaddressable (non-negotiable 2, §5.9
+req 7).
+
+Periodically a node writes `bucket-snapshot/{sha256(scope)}/{seq}`.
+`reindex` reads the latest snapshot plus the records after it, so its
+work is bounded by the snapshot interval, not by the bucket's history.
+Records a snapshot covers leave through GC like any other object.
+
+Cost: one extra object-store PUT per request, next to the xorb, shard and
+registration writes the upload already makes, so small objects stay
+fast. M5 measures it (§12).
 
 "The bucket is the source of truth" (§5.3) means the object-store
 bucket. Where the two could be confused, say "object-store bucket" or
@@ -1632,6 +1687,11 @@ release of the open-source build: it runs the released build (§15).
   - The bucket primitive (§10.4): the HF Storage Buckets routes, mutable
     keys with last-writer-wins and optional versioning, and GC, `reindex`
     and metering for bucket keys. Repository labels need no M5 work.
+  - The bucket log and snapshots of §10.4, with `reindex` restoring every
+    acknowledged key, and a small-object write benchmark: at least 200
+    one-key `batch` commits per second per deployment (§5.8's shard
+    registration rate), with a one-key commit's p99 within 20 ms of the
+    object store's own PUT p99.
   - Cache tier.
   - HF pull-through mirror.
   - Multiple storage pools, residency and KMS.
