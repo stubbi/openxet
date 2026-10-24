@@ -129,6 +129,8 @@ pub struct Config {
     pub body_deadline: BodyDeadline,
     /// `server.memory_budget`, in bytes.
     pub memory_budget: u64,
+    /// The memory this process may use, if it could be read.
+    pub host_memory: Option<u64>,
     pub max_connections: u32,
     pub shutdown_grace: Duration,
     pub visibility: Visibility,
@@ -531,13 +533,28 @@ impl Checker<'_> {
 const SECOND: Duration = Duration::from_secs(1);
 
 /// The default `server.memory_budget` for a host with `memory` bytes
-/// (ruling M1-R40): a quarter of it, leaving the rest to the index, the
-/// CPU-bound work and the system, rounded down to a whole MiB; at least
-/// [`MemoryBudget::DEFAULT_BYTES`] (also when `memory` is unknown) and at
-/// most [`MemoryBudget::MAX_BYTES`].
+/// (ruling M1-R40, review I-3): a quarter of it, leaving the rest to the
+/// index, the CPU-bound work and the system, rounded down to a whole MiB,
+/// from [`MemoryBudget::MIN_BYTES`] to [`MemoryBudget::MAX_BYTES`]. Where
+/// the memory can't be read, [`MemoryBudget::DEFAULT_BYTES`].
 fn default_memory_budget(memory: Option<u64>) -> u64 {
-    let quarter = memory.map_or(0, |m| m / 4) & !((1 << 20) - 1);
-    quarter.clamp(MemoryBudget::DEFAULT_BYTES, MemoryBudget::MAX_BYTES)
+    memory.map_or(MemoryBudget::DEFAULT_BYTES, |m| {
+        ((m / 4) & !((1 << 20) - 1)).clamp(MemoryBudget::MIN_BYTES, MemoryBudget::MAX_BYTES)
+    })
+}
+
+/// A warning if `budget` is over half of the `memory` this process may
+/// use: request data alone could then crowd out the rest of the process.
+pub fn memory_budget_warning(budget: u64, memory: Option<u64>) -> Option<String> {
+    let memory = memory?;
+    (budget > memory / 2).then(|| {
+        format!(
+            "server.memory_budget is {}, more than half of the {} of memory this process may use; \
+             under load it may run out of memory",
+            size::format(budget),
+            size::format(memory & !((1 << 20) - 1)),
+        )
+    })
 }
 
 /// The default `server.max_connections`: far more than the few dozen
@@ -666,13 +683,14 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "4096 (4 KiB/s) keeps uploads over slow links working; a higher rate frees stalled \
          connections sooner.",
     );
+    let host_memory = host_memory::total();
     let memory_budget = c.size(
         "server.memory_budget",
-        default_memory_budget(host_memory::total()),
+        default_memory_budget(host_memory),
         (MemoryBudget::MIN_BYTES, MemoryBudget::MAX_BYTES),
         "Upload bodies and reconstruction answers reserve from it; uploads queue up to 120s \
-         for room, then get 503 memory_busy. The default is a quarter of this host's memory, \
-         at least 1GiB; leave room for the rest of the process.",
+         for room, then get 503 memory_busy. The default is a quarter of this host's memory \
+         (1GiB if it can't be read); keep it under half.",
     );
     let max_connections = int(
         c,
@@ -778,6 +796,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         header_read_timeout: header_read_timeout?,
         body_deadline: BodyDeadline::new(body_read_timeout?, body_min_rate?)?,
         memory_budget: memory_budget?,
+        host_memory,
         max_connections: max_connections?,
         shutdown_grace: shutdown_grace?,
         visibility: visibility?,
@@ -1240,14 +1259,29 @@ mod tests {
     }
 
     #[test]
-    fn the_default_memory_budget_is_a_quarter_of_memory_and_at_least_1gib() {
+    fn the_default_memory_budget_is_a_quarter_of_detected_memory() {
+        // Review I-3 of M1-R40: the 1 GiB floor applies only where memory
+        // can't be read; a small host gets a quarter, at least 256 MiB.
         const GIB: u64 = 1 << 30;
         assert_eq!(default_memory_budget(Some(16 * GIB)), 4 * GIB);
-        assert_eq!(default_memory_budget(Some(2 * GIB)), GIB);
+        assert_eq!(default_memory_budget(Some(2 * GIB)), GIB / 2);
+        assert_eq!(default_memory_budget(Some(GIB)), 256 << 20);
+        assert_eq!(default_memory_budget(Some(512 << 20)), 256 << 20);
         assert_eq!(default_memory_budget(None), GIB);
         assert_eq!(default_memory_budget(Some(8 << 40)), 1 << 40);
         // Rounded down to a whole MiB, so `config check` shows a size.
         assert_eq!(default_memory_budget(Some(16_303_312 * 1024)), 3980 << 20);
+    }
+
+    #[test]
+    fn a_budget_over_half_the_memory_is_warned_about() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(memory_budget_warning(4 * GIB, Some(16 * GIB)), None);
+        assert_eq!(memory_budget_warning(8 * GIB, Some(16 * GIB)), None);
+        let warning = memory_budget_warning(256 << 20, Some(400 << 20)).unwrap();
+        assert!(warning.contains("256MiB"), "{warning}");
+        assert!(memory_budget_warning(9 * GIB, Some(16 * GIB)).is_some());
+        assert_eq!(memory_budget_warning(64 * GIB, None), None);
     }
 
     #[test]

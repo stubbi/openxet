@@ -96,6 +96,12 @@ pub fn run(args: &ServeArgs, output: Output) -> Result<(), CliError> {
         .config
         .ok_or_else(|| CliError::config(&loaded.problems))?;
     logging::init(config.log_format, config.log_level);
+    if let Some(warning) = config::memory_budget_warning(config.memory_budget, config.host_memory) {
+        tracing::warn!(
+            "{warning}. Lower server.memory_budget to at most half, or leave it unset for a \
+             quarter."
+        );
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::config::{Config, Problem};
+use crate::config::{Config, Problem, memory_budget_warning};
 use crate::error::CliError;
 use crate::secret;
 
@@ -107,6 +107,19 @@ pub fn check(config: &Config) -> Findings {
             rule: warning,
             hint: shared_data_dir_fix(dir),
             quoted: true,
+        });
+    }
+
+    if let Some(warning) = memory_budget_warning(config.memory_budget, config.host_memory) {
+        findings.warnings.push(Problem {
+            key: "server.memory_budget".to_owned(),
+            value: Some(crate::size::format(config.memory_budget)),
+            source: "the host's memory".to_owned(),
+            rule: warning,
+            hint: "Lower server.memory_budget to at most half the memory, or leave it unset for \
+                   a quarter."
+                .to_owned(),
+            quoted: false,
         });
     }
 
