@@ -48,6 +48,9 @@ _SECRET_PATTERNS = {
     "CloudFront key pair": re.compile(rf"Key-Pair-Id=(?!{_R})", re.IGNORECASE),
     "CloudFront policy": re.compile(rf"[?&]Policy=(?!{_R})", re.IGNORECASE),
     "CDN client address": re.compile(rf"[?&]xip=(?!{_R})"),
+    # openxet's own generated tokens: `oxt_` and 43 base64url characters
+    # (32 random bytes; ruling M1-R28). The prefix exists so this matches.
+    "openxet token": re.compile(r"oxt_[A-Za-z0-9_-]{43}"),
     # Xet access tokens on huggingface.co are JWTs, not `xet_`-prefixed.
     "JWT": re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\."),
     # Headers appear as `"name": "value"`, as `["name", "value"]` pairs, or
@@ -155,6 +158,10 @@ def test_file_has_no_secrets(path):
         "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ4In0.c2ln",
         '"set-cookie": "token=abc; Path=/"',
         "xet_0123456789abcdef0123456789",
+        "oxt_e1Yb3kQ0d9wN5rS7tU2vX4yZ6aB8cD0eF1gH3iJ5kL7",
+        "token = oxt_-_e1Yb3kQ0d9wN5rS7tU2vX4yZ6aB8cD0eF1gH3iJ5k",
+        "OPENXET_TOKEN=oxt_e1Yb3kQ0d9wN5rS7tU2vX4yZ6aB8cD0eF1gH3iJ5kL7xyz",
+        "DEV_oxt_e1Yb3kQ0d9wN5rS7tU2vX4yZ6aB8cD0eF1gH3iJ5kL7",
         '"accessToken":"<JWT>x"',
         "Authorization: Bearer tokenvalue123",
         "https://cas-bridge.xethub.hf.co/x?Expires=1&Policy=eyJ&Signature=Zm9v&Key-Pair-Id=K2",
@@ -216,6 +223,9 @@ def test_guard_catches_known_leak_shapes(leak):
         "https://cas-bridge.xethub.hf.co/x?Expires=1&Policy=REDACTED&Signature=REDACTED&Key-Pair-Id=REDACTED",
         "https://s3/x?X-Amz-Credential=REDACTED&X-Amz-SignedHeaders=host%3Brange&X-Amz-Signature=REDACTED",
         "user-agent: hf_hub/2.2.0; hf_xet/1.7.0",
+        "tokens look like oxt_ followed by 43 base64url characters",
+        "OPENXET_TOKEN=oxt_<token>",
+        "oxt_test_0123456789abcdef0123456789abcdef",
         "`assert_xet_download`, `xet_get`, `parse_xet_file_data_from_response`",
         "Requests carry `Authorization: Bearer <token>`; a Bearer token is required.",
         '`{"casUrl":"…","exp":<epoch>,"accessToken":"<JWT>"}`',
