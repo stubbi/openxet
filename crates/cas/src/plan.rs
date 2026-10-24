@@ -210,7 +210,8 @@ pub(crate) fn plan(
     let mut out = Plan {
         offset_into_first_range: 0,
         terms: Vec::with_capacity(window.terms.len()),
-        fetches: Vec::new(),
+        // At most one per term.
+        fetches: Vec::with_capacity(window.terms.len()),
     };
     let mut term_at = window.first_term_at;
     for (i, term) in file.terms[window.terms.clone()].iter().enumerate() {

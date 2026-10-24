@@ -202,6 +202,7 @@ impl Catalog {
     /// Adds `plan`'s descriptors, and returns for each the index of its
     /// xorb in `xorbs`, which names the terms it holds.
     fn add(&mut self, plan: &Plan) -> Vec<usize> {
+        self.fetches.reserve(plan.fetches.len());
         plan.fetches
             .iter()
             .map(|fetch| {
