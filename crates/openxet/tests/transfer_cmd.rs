@@ -673,6 +673,46 @@ fn missing_token_is_actionable() {
 }
 
 #[test]
+fn a_token_sent_unencrypted_off_this_host_is_warned_about() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.bin");
+    std::fs::write(&path, b"x").unwrap();
+    let upload = |endpoint: &str, json: bool| {
+        let mut cmd = openxet();
+        cmd.env("OPENXET_ENDPOINT", endpoint)
+            .env("OPENXET_TOKEN", "oxt_unused")
+            .env("HF_XET_CACHE", dir.path().join("cache"))
+            .arg("upload")
+            .arg(&path);
+        if json {
+            cmd.arg("--json");
+        }
+        run(&mut cmd)
+    };
+    // 0.0.0.0 is not loopback, and nothing can listen on port 0, so the
+    // upload fails at once after the warning.
+    let remote = "http://0.0.0.0:0";
+
+    let out = upload(remote, false);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let warning = stderr.lines().next().unwrap();
+    assert!(warning.starts_with("warning: "), "{stderr}");
+    assert!(warning.contains(remote), "{stderr}");
+    assert!(warning.contains("https://"), "{stderr}");
+    assert!(!stderr.contains("oxt_unused"), "{stderr}");
+
+    // With --json, stderr stays one error object.
+    let out = upload(remote, true);
+    assert_eq!(json_stderr(&out)["code"], "unreachable_endpoint");
+
+    // Loopback is not a network the token crosses.
+    let out = upload(NEVER_LISTENING, false);
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(!stderr.contains("warning"), "{stderr}");
+}
+
+#[test]
 fn unreachable_endpoint_is_actionable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.bin");

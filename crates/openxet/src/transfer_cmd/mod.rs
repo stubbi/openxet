@@ -133,6 +133,14 @@ fn resolve(
         )
     })?;
     let endpoint = Endpoint::new(&url, token).map_err(|err| client_error(&err))?;
+    // With --json, stderr carries nothing but an error object.
+    if output == Output::Human && endpoint.token_in_clear() {
+        eprintln!(
+            "warning: the token is sent unencrypted to {}; use an https:// endpoint unless \
+             every network on the way is trusted",
+            endpoint.url
+        );
+    }
     let progress = (output == Output::Human && io::stderr().is_terminal())
         .then(|| Arc::new(ProgressLine::new(verb)));
     let on_progress = progress.clone().map(|line| {

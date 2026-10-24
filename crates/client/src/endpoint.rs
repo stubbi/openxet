@@ -1,6 +1,7 @@
 //! Where to transfer and with which credential.
 
 use std::fmt;
+use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
@@ -59,6 +60,24 @@ impl Endpoint {
             token,
             token_exp,
         })
+    }
+
+    /// Whether the token crosses a network unencrypted: a plain `http://`
+    /// endpoint that isn't on this host (`localhost`, `127.0.0.0/8` or
+    /// `::1`). `hf_xet` sends it all the same; a caller may warn.
+    #[must_use]
+    pub fn token_in_clear(&self) -> bool {
+        let Ok(uri) = self.url.parse::<http::Uri>() else {
+            return false;
+        };
+        if uri.scheme_str() != Some("http") {
+            return false;
+        }
+        let host = uri.host().unwrap_or_default();
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        let loopback = host.eq_ignore_ascii_case("localhost")
+            || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+        !loopback
     }
 
     /// Fails if the token expires within [`EXPIRY_MARGIN_SECS`].
@@ -168,6 +187,29 @@ mod tests {
     fn debug_never_shows_the_token() {
         let ep = Endpoint::new("http://h", "oxt_secret-marker".into()).unwrap();
         assert!(!format!("{ep:?}").contains("secret-marker"));
+    }
+
+    #[test]
+    fn the_token_travels_in_clear_only_over_http_off_this_host() {
+        let in_clear = |url: &str| Endpoint::new(url, "t".into()).unwrap().token_in_clear();
+        for url in [
+            "http://cas.example.com",
+            "http://10.0.0.5:8080",
+            "http://[2001:db8::1]:8080",
+            "http://localhost.example.com",
+        ] {
+            assert!(in_clear(url), "{url}");
+        }
+        for url in [
+            "https://cas.example.com",
+            "http://127.0.0.1:8080",
+            "http://127.1.2.3",
+            "http://[::1]:9000",
+            "http://localhost:8080",
+            "http://LOCALHOST",
+        ] {
+            assert!(!in_clear(url), "{url}");
+        }
     }
 
     #[test]
