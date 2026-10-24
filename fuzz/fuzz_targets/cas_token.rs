@@ -6,7 +6,7 @@
 //!   principal raw bytes can yield is the configured static token's, for
 //!   exactly that token (seeded by fuzz/seed.sh).
 //! - odd: the rest describes claims, a token for them is minted with the
-//!   trusted key, and bytes of it are flipped. Unflipped, it authenticates
+//!   trusted key, with or without a `tenant` claim, and bytes of it are flipped. Unflipped, it authenticates
 //!   as exactly the minted principal; flipped, it either fails or still
 //!   yields exactly that principal, never another one.
 
@@ -19,7 +19,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use libfuzzer_sys::arbitrary::{Result as ArbitraryResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use openxet_auth::{Authenticator, MAX_SCOPE_BYTES, Mode, Principal, StaticToken, TokenSigner};
+use openxet_auth::{
+    Authenticator, DEFAULT_TENANT_PREFIX, MAX_SCOPE_BYTES, Mode, Principal, StaticToken,
+    TokenSigner, default_tenant,
+};
 
 /// A fixed `now`, so a minted token's validity never depends on the clock.
 const NOW: u64 = 1_800_000_000;
@@ -56,6 +59,18 @@ fn assert_valid_identity(principal: &Principal) {
         assert!(!value.chars().any(char::is_control), "{principal:?}");
     }
     assert!(principal.scope.len() <= MAX_SCOPE_BYTES, "{principal:?}");
+    // A tenant is the defaulted one, which only it may start with `scope:`
+    // (ruling M1-R43), or an explicit one passing the scope's rules.
+    if principal.tenant.starts_with(DEFAULT_TENANT_PREFIX) {
+        assert_eq!(principal.tenant, default_tenant(&principal.scope));
+    } else {
+        assert!(!principal.tenant.trim().is_empty(), "{principal:?}");
+        assert!(
+            !principal.tenant.chars().any(char::is_control),
+            "{principal:?}"
+        );
+        assert!(principal.tenant.len() <= MAX_SCOPE_BYTES, "{principal:?}");
+    }
 }
 
 /// The one static token configured: `oxt_` and 43 `A`s, which is 32 zero
@@ -70,6 +85,7 @@ fn static_token() -> StaticToken {
         scope: "model/org/repo".to_owned(),
         mode: Mode::Read,
         subject: "fuzz".to_owned(),
+        tenant: None,
     }
 }
 
@@ -86,6 +102,7 @@ fn raw(bearer: &[u8]) {
 fn minted(input: &mut Unstructured<'_>) -> ArbitraryResult<()> {
     let subject: String = input.arbitrary()?;
     let scope: String = input.arbitrary()?;
+    let tenant: Option<String> = input.arbitrary()?;
     let mode = if input.arbitrary()? {
         Mode::Write
     } else {
@@ -95,10 +112,13 @@ fn minted(input: &mut Unstructured<'_>) -> ArbitraryResult<()> {
     let lifetime = Duration::from_secs(input.int_in_range(1..=max)?);
     let flips: Vec<(u16, u8)> = input.arbitrary()?;
     let (signer, authenticator) = keys();
-    let Ok(token) = signer.sign(&subject, &scope, mode, NOW + lifetime.as_secs(), NOW) else {
+    let exp = NOW + lifetime.as_secs();
+    let Ok(token) = signer.sign_with_tenant(&subject, &scope, tenant.as_deref(), mode, exp, NOW)
+    else {
         return Ok(());
     };
     let expected = Principal {
+        tenant: tenant.unwrap_or_else(|| default_tenant(&scope)),
         subject,
         scope,
         mode,
@@ -112,7 +132,10 @@ fn minted(input: &mut Unstructured<'_>) -> ArbitraryResult<()> {
         return Ok(());
     };
     match authenticator.authenticate(&bearer, NOW) {
-        Ok(principal) => assert_eq!(principal, expected),
+        Ok(principal) => {
+            assert_valid_identity(&principal);
+            assert_eq!(principal, expected);
+        }
         Err(err) => assert!(
             flips.iter().any(|&(_, mask)| mask != 0),
             "an unaltered minted token was refused: {err}"
