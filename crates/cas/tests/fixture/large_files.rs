@@ -149,6 +149,7 @@ fn state(dir: &Path, index: SqliteIndex) -> AppState {
         scope: SCOPE.to_owned(),
         mode: Mode::Read,
         subject: "large-files".to_owned(),
+        tenant: None,
     };
     AppState::new(
         Arc::new(index),

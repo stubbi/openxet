@@ -369,6 +369,7 @@ async fn open(
             scope: DEV_SCOPE.to_owned(),
             mode: Mode::Write,
             subject: DEV_SUBJECT.to_owned(),
+            tenant: None,
         };
         let auth = Authenticator::new(vec![dev], vec![], config.max_token_lifetime)
             .map_err(|err| CliError::new("config", err.to_string(), "Fix [auth]."))?;

@@ -219,7 +219,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
     ),
 ];
 
-const STATIC_TOKEN_FIELDS: &[&str] = &["sha256", "scope", "mode", "subject"];
+const STATIC_TOKEN_FIELDS: &[&str] = &["sha256", "scope", "mode", "subject", "tenant"];
 
 fn kind_of(key: &str) -> Option<Kind> {
     let (section, name) = key.split_once('.')?;
@@ -951,7 +951,10 @@ fn static_tokens(c: &mut Checker<'_>) -> Option<Vec<StaticToken>> {
             } else {
                 "read"
             };
-            format!("{} ({}, {mode})", t.subject, t.scope)
+            match &t.tenant {
+                Some(tenant) => format!("{} ({}, tenant {tenant}, {mode})", t.subject, t.scope),
+                None => format!("{} ({}, {mode})", t.subject, t.scope),
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -983,7 +986,7 @@ fn static_token(
                 None,
                 source,
                 "is not a static token field",
-                "A static token has sha256, scope, mode and subject.",
+                "A static token has sha256, scope, mode and subject, and optionally tenant.",
             );
             ok = false;
         }
@@ -1007,6 +1010,21 @@ fn static_token(
         field("mode"),
         field("subject"),
     );
+    let tenant = match table.get("tenant") {
+        None => Some(None),
+        Some(toml::Value::String(text)) => Some(Some(text.clone())),
+        other => {
+            c.raw.problem_toml(
+                format!("{at}.tenant"),
+                other,
+                source,
+                "must be a string when given",
+                "The tenant groups scopes for `per-tenant` dedup visibility; leave it out to use \
+                 the scope.",
+            );
+            None
+        }
+    };
     let digest = sha256.as_deref().and_then(parse_sha256);
     if sha256.is_some() && digest.is_none() {
         c.raw.problem(
@@ -1037,6 +1055,7 @@ fn static_token(
         scope: scope?,
         mode: mode?,
         subject: subject?,
+        tenant: tenant?,
     };
     ok.then_some(token)
 }
@@ -1131,8 +1150,8 @@ fn authenticator(
                 None,
                 &source,
                 reason,
-                "Give every static token a non-empty subject and scope without control \
-                 characters (scope at most 1024 bytes).",
+                "Give every static token a non-empty subject and scope, and optionally a tenant, \
+                 without control characters (scope and tenant at most 1024 bytes).",
             );
             None
         }
@@ -1351,6 +1370,41 @@ mod tests {
                 "auth.static_tokens[0].sha256",
                 "auth.static_tokens[0].mode",
             ]
+        );
+    }
+
+    /// A static token may name its tenant (ruling M1-R38); one that isn't a
+    /// valid tenant is refused like a bad scope.
+    #[test]
+    fn a_static_token_may_name_its_tenant() {
+        let entry = |tenant: &str| {
+            format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nscope = \"org/model\"\nmode = \"read\"\n\
+                 subject = \"ci\"\ntenant = {tenant}\n",
+                "a".repeat(64)
+            )
+        };
+        let loaded = load_toml(&entry("\"org\""), &[]);
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let summary = &loaded
+            .settings
+            .iter()
+            .find(|s| s.key == "auth.static_tokens")
+            .unwrap()
+            .value;
+        assert!(
+            summary.contains("ci (org/model, tenant org, read)"),
+            "{summary}"
+        );
+        assert!(loaded.config.unwrap().auth.is_some());
+
+        assert_eq!(
+            problem_keys(&load_toml(&entry("7"), &[])),
+            ["auth.static_tokens[0].tenant"]
+        );
+        assert_eq!(
+            problem_keys(&load_toml(&entry("\"org\\n\""), &[])),
+            ["auth.static_tokens[0]"]
         );
     }
 

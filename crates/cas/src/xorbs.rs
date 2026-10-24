@@ -298,6 +298,7 @@ mod tests {
             scope: "s".to_owned(),
             mode: Mode::Write,
             subject: "unit".to_owned(),
+            tenant: None,
         };
         let app = router(test_support::state(dir.path(), vec![token]).await);
         let body = Full::new(Bytes::from(vec![
@@ -333,6 +334,7 @@ mod tests {
             scope: "s".to_owned(),
             mode: Mode::Write,
             subject: "unit".to_owned(),
+            tenant: None,
         }
     }
 

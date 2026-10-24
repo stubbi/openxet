@@ -21,6 +21,9 @@ pub struct StaticToken {
     pub mode: Mode,
     /// Who the token acts for.
     pub subject: String,
+    /// The tenant `scope` belongs to (ruling M1-R38); `None` means the scope
+    /// itself.
+    pub tenant: Option<String>,
 }
 
 impl StaticToken {
@@ -34,6 +37,7 @@ impl StaticToken {
         Principal {
             subject: self.subject.clone(),
             scope: self.scope.clone(),
+            tenant: self.tenant.clone().unwrap_or_else(|| self.scope.clone()),
             mode: self.mode,
         }
     }
@@ -46,6 +50,7 @@ impl fmt::Debug for StaticToken {
             .field("scope", &self.scope)
             .field("mode", &self.mode)
             .field("subject", &self.subject)
+            .field("tenant", &self.tenant)
             .finish()
     }
 }

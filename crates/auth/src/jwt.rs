@@ -13,10 +13,11 @@
 //! - an Ed25519 signature over `header_b64.payload_b64` as received,
 //!   checked with `verify_strict` against the key named by `kid`;
 //! - claims `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and `iat`,
-//!   plus optional `nbf`, and nothing else; `exp` is exclusive and `nbf`
-//!   inclusive, with no leeway; `exp` at most the lifetime cap after `now`
-//!   and `iat` at most [`crate::MAX_CLOCK_SKEW`] ahead of it; `sub` and `scope` pass
-//!   [`check_identity`](crate::check_identity).
+//!   plus optional `nbf` and `tenant`, and nothing else; `exp` is exclusive
+//!   and `nbf` inclusive, with no leeway; `exp` at most the lifetime cap
+//!   after `now` and `iat` at most [`crate::MAX_CLOCK_SKEW`] ahead of it;
+//!   `sub` and `scope` pass [`check_identity`](crate::check_identity) and
+//!   `tenant` passes [`check_tenant`](crate::check_tenant).
 
 use std::fmt::{self, Write as _};
 use std::time::Duration;
@@ -149,15 +150,12 @@ impl TokenSigner {
     }
 
     /// A CAS token for `subject` limited to `scope` and `mode`, issued at
-    /// `now` and valid until `exp` (Unix seconds, exclusive).
+    /// `now` and valid until `exp` (Unix seconds, exclusive). Its tenant is
+    /// the scope; see [`TokenSigner::sign_with_tenant`].
     ///
     /// # Errors
     ///
-    /// [`AuthError::InvalidClaims`] for a token the verifier would reject:
-    /// an empty or control-character `subject` or `scope`, a `scope` over
-    /// [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES), `exp <= now`, `exp`
-    /// more than this signer's lifetime limit after `now`, or claims that
-    /// make the token longer than [`MAX_TOKEN_BYTES`].
+    /// As [`TokenSigner::sign_with_tenant`].
     pub fn sign(
         &self,
         subject: &str,
@@ -166,7 +164,31 @@ impl TokenSigner {
         exp: u64,
         now: u64,
     ) -> Result<String, AuthError> {
+        self.sign_with_tenant(subject, scope, None, mode, exp, now)
+    }
+
+    /// [`TokenSigner::sign`], with a `tenant` claim when `tenant` is given:
+    /// the unit of isolation under `per-tenant` visibility (ruling M1-R38).
+    /// Without one the tenant is the scope.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::InvalidClaims`] for a token the verifier would reject:
+    /// an empty or control-character `subject`, `scope` or `tenant`, a
+    /// `scope` or `tenant` over [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES),
+    /// `exp <= now`, `exp` more than this signer's lifetime limit after
+    /// `now`, or claims that make the token longer than [`MAX_TOKEN_BYTES`].
+    pub fn sign_with_tenant(
+        &self,
+        subject: &str,
+        scope: &str,
+        tenant: Option<&str>,
+        mode: Mode,
+        exp: u64,
+        now: u64,
+    ) -> Result<String, AuthError> {
         crate::check_identity(subject, scope)
+            .and_then(|()| tenant.map_or(Ok(()), crate::check_tenant))
             .map_err(|reason| AuthError::InvalidClaims { reason })?;
         if exp <= now {
             return Err(AuthError::InvalidClaims {
@@ -179,9 +201,12 @@ impl TokenSigner {
             });
         }
         let header = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": self.kid });
-        let claims = serde_json::json!({
+        let mut claims = serde_json::json!({
             "sub": subject, "scope": scope, "mode": mode, "exp": exp, "iat": now,
         });
+        if let Some(tenant) = tenant {
+            claims["tenant"] = tenant.into();
+        }
         let mut token = format!(
             "{}.{}",
             URL_SAFE_NO_PAD.encode(header.to_string()),
@@ -189,7 +214,7 @@ impl TokenSigner {
         );
         if token.len() + 1 + SIGNATURE_B64_LEN > MAX_TOKEN_BYTES {
             return Err(AuthError::InvalidClaims {
-                reason: "the subject and scope make the token longer than 8 KiB, which verifiers refuse; shorten them",
+                reason: "the subject, scope and tenant make the token longer than 8 KiB, which verifiers refuse; shorten them",
             });
         }
         let signature = self.key.sign(token.as_bytes());
@@ -288,7 +313,7 @@ struct Header {
     kid: String,
 }
 
-/// The claims openxet accepts (ADR 0007, ruling M1-R19). Anything else,
+/// The claims openxet accepts (ADR 0007, rulings M1-R19 and M1-R38). Anything else,
 /// such as `aud`, `iss` or `jti`, is rejected rather than ignored: openxet
 /// cannot honour an audience or issuer restriction, so a token that asks for
 /// one must not be accepted.
@@ -302,11 +327,18 @@ struct Claims {
     iat: u64,
     #[serde(default, deserialize_with = "present_u64")]
     nbf: Option<u64>,
+    #[serde(default, deserialize_with = "present_string")]
+    tenant: Option<String>,
 }
 
 /// An optional claim that, when present, must be a `u64` (not `null`).
 fn present_u64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
     u64::deserialize(d).map(Some)
+}
+
+/// An optional claim that, when present, must be a string (not `null`).
+fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
 }
 
 pub(crate) fn verify(
@@ -339,7 +371,9 @@ pub(crate) fn verify(
     verify_signature(&key.key, header_b64, payload_b64, signature_b64)?;
 
     let claims: Claims = decode_json(payload_b64)?;
-    crate::check_identity(&claims.sub, &claims.scope).map_err(|_| AuthError::Invalid)?;
+    crate::check_identity(&claims.sub, &claims.scope)
+        .and_then(|()| claims.tenant.as_deref().map_or(Ok(()), crate::check_tenant))
+        .map_err(|_| AuthError::Invalid)?;
     if claims.nbf.is_some_and(|nbf| now < nbf) {
         return Err(AuthError::Invalid);
     }
@@ -353,6 +387,7 @@ pub(crate) fn verify(
     }
     Ok(Principal {
         subject: claims.sub,
+        tenant: claims.tenant.unwrap_or_else(|| claims.scope.clone()),
         scope: claims.scope,
         mode: claims.mode,
     })

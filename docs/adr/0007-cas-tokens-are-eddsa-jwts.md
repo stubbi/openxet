@@ -33,6 +33,17 @@ therefore has to honour `exp` exactly.
    openxet cannot honour never fails open. `sub` and `scope` must be
    non-empty and free of control characters, and `scope` may be at most
    1024 bytes.
+
+   *Amended (M1-R38):* an optional `tenant` claim names the tenant the
+   scope belongs to, the unit of isolation for xorbs and dedup under
+   `per-tenant` visibility (design §5.4). It follows the rules for
+   `scope`: a non-empty string, free of control and format characters,
+   at most 1024 bytes; `null` or any other type is rejected. Without it
+   the tenant is the scope, so tokens minted before the claim existed
+   keep working and keep each scope its own tenant. The claim is added
+   now, before platforms integrate, because the strict claim set above
+   would make a later addition break every platform's tokens. Static
+   tokens take an optional configured `tenant` with the same default.
 3. **Key set.** The server accepts several public keys at once and signs
    with one private key. Rotation adds the new public key everywhere,
    switches the signer, then removes the old key after the longest token

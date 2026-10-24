@@ -248,6 +248,7 @@ sha256 = "<64 lowercase hex characters>"
 scope = "ci"
 mode = "write"      # or "read"
 subject = "ci-bot"  # who the token acts for
+tenant = "ci"       # optional; the scope when left out
 ```
 
 `openxet token generate --scope ci --mode write --subject ci-bot` prints a
@@ -255,6 +256,8 @@ new token and this entry. Give each token its own `subject`, so the audit
 log tells them apart. A presented token is hashed and compared against
 every configured hash in constant time. `scope` and `subject` must not be
 empty or contain control characters, and `scope` is at most 1024 bytes.
+`tenant` names the [tenant](#tenants) the scope belongs to and follows the
+same rules as `scope`; without it the tenant is the scope.
 `write` may upload; `read` may download and query.
 
 ## CAS tokens
@@ -277,9 +280,11 @@ openxet accepts exactly this:
 - **Header:** exactly `{"alg":"EdDSA","typ":"JWT","kid":"<kid>"}`. Any other
   algorithm or header parameter is refused.
 - **Claims:** `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and
-  `iat` (Unix seconds), plus an optional `nbf`. Any other claim, such as
-  `aud`, `iss` or `jti`, makes the token invalid, since openxet can't honour
-  it. `sub` and `scope` follow the static-token rules above.
+  `iat` (Unix seconds), plus an optional `nbf` and an optional `tenant`
+  (a string naming the [tenant](#tenants) the scope belongs to; without it
+  the tenant is the scope). Any other claim, such as `aud`, `iss` or
+  `jti`, makes the token invalid, since openxet can't honour it. `sub`,
+  `scope` and `tenant` follow the static-token rules above.
 - **Time:** a token is valid while `now < exp` and invalid from the `exp`
   second on, with no leeway (stock clients refresh 30 s before `exp`).
   It is invalid before `nbf`. `exp` may lie at most `max_token_lifetime`
@@ -302,6 +307,19 @@ hour. A URL whose `exp` lies further ahead than this server's
 `url_lifetime` on a live server invalidates outstanding URLs signed under
 the longer lifetime. Clients recover by requesting a fresh reconstruction,
 which `hf_xet` does on the `403` by itself.
+
+## Tenants
+
+Every credential names a **scope**, the unit of access: files are read
+and registered per scope. It also names a **tenant**, the unit of
+isolation: under [`per-tenant` visibility](#dedup-visibility) the scopes
+of one tenant share xorbs and dedup, and different tenants don't. A CAS
+token names its tenant in the optional `tenant` claim and a static token
+in its optional `tenant` field; without one, the tenant is the scope, so
+each scope is its own tenant. A platform whose customers each own several
+scopes (repos, projects) gives all of a customer's tokens that customer's
+tenant, so a fine-tune uploaded to one project dedups against the base
+model uploaded to another.
 
 ## Dedup visibility
 

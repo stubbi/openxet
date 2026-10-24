@@ -262,6 +262,7 @@ mod tests {
             scope: "s".to_owned(),
             mode,
             subject: "unit".to_owned(),
+            tenant: None,
         }
     }
 

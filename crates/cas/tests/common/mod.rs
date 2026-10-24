@@ -600,6 +600,7 @@ fn static_token(token: &str, scope: &str, mode: Mode) -> StaticToken {
         scope: scope.to_owned(),
         mode,
         subject: format!("test-{scope}-{mode:?}"),
+        tenant: None,
     }
 }
 

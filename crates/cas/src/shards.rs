@@ -625,6 +625,7 @@ mod tests {
             scope: "s".to_owned(),
             mode: Mode::Write,
             subject: "unit".to_owned(),
+            tenant: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.validate = Arc::new(Semaphore::new(1));
@@ -674,6 +675,7 @@ mod tests {
             scope: "s".to_owned(),
             mode: Mode::Write,
             subject: "unit".to_owned(),
+            tenant: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.commit = Arc::new(Semaphore::new(2));

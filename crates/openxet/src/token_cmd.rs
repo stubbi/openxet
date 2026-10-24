@@ -65,6 +65,10 @@ pub enum TokenCommand {
         /// The scope the token is limited to
         #[arg(long)]
         scope: String,
+        /// The tenant the scope belongs to (its `tenant` claim), the unit of
+        /// `per-tenant` dedup isolation [default: the scope]
+        #[arg(long)]
+        tenant: Option<String>,
         /// What the token may do within its scope
         #[arg(long, value_enum)]
         mode: ModeArg,
@@ -84,6 +88,10 @@ pub enum TokenCommand {
         /// The scope the token is limited to
         #[arg(long, default_value = "default")]
         scope: String,
+        /// The tenant the scope belongs to, the unit of `per-tenant` dedup
+        /// isolation [default: the scope]
+        #[arg(long)]
+        tenant: Option<String>,
         /// What the token may do within its scope
         #[arg(long, value_enum)]
         mode: ModeArg,
@@ -125,6 +133,7 @@ pub fn run(command: &TokenCommand, output: Output) -> Result<(), CliError> {
         TokenCommand::Keygen { key } => keygen(&key_path(key.as_deref())?, output),
         TokenCommand::Mint {
             scope,
+            tenant,
             mode,
             ttl,
             subject,
@@ -132,6 +141,7 @@ pub fn run(command: &TokenCommand, output: Output) -> Result<(), CliError> {
         } => mint(
             &key_path(key.as_deref())?,
             scope,
+            tenant.as_deref(),
             *mode,
             *ttl,
             subject,
@@ -139,9 +149,10 @@ pub fn run(command: &TokenCommand, output: Output) -> Result<(), CliError> {
         ),
         TokenCommand::Generate {
             scope,
+            tenant,
             mode,
             subject,
-        } => generate(scope, *mode, subject, output),
+        } => generate(scope, tenant.as_deref(), *mode, subject, output),
     }
 }
 
@@ -233,6 +244,7 @@ struct Minted<'a> {
     kid: String,
     subject: &'a str,
     scope: &'a str,
+    tenant: &'a str,
     mode: &'static str,
     iat: u64,
     exp: u64,
@@ -247,6 +259,7 @@ impl HumanDisplay for Minted<'_> {
 fn mint(
     key: &Path,
     scope: &str,
+    tenant: Option<&str>,
     mode: ModeArg,
     ttl: Duration,
     subject: &str,
@@ -298,13 +311,13 @@ fn mint(
         .map_or(0, |d| d.as_secs());
     let exp = now.saturating_add(ttl.as_secs());
     let token = signer
-        .sign(subject, scope, mode.mode(), exp, now)
+        .sign_with_tenant(subject, scope, tenant, mode.mode(), exp, now)
         .map_err(|err| {
             CliError::new(
                 "invalid_claims",
                 err.to_string(),
-                "Give a non-empty --scope and --subject without control characters (scope at \
-                 most 1024 bytes, the whole token at most 8 KiB).",
+                "Give a non-empty --scope and --subject, and --tenant if any, without control \
+                 characters (scope and tenant at most 1024 bytes, the whole token at most 8 KiB).",
             )
         })?;
     if output == Output::Human && ttl > Authenticator::DEFAULT_MAX_TOKEN_LIFETIME {
@@ -321,6 +334,7 @@ fn mint(
             kid: signer.kid().to_owned(),
             subject,
             scope,
+            tenant: tenant.unwrap_or(scope),
             mode: mode.name(),
             iat: now,
             exp,
@@ -334,6 +348,7 @@ struct Generated<'a> {
     token: &'a str,
     sha256: String,
     scope: &'a str,
+    tenant: &'a str,
     mode: &'static str,
     subject: &'a str,
     /// The `[[auth.static_tokens]]` entry, which holds the hash only.
@@ -351,13 +366,20 @@ impl HumanDisplay for Generated<'_> {
     }
 }
 
-fn generate(scope: &str, mode: ModeArg, subject: &str, output: Output) -> Result<(), CliError> {
+fn generate(
+    scope: &str,
+    tenant: Option<&str>,
+    mode: ModeArg,
+    subject: &str,
+    output: Output,
+) -> Result<(), CliError> {
     let token = secret::generate_token()?;
     let entry = StaticToken {
         sha256: StaticToken::digest(&token),
         scope: scope.to_owned(),
         mode: mode.mode(),
         subject: subject.to_owned(),
+        tenant: tenant.map(str::to_owned),
     };
     let sha256 = secret::hex(&entry.sha256);
     // The server applies the same checks when it loads the entry.
@@ -370,17 +392,22 @@ fn generate(scope: &str, mode: ModeArg, subject: &str, output: Output) -> Result
         CliError::new(
             "invalid_claims",
             err.to_string(),
-            "Give a non-empty --scope and --subject without control characters (scope at \
-                 most 1024 bytes).",
+            "Give a non-empty --scope and --subject, and --tenant if any, without control \
+                 characters (scope and tenant at most 1024 bytes).",
         )
     })?;
     let quote = |text: &str| toml::Value::String(text.to_owned()).to_string();
-    let config = format!(
+    let mut config = format!(
         "[[auth.static_tokens]]\nsha256 = \"{sha256}\"\nscope = {}\nmode = \"{}\"\nsubject = {}\n",
         quote(scope),
         mode.name(),
         quote(subject),
     );
+    if let Some(tenant) = tenant {
+        config.push_str("tenant = ");
+        config.push_str(&quote(tenant));
+        config.push('\n');
+    }
     emit(
         output,
         &Generated {
@@ -388,6 +415,7 @@ fn generate(scope: &str, mode: ModeArg, subject: &str, output: Output) -> Result
             token: &token,
             sha256,
             scope,
+            tenant: tenant.unwrap_or(scope),
             mode: mode.name(),
             subject,
             config,
