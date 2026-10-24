@@ -465,7 +465,7 @@ Xorbs remain globally content-addressed and shared.
   `openxet purge <file-hash>` (M2+). Purge unregisters the file from every
   scope at once and logs it. New reconstructions stop immediately;
   already-issued URLs expire within their lifetime (at most 60 min,
-  ADR 0002). Purge also evicts the file's ranges from the cache tier. The
+  ADR 0002, ruling M1-R42). Purge also evicts the file's ranges from the cache tier. The
   bytes then leave storage through GC (§5.6), once no other file
   references their xorbs. Removing a reader from the scope revokes their access once their
   current CAS token expires.
@@ -537,7 +537,8 @@ already stored writes nothing new. Test:
   URLs; otherwise it falls back to (b) and logs why. This applies to every
   backend (S3, R2, Garage, MinIO, and GCS or Azure once their signers can
   bind a range). CI runs the probe against MinIO. URL lifetime defaults to
-  60 min with a 30 min minimum, as derived in ADR 0002. v1 reconstruction
+  60 min, with a 30 min minimum as derived in ADR 0002 and a 60 min maximum
+  (ruling M1-R42). v1 reconstruction
   is served too, for older clients.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`

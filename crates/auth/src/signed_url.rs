@@ -58,9 +58,10 @@ impl UrlSigner {
     /// §5 from how long `hf_xet` holds a URL before its last use.
     pub const MIN_LIFETIME: Duration = Duration::from_mins(30);
 
-    /// The longest accepted URL lifetime: 24 hours (ruling M1-R19), so a
-    /// leaked URL stays usable for a bounded time.
-    pub const MAX_LIFETIME: Duration = Duration::from_hours(24);
+    /// The longest accepted URL lifetime: 60 minutes (ADR 0002; ruling
+    /// M1-R42), so a leaked URL, or one issued before a purge (design §5.4),
+    /// stops working within the hour.
+    pub const MAX_LIFETIME: Duration = Duration::from_hours(1);
 
     /// A signer using `key`, issuing URLs valid for `lifetime`.
     ///

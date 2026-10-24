@@ -60,7 +60,7 @@ creates one empty file named `.openxet-check-<16 hex>` there with
 ```json
 {"schema":"openxet.config-check.v1","valid":false,"file":"openxet.toml","dev_mode":null,
  "problems":[{"key":"cas.url_lifetime","value":"5m","source":"file openxet.toml",
-              "rule":"must be a whole number followed by s, m, h or d, such as 30s, 60m, 24h or 30d, from 30m to 24h inclusive",
+              "rule":"must be a whole number followed by s, m, h or d, such as 30s, 60m, 24h or 30d, from 30m to 60m inclusive",
               "hint":"Use 60m unless you need otherwise. …"}],
  "warnings":[],
  "settings":[{"key":"server.bind","value":"127.0.0.1:8080","source":"default"}, …]}

@@ -77,7 +77,7 @@ host name instead. A trailing `/` is allowed and ignored.
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
 | `dedup_visibility` | `global` | `global` or `per-scope` | Whether one scope's xorbs are visible to another. See [Dedup visibility](#dedup-visibility). |
-| `url_lifetime` | `60m` | `30m` to `24h` | How long a signed transfer URL is valid. See [Transfer URLs](#transfer-urls). |
+| `url_lifetime` | `60m` | `30m` to `60m` | How long a signed transfer URL is valid. See [Transfer URLs](#transfer-urls). |
 | `heartbeat_interval` | `5s` | `1s` to `2m` | How often a `/v2/shards` upload stream repeats its progress while the upload is verified and committed. `hf_xet` fails a stream that is silent for 300 s. |
 | `transfer_key_file` | `<data_dir>/transfer.key` | a file path | The key that signs transfer URLs. Set explicitly, the file must exist. See [Keys and tokens on disk](#keys-and-tokens-on-disk). |
 
@@ -229,8 +229,9 @@ A reconstruction answers with signed URLs of the form
 `{public_url}/v1/transfer/xorbs/{xorb}?range={start}-{end}&exp={unix}&sig=…`,
 each valid for `url_lifetime` and only with exactly its `Range` header.
 `url_lifetime` is at least 30 minutes, the longest `hf_xet` holds a URL
-before its last use (ADR 0002), and at most 24 hours, so a leaked URL stops
-working. A URL whose `exp` lies further ahead than this server's
+before its last use (ADR 0002), and at most 60 minutes (ruling M1-R42), so
+a leaked URL, or one issued before data is purged, stops working within the
+hour. A URL whose `exp` lies further ahead than this server's
 `url_lifetime` (plus 5 minutes of clock skew) is refused, so shortening
 `url_lifetime` on a live server invalidates outstanding URLs signed under
 the longer lifetime. Clients recover by requesting a fresh reconstruction,

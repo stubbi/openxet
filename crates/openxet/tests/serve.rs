@@ -562,7 +562,7 @@ fn config_env_override() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(
         dir.path(),
-        "[cas]\nurl_lifetime = \"2h\"\ndedup_visibility = \"global\"\n",
+        "[cas]\nurl_lifetime = \"45m\"\ndedup_visibility = \"global\"\n",
     );
 
     let out = run(openxet()
@@ -588,7 +588,7 @@ fn config_env_override() {
         setting("cas.dedup_visibility")["source"],
         "env OPENXET_CAS__DEDUP_VISIBILITY"
     );
-    assert_eq!(setting("cas.url_lifetime")["value"], "2h");
+    assert_eq!(setting("cas.url_lifetime")["value"], "45m");
     assert!(
         setting("cas.url_lifetime")["source"]
             .as_str()
