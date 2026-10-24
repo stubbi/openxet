@@ -86,18 +86,29 @@ Before it buffers anything, a request reserves its bytes from
   An answer not sent within 30 s plus 1 s per MiB is cut off, and its
   share freed.
 
-A request that can't reserve its bytes within 5 s is refused with
-`503 memory_busy` and `Retry-After: 1`; stock clients retry it. An upload
-refused so is not read, and its connection is closed. A request that
-needs more than the whole budget is refused at once, with the same code.
-The largest batch reconstruction (1,000,000 terms) reserves about
-600 MB, a little more with a long `public_url`, so a budget below that
-refuses it.
+A request that doesn't fit waits, in order of arrival, for bytes to come
+free:
+
+- An upload waits up to 120 s, its body unread. `hf_xet` sends up to 64
+  xorbs at once; past the budget they queue here and are read as others
+  finish, well inside the client's 300 s timeout. A waiting upload holds
+  only its connection.
+- A reconstruction waits up to 5 s.
+
+After that wait the request is refused with `503 memory_busy` and
+`Retry-After: 1`; stock clients retry it. An upload refused so is not
+read, and its connection is closed.
+
+A request that needs more than the whole budget is refused at once with
+`413 exceeds_memory_budget`, which clients don't retry, since no retry
+could succeed. The largest batch reconstruction (1,000,000 terms) reserves
+about 600 MB, a little more with a long `public_url`, so a budget below
+that refuses it; split the batch, or raise `memory_budget`.
 
 Size the budget to leave room for the rest of the process: the index's
 cache, the CPU-bound work each permit runs (about 150 MB per dedup answer
 being built) and the operating system. Every refusal is logged at warn
-as `request refused` with code `memory_busy`; frequent ones mean the
+as `request refused` with its code; frequent `memory_busy` means the
 budget, or the server, is too small for its load.
 
 `public_url` must be the origin root, with no path, query, fragment or user

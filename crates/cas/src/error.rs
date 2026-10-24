@@ -188,14 +188,14 @@ pub enum CasError {
     MemoryBusy,
 
     /// The request needs more memory than the process's whole budget
-    /// (ruling M1-R40). `503 memory_busy` with `Retry-After: 1`, like
-    /// [`CasError::MemoryBusy`]: stock clients can't tell the two apart,
-    /// and the message says why a retry won't help.
+    /// (ruling M1-R40). `413 exceeds_memory_budget`, final: no retry can
+    /// succeed, and clients retry a `503` (S10 "Status codes and
+    /// retries").
     #[error(
         "the request needs about {needed} bytes of server memory, more than the server's whole \
          memory budget of {budget} bytes"
     )]
-    OverMemoryBudget {
+    ExceedsMemoryBudget {
         /// The bytes the request needs.
         needed: u64,
         /// The budget, `server.memory_budget`.
@@ -549,11 +549,11 @@ impl CasError {
                  persists, upload fewer files at once, or the operator can raise \
                  `server.memory_budget`.",
             ),
-            Self::OverMemoryBudget { .. } => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "memory_busy",
-                "Ask for less at once: split the batch, or reconstruct a range of the file. \
-                 The operator can raise `server.memory_budget`.",
+            Self::ExceedsMemoryBudget { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "exceeds_memory_budget",
+                "Ask for less at once: split the batch into fewer files, or reconstruct a large \
+                 file alone or by range. The operator can raise `server.memory_budget`.",
             ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,
@@ -658,7 +658,7 @@ impl CasError {
             Self::UnknownXorb { .. } => tracing::warn!(code, reason = %self, "shard rejected"),
             // The server's state, not a fault: one line per refusal, without
             // an error's alarm.
-            Self::MemoryBusy | Self::OverMemoryBudget { .. } => {
+            Self::MemoryBusy | Self::ExceedsMemoryBudget { .. } => {
                 tracing::warn!(code, reason = %self, "request refused");
             }
             _ if status.is_server_error() => {
@@ -687,9 +687,7 @@ impl IntoResponse for CasError {
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
-        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy | Self::OverMemoryBudget { .. } =
-            self
-        {
+        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy = self {
             response
                 .headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
@@ -804,20 +802,27 @@ mod tests {
 
     #[tokio::test]
     async fn a_full_memory_budget_is_a_retryable_503_with_retry_after() {
-        for (e, retryable) in [
-            (CasError::MemoryBusy, true),
-            (
-                CasError::OverMemoryBudget {
-                    needed: 2048,
-                    budget: 1024,
-                },
-                false,
-            ),
-        ] {
-            assert_eq!(e.is_retryable(), retryable);
-            let reply = assert_maps(e, StatusCode::SERVICE_UNAVAILABLE, "memory_busy").await;
-            assert_eq!(reply.headers[RETRY_AFTER], "1");
-        }
+        assert!(CasError::MemoryBusy.is_retryable());
+        let reply = assert_maps(
+            CasError::MemoryBusy,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "memory_busy",
+        )
+        .await;
+        assert_eq!(reply.headers[RETRY_AFTER], "1");
+    }
+
+    #[tokio::test]
+    async fn a_request_over_the_whole_memory_budget_is_a_final_413() {
+        let e = CasError::ExceedsMemoryBudget {
+            needed: 2048,
+            budget: 1024,
+        };
+        assert!(!e.is_retryable());
+        let reply = assert_maps(e, StatusCode::PAYLOAD_TOO_LARGE, "exceeds_memory_budget").await;
+        assert!(!reply.headers.contains_key(RETRY_AFTER));
+        let hint = reply.body["hint"].as_str().unwrap();
+        assert!(hint.contains("server.memory_budget"), "{hint}");
     }
 
     #[tokio::test]

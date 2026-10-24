@@ -154,7 +154,7 @@ async fn single(
     };
     let reserved = state
         .budget
-        .reserve(answer::bound(terms, 1, &state.cfg.public_url))
+        .reserve_answer(answer::bound(terms, 1, &state.cfg.public_url))
         .await?;
     let permit = validation_permit(state).await?;
     let tables = chunk_layouts(state, scope, xorbs).await?;
@@ -254,13 +254,18 @@ async fn batch(
         });
     }
     // The cap is checked from the stored term counts before any file is
-    // loaded, so a batch over it costs no decoding (ruling M1-R40).
+    // loaded, so a batch over it costs no decoding (ruling M1-R40). The
+    // count runs before any permit, not under the validation permit as the
+    // ruling first said (an accepted deviation, recorded in design §17): it
+    // reads at most 1,000 rows' sizes, and the memory reservation sized
+    // from it must come before the permit, the one order every request
+    // takes them in, so none waits for memory holding a CPU permit.
     let stored =
         usize::try_from(state.index.term_count(&files, scope).await?).unwrap_or(usize::MAX);
     check_batch_terms(stored)?;
     let reserved = state
         .budget
-        .reserve(answer::bound(stored, files.len(), &state.cfg.public_url))
+        .reserve_answer(answer::bound(stored, files.len(), &state.cfg.public_url))
         .await?;
     let mut found = state.index.files(&files, scope).await?;
     let records: Vec<_> = files.iter().filter_map(|f| found.remove(f)).collect();
@@ -861,8 +866,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut state, request) = one_file(dir.path()).await;
         let wait = Duration::from_millis(300);
-        state.budget = crate::MemoryBudget::new(1 << 20, wait);
-        let _full = state.budget.reserve(1 << 20).await.unwrap();
+        state.budget = crate::MemoryBudget::new(1 << 20).with_waits(Duration::from_mins(1), wait);
+        let _full = state.budget.reserve_answer(1 << 20).await.unwrap();
 
         let started = std::time::Instant::now();
         let response = router(state.clone()).oneshot(request).await.unwrap();
@@ -875,6 +880,52 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "memory_busy", "{json}");
+    }
+
+    #[tokio::test]
+    async fn a_batch_over_the_whole_memory_budget_is_a_final_413() {
+        // A retryable 503 would make stock clients retry, in vain, for
+        // minutes (S10 "Status codes and retries"); the hint says what helps.
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.budget = crate::MemoryBudget::new(1 << 20);
+        // About 6 MB of answer bound.
+        let index = CountingIndex::install(&mut state, 10_000);
+        let file = openxet_protocol::chunk_hash(b"file");
+
+        let response = router(state)
+            .oneshot(
+                Request::get(format!(
+                    "/v1/reconstructions?file_id={}",
+                    hash_to_hex(&file)
+                ))
+                .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(!response.headers().contains_key("retry-after"));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "exceeds_memory_budget", "{json}");
+        assert!(
+            json["hint"]
+                .as_str()
+                .unwrap()
+                .contains("server.memory_budget")
+        );
+        assert_eq!(index.file_loads.load(Ordering::SeqCst), 0);
     }
 
     /// The writer threads `render` grants a 100k-term answer when `held`

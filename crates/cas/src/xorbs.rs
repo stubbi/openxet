@@ -342,7 +342,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut state = test_support::state(dir.path(), vec![write_token()]).await;
         let wait = std::time::Duration::from_millis(300);
-        state.budget = crate::MemoryBudget::new(1 << 20, wait);
+        state.budget =
+            crate::MemoryBudget::new(1 << 20).with_waits(wait, std::time::Duration::from_mins(1));
         let app = router(state.clone());
 
         let (mut stalled, body) = test_support::declared_body(600 << 10);
@@ -373,18 +374,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_upload_over_the_whole_budget_is_refused_at_once() {
-        // A chunked body reserves the route's limit, 64.5 MiB, which a
-        // 1 MiB budget can never hold: no wait helps, so none is spent.
+    async fn an_upload_queues_for_the_memory_budget_far_past_the_answer_wait() {
+        // A stock client sends up to 64 xorbs at once: past the budget, they
+        // queue for it, unread, rather than fail with a 503 the client then
+        // backs off from for seconds (S10 "Status codes and retries").
         let dir = tempfile::tempdir().unwrap();
         let mut state = test_support::state(dir.path(), vec![write_token()]).await;
-        state.budget = crate::MemoryBudget::new(1 << 20, std::time::Duration::from_mins(1));
+        let short = std::time::Duration::from_millis(100);
+        state.budget =
+            crate::MemoryBudget::new(1 << 20).with_waits(std::time::Duration::from_mins(1), short);
+        let app = router(state.clone());
+
+        let (mut first_body, body) = test_support::declared_body(600 << 10);
+        let first = tokio::spawn(app.clone().oneshot(post(body)));
+        first_body
+            .send_data(Bytes::from(vec![0; 100 << 10]))
+            .await
+            .unwrap();
+        while state.budget.available() == 1 << 20 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let (mut second_body, body) = test_support::declared_body(600 << 10);
+        let second = tokio::spawn(app.clone().oneshot(post(body)));
+        tokio::time::sleep(5 * short).await;
+        assert!(!second.is_finished(), "the queued upload was refused");
+
+        drop(first_body);
+        assert_eq!(
+            first.await.unwrap().unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+        second_body
+            .send_data(Bytes::from(vec![0; 600 << 10]))
+            .await
+            .unwrap();
+        drop(second_body);
+        let second = second.await.unwrap().unwrap();
+        assert_eq!(
+            second.status(),
+            StatusCode::BAD_REQUEST,
+            "read and validated"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_upload_over_the_whole_budget_is_a_final_413_at_once() {
+        // A chunked body reserves the route's limit, 64.5 MiB, which a
+        // 1 MiB budget can never hold: no wait helps, and a retryable 503
+        // would only be retried in vain, so the refusal is final.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![write_token()]).await;
+        state.budget = crate::MemoryBudget::new(1 << 20).with_waits(
+            std::time::Duration::from_mins(1),
+            std::time::Duration::from_mins(1),
+        );
         let body = Body::new(Full::new(Bytes::from(vec![0u8; 10])).map_frame(|frame| frame));
 
         let started = std::time::Instant::now();
         let response = router(state).oneshot(post(body)).await.unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
-        assert_memory_busy(response).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(!response.headers().contains_key("retry-after"));
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "exceeds_memory_budget", "{json}");
     }
 
     #[tokio::test]

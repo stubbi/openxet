@@ -185,7 +185,7 @@ impl AppState {
         cfg: CasConfig,
     ) -> Self {
         let permits = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-        let budget = MemoryBudget::new(cfg.memory_budget, MemoryBudget::DEFAULT_WAIT);
+        let budget = MemoryBudget::new(cfg.memory_budget);
         Self {
             index,
             bucket,

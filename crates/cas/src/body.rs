@@ -39,7 +39,7 @@ pub(crate) async fn buffer(
         return Err(closing(too_large()));
     }
     let declared = hint.upper().unwrap_or(limit).min(limit);
-    let reservation = budget.reserve(declared).await.map_err(closing)?;
+    let reservation = budget.reserve_upload(declared).await.map_err(closing)?;
     let mut body = request.into_body();
     let capacity = usize::try_from(declared).map_err(|e| CasError::internal(e).into_response())?;
     let mut buffer = Vec::with_capacity(capacity);
