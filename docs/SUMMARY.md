@@ -38,4 +38,5 @@
   - [S9: Git engine](research/S9-git-engine.md)
   - [S10: CAS wire contract](research/S10-cas-wire-contract.md)
   - [S11: Global dedup answer](research/S11-global-dedup-response.md)
+  - [S13: Hosted features and pricing](research/S13-hosted-features-and-pricing.md)
 - [Competitive matrix](competitive-matrix.md)
