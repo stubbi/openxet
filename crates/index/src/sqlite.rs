@@ -145,10 +145,25 @@ impl OpenLock {
             Err(err) => return Err(failed(err)),
         };
         let deadline = tokio::time::Instant::now() + OPEN_LOCK_TIMEOUT;
+        let mut waited = false;
         loop {
             match file.try_lock() {
-                Ok(()) => return Ok(Self { _held: Some(file) }),
+                Ok(()) => {
+                    if waited {
+                        tracing::info!(path = %path.display(), "got the index lock");
+                    }
+                    return Ok(Self { _held: Some(file) });
+                }
                 Err(TryLockError::WouldBlock) if tokio::time::Instant::now() < deadline => {
+                    if !waited {
+                        // The server isn't ready (`/readyz` is 503) until
+                        // the other process has opened the index.
+                        tracing::info!(
+                            path = %path.display(),
+                            "waiting for another process to finish opening the index"
+                        );
+                        waited = true;
+                    }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 Err(TryLockError::WouldBlock) => {
