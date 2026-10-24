@@ -154,8 +154,8 @@ and then that labels are generic, not a fixed set.
      takes effect if and only if its record, not an abort, owns its
      `seq`, and it is acknowledged only then.
    - A snapshot `bucket-snapshot/{sha256(scope)}/{seq}` is taken only at
-     a watermark, the highest `seq` with every lower one applied or
-     aborted. `reindex` replays from the latest snapshot, skips aborts,
+     a watermark W, the highest `seq` with every `seq` up to and
+     including W applied or aborted. `reindex` replays from the latest snapshot, skips aborts,
      and sets the next `seq` above the highest record it found, aborts
      included.
    - Overwriting or deleting a key only drops a reference; bytes leave

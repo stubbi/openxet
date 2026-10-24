@@ -1323,10 +1323,11 @@ Retries stay idempotent:
   loses reports the write as failed, so the client's failure matches
   the log, and the client's retry gets a new `seq`.
 
-The invariant: a write takes effect if and only if its record, not an
-abort, owns its `seq`, and it is acknowledged only then.
 - A client that retries a whole request writes a new record with the
   same operations, which leaves the keys as one write would.
+
+The invariant: a write takes effect if and only if its record, not an
+abort, owns its `seq`, and it is acknowledged only then.
 
 The record is written synchronously. Spike S12 suggested an asynchronous
 ordered log with up to 60 s of staleness, like repository refs (§5.3).
@@ -1337,8 +1338,8 @@ the database would leave its data unaddressable (non-negotiable 2, §5.9
 req 7).
 
 Periodically a node writes `bucket-snapshot/{sha256(scope)}/{seq}`, only
-at a watermark: the highest `seq` such that every lower `seq` is applied
-or aborted, so a snapshot covers exactly a complete prefix of the log.
+at a watermark: the highest `seq` W such that every `seq` up to and
+including W is applied or aborted, so a snapshot covers exactly a complete prefix of the log.
 `reindex` replays from the latest snapshot, skips abort records, and
 sets the bucket's next `seq` above the highest record it found, aborts
 included. Its work is bounded by the snapshot interval, not by the
