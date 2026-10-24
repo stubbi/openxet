@@ -16,8 +16,8 @@ use common::shard::{Event, hf_xet_files, hf_xet_shard, lines, terminal};
 use common::xorb::{HF_XET_XORB, hf_xet_xorb, stored, xorb_of, xorb_path};
 use common::{
     Access, BATCH_GET_PATH, BATCH_POST_PATH, CountingBucket, DEDUP_MERKLEDB_PATH, DEDUP_PATH,
-    FILE_PATH, RECONSTRUCTION_V1_PATH, RECONSTRUCTION_V2_PATH, ROUTES, Reply, Route, SCOPE_A,
-    TRANSFER_PATH, TablelessIndex, TestServer, XORB_PATH, bearer, config,
+    FILE_PATH, PROBE_BODIES, RECONSTRUCTION_V1_PATH, RECONSTRUCTION_V2_PATH, ROUTES, Reply, Route,
+    SCOPE_A, TRANSFER_PATH, TablelessIndex, TestServer, UNAUTHENTICATED, XORB_PATH, bearer, config,
 };
 use openxet_auth::UrlSigner;
 use openxet_cas::{Clock as _, MAX_BATCH_FILES, MAX_BATCH_TERMS};
@@ -1278,6 +1278,14 @@ async fn no_unauthenticated_reads() {
     )
     .await;
     assert_eq!(got.status, 400);
+    // The allowlist: probes answer without a credential, and with a fixed
+    // body that names nothing stored.
+    for path in UNAUTHENTICATED {
+        let got = fetch(&server, &server.url(path), None).await;
+        assert_eq!(got.status, 200, "{path}");
+        let body = String::from_utf8(got.body).unwrap();
+        assert!(PROBE_BODIES.contains(&body.as_str()), "{path}: {body}");
+    }
 
     // Collect every URL the server emits, from every reconstruction form.
     let files = hf_xet_files();

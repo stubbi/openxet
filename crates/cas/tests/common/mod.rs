@@ -29,7 +29,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
-use openxet_cas::{AppState, CasConfig, Clock, SystemClock, router};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
 use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
@@ -184,6 +184,15 @@ impl Route {
     }
 }
 
+/// Paths served without any credential: the liveness and readiness probes,
+/// which orchestrators call unauthenticated. They are the only exception to
+/// design §5.9 req 1, because their answers say nothing about stored data:
+/// each is one of [`PROBE_BODIES`], whatever the server holds.
+pub const UNAUTHENTICATED: &[&str] = &["/healthz", "/readyz"];
+
+/// Every body a probe in [`UNAUTHENTICATED`] may answer with.
+pub const PROBE_BODIES: &[&str] = &[r#"{"status":"ok"}"#, r#"{"status":"ready"}"#];
+
 /// A xorb route's path, for a xorb no test stores.
 pub const XORB_PATH: &str =
     "/v1/xorbs/default/0000000000000000000000000000000000000000000000000000000000000000";
@@ -259,6 +268,7 @@ pub fn config(visibility: Visibility) -> CasConfig {
         visibility,
         verify_limits: VerifyLimits::default(),
         heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
+        body_deadline: BodyDeadline::DEFAULT,
     }
 }
 

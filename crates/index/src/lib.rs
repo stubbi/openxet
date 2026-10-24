@@ -154,6 +154,20 @@ pub enum IndexError {
          full, then retry"
     )]
     Database(#[source] sqlx::Error),
+    /// The lock that serializes opening the index between processes could
+    /// not be taken.
+    #[error(
+        "could not lock {} while opening the index; check that the data directory is writable \
+         and that no other process is stuck opening it",
+        .path.display()
+    )]
+    OpenLock {
+        /// The lock file.
+        path: std::path::PathBuf,
+        /// What failed.
+        #[source]
+        source: std::io::Error,
+    },
     /// The schema could not be brought up to date.
     #[error(
         "could not migrate the index schema; the database may be from a newer openxet, so run \

@@ -10,6 +10,7 @@ use axum::response::{IntoResponse as _, Response};
 use http_body_util::BodyExt as _;
 
 use crate::CasError;
+use crate::deadline::{BodyTimedOut, timed_out};
 use crate::error::closing;
 
 /// The body of `request`, which the route's `DefaultBodyLimit` caps at
@@ -34,8 +35,18 @@ pub(crate) async fn buffer(
             BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_)) => {
                 closing(too_large())
             }
-            _ => CasError::UnreadableBody.into_response(),
+            rejection => unreadable(&rejection),
         })
+}
+
+/// The answer to a body that failed while being read: `408` if it fell
+/// behind its [`crate::BodyDeadline`], closing the connection since the
+/// rest of the body is unread, and `400` otherwise.
+pub(crate) fn unreadable(err: &(dyn std::error::Error + 'static)) -> Response {
+    match timed_out(err) {
+        Some(BodyTimedOut(deadline)) => closing(CasError::BodyTimeout(deadline)),
+        None => CasError::UnreadableBody.into_response(),
+    }
 }
 
 /// The answer `e` to an upload refused before its body was read, for a

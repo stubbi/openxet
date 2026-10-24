@@ -1,20 +1,14 @@
 use std::ffi::OsString;
-use std::io::{self, Write};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use openxet_protocol::PROTOCOL_SPEC;
 use serde::Serialize;
 
+use crate::config_cmd::{self, ConfigCommand};
+use crate::error::{CliError, ExitCode};
 use crate::output::{HumanDisplay, Output};
-
-/// Process exit codes, documented in `docs/reference/exit-codes.md`.
-pub struct ExitCode;
-
-impl ExitCode {
-    pub const SUCCESS: u8 = 0;
-    pub const FAILURE: u8 = 1;
-    pub const USAGE: u8 = 2;
-}
+use crate::serve::{self, ServeArgs};
+use crate::token_cmd::{self, TokenCommand};
 
 #[derive(Parser)]
 #[command(
@@ -35,6 +29,18 @@ struct Cli {
 enum Command {
     /// Print version and build information
     Version,
+    /// Serve the Xet CAS; without a config file, in dev mode with a generated token
+    Serve(ServeArgs),
+    /// Check and explain the server configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    /// Create CAS-token signing keys, CAS tokens and static tokens
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
 }
 
 #[derive(Serialize)]
@@ -54,57 +60,6 @@ impl HumanDisplay for VersionInfo {
     }
 }
 
-/// A failure reported to the user: one line of text, or with `--json` one
-/// `openxet.error.v1` object, on stderr.
-#[derive(Serialize)]
-struct CliError {
-    schema: &'static str,
-    /// Stable machine-readable kind, e.g. `usage` or `io`.
-    code: &'static str,
-    message: String,
-    /// The next action to take.
-    hint: &'static str,
-    #[serde(skip)]
-    exit: u8,
-}
-
-impl CliError {
-    fn usage(err: &clap::Error) -> Self {
-        let rendered = err.to_string();
-        let message = rendered.lines().next().unwrap_or_default();
-        Self {
-            schema: "openxet.error.v1",
-            code: "usage",
-            message: message
-                .strip_prefix("error: ")
-                .unwrap_or(message)
-                .to_owned(),
-            hint: "Run `openxet --help` to list commands and options.",
-            exit: ExitCode::USAGE,
-        }
-    }
-
-    fn output(err: &io::Error) -> Self {
-        Self {
-            schema: "openxet.error.v1",
-            code: "io",
-            message: format!("could not write output: {err}"),
-            hint: "Check that stdout is writable, for example that the reading end of a pipe \
-                   stays open.",
-            exit: ExitCode::FAILURE,
-        }
-    }
-
-    /// Prints the error with `--json`; the caller prints the text form.
-    fn report_json(&self) -> u8 {
-        if let Ok(line) = serde_json::to_string(self) {
-            // A closed stderr leaves nothing to report to; keep the exit code.
-            let _ = writeln!(io::stderr(), "{line}");
-        }
-        self.exit
-    }
-}
-
 /// Parses `args` and runs the command, returning the process exit code.
 /// Arguments need not be UTF-8: clap reports one it can't use as a usage
 /// error.
@@ -117,7 +72,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Err(err) if err.use_stderr() => {
             let error = CliError::usage(&err);
             if json {
-                return error.report_json();
+                return error.report(true);
             }
             let _ = err.print();
             return error.exit;
@@ -130,24 +85,22 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
     };
 
     let output = Output::from_json_flag(cli.json);
-    let result = match cli.command {
-        Command::Version => output.emit(&VersionInfo {
-            schema: "openxet.version.v1",
-            version: env!("CARGO_PKG_VERSION"),
-            git_commit: env!("OPENXET_GIT_COMMIT"),
-            protocol_spec: PROTOCOL_SPEC,
-        }),
+    let result = match &cli.command {
+        Command::Version => output
+            .emit(&VersionInfo {
+                schema: "openxet.version.v1",
+                version: env!("CARGO_PKG_VERSION"),
+                git_commit: env!("OPENXET_GIT_COMMIT"),
+                protocol_spec: PROTOCOL_SPEC,
+            })
+            .map_err(|err| CliError::output(&err)),
+        Command::Serve(args) => serve::run(args, output),
+        Command::Config { command } => config_cmd::run(command, output),
+        Command::Token { command } => token_cmd::run(command, output),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            let error = CliError::output(&err);
-            if json {
-                return error.report_json();
-            }
-            let _ = writeln!(io::stderr(), "error: {}", error.message);
-            error.exit
-        }
+        Err(error) => error.report(json),
     }
 }
 
@@ -253,20 +206,57 @@ mod tests {
         ));
     }
 
+    /// Every command's invocation as the agent leg lists it: `["name"` for a
+    /// top-level command, `["parent", "child"` for a nested one.
+    fn invocations(cmd: &clap::Command, parents: &[String]) -> Vec<String> {
+        let mut found = Vec::new();
+        for sub in cmd.get_subcommands() {
+            let mut path = parents.to_vec();
+            path.push(format!("\"{}\"", sub.get_name()));
+            if sub.has_subcommands() {
+                found.extend(invocations(sub, &path));
+            } else {
+                found.push(format!("[{}", path.join(", ")));
+            }
+        }
+        found
+    }
+
+    const AGENT_LEG: &str = include_str!("../../../compat/tests/test_agent_cli.py");
+
     /// The agent leg (`compat/tests/test_agent_cli.py`) runs every command
-    /// non-interactively with `--json`; a new subcommand must be added there.
+    /// non-interactively with `--json`; a new subcommand, nested ones
+    /// included, must be added there.
     #[test]
     fn every_subcommand_is_in_the_agent_leg() {
-        let agent_leg = include_str!("../../../compat/tests/test_agent_cli.py");
-        let cli = Cli::command();
-        let missing: Vec<&str> = cli
-            .get_subcommands()
-            .map(clap::Command::get_name)
-            .filter(|name| !agent_leg.contains(&format!("[\"{name}\"")))
+        let missing: Vec<String> = invocations(&Cli::command(), &[])
+            .into_iter()
+            .filter(|invocation| !AGENT_LEG.contains(invocation.as_str()))
             .collect();
         assert!(
             missing.is_empty(),
             "add {missing:?} to JSON_COMMANDS in compat/tests/test_agent_cli.py"
         );
+    }
+
+    #[test]
+    fn agent_leg_lists_new_commands() {
+        let listed = invocations(&Cli::command(), &[]);
+        for invocation in [
+            r#"["serve""#,
+            r#"["config", "check""#,
+            r#"["token", "keygen""#,
+            r#"["token", "mint""#,
+            r#"["token", "generate""#,
+        ] {
+            assert!(
+                listed.iter().any(|l| l == invocation),
+                "{invocation} is not a command"
+            );
+            assert!(
+                AGENT_LEG.contains(invocation),
+                "{invocation} is not in the agent leg"
+            );
+        }
     }
 }

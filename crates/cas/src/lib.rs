@@ -17,8 +17,10 @@ mod auth;
 mod blocking;
 mod body;
 mod cache;
+mod deadline;
 mod dedup;
 mod error;
+mod health;
 mod misc;
 mod path;
 mod plan;
@@ -49,7 +51,9 @@ use tower_http::trace::TraceLayer;
 use url::Url;
 
 pub use auth::{ReadAccess, WriteAccess};
+pub use deadline::BodyDeadline;
 pub use error::CasError;
+pub use health::starting_router;
 pub use misc::TELEMETRY_BODY_LIMIT;
 pub use reconstruction::{MAX_BATCH_FILES, MAX_BATCH_TERMS};
 pub use request_id::{RequestId, X_REQUEST_ID};
@@ -69,6 +73,8 @@ pub struct CasConfig {
     /// while the upload's work runs. `hf_xet` fails a stream silent for its
     /// 300 s read timeout (S10 §4).
     pub heartbeat_interval: Duration,
+    /// The pace every request body must keep.
+    pub body_deadline: BodyDeadline,
 }
 
 impl CasConfig {
@@ -179,10 +185,14 @@ impl AppState {
 ///   retries"). A known path with an unserved method answers `405`.
 /// - A handler panic answers `500 internal` with the error body and the
 ///   request id, never the panic message.
+/// - Every request body is read under [`CasConfig::body_deadline`].
+/// - `GET /healthz` and `GET /readyz` answer `200` without a credential;
+///   see [`starting_router`] for the answers before the server is ready.
 /// - Responses are never compressed: clients send no `Accept-Encoding`.
 pub fn router(state: AppState) -> Router {
     with_middleware(
         Router::new()
+            .merge(health::routes())
             .merge(misc::routes())
             .merge(xorbs::routes())
             .merge(shards::routes())
@@ -202,10 +212,15 @@ fn panicked(_payload: Box<dyn Any + Send + 'static>) -> Response {
 
 /// `routes` with the fallbacks and middleware every CAS route gets.
 fn with_middleware(routes: Router<AppState>, state: AppState) -> Router {
+    let body_deadline = state.cfg.body_deadline;
     routes
         .fallback(error::no_route)
         .method_not_allowed_fallback(error::method_not_allowed)
         .with_state(state)
+        .layer(axum::middleware::from_fn_with_state(
+            body_deadline,
+            deadline::limit,
+        ))
         .layer(CatchPanicLayer::custom(panicked))
         .layer(TraceLayer::new_for_http().make_span_with(request_id::span))
         .layer(SetSensitiveRequestHeadersLayer::new([AUTHORIZATION]))

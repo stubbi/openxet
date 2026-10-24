@@ -9,14 +9,36 @@ repository.workspace = true
 build = "build.rs"
 
 [dependencies]
+axum = "0.8.9"
+base64 = "0.23.1"
 clap = { version = "4", features = ["derive"] }
+getrandom = "0.4.3"
+hyper = { version = "1.12.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["server-graceful", "tokio"] }
+openxet-auth = { path = "../auth", version = "0.0.0" }
+openxet-cas = { path = "../cas", version = "0.0.0" }
+openxet-index = { path = "../index", version = "0.0.0" }
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
+openxet-storage = { path = "../storage", version = "0.0.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "1.1.8"
+tower = { version = "0.5.3", features = ["util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "json", "registry", "std"] }
+url = "2.5.8"
+zeroize = "1.9.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+reqwest = { version = "0.13.5", default-features = false }
+tempfile = "3"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
