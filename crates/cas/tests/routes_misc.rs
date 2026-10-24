@@ -518,3 +518,90 @@ fn body_deadline_rejects_zero() {
     assert!(BodyDeadline::new(Duration::from_secs(1), 0).is_none());
     assert!(BodyDeadline::new(Duration::from_secs(1), 1).is_some());
 }
+
+/// Whether the concrete `path` (its query ignored) is an instance of the
+/// route `template`, whose `{name}` segments match any one segment.
+fn instance_of(template: &str, path: &str) -> bool {
+    let path = path.split('?').next().unwrap();
+    let (mut t, mut p) = (template.split('/'), path.split('/'));
+    loop {
+        match (t.next(), p.next()) {
+            (None, None) => return true,
+            (Some(t), Some(p)) if t == p || (t.starts_with('{') && !p.is_empty()) => {}
+            _ => return false,
+        }
+    }
+}
+
+/// A concrete path for `template`: the `default` prefix and a hash no test
+/// stores.
+fn concrete(template: &str) -> String {
+    template
+        .replace("{prefix}", "default")
+        .replace("{hash}", &"0".repeat(64))
+}
+
+#[test]
+fn every_served_route_is_in_routes_or_the_allowlist() {
+    // A route missing from `ROUTES` escapes the authentication, scoping and
+    // echo matrices (design §5.9 reqs 1, 2 and 6), so every endpoint the
+    // router serves is either there or on the explicit allowlist: the
+    // probes, and the signed transfer route, whose signature is its
+    // credential (ADR 0002).
+    let endpoints = openxet_cas::endpoints();
+    for endpoint in &endpoints {
+        let (method, template) = (&endpoint.method, endpoint.path);
+        let in_routes = ROUTES
+            .iter()
+            .any(|r| r.method == *method && instance_of(template, r.path));
+        let probe =
+            *method == Method::GET && UNAUTHENTICATED.iter().any(|p| instance_of(template, p));
+        let signed =
+            matches!(*method, Method::GET | Method::HEAD) && instance_of(template, TRANSFER_PATH);
+        assert!(
+            in_routes || probe || signed,
+            "{method} {template} is served but not in common::ROUTES; add it there so the \
+             credential and echo matrices cover it"
+        );
+    }
+    for route in ROUTES {
+        assert!(
+            endpoints
+                .iter()
+                .any(|e| e.method == route.method && instance_of(e.path, route.path)),
+            "common::ROUTES lists {} {}, which the router doesn't serve",
+            route.method,
+            route.path
+        );
+    }
+}
+
+#[tokio::test]
+async fn router_serves_exactly_its_endpoints() {
+    // `endpoints()` comes from the calls that build the router, but each
+    // call also states its methods by hand. A `405` lists in `Allow` every
+    // method the path really serves, so probing each path with a method no
+    // route uses checks the stated methods against the handlers.
+    let server = TestServer::start_default().await;
+    let endpoints = openxet_cas::endpoints();
+    let paths: HashSet<&str> = endpoints.iter().map(|e| e.path).collect();
+    for template in paths {
+        let mut stated: HashSet<String> = endpoints
+            .iter()
+            .filter(|e| e.path == template)
+            .map(|e| e.method.to_string())
+            .collect();
+        if stated.contains("GET") {
+            stated.insert("HEAD".to_owned());
+        }
+        let reply = Reply::of(server.request(Method::PATCH, &concrete(template))).await;
+        reply.assert_error(405, "method_not_allowed");
+        let allowed: HashSet<String> = reply.headers["allow"]
+            .to_str()
+            .unwrap()
+            .split(',')
+            .map(|m| m.trim().to_owned())
+            .collect();
+        assert_eq!(allowed, stated, "{template}");
+    }
+}

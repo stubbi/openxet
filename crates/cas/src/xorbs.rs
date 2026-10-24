@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Request, State};
-use axum::http::StatusCode;
 use axum::http::header::CONTENT_LENGTH;
 use axum::http::request::Parts;
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use openxet_auth::Principal;
@@ -18,6 +17,7 @@ use openxet_protocol::{
 use openxet_storage::Key;
 use serde::Serialize;
 
+use crate::routes::Routes;
 use crate::{AppState, CasError, ReadAccess, WriteAccess, body, path};
 
 /// The only xorb prefix: what clients send (`HF_XET_DATA_DEFAULT_PREFIX`;
@@ -32,9 +32,10 @@ const PREFIX: &str = "default";
 const BODY_LIMIT: usize = MAX_XORB_BODY_BYTES as usize;
 
 /// `POST` and `HEAD /v1/xorbs/{prefix}/{hash}` (S10 §3).
-pub(crate) fn routes() -> Router<AppState> {
-    Router::new().route(
+pub(crate) fn routes() -> Routes {
+    Routes::new().route(
         "/v1/xorbs/{prefix}/{hash}",
+        &[Method::POST, Method::HEAD],
         post(upload)
             .head(head)
             .layer(DefaultBodyLimit::max(BODY_LIMIT)),

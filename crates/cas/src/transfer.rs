@@ -25,13 +25,12 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{FromRequestParts, Query, State};
 use axum::http::header::{ALLOW, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures_core::Stream;
@@ -41,13 +40,15 @@ use openxet_protocol::{MerkleHash, hash_to_hex};
 use openxet_storage::{Key, RangeStream, StorageError};
 
 use crate::cache::private;
+use crate::routes::Routes;
 use crate::{AppState, CasError, path};
 
 /// `GET /v1/transfer/xorbs/{hash}`.
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Routes {
     // `head` is set after `get`, which would otherwise answer it too.
-    Router::new().route(
+    Routes::new().route(
         "/v1/transfer/xorbs/{hash}",
+        &[Method::GET, Method::HEAD],
         private(get(transfer).head(head_refused)),
     )
 }

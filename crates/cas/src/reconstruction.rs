@@ -25,11 +25,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use axum::Router;
 use axum::extract::{DefaultBodyLimit, FromRequestParts, RawQuery, Request, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, head, post};
 use openxet_index::ChunkTable;
@@ -42,6 +41,7 @@ use url::Url;
 use crate::blocking::blocking;
 use crate::cache::private;
 use crate::plan::{self, Fetch, Plan, PlanError, PlannedTerm};
+use crate::routes::Routes;
 use crate::{AppState, CasError, ReadAccess, body, path};
 
 /// The most distinct files one batch reconstruction may name; a batch over
@@ -63,20 +63,33 @@ const _: () = assert!(MAX_BATCH_FILES == 1000);
 const BATCH_BODY_LIMIT: u64 = 256 * 1024;
 
 /// The reconstruction routes and `HEAD /v1/files/{hash}`.
-pub(crate) fn routes() -> Router<AppState> {
+pub(crate) fn routes() -> Routes {
     #[allow(
         clippy::cast_possible_truncation,
         reason = "256 KiB fits the usize of every target"
     )]
     let batch_limit = DefaultBodyLimit::max(BATCH_BODY_LIMIT as usize);
-    Router::new()
-        .route("/v2/reconstructions/{hash}", private(get(v2)))
-        .route("/v1/reconstructions/{hash}", private(get(v1)))
+    Routes::new()
+        .route(
+            "/v2/reconstructions/{hash}",
+            &[Method::GET],
+            private(get(v2)),
+        )
+        .route(
+            "/v1/reconstructions/{hash}",
+            &[Method::GET],
+            private(get(v1)),
+        )
         .route(
             "/v1/reconstructions",
+            &[Method::POST, Method::GET],
             private(post(batch_post).layer(batch_limit).get(batch_get)),
         )
-        .route("/v1/files/{hash}", private(head(head_file)))
+        .route(
+            "/v1/files/{hash}",
+            &[Method::HEAD],
+            private(head(head_file)),
+        )
 }
 
 /// The file named by the path ([`path::hash`]).

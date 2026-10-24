@@ -1,6 +1,6 @@
-use axum::Router;
 use axum::body::Body;
 use axum::body::HttpBody as _;
+use axum::http::Method;
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::post;
@@ -8,15 +8,16 @@ use http_body_util::BodyExt as _;
 
 use crate::body;
 use crate::error::closing;
-use crate::{AppState, CasError, ReadAccess};
+use crate::routes::Routes;
+use crate::{CasError, ReadAccess};
 
 /// The largest telemetry body accepted. `hf_xet` 1.7.0 sends five keys and
 /// a flat object of counters, well under 1 KiB (S10 §6).
 pub const TELEMETRY_BODY_LIMIT: usize = 64 * 1024;
 
 /// Routes that carry no data: telemetry.
-pub(crate) fn routes() -> Router<AppState> {
-    Router::new().route("/v1/telemetry", post(telemetry))
+pub(crate) fn routes() -> Routes {
+    Routes::new().route("/v1/telemetry", &[Method::POST], post(telemetry))
 }
 
 /// `POST /v1/telemetry`: accepted and dropped (S10 §6; non-negotiable 6, no

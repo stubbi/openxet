@@ -6,21 +6,23 @@
 //! answers a fixed body that names nothing stored.
 
 use axum::Router;
+use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower_http::trace::TraceLayer;
 
 use crate::error::closing;
-use crate::{AppState, CasError, request_id};
+use crate::routes::Routes;
+use crate::{CasError, request_id};
 
 const JSON: [(axum::http::HeaderName, &str); 1] = [(CONTENT_TYPE, "application/json")];
 
 /// The probes of a server that is ready.
-pub(crate) fn routes() -> Router<AppState> {
-    Router::new()
-        .route("/healthz", get(live))
-        .route("/readyz", get(ready))
+pub(crate) fn routes() -> Routes {
+    Routes::new()
+        .route("/healthz", &[Method::GET], get(live))
+        .route("/readyz", &[Method::GET], get(ready))
 }
 
 /// `GET /healthz`: the process is up and serving HTTP.

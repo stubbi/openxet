@@ -10,7 +10,9 @@
 //! [`ROUTES`] lists every route the CAS serves. Tests that must hold on every
 //! route (credentials are never echoed, every route authenticates) iterate
 //! over it, so a task that adds a route adds it there and those tests cover
-//! it automatically.
+//! it automatically. `every_served_route_is_in_routes_or_the_allowlist`
+//! (`routes_misc.rs`) fails for a route [`openxet_cas::endpoints`] lists
+//! but `ROUTES` doesn't.
 
 #![allow(dead_code)]
 

@@ -27,6 +27,7 @@ mod path;
 mod plan;
 mod reconstruction;
 mod request_id;
+mod routes;
 mod shards;
 #[cfg(test)]
 mod test_support;
@@ -58,6 +59,7 @@ pub use health::starting_router;
 pub use misc::TELEMETRY_BODY_LIMIT;
 pub use reconstruction::{MAX_BATCH_FILES, MAX_BATCH_TERMS};
 pub use request_id::{RequestId, X_REQUEST_ID};
+pub use routes::Endpoint;
 
 /// The CAS's configuration.
 #[derive(Debug, Clone)]
@@ -209,17 +211,26 @@ impl AppState {
 ///   see [`starting_router`] for the answers before the server is ready.
 /// - Responses are never compressed: clients send no `Accept-Encoding`.
 pub fn router(state: AppState) -> Router {
-    with_middleware(
-        Router::new()
-            .merge(health::routes())
-            .merge(misc::routes())
-            .merge(xorbs::routes())
-            .merge(shards::routes())
-            .merge(dedup::routes())
-            .merge(reconstruction::routes())
-            .merge(transfer::routes()),
-        state,
-    )
+    with_middleware(served().into_router(), state)
+}
+
+/// Every method and path template [`router`] serves, from the same calls
+/// that build it.
+#[must_use]
+pub fn endpoints() -> Vec<Endpoint> {
+    served().into_endpoints()
+}
+
+/// The CAS's routes, without middleware or state.
+fn served() -> routes::Routes {
+    routes::Routes::new()
+        .merge(health::routes())
+        .merge(misc::routes())
+        .merge(xorbs::routes())
+        .merge(shards::routes())
+        .merge(dedup::routes())
+        .merge(reconstruction::routes())
+        .merge(transfer::routes())
 }
 
 /// The response to a handler panic: `500 internal`, logged inside the
