@@ -142,7 +142,7 @@ host name instead. A trailing `/` is allowed and ignored.
 
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
-| `dedup_visibility` | `global` | `global` or `per-scope` | Whether one scope's xorbs are visible to another. See [Dedup visibility](#dedup-visibility). |
+| `dedup_visibility` | `global` | `global` or `per-tenant` | Whether one tenant's xorbs are visible to another. See [Dedup visibility](#dedup-visibility). |
 | `url_lifetime` | `60m` | `30m` to `60m` | How long a signed transfer URL is valid. See [Transfer URLs](#transfer-urls). |
 | `heartbeat_interval` | `5s` | `1s` to `2m` | How often a `/v2/shards` upload stream repeats its progress while the upload is verified and committed. `hf_xet` fails a stream that is silent for 300 s. |
 | `transfer_key_file` | `<data_dir>/transfer.key` | a file path | The key that signs transfer URLs. Set explicitly, the file must exist. See [Keys and tokens on disk](#keys-and-tokens-on-disk). |
@@ -324,9 +324,10 @@ model uploaded to another.
 ## Dedup visibility
 
 Files are always visible only in the scope they were uploaded to.
-`dedup_visibility` decides xorbs, the deduplicated chunk containers:
+`dedup_visibility` decides xorbs, the deduplicated chunk containers,
+between [tenants](#tenants):
 
-- `global` (the default): every stored xorb is visible to every scope. An
+- `global` (the default): every stored xorb is visible to every tenant. An
   upload skips any chunk stored by anyone, which saves the most space and
   bandwidth.
 
@@ -336,15 +337,23 @@ Files are always visible only in the scope they were uploaded to.
   more than the edit: about 1.1 MB for a 1 MiB edit of a 100 MiB file.
   The price is what one matching chunk reveals: anyone who holds one
   chunk of an upload learns that upload's xorb hashes, chunk counts and
-  chunk lengths (never its data or raw chunk hashes); choose `per-scope`
+  chunk lengths (never its data or raw chunk hashes); choose `per-tenant`
   if tenants must not learn that about each other.
-- `per-scope`: a scope sees only xorbs uploaded with its own credentials.
-  To any other scope, another scope's xorb reads as absent: `HEAD` of it
+- `per-tenant`: a tenant sees only the xorbs it owns: those uploaded with
+  its credentials, in any of its scopes, and those its registered files
+  reference. To any other tenant such a xorb reads as absent: `HEAD` of it
   answers `404`, dedup queries find no match in it, and a shard that
   references it is refused with `unknown_xorb`. A dedup answer offers only
-  xorbs of the scope's own uploads. So no scope can learn what
-  another has stored, and each scope uploads its own copy of shared data
-  (stored once in the bucket, all the same).
+  xorbs of the tenant's own uploads. So no tenant can learn what another
+  has stored, and each tenant uploads its own copy of shared data (stored
+  once in the bucket, all the same), while the scopes of one tenant
+  deduplicate against each other.
+
+Switching a running deployment from `global` to `per-tenant` is safe:
+every file stays readable in its scope, and a tenant keeps owning the
+xorbs its files reference even if another tenant uploaded them, so its
+uploads keep deduplicating against them. Switching back loses nothing
+either.
 
 Dedup answers get their own share of the server, a quarter of its CPUs (at
 least one answer at a time). A query that waits 1 s for its turn answers

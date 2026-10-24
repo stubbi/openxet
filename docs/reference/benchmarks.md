@@ -43,8 +43,9 @@ pins the file shape, so it can't pass on an easy file. Both files have
 
 Each shape gets 200 full-file and 200 random-range
 `GET /v2/reconstructions`, one at a time, in process through the router
-and a SQLite index on disk, timed to the body's last byte. The index uses
-per-scope visibility, the costlier check. The gate runs on the Linux
+and a SQLite index on disk, timed to the body's last byte. The server uses
+`per-tenant` visibility, as a multi-tenant host does; reconstruction reads
+chunk layouts the same way in either mode. The gate runs on the Linux
 runner only, as the other release-build gate does.
 
 p50 / p99 in ms:

@@ -44,8 +44,33 @@ once built.
   most 100,000 terms. An answer not sent within 30 s plus 1 s per MiB is
   cut off. `server.max_connections` (4096 by default) caps open
   connections ([config](docs/reference/config.md#memory)).
+- Tenants: every credential names a tenant next to its scope, from a CAS
+  token's optional `tenant` claim or a static token's `tenant` field, and
+  the scope when it names none. `dedup_visibility = "per-tenant"` isolates
+  tenants while the scopes of one tenant share dedup
+  ([config](docs/reference/config.md#tenants)). `openxet token mint` and
+  `token generate` take `--tenant`.
+- The bucket records which scope registered which shard, for which tenant,
+  and which tenant uploaded which xorb, before the index does, so losing
+  the index never loses anyone's access to their files: the index can be
+  rebuilt from the bucket alone.
 
 ### Upgrading
+
+- `dedup_visibility = "per-scope"` is now `"per-tenant"`; the old value is
+  refused at startup with a hint. With no tenant configured, each scope
+  is its own tenant, which isolates exactly as `per-scope` did.
+- Index migration 0005 gives every existing row its scope as its tenant,
+  and makes each scope an owner of the xorbs its registered shards
+  reference where the index lists them (shards registered after migration
+  0002), so switching `global` to `per-tenant` keeps their files readable
+  and dedupable. A shard registered before 0002 gains that ownership when
+  it is registered again.
+- Registrations and xorb uploads made before this version have no record
+  in the bucket. The index still holds them, but a rebuild from the bucket
+  (`reindex`, [#26](https://github.com/stubbi/openxet/issues/26)) can't
+  restore them until each shard and xorb is uploaded again, which writes
+  its record. `reindex` will backfill the records from a live index.
 
 - Shards registered before index migration 0002 have no list of their
   xorbs, so a dedup match in one offers only the matched xorb, not the
