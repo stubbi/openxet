@@ -114,6 +114,27 @@ jobs:
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
 
+  # Stock hf_xet (the pinned floor) against openxet serve, with no Hub.
+  compat-storage-only:
+    name: compat (storage-only)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+          cache-dependency-glob: compat/uv.lock
+      - run: cargo build --locked -p openxet
+      - run: uv run --frozen --directory compat pytest -m storage_only
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+
   # Not a required check: it needs the nightly toolchain, whose moving
   # sanitizer and coverage flags make it non-hermetic (see GOVERNANCE.md).
   fuzz-smoke:
