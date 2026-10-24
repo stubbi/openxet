@@ -32,24 +32,23 @@ use axum::http::header::{ALLOW, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RAN
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use futures_core::Stream;
 use futures_core::stream::BoxStream;
 use openxet_auth::TransferQuery;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use openxet_storage::{Key, RangeStream, StorageError};
 
-use crate::cache::private;
-use crate::routes::Routes;
+use crate::routes::{Routes, on};
 use crate::{AppState, CasError, path};
 
 /// `GET /v1/transfer/xorbs/{hash}`.
 pub(crate) fn routes() -> Routes {
-    // `head` is set after `get`, which would otherwise answer it too.
+    // `HEAD` has its own handler; without one, `get` would answer it too.
     Routes::new().route(
         "/v1/transfer/xorbs/{hash}",
-        &[Method::GET, Method::HEAD],
-        private(get(transfer).head(head_refused)),
+        on(Method::GET, transfer)
+            .on(Method::HEAD, head_refused)
+            .private(),
     )
 }
 

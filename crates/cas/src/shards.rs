@@ -24,10 +24,10 @@ use std::time::Duration;
 use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, FromRequestParts as _, Request, State};
+use axum::handler::Handler as _;
 use axum::http::Method;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
 use http_body_util::channel::{Channel, Sender};
 use openxet_index::{FileRecord, NewFile, Term};
 use openxet_protocol::{
@@ -41,7 +41,7 @@ use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
 use crate::blocking::blocking;
-use crate::routes::Routes;
+use crate::routes::{Routes, on};
 use crate::{AppState, CasError, RequestId, WriteAccess, body};
 
 /// [`MAX_UPLOAD_SHARD_BYTES`] as a buffer length.
@@ -64,13 +64,17 @@ pub(crate) fn routes() -> Routes {
     Routes::new()
         .route(
             "/v1/shards",
-            &[Method::POST],
-            post(upload_v1).layer(DefaultBodyLimit::max(BODY_LIMIT)),
+            on(
+                Method::POST,
+                upload_v1.layer(DefaultBodyLimit::max(BODY_LIMIT)),
+            ),
         )
         .route(
             "/v2/shards",
-            &[Method::POST],
-            post(upload_v2).layer(DefaultBodyLimit::max(BODY_LIMIT)),
+            on(
+                Method::POST,
+                upload_v2.layer(DefaultBodyLimit::max(BODY_LIMIT)),
+            ),
         )
 }
 

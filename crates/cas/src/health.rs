@@ -13,7 +13,7 @@ use axum::routing::get;
 use tower_http::trace::TraceLayer;
 
 use crate::error::closing;
-use crate::routes::Routes;
+use crate::routes::{Routes, on};
 use crate::{CasError, request_id};
 
 const JSON: [(axum::http::HeaderName, &str); 1] = [(CONTENT_TYPE, "application/json")];
@@ -21,8 +21,8 @@ const JSON: [(axum::http::HeaderName, &str); 1] = [(CONTENT_TYPE, "application/j
 /// The probes of a server that is ready.
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route("/healthz", &[Method::GET], get(live))
-        .route("/readyz", &[Method::GET], get(ready))
+        .route("/healthz", on(Method::GET, live))
+        .route("/readyz", on(Method::GET, ready))
 }
 
 /// `GET /healthz`: the process is up and serving HTTP.
@@ -43,6 +43,10 @@ async fn not_ready() -> Response {
 /// What a server answers while its index and bucket open, before it serves
 /// [`crate::router`]: `/healthz` is `200`, and `/readyz` and every other
 /// path `503 not_ready` with `Retry-After: 1`, which clients retry.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the probes before the CAS routes exist; `router` serves the listed ones"
+)]
 pub fn starting_router() -> Router {
     Router::new()
         .route("/healthz", get(live))

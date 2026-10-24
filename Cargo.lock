@@ -1802,6 +1802,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "openxet-auth",
+ "openxet-cas",
  "openxet-index",
  "openxet-protocol",
  "openxet-storage",

@@ -26,11 +26,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, FromRequestParts, RawQuery, Request, State};
+use axum::handler::Handler as _;
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, head, post};
 use openxet_index::ChunkTable;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::ser::{SerializeStruct as _, Serializer};
@@ -39,9 +39,8 @@ use tokio::sync::OwnedSemaphorePermit;
 use url::Url;
 
 use crate::blocking::blocking;
-use crate::cache::private;
 use crate::plan::{self, Fetch, Plan, PlanError, PlannedTerm};
-use crate::routes::Routes;
+use crate::routes::{Routes, on};
 use crate::{AppState, CasError, ReadAccess, body, path};
 
 /// The most distinct files one batch reconstruction may name; a batch over
@@ -70,26 +69,15 @@ pub(crate) fn routes() -> Routes {
     )]
     let batch_limit = DefaultBodyLimit::max(BATCH_BODY_LIMIT as usize);
     Routes::new()
-        .route(
-            "/v2/reconstructions/{hash}",
-            &[Method::GET],
-            private(get(v2)),
-        )
-        .route(
-            "/v1/reconstructions/{hash}",
-            &[Method::GET],
-            private(get(v1)),
-        )
+        .route("/v2/reconstructions/{hash}", on(Method::GET, v2).private())
+        .route("/v1/reconstructions/{hash}", on(Method::GET, v1).private())
         .route(
             "/v1/reconstructions",
-            &[Method::POST, Method::GET],
-            private(post(batch_post).layer(batch_limit).get(batch_get)),
+            on(Method::POST, batch_post.layer(batch_limit))
+                .on(Method::GET, batch_get)
+                .private(),
         )
-        .route(
-            "/v1/files/{hash}",
-            &[Method::HEAD],
-            private(head(head_file)),
-        )
+        .route("/v1/files/{hash}", on(Method::HEAD, head_file).private())
 }
 
 /// The file named by the path ([`path::hash`]).
