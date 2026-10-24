@@ -205,6 +205,7 @@ cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)'
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
 cargo fmt --check                                          # formatting (CI gate)
 cargo deny check                                           # licenses, advisories, bans
+scripts/check-client-core-ban.sh                           # the ADR 0006 ban rejects xet-data & co. in a server crate (CI gate)
 fuzz/seed.sh                                               # fill fuzz/corpus from testdata/ (once; needs the reference files)
 cargo +nightly fuzz run xorb_upload -- -max_total_time=60  # fuzz a parser (targets: xorb_upload, xorb_chunks, upload_shard, verify_shard)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps # docs build (CI gate)

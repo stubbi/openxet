@@ -6,8 +6,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
-    # xet-core crates are bumped deliberately, with the compatibility suite
-    # run on the bump (ADR 0001, Consequences).
+    # xet-core crates (xet-core-structures, and xet-data, xet-runtime and
+    # xet-client in openxet-client) are bumped deliberately, all four in
+    # lockstep, with the compatibility suite run on the bump (ADR 0001,
+    # Consequences; ADR 0006).
     ignore:
       - dependency-name: "xet-*"
   - package-ecosystem: github-actions
