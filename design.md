@@ -2,16 +2,28 @@
 
 <!-- description: The shared visual language, content rules, components, user journeys and quality standards for the openxet website, documentation and interfaces. -->
 
-Version 1 · 2026-10-24 · Applies to openxet.com, its documentation, hosted
+Version 2 · 2026-10-24 · Applies to openxet.com, its documentation, hosted
 onboarding, and the optional self-service UI. This is the canonical design
 reference for humans and coding agents. The product design and accepted ADRs
 remain authoritative for capabilities, architecture and security.
 
-This system turns a first visit into understanding, a successful first task,
-and a reason to return. Visual polish supports that sequence. Trust is earned
-by working examples, honest status, useful feedback and reliable behavior.
+The purpose is to help someone understand openxet, make a sound choice, finish
+a useful task and confidently return. Visual polish supports that sequence.
+Working examples, honest status, useful feedback and reliable behavior earn
+trust; a landing page alone cannot create loyalty.
 
-## Overview
+**How to use this reference:** the principles and shared task contracts are
+durable. The release blueprint, identity, tokens and example layouts are the
+current versioned expression of them. Follow those adopted choices consistently
+until an intentional revision replaces them; no existing page, logo or layout
+is protected from a better-supported design. Preserve working URLs or plan
+their migration. Current reference docs and verified behavior establish what
+works; the product design and ADRs establish approved targets and architecture.
+This file never turns a target into an available feature.
+
+<span id="overview"></span>
+
+## Durable principles
 
 ### The promise and the first understanding
 
@@ -25,29 +37,23 @@ Explain in this order:
 2. Much of the file can remain the same.
 3. openxet recognizes those parts, so they do not need uploading again.
 4. This is called deduplication. The files people use remain complete files.
-5. People can use the hosted service, operate their own installation, or embed
-   the storage in another product, subject to the current availability below.
+5. People choose who operates their storage. Integrating it into a product is
+   a separate choice, subject to the current availability below.
 
 The first **aha** is “I can keep the whole file while uploading less.” It must
 be visible above or immediately below the fold, require no account, and work
-as a still diagram. A technical explanation is available one click deeper.
+as a still diagram. Show both the complete file and the smaller set to upload;
+color alone does not explain what crosses the network. A technical explanation
+is available one click deeper.
 
-### Personality
+The differentiated long-term proposition is Xet storage with a choice of
+operator and an inspectable, shared open-source implementation. Explain that
+choice after the basic benefit. Do not imply that deduplication is unique to
+openxet or that an unavailable deployment option works today.
 
-Calm, capable, open and considerate. Use light mineral surfaces, dark blue ink,
-precise type, and one useful illustration. The distinctive element is a pair
-of file-version strips: unchanged pieces line up; one new piece has a warm
-highlight. It represents the product instead of decorating it.
-
-Keep the existing lowercase name and four-part symbol. Refine its color and
-spacing; do not invent a new logo in an unrelated feature change. Do not
-borrow Hugging Face's logo, illustrations, customer claims or visual identity.
-Credit the Xet protocol and link to upstream explanations.
-
-Three directions were considered: a dark terminal-led page, an infrastructure
-blueprint, and a light explanation-led page. Choose the last: it welcomes
-less technical readers and gives real product evidence room to breathe.
-Terminals and architecture diagrams belong after the explanation.
+Prioritize understanding before persuasion, useful completion before clicks,
+and evidence before reassurance. Give a beginner plain words and an expert a
+short route to exact contracts. Both should reach the same truth.
 
 ### Stakeholders and the decisions they make
 
@@ -105,6 +111,12 @@ the visitor after external sign-in. For cross-device setup, obtain credentials
 again through the approved identity flow. A public marketing page never needs
 to know the visitor's identity to explain the product.
 
+## Current release blueprint
+
+This section describes the present website and the transition to hosting.
+Change it when availability or evidence changes; it is not the permanent
+information architecture of every openxet interface.
+
 ### Availability and launch states
 
 The user requested a page designed for the final hosted product, with sign-up
@@ -125,6 +137,40 @@ in waitlist mode replace it with a useful GitHub/docs link instead of a dead
 button. Future `/signup` and `/signin` aliases on the marketing origin should
 redirect only after launch. Pricing appears in navigation only when publishable.
 
+### Claims and their evidence
+
+These are the claims most likely to confuse a visitor, reviewed 2026-10-24.
+They are pointers to authoritative material, not a second capability registry.
+Before changing public copy, check its source and tested version. Update HTML,
+Markdown and structured data together; link measurements rather than copying
+numbers that will drift. A missing implementation or test stays **planned**.
+
+| Claim | Status | Source / evidence to check |
+|---|---|---|
+| Storage-only server on local disk and SQLite; source build required | Available preview, M1 | [Quickstart](docs/quickstart-storage-only.md), [configuration](docs/reference/config.md), [changelog](docs/changelog.md) |
+| Reuse already stored file data; `hf_xet` 1.7.0+ and `openxet` upload/download | Available in the documented storage workflow | [Executable quickstart](docs/quickstart-storage-only.md), [CLI byte-counter definitions](docs/reference/cli.md#openxet-upload) |
+| Scoped credentials, signed transfer URLs and versioned CLI errors | Implemented boundaries; do not imply a security certification | [Configuration](docs/reference/config.md), [security test map](docs/reference/security-tests.md), [exit codes](docs/reference/exit-codes.md) |
+| Hosted service, Hub/Git/LFS, external identity and MCP | Planned; no active hosted signup | [Product design](docs/superpowers/specs/2026-10-23-openxet-design.md), checked against current reference docs |
+| Hosted uses the shared open-source implementation | Architectural commitment for launch | [Product design §15](docs/superpowers/specs/2026-10-23-openxet-design.md#15-hosted-openxetcom-decided-by-the-user-we-must-have-the-perfect-hosted-experience) |
+
+### Resource addresses: selected future contract
+
+The founder chose **`xet://`** for future openxet resource addresses;
+[ADR 0009](docs/adr/0009-xet-resource-uris.md) records the decision. The authority
+will name the actual deployment host and optional port. Hosted and self-hosted
+installations use the same scheme; copied addresses must not silently select a
+default server. HTTPS stays the canonical browser/share link. No access token,
+password or signed capability belongs in a resource URI.
+
+The name is selected; the full grammar, legacy compatibility and implementation
+remain pending. M2-URI specifies the contract and parser; M6-URI delivers clients,
+adapters and UI/docs integration, as tracked in the
+[milestone handoff](docs/superpowers/plans/2026-10-24-resource-uri-milestones.md).
+Once supported, offer distinct **Copy resource URI** and **Copy web link**
+actions with the same task/resource context for humans and agents. Until then,
+use released commands and ordinary HTTPS links in website examples. Do not
+claim stock clients accept the scheme or that openxet owns the Xet protocol.
+
 ### Information architecture
 
 Current navigation: **How it works · Hosting · Docs · GitHub · Join the waitlist**.
@@ -135,7 +181,9 @@ accessible disclosure for the remaining links; do not hide essential paths.
 |---|---|---|---|
 | `/` | Explain value, demonstrate reuse, route the visitor | open-source large-file storage; Xet storage | Homepage |
 | `/#how-it-works` | Make the mechanism understandable | how file deduplication works | Explanation and example; preserve old `#dedup` links |
-| `/#hosting` | Explain hosted, self-hosted and embedded choices | hosted or self-hosted Xet | Honest availability beside each option; preserve `#hosted` |
+| `/#hosting` | Choose who operates the storage | hosted or self-hosted Xet | Hosted and own-infrastructure paths; preserve `#hosted` |
+| `/#integrate` | Fit storage into another product | Xet storage API integration | Separate integration path, current API and token references |
+| `/#review` | Judge maturity and operating boundaries | openxet security / operation | Current stage, configuration, tests, benchmarks and maintainer links |
 | `/waitlist/` | Save a request for hosted launch contact | openxet early access | One-field form + privacy + confirmed receipt |
 | `/docs/` | Accomplish a real task | openxet documentation | mdBook, current commands and compatibility |
 | `/about/` | Establish who builds it and how to participate | openxet project / contact | Maintainer, source, governance, feedback and disclosure links |
@@ -153,11 +201,11 @@ review and related next step; use the editorial backlog in the research note.
 | Section | Question answered | Content / behavior |
 |---|---|---|
 | Hero | What is this? | **Large files. Lighter uploads.** Supporting text names storage and explains reuse. Hosted waitlist status sits beside CTA. |
-| File-version illustration | Why should I care? | Show a previously stored file and its edited version; distinguish reused and new parts with labels as well as color. |
+| File-version illustration | Why should I care? | Show stored and edited files, then isolate the new data to upload. Preserve the complete-file mental model. |
 | Explanation | How does it work? | Three real steps: split into parts, recognize existing parts, upload new parts. Explain “chunks” after “parts.” |
-| Deployment choices | Where does my data live? | Hosted service (waitlist), own infrastructure (quickstart), own product (integration docs). No fake cloud availability. |
-| Familiar tools and agents | How will I use it? | Separate available `openxet` / `hf_xet` flows from planned Hub/Git/MCP. Link exact current references. |
-| Evidence | Why trust it? | Apache-2.0 source, reference-file checks, real-client tests, measured benchmarks and public decisions. |
+| Hosting, then integration | Who operates it? How does it fit my product? | Two hosting choices, each with operator/location/status/action. Separate API and platform-token path; hosted integration remains unpromised until specified. |
+| First task and handoff | How will I use it? | Upload, download, verify and observe reuse in the tested storage workflow. Share the same recipe as Markdown. Separate planned Hub/Git/MCP. |
+| Evidence | Does it meet my requirements? | State maturity, link operating/data behavior, permission tests, reproducible measurements, source, changes and maintainers. |
 | Practical questions | Is this right for me? | Workloads, variable savings, independence from Hugging Face, release status and pricing availability. |
 | Final action | What now? | Repeat the waitlist action; offer a direct self-host quickstart. |
 
@@ -167,17 +215,44 @@ Desktop composition:
 openxet          How it works  Hosting  Docs  GitHub     [Join the waitlist]
 
 Large files.                    Previous file  [A][B][C][D][E][F][G][H]
-Lighter uploads.                Updated file   [A][B][+][D][E][F][G][H]
-Plain explanation.              7 parts reused · 1 new part to upload
-[Join the waitlist] [See how]    Illustrative example · change a part
+Lighter uploads.                Updated file   [A][B][I+][D][E][F][G][H]
+Plain explanation.              New data to upload [I+]
+[Join the waitlist] [See how]    7 parts reused · 1 new part to upload
 Hosted service coming soon.
 
-                 Same file to work with. Less to send.
-                 explanation → hosting → tools → evidence → FAQ → CTA
+                 explanation → hosting / integration → first task
+                 → evidence → practical questions → next action
 ```
 
 On mobile: headline → explanation → actions/status → illustration → remaining
 sections. Avoid forcing a large artwork above the reason to use the product.
+
+<span id="personality"></span>
+
+## Visual identity: version 2
+
+Calm, capable, open and considerate. The chosen light mineral surfaces and
+dark blue ink make explanatory content readable without requiring terminal
+fluency. Manrope supplies a compact display voice; IBM Plex Sans and Mono
+connect readable prose with exact file data. This is a reasoned direction,
+not evidence that one palette converts better than another.
+
+The signature is a visual grammar: aligned labels mean existing content, an
+amber plus-marked part means new content, a transfer tray isolates what moves,
+and the complete strip remains the file the person works with. Reuse this
+grammar in relevant diagrams and future transfer results, never as decoration
+on unrelated screens. Real results show actual bytes, not toy part counts.
+
+The lowercase wordmark and four-part symbol are retained because they are
+compact and connect to the composition of a file. They may be replaced when
+a candidate improves recognition, small-size legibility and product fit.
+Compare candidates on those criteria, not novelty or attachment to old work.
+Do not borrow Hugging Face's visual identity; credit its Xet protocol.
+
+A dark terminal-led direction and a dense infrastructure blueprint would
+privilege experienced operators at the first encounter. Keep their useful
+technical detail deeper in the experience. Validate the chosen direction with
+the comprehension and navigation experiments below; revise it if it fails.
 
 ## Colors
 
@@ -270,8 +345,8 @@ layout:
   section-gap: "clamp(64px, 8vw, 112px)"
 ```
 
-Use a two-column hero above 960px, a single column below it. Use a three-column
-deployment choice group only when all choices fit comfortably; collapse by
+Use a two-column hero above 960px, a single column below it. Compare the two
+hosting options side by side only when both fit comfortably; collapse by
 768px. At 320px, no horizontal page scrolling, clipped controls or tiny text.
 Code blocks may scroll horizontally within a labeled region.
 
@@ -305,7 +380,9 @@ round joins. Icons accompany meaningful text unless their accessible name is
 unambiguous. Inline SVG and CSS diagrams are preferred over decorative raster
 images. Provide a 1200×630 social image matching the current page and status.
 
-## Components
+<span id="components"></span>
+
+## Shared interaction contracts
 
 ### Buttons and links
 
@@ -326,10 +403,13 @@ current hosted action; never alternate with “Get started” or “Start free.�
 
 ### File-version demonstration
 
-Use eight labeled parts in an **illustrative** file. The initial view already
-shows seven reused parts and one new part. A small “Change another part” action
-can change the example; do not require it to reveal the idea. If offering
-scenarios, name them “Small edit”, “Same file” and “All new” with real buttons.
+The current example uses eight labeled parts: enough to show substantial reuse,
+few enough to compare on a phone. This count is an illustration choice, not a
+brand requirement or protocol fact. The initial state shows seven reused parts
+and one new part, with that new part alone in a **New data to upload** tray.
+“Small edit”, “Same file” and “All new” buttons confirm the idea; interaction
+is optional. The same-file tray says there is no new file data; the all-new
+tray contains every part. Keep the complete updated file visible in all states.
 
 Keep equal toy parts explicitly illustrative. Real chunks vary in length;
 file formats, edits, compression, client caches and metadata affect transfer.
@@ -345,8 +425,8 @@ when scripts fail. Reduced motion removes transitions.
 
 ### Cards, tables, code and proof
 
-- Deployment cards use the same order: name, who operates it, data location,
-  availability, action. Compare meaningful choices, not invented tiers.
+- Hosting choices use the same order: name, who operates it, data location,
+  availability, action. Integration is a separate dimension, not a hosting tier.
 - Compatibility tables say **Available**, **Planned**, or **Not supported** in
   text. A green check never substitutes for a version or qualification.
 - Code examples are copyable text with a language label, prerequisites and
@@ -400,7 +480,45 @@ operator procedure, not an automatic expiry guarantee; document the closure
 date and completed deletion in the protected operations record. The same rule
 applies to exports. Short-lived rate counters are purged by the service.
 
-### Future hosted onboarding and human/agent collaboration
+### A task that humans and agents can share
+
+A recipe is the unit of handoff, not a bare command or a link to an enormous
+design document. Maintain one canonical task page and generate its HTML and
+Markdown from the same source. Offer the relevant Markdown link next to the
+human instructions; `llms.txt` helps find it but does not replace it.
+
+| Recipe field | What the reader or agent needs |
+|---|---|
+| Goal and completion | One observable outcome and how to verify it; distinguish an attempted action from a durable result |
+| Context and prerequisites | Supported versions, installation, resource, endpoint, working directory and inputs; record the build used when reporting a result |
+| Authority | Required scope and where an authorized person obtains a credential; never embed the credential in the shared recipe |
+| Action | Exact commands or requests, expected output/schema, whether retries are safe and which steps change state |
+| Recovery and limits | Stable error/exit reference, likely corrective action, cancellation and partial-result behavior; no invented `--dry-run` or approval feature |
+| Next task and cleanup | A useful next outcome, files left behind and explicit cleanup boundaries; never silently delete existing data |
+
+**Current example:** the [storage-only quickstart](docs/quickstart-storage-only.md)
+builds and starts a server, uploads a generated test file with `hf_xet`, downloads
+and compares it, then uploads it with `openxet` to demonstrate reuse. It includes
+the prerequisites, endpoint setup, version floor and server shutdown. Share that
+page as Markdown with the goal “upload the test file, download it and verify
+the contents”; authorize access to credentials separately. The example's
+executable steps run in CI. It needs no hosted account or future Hub API.
+
+Design a second success into the path: first establish a verified round trip,
+then observe actual reuse on the repeated upload. A revised-file experiment
+is the next candidate recipe; publish its commands and expected observations
+only once tested. Do not convert illustrative percentages into expected output.
+
+On a phone, a useful result may be saving the public recipe for a workstation.
+A reviewer should be able to share the specific evidence page. After a waitlist
+request, offer the current quickstart or project progress without subscribing
+the person to more messages. After a successful task, offer verification or a
+related next task; after failure, offer recovery and a reproducible issue report.
+Collect only the context needed to help, with credentials and private data removed.
+
+<span id="future-hosted-onboarding-and-humanagent-collaboration"></span>
+
+### Future hosted onboarding and delegated actions
 
 At launch: sign in with an existing external identity → choose workspace/repo
 and region when necessary → receive a narrowly scoped credential through the
@@ -408,10 +526,11 @@ proper secret channel → run the chosen upload → see a durable success and
 actual transferred/stored bytes. Progressive disclosure keeps advanced storage
 settings out of the first upload. BYO bucket needs its own permission review.
 
-The same task can begin in UI, CLI or agent. Offer “Copy command” and “Read as
-Markdown” beside relevant actions. A handoff includes goal, endpoint, resource,
-scope, version, prerequisites and expected result, with a reference to where a
-credential can be obtained. It never includes a credential itself.
+The same task contract applies to UI, CLI and agents. The future app should
+preserve non-sensitive intent across external sign-in and show a durable result
+the person can inspect later. “Copy command” copies an authorized instruction,
+never a credential. Returning users go to their task or workspace, not back
+through marketing onboarding.
 
 For delegated actions, the future app shows who acted, on whose behalf, the
 affected resource and the result. Pending approval is a visible/pollable state,
@@ -441,6 +560,8 @@ hash. The 404 says “Page not found” and links home and to documentation.
 Write as a knowledgeable person helping someone do the work. Be precise and
 warm without cheerleading. Use concrete nouns, active verbs and varied sentence
 length. Read copy aloud. Explain a term once, then use it consistently.
+Headings name the question, decision or task; reserve expressive copy for the
+main promise rather than turning every section into a slogan.
 
 | Prefer | Avoid / reason |
 |---|---|
@@ -513,12 +634,13 @@ or provide deliberate redirects when reorganizing content.
 | Outcome | Proposed test / definition | Evidence status |
 |---|---|---|
 | Understand the product | After 10 seconds, 4/5 first-time participants can describe file-part reuse without prompting | Research target; not yet tested |
-| Understand the benefit | A beginner can predict the unchanged-file and all-new-file examples | Research target; not yet tested |
-| Find the right path | Hosted, self-hosting and integration participants find the right next action within 30 seconds | Research target; not yet tested |
+| Understand the benefit | A beginner points to what uploads, knows the file stays complete, and predicts the same-file and all-new-file cases | Research target; not yet tested |
+| Find the right path | Hosted, self-hosting and integration participants find a next action within 30 seconds without treating integration as a third hosting model | Research target; not yet tested |
 | Reliable waitlist | Validation, failure, duplicate, cancellation and durable-save checks pass | Automated and live checks per release |
 | First hosted success | Landing → completed real `hf upload` under 60s on the documented test rig | Future launch gate; include setup and network assumptions |
 | Trust | Capability claims link evidence; no knowingly broken path or hidden availability | Editorial/release review |
-| Return value | Users complete a second useful task and choose to return; feedback issues are closed with an explanation | Requires actual users; not inferable from clicks |
+| Shared task | A human and an authorized agent independently follow the same recipe and can explain its result and recovery path | Current quickstart has executable CI coverage; handoff usability still needs observation |
+| Return value | Users verify a download, then observe reuse on a repeated upload; they can resume from a saved recipe and report a problem that receives a useful response | Requires actual users; not inferable from clicks |
 
 Do not optimize waitlist conversion at the cost of understanding or consent.
 Do not equate a scanner score with accessibility, trust or love. Use manual
@@ -529,7 +651,8 @@ need user research rather than pretending no further improvement is possible.
 ### Ownership, maintenance and intentional change
 
 1. Before a website/docs/UI change, read this file and the relevant product
-   references. Reuse tokens, words, component states and routes.
+   references. Check the distinction between durable requirements, current
+   expression and future capabilities; reuse the adopted tokens and contracts.
 2. Add new components to this document when they introduce a reusable behavior.
    A one-off illustration does not justify a new abstraction or entire library.
 3. Any intentional change to palette, typography, voice or navigation updates
@@ -547,6 +670,17 @@ need user research rather than pretending no further improvement is possible.
   signature, blue/mineral palette, hosted-first waitlist state, shared
   human/agent facts and measurable quality criteria. User explicitly requested
   documentation, research, early understanding and small public releases.
+- 2026-10-24, v2: reconsidered the website without preserving its old layout
+  or logo by default. Independent critique found that two full file rows did
+  not show the smaller transfer, and integration was misclassified as hosting.
+  Added a transfer tray, separated those decisions, made trust links answer
+  operating questions, and specified shared task recipes and a second success.
+  Kept the palette/type direction for readability and semantic consistency;
+  comprehension and recognition remain hypotheses requiring participant tests.
+- 2026-10-24, resource-address contract: the founder selected `xet://` for
+  future resource addresses (ADR 0009). M2-URI and M6-URI schedule the grammar,
+  compatibility checks and client/UI delivery. HTTPS links and current examples
+  stay in place until support ships; no visual identity or runtime changes here.
 - Future changes append date, reason, impacted tokens/components, evidence and
   migration scope here. Avoid duplicating the token definitions in prose elsewhere.
 

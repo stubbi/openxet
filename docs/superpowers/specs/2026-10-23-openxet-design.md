@@ -1173,6 +1173,12 @@ It is better to use than the stock tools and never incompatible with them.
   trips (upload with ours, download with `hf`, and the reverse).
 
 **What makes it worth installing** (the extra mile for users):
+- **Resource URIs:** `xet://` is the chosen future resource scheme
+  ([ADR 0009](../../adr/0009-xet-resource-uris.md)). The authority names the
+  actual deployment host and optional port, equally for hosted and self-hosted
+  servers. HTTPS remains the canonical browser/share link. M2 specifies and
+  tests the shared parser; M6 integrates CLI/SDKs and adapters. Full grammar
+  and legacy compatibility are still to be specified, not current support.
 - **`sync`:** rsync-style, two-way sync of a directory with a repo or
   bucket. Only changed chunks move.
 - **`mount`:** read-only FUSE (Linux) / FSKit or macFUSE (macOS) mount of any
@@ -1462,6 +1468,14 @@ but sets no calendar dates.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
   - The resolve-bytes subset of the HTTP read gateway (§5.5): the LFS
     `basic` download `href`s point at it (ADR 0003).
+  - **M2-URI: resource-address contract** (ADR 0009), after the Hub resource
+    naming and resolution contracts. Deliver the reviewed `xet://`
+    specification, legacy Git-Xet/pyxet compatibility matrix and shared
+    parser/formatter. Acceptance: explicit-host hosted/self-hosted parity,
+    golden vectors, round-trip properties, fuzzing, and two-endpoint
+    resolution/credential-isolation tests. Full grammar requires its own
+    reviewed specification and implementation plan before coding; see the
+    [URI milestone handoff](../plans/2026-10-24-resource-uri-milestones.md).
   - `openxet purge <file-hash>` (§5.4).
   - One router: the CAS and Hub routes composed at the builder level under
     a single fallback, since axum can't merge two routers that each carry
@@ -1498,6 +1512,14 @@ but sets no calendar dates.
     it answers `404`; no stock client calls it).
   - `sync`, `mount`, storage-only mode, `login`, `setup git` (including the Git LFS download agent), `doctor`.
   - Python bindings.
+  - **M6-URI: resource-address delivery**, consuming M2-URI. CLI, Rust/Python
+    SDKs and the explicit fsspec adapter use the shared contract; test real
+    client round trips on two deployments and hosted staging before launch.
+    Publish the versioned support matrix and human/agent recipes; add separate
+    resource-URI and HTTPS-copy actions to the UI. Legacy-handler coexistence,
+    endpoint isolation and unchanged stock-client paths must pass; third-party
+    native support is never assumed. The URI milestone handoff defines the
+    acceptance checks and dependencies on implemented resource kinds.
   - The minimal self-service web UI (§10.10).
   - The two-way compatibility suite, including nightly runs against
     huggingface.co.
@@ -1508,6 +1530,9 @@ but sets no calendar dates.
   - Release pipeline, images, Helm (operator only if needed), compose,
     one-click templates, Nix, Homebrew, winget, PyPI, marketplace listings.
   - Docs site.
+  - Publish the `xet://` specification, tested client/adapter support matrix,
+    migration notes and accurate registration status with the M6 clients;
+    verify packaged versions execute the documented recipes (ADR 0009).
   - Published benchmarks.
   - Time-to-first-upload check.
 
@@ -1535,6 +1560,11 @@ exists (created 2025-08-15, empty) and belongs to someone else, so our GitHub
 organization needs a different handle; that is the user's choice. For now the
 repository lives at `github.com/stubbi/openxet` *(decided by the user)*. The user
 owns the openxet.com domain.
+
+The future resource URI scheme is **`xet://`** *(decided by the user,
+2026-10-24; ADR 0009)*. This is a name and endpoint-boundary decision, not
+implemented syntax or ownership of the Xet protocol. M2-URI and M6-URI in §12
+schedule the specification, compatibility audit and client delivery.
 
 ## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
 

@@ -103,6 +103,17 @@ and what happens if every part changes. Record verbatim misunderstandings.
 This research has not been conducted. Internal review and a scan cannot stand
 in for it.
 
+**Design critique, 2026-10-24:** after the user removed any requirement to
+preserve the old website, an independent review found two comprehension gaps
+in the first proposal: two complete file strips did not isolate the smaller
+transfer, and a platform integration path was incorrectly presented as a third
+hosting choice. Design v2 adds an explicit transfer tray and separates hosting
+from integration. It also replaces vague task headings, directs trust questions
+to operating evidence, and specifies shared human/agent recipes and a second
+successful task. The visual direction is retained for its explanatory purpose,
+not because it already exists. These are review-based improvements; participant
+testing is still needed to establish understanding, recognition and preference.
+
 ## Stakeholder and SEO implications
 
 The [design system](../design.md) maps eight stakeholder perspectives to
@@ -138,3 +149,39 @@ tracks completion. Append release commit/PR, deployment result, audit coverage,
 browser sizes and observed failures as they are verified. Distinguish passing
 checks from checks not run. User research and production field performance
 remain unmeasured until actually collected.
+
+### First public release
+
+PR [#56](https://github.com/stubbi/openxet/pull/56), merge commit `150e632`,
+deployed successfully through Pages on 2026-10-24. The public design page's
+canonical URL and content were fetched after deployment. Required CI passed,
+including Linux/macOS Rust and both compatibility legs.
+
+The first full audit used Squirrel 0.0.133 with `--coverage full --max-pages 100
+--refresh`, with `NO_TELEMETRY=1`. Its baseline was 49/F with 116 failed rules;
+after this release it was 73/C with three failed rules. The three failures
+refer to the same 24 unnamed task checkboxes in ADR 0004. More pages became
+discoverable (65 fetched resources, 33 HTML pages evaluated), so these scores
+are directional rather than a fixed-cohort experiment. The remaining errors
+and repeated table names were reproduced and fixed with item-specific names
+and authored captions in the next release candidate.
+
+### Homepage and waitlist release candidate
+
+Independent reviews covered design coherence, copy, accessibility and waitlist
+data handling. Changes include the explicit upload tray, separate hosting and
+integration choices, pending email locking, private-link copying, actionable
+validation/retry states and shorter mobile form content.
+
+The standalone waitlist was deployed using Sites; a real native browser POST
+confirmed persistence before reporting success. The deployed HTTP smoke checks
+passed signup, cancellation, origin rejection, no public reads and response
+headers. Synthetic addresses were withdrawn. Frontend tests cover malformed
+success, network failure, invalid email, throttling and removal-link validation.
+
+Chrome rendering checks confirmed no horizontal page overflow at 320, 390, 768
+and 1440 CSS pixels on the homepage and waitlist. The diagram's unchanged-file
+state, mobile menu/Escape and form failure with retained input were exercised.
+These are browser checks, not a completed assistive-technology or user study.
+Cross-browser and physical-device testing, field Core Web Vitals, and first-time
+participant comprehension remain follow-up evidence needs.

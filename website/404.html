@@ -4,28 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Page not found · openxet</title>
-<meta name="robots" content="noindex">
+<meta name="description" content="This page could not be found. Return to openxet or find the documentation.">
 <meta name="color-scheme" content="light dark">
+<meta name="referrer" content="strict-origin">
+<meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101A2B" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<style>
-:root { --bg: #fafaf9; --fg: #0c0c0b; --muted: #5c5c57; --line: #d9d8d3; --accent: #0f7a55; }
-@media (prefers-color-scheme: dark) { :root { --bg: #0c0c0b; --fg: #ededea; --muted: #a3a29c; --line: #2b2b28; --accent: #4fd1a1; } }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg); font: 1rem/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Arial, sans-serif; padding: 1.25rem; }
-main { max-width: 30rem; }
-p.code { font: 500 .8rem/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--accent); margin: 0 0 1rem; }
-h1 { font-size: 2rem; letter-spacing: -.03em; line-height: 1.1; margin: 0 0 .75rem; }
-p { color: var(--muted); margin: 0 0 1.75rem; }
-a { display: inline-flex; align-items: center; height: 2.75rem; padding: 0 1.15rem; border-radius: .5rem; background: var(--fg); color: var(--bg); text-decoration: none; font-weight: 500; }
-a + a { background: none; color: var(--fg); border: 1px solid var(--line); margin-left: .5rem; }
-a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-</style>
+<link rel="stylesheet" href="/assets/site.css">
+<link rel="stylesheet" href="/assets/pages.css">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="openxet">
+<meta property="og:title" content="Page not found · openxet">
+<meta property="og:description" content="This page could not be found. Return to openxet or find the documentation.">
+<meta property="og:url" content="https://openxet.com/404/">
+<meta property="og:image" content="https://openxet.com/og.png">
+<meta property="og:image:alt" content="openxet: Large files. Lighter uploads.">
+<meta name="twitter:card" content="summary_large_image">
+<script type="module" src="/assets/site.mjs"></script>
+
 </head>
 <body>
-<main>
-  <p class="code">404 · chunk not found</p>
-  <h1>This page doesn't exist.</h1>
-  <p>The link may be old, or the page hasn't been written yet. The project itself lives on GitHub.</p>
-  <a href="/">openxet.com</a><a href="/docs/">Docs</a><a href="https://github.com/stubbi/openxet">GitHub</a>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/" aria-label="openxet home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>
+        openxet
+      </a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="/#how-it-works">How it works</a>
+        <a href="/#hosting">Hosting</a>
+        <a href="/docs/">Docs</a>
+        <a href="https://github.com/stubbi/openxet">GitHub</a>
+      </nav>
+      <a class="button button-primary header-action" href="/waitlist/">Join the waitlist</a>
+      <details class="mobile-menu">
+        <summary aria-label="Navigation menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
+        <nav aria-label="Mobile navigation">
+          <a href="/#how-it-works">How it works</a>
+          <a href="/#hosting">Hosting</a>
+          <a href="/docs/">Docs</a>
+          <a href="https://github.com/stubbi/openxet">GitHub</a>
+        </nav>
+      </details>
+    </div>
+  </header>
+
+
+<main id="main">
+<div class="wrap"><div class="reading page-intro error-page"><p class="page-label">404</p><h1>Page not found.</h1><p class="lead">The address may have changed, or the link may be incomplete.</p><div class="actions"><a class="button button-primary" href="/">Go to the homepage</a><a class="button button-secondary" href="/docs/">Find the documentation</a></div></div></div>
 </main>
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div><a class="brand" href="/" aria-label="openxet home"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>openxet</a><p>Open-source storage for large files.<br>Apache 2.0 · Independent of Hugging Face.</p></div>
+      <nav class="footer-links" aria-label="Footer navigation"><a href="/docs/">Documentation</a><a href="https://github.com/stubbi/openxet">GitHub</a><a href="/about/">About &amp; contribute</a><a href="https://github.com/stubbi/openxet/security/policy">Report a security issue</a><a href="/privacy/">Privacy</a><a href="/llms.txt">llms.txt</a></nav>
+    </div>
+  </footer>
 </body>
 </html>

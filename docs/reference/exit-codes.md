@@ -3,6 +3,8 @@
 `openxet` exits with one of these codes. They are stable: scripts and agents
 can rely on them.
 
+<!-- table-caption: Process exit codes -->
+
 | Code | Name      | Meaning                                                              |
 | ---- | --------- | -------------------------------------------------------------------- |
 | 0    | `SUCCESS` | The command did what was asked.                                      |
@@ -18,6 +20,8 @@ lines.
 ```json
 {"schema":"openxet.error.v1","code":"usage","message":"unrecognized subcommand 'nope'","hint":"Run `openxet --help` to list commands and options."}
 ```
+
+<!-- table-caption: JSON error codes and exit statuses -->
 
 | `code` | Exit | When |
 | ------ | ---- | ---- |

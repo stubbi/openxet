@@ -16,7 +16,9 @@
 # Project
 
 - [Website and interface design](design.md)
+- [Hosted waitlist operations](hosted-waitlist.md)
 - [Design](superpowers/specs/2026-10-23-openxet-design.md)
+- [Resource URI delivery milestones](superpowers/plans/2026-10-24-resource-uri-milestones.md)
 - [Architecture decisions]()
   - [0001: Build from scratch on xet-core](adr/0001-build-from-scratch-on-xet-core.md)
   - [0002: One range-bound URL per fetch entry](adr/0002-one-range-bound-url-per-fetch-entry.md)
@@ -26,8 +28,10 @@
   - [0006: Client core on xet-data](adr/0006-client-core-on-xet-data.md)
   - [0007: CAS tokens are EdDSA JWTs](adr/0007-cas-tokens-are-eddsa-jwts.md)
   - [0008: Hosted waitlist](adr/0008-hosted-waitlist.md)
+  - [0009: xet resource URIs](adr/0009-xet-resource-uris.md)
 - [Research notes]()
   - [Website design research](research/website-design-2026-10-24.md)
+  - [Resource URI research](research/resource-uris-2026-10-24.md)
   - [S1 + S2: Direct downloads](research/S1-S2-direct-downloads.md)
   - [S3: Hub API shapes](research/S3-hub-api-shapes.md)
   - [S4: Analytics clients](research/S4-analytics-clients.md)

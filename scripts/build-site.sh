@@ -6,7 +6,7 @@
 # Markdown; /sitemap.xml includes every indexable page's canonical URL.
 # Fails on a page missing from the navigation, a broken repository link, any
 # mdBook warning, or an llms.txt entry without a description. Needs mdbook
-# 0.5.4 and python3.
+# 0.5.4, python3 and Node.js 22 or later.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,6 +24,7 @@ python3 -I "$root/scripts/check-docs-nav.py"
 # The link preprocessor must refuse includes from outside the repository.
 python3 -I "$root/site/test_repo_links.py" -q
 python3 -I "$root/site/test_site_output.py" -q
+node --test "$root/site/"test_*.mjs
 
 rm -rf "$out"
 log="$(mktemp)"

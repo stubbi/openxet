@@ -1,0 +1,37 @@
+.page-intro { padding-block: clamp(64px, 8vw, 104px) 40px; }
+.page-intro h1 { max-width: 18ch; margin: 12px 0 24px; font: 650 clamp(38px, 5vw, 60px)/1.1 var(--display); letter-spacing: -.04em; }
+.page-intro .lead { max-width: 42rem; }
+.page-content { padding-bottom: 96px; }
+.reading { max-width: 680px; margin-inline: auto; }
+.reading h2 { font: 650 26px/1.25 var(--display); letter-spacing: -.025em; margin-block: 48px 16px; }
+.reading h3 { font-size: 19px; margin-block: 28px 12px; }
+.reading p, .reading li { color: var(--muted); }
+.reading li + li { margin-top: 10px; }
+.reading strong { color: var(--ink); }
+.reading code { overflow-wrap: anywhere; }
+.reading a { color: var(--primary); text-underline-offset: .2em; }
+.page-label { color: var(--primary); font-size: 15px; font-weight: 500; }
+.waitlist-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px); gap: 80px; align-items: start; padding-block: 96px; }
+.waitlist-layout .page-intro { padding: 0; }
+.waitlist-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; }
+.waitlist-panel h2 { font: 650 24px/1.25 var(--display); margin: 0 0 12px; letter-spacing: -.025em; }
+.waitlist-panel p { color: var(--muted); }
+.field { display: grid; gap: 10px; margin-block: 28px 20px; }
+.field label { font-weight: 500; }
+.field input { font: inherit; width: 100%; padding: 12px 14px; min-height: 48px; color: var(--ink); background: var(--surface); border: 1px solid var(--control-border); border-radius: 8px; }
+.field input::placeholder { color: var(--muted); }
+.field input:user-invalid { border-color: var(--danger); }
+.waitlist-panel .button { width: 100%; min-height: 48px; justify-content: center; }
+.privacy-note { font-size: 14px; line-height: 1.55; margin-block: 18px 0; }
+.privacy-note a { color: var(--primary); text-underline-offset: .2em; }
+.form-status { font-size: 15px; margin-block: 16px 0; }
+.form-status:empty { display: none; }
+.form-error { color: var(--danger) !important; }
+.bot-field { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.small-note { font-size: 14px; color: var(--muted); }
+.about-links { display: grid; gap: 12px; padding: 0; list-style: none; }
+.about-links a { display: inline-block; padding-block: 6px; }
+.error-page { min-height: 62vh; display: flex; flex-direction: column; justify-content: center; }
+[hidden] { display: none !important; }
+@media (max-width: 850px) { .waitlist-layout { grid-template-columns: 1fr; gap: 24px; padding-block: 40px; } .waitlist-layout .page-intro { margin-bottom: 0; } .waitlist-panel { max-width: 520px; width: 100%; } }
+@media (max-width: 400px) { .waitlist-panel { padding: 24px 20px; } }

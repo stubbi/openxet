@@ -50,6 +50,8 @@ runner only, as the other release-build gate does.
 
 p50 / p99 in ms:
 
+<!-- table-caption: Reconstruction latency by implementation stage (p50 / p99, ms) -->
+
 | Shape | Start (local) | Before threads (CI Linux) | All writers (CI Linux) | All writers (CI macOS) | Half the free permits (CI Linux, slow runner) | Now (local) | Now (CI Linux, 10 runs) |
 |---|---|---|---|---|---|---|---|
 | unmerged full | 246 / 679 | 66.2 / 73.6 | 24.8 / 28.2 | 57.5 / 90.3 | 43.7 / 53.1 | 17.4 / 20.4 | **14.4–26.8 / 16.4–29.6** |
@@ -70,6 +72,8 @@ p50 / p99 in ms:
 
 **The ten CI runs.** Ten parallel jobs of the gate on `ubuntu-latest`
 (4 vCPUs), all passing, p50 / p99 in ms for the unmerged full shape:
+
+<!-- table-caption: Reconstruction latency in ten Linux CI runs (p50 / p99, ms) -->
 
 | Run | CPU | unmerged full | unmerged range | merged full | merged range |
 |---|---|---|---|---|---|

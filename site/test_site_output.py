@@ -124,6 +124,60 @@ class SiteOutput(unittest.TestCase):
         self.assertNotIn("aria-labelledby", named_table)
         self.assertNotIn("aria-labelledby", captioned_table)
 
+    def test_mdbook_task_checkboxes_are_named_from_their_item_text(self):
+        # Actual mdBook 0.5.4 output from ADR 0004, including inline code.
+        tasks = '''<ul><li>Each rule below must be covered by at least one test:
+<ul>
+<li><input disabled="" type="checkbox"> the v2 command allowlist: only <code>ls-refs</code> and <code>fetch</code></li>
+<li><input disabled="" type="checkbox"> <code>reindex</code> rebuilds refs, <code>ref_log</code> and the pack list from the
+bucket, and lists unplaced commits as recoverable</li>
+</ul></li></ul>'''
+        self.write("docs/reference/cli.html", DOC_HTML.replace("</main>", tasks + "</main>"))
+        doc = self.generated("docs/reference/cli.html")
+        controls = [item for item in doc.tags("input", type="checkbox") if "disabled" in item]
+        self.assertEqual([item.get("aria-label") for item in controls], [
+            "the v2 command allowlist: only ls-refs and fetch",
+            "reindex rebuilds refs, ref_log and the pack list from the bucket, and lists unplaced commits as recoverable",
+        ])
+        html = (self.public / "docs/reference/cli.html").read_text(encoding="utf-8")
+        self.assertIn("only <code>ls-refs</code> and <code>fetch</code></li>", html)
+
+    def test_task_names_exclude_nested_items_decode_entities_and_preserve_explicit_names(self):
+        tasks = '''<ul>
+<li><input disabled="" type="checkbox" checked=""> Review <a href="/docs/"><code>--dry-run</code></a> &amp; &quot;confirm&quot;:
+<ul><li><input disabled="" type="checkbox"> Keep &#60;files&#62;.</li></ul>
+Then stop.</li>
+<li><input disabled="" type="checkbox" aria-label="Existing task name"> Other text.</li>
+</ul>'''
+        self.write("docs/reference/cli.html", DOC_HTML.replace("</main>", tasks + "</main>"))
+        self.generated("docs/reference/cli.html")
+        doc = self.generated("docs/reference/cli.html")
+        controls = [item for item in doc.tags("input", type="checkbox") if "disabled" in item]
+        self.assertEqual([item.get("aria-label") for item in controls], [
+            'Review --dry-run & "confirm": Then stop.', "Keep <files>.", "Existing task name",
+        ])
+        self.assertIn("checked", controls[0])
+        html = (self.public / "docs/reference/cli.html").read_text(encoding="utf-8")
+        self.assertIn('<a href="/docs/"><code>--dry-run</code></a> &amp; &quot;confirm&quot;', html)
+        self.assertIn('<ul><li><input disabled="" type="checkbox" aria-label="Keep &lt;files&gt;.">', html)
+
+    def test_authored_table_captions_distinguish_tables_under_one_heading(self):
+        tables = '''<!-- table-caption: Process exit codes -->
+<div class="table-wrapper"><table><thead><tr><th>Exit</th></tr></thead><tbody><tr><td>0</td></tr></tbody></table></div>
+<!-- table-caption: JSON & error codes -->
+<div class="table-wrapper"><table><thead><tr><th>Code</th></tr></thead><tbody><tr><td><code>usage</code></td></tr></tbody></table></div>'''
+        self.write("docs/reference/cli.html", DOC_HTML.replace("</main>", tables + "</main>"))
+        self.generated("docs/reference/cli.html")
+        doc = self.generated("docs/reference/cli.html")
+        self.assertEqual(len(doc.tags("caption")), 3)
+        for table in doc.tags("table")[-2:]:
+            self.assertNotIn("aria-labelledby", table)
+        html = (self.public / "docs/reference/cli.html").read_text(encoding="utf-8")
+        self.assertIn("<caption>Process exit codes</caption>", html)
+        self.assertIn("<caption>JSON &amp; error codes</caption>", html)
+        self.assertIn("<td><code>usage</code></td>", html)
+        self.assertNotIn("<!-- table-caption:", html)
+
     def test_rerun_does_not_duplicate_metadata_or_markdown_links(self):
         self.generated("docs/reference/cli.html")
         doc = self.generated("docs/reference/cli.html")

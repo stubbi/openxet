@@ -4,12 +4,14 @@ Fixtures are real exchanges with huggingface.co and object stores, and the
 research notes, ADRs and code quote them, so every text file `git ls-files`
 lists is scanned, except the allowlist below. Every secret value is replaced by the literal
 `REDACTED`; parameter and header names stay so the shape remains visible. A
-pattern hit is allowed only when the value that follows it is that
-placeholder.
+credential hit is allowed only when the value that follows it is that
+placeholder. The waitlist npm lockfile's numeric cookie dependency version
+is identified by JSON path and source offset; it is not a credential header.
 """
 
 import base64
 import binascii
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -93,12 +95,73 @@ def _is_basic_credential(candidate: str) -> bool:
     return ":" in text and text.isprintable()
 
 
-def secrets_in(text: str) -> list[str]:
+def _npm_cookie_dependency_offsets(text: str, path: Path | None) -> set[int]:
+    if path != REPO / "hosted/waitlist/package-lock.json":
+        return set()
+
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("non-JSON numeric constant")
+
+    try:
+        data = json.loads(text, object_pairs_hook=unique_keys, parse_constant=reject_constant)
+    except (ValueError, RecursionError):
+        return set()
+    if (not isinstance(data, dict) or type(data.get("lockfileVersion")) is not int
+            or data["lockfileVersion"] != 3 or not isinstance(data.get("packages"), dict)):
+        return set()
+
+    decoder = json.JSONDecoder()
+    whitespace = re.compile(r"[ \t\r\n]*")
+
+    def members(start):
+        # JSON has already been validated. raw_decode supplies exact value ends,
+        # so braces, escapes or matching strings in other fields cannot redirect
+        # the exemption to a different source offset.
+        cursor = whitespace.match(text, start + 1).end()
+        while text[cursor] != "}":
+            key_start = cursor
+            key, cursor = decoder.raw_decode(text, cursor)
+            colon = whitespace.match(text, cursor).end()
+            value_start = whitespace.match(text, colon + 1).end()
+            value, cursor = decoder.raw_decode(text, value_start)
+            yield key, value, key_start, value_start
+            cursor = whitespace.match(text, cursor).end()
+            if text[cursor] == ",":
+                cursor = whitespace.match(text, cursor + 1).end()
+
+    release = re.compile(r"[~^]?(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+    offsets = set()
+    for name, value, _, start in members(whitespace.match(text).end()):
+        if name != "packages" or not isinstance(value, dict):
+            continue
+        for _, package, _, package_start in members(start):
+            if not isinstance(package, dict):
+                continue
+            for group, dependencies, _, group_start in members(package_start):
+                if group != "dependencies" or not isinstance(dependencies, dict):
+                    continue
+                for name, version, offset, _ in members(group_start):
+                    if name == "cookie" and isinstance(version, str) and release.fullmatch(version):
+                        offsets.add(offset)
+    return offsets
+
+
+def secrets_in(text: str, *, path: Path | None = None) -> list[str]:
     """Names and offsets of hits; never the matched value, so CI logs stay clean."""
+    dependency_offsets = _npm_cookie_dependency_offsets(text, path)
     hits = [
         f"{name} at offset {match.start()}"
         for name, pattern in _SECRET_PATTERNS.items()
         for match in pattern.finditer(text)
+        if not (name == "credential header" and match.start() in dependency_offsets)
     ]
     hits += [
         f"Basic credential at offset {match.start()}"
@@ -137,7 +200,7 @@ def test_scan_covers_fixtures_and_docs():
     "path", _scanned_files(), ids=lambda p: str(p.relative_to(REPO))
 )
 def test_file_has_no_secrets(path):
-    hits = secrets_in(path.read_text(encoding="utf-8", errors="replace"))
+    hits = secrets_in(path.read_text(encoding="utf-8", errors="replace"), path=path)
     assert not hits, (
         f"{path.relative_to(REPO)} contains unredacted secrets: {hits[:5]}. "
         "Replace each value with the literal REDACTED (keep the name) before "
@@ -256,3 +319,87 @@ def test_guard_catches_known_leak_shapes(leak):
 )
 def test_guard_allows_redacted_placeholders(redacted):
     assert not secrets_in(redacted)
+
+
+_LOCKFILE = REPO / "hosted/waitlist/package-lock.json"
+
+
+def _lockfile_with_cookie(version="^1.0.2"):
+    return {
+        "lockfileVersion": 3,
+        "packages": {"node_modules/youch": {"dependencies": {"cookie": version}}},
+    }
+
+
+@pytest.mark.parametrize("version", ["1.0.2", "^1.0.2", "~1.0.2"])
+@pytest.mark.parametrize("indent", [None, 2])
+def test_npm_cookie_dependency_version_is_not_a_credential(version, indent):
+    text = json.dumps(_lockfile_with_cookie(version), indent=indent)
+    assert secrets_in(text), "without file context, a Cookie-shaped value stays suspect"
+    assert not secrets_in(text, path=_LOCKFILE)
+    assert secrets_in(text, path=REPO / "compat/fixtures/package-lock.json")
+
+
+@pytest.mark.parametrize("version", [
+    "session=private", "^1.0.2; session=private", "1.0.2\nBearer private",
+    "01.0.2", "1.0.2-beta", "1.0.2+build", "1.0.2 || 2.0.0", "*",
+])
+def test_npm_dependency_cookie_accepts_only_numeric_release_versions(version):
+    assert secrets_in(json.dumps(_lockfile_with_cookie(version)), path=_LOCKFILE)
+
+
+@pytest.mark.parametrize("location", ["root", "package", "dependency"])
+def test_semver_looking_cookie_in_unknown_or_header_fields_is_still_detected(location):
+    data = _lockfile_with_cookie()
+    package = data["packages"]["node_modules/youch"]
+    target = {"root": data, "package": package, "dependency": package["dependencies"]}[location]
+    target["headers"] = {"cookie": "^1.0.2"}
+    hits = secrets_in(json.dumps(data), path=_LOCKFILE)
+    assert len(hits) == 1
+    assert hits[0].startswith("credential header at offset ")
+
+
+@pytest.mark.parametrize("field,value,detector", [
+    ("authorization", "Bearer private", "bearer credential"),
+    ("set-cookie", "session=private", "credential header"),
+    ("resolved", "https://example.com/pkg?Signature=private", "URL signature"),
+    ("note", "hf_abcdefghijklmnopqrstuvwxyz0123", "HF user token"),
+])
+def test_npm_dependency_exception_preserves_other_credential_detectors(field, value, detector):
+    data = _lockfile_with_cookie()
+    data["packages"]["node_modules/youch"][field] = value
+    assert any(hit.startswith(detector) for hit in secrets_in(json.dumps(data), path=_LOCKFILE))
+
+
+@pytest.mark.parametrize("mutation", ["v2", "float-version", "missing-version", "unknown-group", "malformed", "duplicate-cookie", "duplicate-unrelated"])
+def test_npm_dependency_exception_fails_closed_on_unrecognized_or_ambiguous_json(mutation):
+    data = _lockfile_with_cookie()
+    if mutation == "v2":
+        data["lockfileVersion"] = 2
+    elif mutation == "float-version":
+        data["lockfileVersion"] = 3.0
+    elif mutation == "missing-version":
+        del data["lockfileVersion"]
+    elif mutation == "unknown-group":
+        package = data["packages"]["node_modules/youch"]
+        package["devDependencies"] = package.pop("dependencies")
+    text = json.dumps(data)
+    if mutation == "malformed":
+        text = text[:-1]
+    elif mutation == "duplicate-cookie":
+        text = text.replace('"cookie": "^1.0.2"', '"cookie": "session=private", "cookie": "^1.0.2"')
+    elif mutation == "duplicate-unrelated":
+        text = text.replace('"lockfileVersion": 3', '"name": "one", "name": "two", "lockfileVersion": 3')
+    assert secrets_in(text, path=_LOCKFILE) == secrets_in(text)
+
+
+def test_npm_dependency_offsets_do_not_exempt_identical_header_values_elsewhere():
+    data = _lockfile_with_cookie()
+    data["note"] = "Unicode prefix: ☃"
+    data["headers"] = {"cookie": "^1.0.2"}
+    text = json.dumps(data, ensure_ascii=False, indent=2).replace("node_modules/youch", r"node_modules\/youch")
+    expected_offset = text.rindex('"cookie"')
+    assert secrets_in(text, path=_LOCKFILE) == [f"credential header at offset {expected_offset}"]
+    escaped = text.replace('"cookie": "^1.0.2"', r'"co\u006fkie": "^1.0.2"', 1)
+    expected_offset = escaped.rindex('"cookie"')
+    assert secrets_in(escaped, path=_LOCKFILE) == [f"credential header at offset {expected_offset}"]
