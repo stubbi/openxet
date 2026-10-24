@@ -413,8 +413,10 @@ def test_version_floor_recorded():
 
 def test_fresh_cache_edit_bytes_recorded(openxet_server, clients, tmp_path, record_measurement):
     # Design §1a: a 1 MiB edit in the middle of a 100 MiB file, re-uploaded
-    # by stock hf_xet with an empty cache. Recorded, not asserted, here:
-    # Task 10b adds the assertion of the bound.
+    # by stock hf_xet with an empty cache. Recorded, not asserted, here: the
+    # bound (at most 2 MiB) is asserted with the openxet client, on the same
+    # client core, by `fresh_cache_edit_dedups_against_the_server` in
+    # crates/openxet/tests/transfer_cmd.rs.
     size, edit = 100 * MiB, MiB
     original = write_noise(tmp_path / "original.bin", size, 12)
     edited = tmp_path / "edited.bin"
