@@ -36,11 +36,13 @@ once built.
   node, gated in CI ([benchmarks](docs/reference/benchmarks.md)).
 - Memory and connection bounds that hold whatever clients do: upload
   bodies and reconstruction answers reserve from one budget,
-  `server.memory_budget` (1 GiB by default), and get `503 memory_busy`,
-  which clients retry, when it stays full for 5 s; an answer not sent
-  within 30 s plus 1 s per MiB is cut off; `server.max_connections`
-  (4096 by default) caps open connections
-  ([config](docs/reference/config.md#memory)).
+  `server.memory_budget` (by default a quarter of the host's memory, at
+  least 1 GiB). Uploads past it queue for up to 120 s, then get
+  `503 memory_busy`, which clients retry; reconstructions wait 5 s; a
+  request larger than the whole budget gets a final
+  `413 exceeds_memory_budget`. An answer not sent within 30 s plus 1 s
+  per MiB is cut off. `server.max_connections` (4096 by default) caps
+  open connections ([config](docs/reference/config.md#memory)).
 
 ### Upgrading
 
