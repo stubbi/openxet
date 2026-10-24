@@ -51,6 +51,11 @@ jobs:
           key: xet-spec-reference-${{ hashFiles('testdata/xet-spec-reference/SHA256SUMS') }}
       - run: scripts/fetch-reference-files.sh
       - run: cargo nextest run --locked --workspace
+      # Every Rust test docs/reference/security-tests.md maps runs, once.
+      - name: Security test map matches the tests that run
+        run: |
+          cargo nextest list --locked --workspace --message-format json > "$RUNNER_TEMP/tests.json"
+          python3 -I scripts/check-security-tests-map.py --nextest "$RUNNER_TEMP/tests.json"
       # Release builds drop upstream's debug self-check of MerkleHashSubtree,
       # so the incremental file hash is also tested the way production runs it.
       - if: matrix.os == 'ubuntu-latest'
@@ -106,6 +111,10 @@ jobs:
           cache-dependency-glob: compat/uv.lock
       - name: Tracked files carry no secrets
         run: uv run --frozen --directory compat pytest tests/test_fixture_redaction.py
+      - name: Security test map matches the compat tests that run
+        run: |
+          uv run --frozen --directory compat pytest --collect-only -q > "$RUNNER_TEMP/compat-tests.txt"
+          python3 -I scripts/check-security-tests-map.py --pytest "$RUNNER_TEMP/compat-tests.txt"
       # Needs no network: checks the harness isolates client env and caches.
       - name: Harness isolation
         run: uv run --frozen --directory compat pytest tests/test_harness.py -m "not pinned"

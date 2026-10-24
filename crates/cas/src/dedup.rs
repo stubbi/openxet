@@ -45,20 +45,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Router;
 use axum::extract::{FromRequestParts, State};
+use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use openxet_index::Visibility;
 use openxet_protocol::{
     DEDUP_ANSWER_BUDGET, MerkleHash, dedup_answer_xorb_bytes, dedup_shard, hash_to_hex,
 };
 
 use crate::blocking::blocking;
-use crate::cache::private;
 use crate::dedup_body::answer_body;
+use crate::routes::{Routes, on};
 use crate::{AppState, CasError, ReadAccess, path};
 
 /// The prefixes served: `default`, which `hf_xet` sends, and
@@ -85,8 +84,11 @@ const TABLES_PER_LOAD: usize = 32;
 const PERMIT_WAIT: Duration = Duration::from_secs(1);
 
 /// `GET /v1/chunks/{prefix}/{hash}` (S10 §2).
-pub(crate) fn routes() -> Router<AppState> {
-    Router::new().route("/v1/chunks/{prefix}/{hash}", private(get(query)))
+pub(crate) fn routes() -> Routes {
+    Routes::new().route(
+        "/v1/chunks/{prefix}/{hash}",
+        on(Method::GET, query).private(),
+    )
 }
 
 /// The raw chunk hash named by the path ([`path::prefixed_hash`]).

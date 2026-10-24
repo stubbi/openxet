@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from conftest import isolated_env
+from conftest import assert_no_credential_in_log, isolated_env, openxet_serve
 
 pytestmark = pytest.mark.agent
 
@@ -65,26 +65,17 @@ def expand(openxet_bin, args, tmp_path, env):
 
 @contextlib.contextmanager
 def dev_server(openxet_bin, tmp_path):
-    """The environment for a client of a dev-mode server, while it runs."""
-    proc = subprocess.Popen(
-        [openxet_bin, "serve", "--data-dir", str(tmp_path / "server"), "--port", "0", "--json"],
-        env=isolated_env(tmp_path / "server-env"),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        ready = json.loads(proc.stdout.readline())
+    """The environment for a client of a dev-mode server, while it runs. On
+    exit, the server's debug log must not hold its token (design §5.9 req 6),
+    the only credential its clients send."""
+    with openxet_serve(openxet_bin, tmp_path / "server") as server:
         env = isolated_env(
             tmp_path / "client-env",
-            OPENXET_ENDPOINT=ready["endpoint"],
-            OPENXET_TOKEN=ready["token"],
+            OPENXET_ENDPOINT=server.endpoint,
+            OPENXET_TOKEN=server.token,
         )
         # The server is local; a proxy from the shell would intercept it.
         yield {k: v for k, v in env.items() if not k.lower().endswith("_proxy")}
-    finally:
-        proc.kill()
-        proc.wait()
 
 
 def run_long(openxet_bin, *args, env):
@@ -117,6 +108,10 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
         args = expand(openxet_bin, args, tmp_path, env)
         if args[0] in LONG_RUNNING:
             stdout, returncode, stderr = run_long(openxet_bin, *args, env=env)
+            if args[0] == "serve":
+                # The dev token it prints on stdout never reaches its log.
+                token = json.loads(stdout)["token"]
+                assert_no_credential_in_log(stderr.decode(errors="replace"), {token})
         else:
             out = run(openxet_bin, *args, env=env)
             stdout, returncode, stderr = out.stdout, out.returncode, out.stderr

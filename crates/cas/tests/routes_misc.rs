@@ -14,7 +14,7 @@ use axum::body::Body;
 use axum::http::Request;
 use common::xorb::HF_XET_XORB;
 use common::{
-    Access, FILE_CHUNK_HASHES_PATH, PROBE_BODIES, ROUTES, Reply, SCOPE_A, TRANSFER_PATH,
+    Access, FILE_CHUNK_HASHES_PATH, PROBE_BODIES, ROUTES, Reply, Route, SCOPE_A, TRANSFER_PATH,
     TestServer, UNAUTHENTICATED, UNSERVED, XORB_GRANT_PATH, bearer, config,
 };
 use openxet_auth::Mode;
@@ -517,4 +517,122 @@ fn body_deadline_rejects_zero() {
     assert!(BodyDeadline::new(Duration::ZERO, 1).is_none());
     assert!(BodyDeadline::new(Duration::from_secs(1), 0).is_none());
     assert!(BodyDeadline::new(Duration::from_secs(1), 1).is_some());
+}
+
+/// Whether the concrete `path` (its query ignored) is an instance of the
+/// route `template`, whose `{name}` segments match any one segment.
+fn instance_of(template: &str, path: &str) -> bool {
+    let path = path.split('?').next().unwrap();
+    let (mut t, mut p) = (template.split('/'), path.split('/'));
+    loop {
+        match (t.next(), p.next()) {
+            (None, None) => return true,
+            (Some(t), Some(p)) if t == p || (t.starts_with('{') && !p.is_empty()) => {}
+            _ => return false,
+        }
+    }
+}
+
+/// The template among `templates` that serves the concrete `path`, as the
+/// router picks it: at each segment a literal wins over a parameter.
+fn serving<'a>(templates: impl Iterator<Item = &'a str>, path: &str) -> Option<&'a str> {
+    let kinds = |t: &str| -> Vec<bool> { t.split('/').map(|s| s.starts_with('{')).collect() };
+    templates
+        .filter(|t| instance_of(t, path))
+        .min_by_key(|t| kinds(t))
+}
+
+/// A concrete path for `template`: the `default` prefix and a hash no test
+/// stores.
+fn concrete(template: &str) -> String {
+    template
+        .replace("{prefix}", "default")
+        .replace("{hash}", &"0".repeat(64))
+}
+
+/// The endpoints served without an `Authorization` credential, by exact
+/// template: the probes, and the signed transfer route, whose signature is
+/// its credential (ADR 0002).
+const ALLOWLIST: &[(Method, &str)] = &[
+    (Method::GET, "/healthz"),
+    (Method::GET, "/readyz"),
+    (Method::GET, "/v1/transfer/xorbs/{hash}"),
+    (Method::HEAD, "/v1/transfer/xorbs/{hash}"),
+];
+
+#[test]
+fn every_served_route_is_in_routes_or_the_allowlist() {
+    // A route missing from `ROUTES` escapes the authentication, scoping and
+    // echo matrices (design §5.9 reqs 1, 2 and 6), so every endpoint the
+    // router serves is either there or on the explicit allowlist. A
+    // `ROUTES` entry covers the one template that serves its path, so a
+    // broader template that would also match it is still uncovered.
+    let endpoints = openxet_cas::endpoints();
+    let serving_route = |route: &Route| {
+        serving(
+            endpoints
+                .iter()
+                .filter(|e| e.method == route.method)
+                .map(|e| e.path),
+            route.path,
+        )
+    };
+    for endpoint in &endpoints {
+        let (method, template) = (&endpoint.method, endpoint.path);
+        let in_routes = ROUTES
+            .iter()
+            .any(|r| r.method == *method && serving_route(r) == Some(template));
+        let allowed = ALLOWLIST.iter().any(|(m, t)| m == method && *t == template);
+        assert!(
+            in_routes || allowed,
+            "{method} {template} is served but not in common::ROUTES; add it there so the \
+             credential and echo matrices cover it"
+        );
+    }
+    for route in ROUTES {
+        assert!(
+            serving_route(route).is_some(),
+            "common::ROUTES lists {} {}, which the router doesn't serve",
+            route.method,
+            route.path
+        );
+    }
+    for (method, template) in ALLOWLIST {
+        assert!(
+            endpoints
+                .iter()
+                .any(|e| e.method == *method && e.path == *template),
+            "the allowlist names {method} {template}, which the router doesn't serve"
+        );
+    }
+}
+
+#[tokio::test]
+async fn router_serves_exactly_its_endpoints() {
+    // `endpoints()` comes from the calls that build the router. A `405`
+    // lists in `Allow` every method a path really serves, so probing each
+    // path with a method no route uses checks the list against what is
+    // served, including the `HEAD` a `GET` handler answers.
+    let server = TestServer::start_default().await;
+    let endpoints = openxet_cas::endpoints();
+    let paths: HashSet<&str> = endpoints.iter().map(|e| e.path).collect();
+    for template in paths {
+        let mut stated: HashSet<String> = endpoints
+            .iter()
+            .filter(|e| e.path == template)
+            .map(|e| e.method.to_string())
+            .collect();
+        if stated.contains("GET") {
+            stated.insert("HEAD".to_owned());
+        }
+        let reply = Reply::of(server.request(Method::PATCH, &concrete(template))).await;
+        reply.assert_error(405, "method_not_allowed");
+        let allowed: HashSet<String> = reply.headers["allow"]
+            .to_str()
+            .unwrap()
+            .split(',')
+            .map(|m| m.trim().to_owned())
+            .collect();
+        assert_eq!(allowed, stated, "{template}");
+    }
 }

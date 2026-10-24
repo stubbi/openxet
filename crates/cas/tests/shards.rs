@@ -513,7 +513,7 @@ async fn shard_commit_survives_client_disconnect() {
 }
 
 #[tokio::test]
-async fn acknowledged_write_is_visible() {
+async fn acknowledged_shard_write_is_visible() {
     // Design §5.9 req 7: a result means the shard is in the bucket and its
     // files are in the index, before the answer is sent.
     for v2 in [false, true] {

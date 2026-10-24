@@ -76,12 +76,13 @@ mod tests {
 
     use axum::Router;
     use axum::body::{Body, to_bytes};
+    use axum::http::Method;
     use axum::http::{Request, StatusCode};
-    use axum::routing::post;
     use openxet_auth::{Mode, StaticToken};
     use tower::ServiceExt as _;
 
     use super::*;
+    use crate::routes::{Routes, on};
     use crate::test_support;
 
     // The scheme is a constant so the repository's secret scanner, which
@@ -102,11 +103,14 @@ mod tests {
     /// A write-only route, which the CAS gains only in later tasks.
     async fn write_route(dir: &tempfile::TempDir) -> Router {
         let tokens = vec![token(READ, Mode::Read), token(WRITE, Mode::Write)];
-        Router::new()
+        Routes::new()
             .route(
                 "/w",
-                post(|WriteAccess(p): WriteAccess| async move { p.subject }),
+                on(Method::POST, |WriteAccess(p): WriteAccess| async move {
+                    p.subject
+                }),
             )
+            .into_router()
             .with_state(test_support::state(dir.path(), tokens).await)
     }
 

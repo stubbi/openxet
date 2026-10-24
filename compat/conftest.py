@@ -246,6 +246,20 @@ V1_RECONSTRUCTION_ROUTE = "/v1/reconstructions/{hash}"
 SERVE_PATIENCE = 120.0
 
 
+def assert_no_credential_in_log(log: str, credentials: set[str]) -> None:
+    """Fails if `log` holds any of `credentials` (design §5.9 req 6). A JWT's
+    signature segment counts on its own: the server must not log any part
+    that authenticates a request."""
+    fragments = set(credentials) | {
+        c.rsplit(".", 1)[1] for c in credentials if c.count(".") == 2
+    }
+    leaked = sum(1 for fragment in fragments if fragment in log)
+    assert not leaked, (
+        f"the server log holds {leaked} of the {len(fragments)} credentials "
+        "or JWT signatures the test sent"
+    )
+
+
 class OpenxetServer:
     """A running `openxet serve` and its JSON debug log.
 
@@ -271,17 +285,7 @@ class OpenxetServer:
         self._credentials.add(credential)
 
     def assert_no_credential_logged(self) -> None:
-        log = "".join(self._lines)
-        # A JWT's signature segment counts on its own: the server must not
-        # log any part that authenticates a request.
-        fragments = set(self._credentials) | {
-            c.rsplit(".", 1)[1] for c in self._credentials if c.count(".") == 2
-        }
-        leaked = sum(1 for fragment in fragments if fragment in log)
-        assert not leaked, (
-            f"the server log holds {leaked} of the {len(fragments)} credentials "
-            "or JWT signatures the test sent"
-        )
+        assert_no_credential_in_log("".join(self._lines), self._credentials)
 
     def log(self) -> list[dict]:
         entries = []
