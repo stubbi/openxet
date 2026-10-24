@@ -143,8 +143,9 @@ Behaviour that shapes the M1 server:
 - **Range handling the server must do:**
   - `start >= file_size` → `416` (the client reads it as "past the end",
     `remote_client.rs:271`). An empty file may answer `416` or `200` with
-    no terms; both download correctly (observed). openxet answers `416`,
-    as the spec says.
+    no terms; both download correctly (observed). openxet answers `416`
+    to any `Range`, as the spec says, and `200` with no terms without one
+    (`docs/reference/routes.md`).
   - `end >= file_size` → clamp to the file; answer `200`.
 - **Response `200`, `application/json`** (observed, `cas_types/mod.rs:223-249`):
 
@@ -528,7 +529,7 @@ back on `/v2/*`, but fails the upload on the grant route, so openxet uses
 | Data fetch | one multi-range request per entry | one single-range request per descriptor by default | one range per entry (ADR 0002) |
 | `Accept-Encoding` | clients SHOULD send gzip or zstd | sends none | compress only when asked |
 | Footer bytes 24–72 and 168–192 | reserved | lookup-table offsets and byte counts (`shard_format.rs:103-131`) | write them with upstream's serializers |
-| Empty file reconstruction | `416` when `start >= size` | `416` and `200` with no terms both work | `416` |
+| Empty file reconstruction | `416` when `start >= size` | `416` and `200` with no terms both work | `416` with a `Range`, `200` with no terms without one |
 
 ## Our client core: `xet-data` 1.7.0
 

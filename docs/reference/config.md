@@ -261,6 +261,15 @@ Files are always visible only in the scope they were uploaded to.
   another has stored, and each scope uploads its own copy of shared data
   (stored once in the bucket, all the same).
 
+Dedup answers get their own share of the server, a quarter of its CPUs (at
+least one answer at a time). A query that waits 1 s for its turn answers
+`429 dedup_busy`, which `hf_xet` reads as no match: the upload goes on and
+sends those chunks. An answer not sent within its deadline (30 s plus 1 s
+per MiB) is cut off and its turn freed. At `log_level = "debug"` both are
+logged, the first as `request refused` with code `dedup_busy`, the second
+as `a dedup answer missed its send deadline`. Frequent `dedup_busy` means the server needs
+more CPUs.
+
 ## Stale client caches
 
 Clients cache dedup information for up to 21 days per endpoint. If a
