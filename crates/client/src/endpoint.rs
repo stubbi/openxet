@@ -64,7 +64,7 @@ impl Endpoint {
 
     /// Whether the token crosses a network unencrypted: a plain `http://`
     /// endpoint that isn't on this host (`localhost`, `127.0.0.0/8` or
-    /// `::1`). `hf_xet` sends it all the same; a caller may warn.
+    /// `::1`), which a caller may warn about.
     #[must_use]
     pub fn token_in_clear(&self) -> bool {
         let Ok(uri) = self.url.parse::<http::Uri>() else {

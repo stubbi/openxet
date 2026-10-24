@@ -249,10 +249,9 @@ written.
   an `openxet.error.v1` object on failure. Without it, a progress line is
   drawn on stderr when stderr is a terminal, and a `warning:` line says so
   when the token would cross a network unencrypted: a plain `http://`
-  endpoint other than `localhost`, `127.0.0.0/8` or `::1` (`hf_xet` sends
-  the token all the same). The token is never printed,
-  and server text (an upload rejection's reason) is printed without
-  control characters.
+  endpoint other than `localhost`, `127.0.0.0/8` or `::1`. The token is
+  never printed, and server text (an upload rejection's reason) is printed
+  without control characters.
 - **Interrupts.** `SIGINT` (Ctrl-C) or `SIGTERM` stops the transfer, removes
   a partial download, and exits 130 with error code `interrupted`. An
   interrupted download wrote nothing to its output. An interrupted upload
