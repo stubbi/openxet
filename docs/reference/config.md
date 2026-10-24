@@ -353,11 +353,19 @@ between [tenants](#tenants):
   once in the bucket, all the same), while the scopes of one tenant
   deduplicate against each other.
 
-Switching a running deployment from `global` to `per-tenant` is safe:
-every file stays readable in its scope, and a tenant keeps owning the
-xorbs its files reference even if another tenant uploaded them, so its
-uploads keep deduplicating against them. Switching back loses nothing
-either.
+Switching a running deployment from `global` to `per-tenant` keeps
+everything working: every file stays readable in its scope, and a tenant
+keeps owning the xorbs its files reference even if another tenant uploaded
+them, so its uploads keep deduplicating against them. Switching back loses
+nothing either.
+
+What a tenant keeps covers whole xorbs, not just the chunks it used. A
+file that referenced even one chunk of another tenant's xorb makes the
+whole xorb its tenant's: after the switch, that tenant still gets `HEAD`
+`200` and dedup matches for every chunk of it. It never gets another
+tenant's raw chunk hashes, and under `global` it could see all of this
+anyway. An operator who needs tenants isolated from their first upload
+starts on `per-tenant`.
 
 Dedup answers get their own share of the server, a quarter of its CPUs (at
 least one answer at a time). A query that waits 1 s for its turn answers
