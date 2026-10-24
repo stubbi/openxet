@@ -136,11 +136,12 @@ pub struct AppState {
     /// files). Uploads waiting for a permit hold only their body.
     pub commit: Arc<Semaphore>,
     /// Bounds concurrent global dedup answers, from loading their chunk
-    /// tables until their body has been sent or dropped (ruling M1-R32).
-    /// Separate from `validate`, so dedup queries can never starve xorb
-    /// and shard validation; a quarter of the CPUs, at least one. Dedup's
-    /// memory per process is at most its permits × about 100 MB (an answer
-    /// of at most 16 MiB with its build; measured in S11).
+    /// tables until their body has been sent, dropped or overrun its send
+    /// deadline (rulings M1-R32, M1-R33). Separate from `validate`, so
+    /// dedup queries can never starve xorb and shard validation; a quarter
+    /// of the CPUs, at least one. Dedup's memory per process is at most its
+    /// permits × about 150 MB (an answer of at most 16 MiB with its build;
+    /// measured in S11: about 120 MB for one, about 300 MB with 2 busy).
     pub dedup: Arc<Semaphore>,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,

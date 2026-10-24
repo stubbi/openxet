@@ -23,20 +23,24 @@
 //! req 3).
 //!
 //! Each answer holds one `dedup` permit (ruling M1-R32) from loading its
-//! tables until its body has been sent or dropped; the build runs on a
-//! blocking thread (ruling M1-R25). The `dedup` permits are their own pool,
-//! a quarter of the CPUs, so dedup queries can never take a permit xorb or
-//! shard validation needs (review I2 of Task 10b).
+//! tables until its body has been sent, dropped or overrun its send
+//! deadline (ruling M1-R33); the build runs on a blocking thread (ruling
+//! M1-R25). The `dedup` permits are their own pool, a quarter of the CPUs,
+//! so dedup queries can never take a permit xorb or shard validation needs.
+//! A query waits at most [`PERMIT_WAIT`] for one, then answers `429
+//! dedup_busy`, which the client reads as "no match"; so a client that
+//! stalls its answer delays other uploads' dedup by at most that wait,
+//! never the upload itself, and loses its permit at the send deadline.
 //!
-//! Memory: a full answer (a 16 MiB body) peaks at about 55 MB while upstream
-//! serializes it (the in-memory shard with its chunk index, and the
-//! serialization), then holds the serialization and the keyed output, then
-//! the body alone until it is sent. Per process, dedup memory is therefore
-//! at most the `dedup` permits × about 100 MB including allocator slack,
-//! however many clients ask or never read. Measured (release, Apple M3, 8
-//! CPUs, so 2 permits; answers of 16.5 MB): 150 to 200 MB over idle with 8
-//! or 16 concurrent queries and with 32 or 64 connections that never read
-//! their answer (S11, "Answer cost").
+//! Memory: a full answer (a 16 MiB body) peaks while upstream serializes
+//! it (the in-memory shard with its chunk index, and the serialization),
+//! then holds the serialization and the keyed output, then the body alone
+//! until it is sent. Per process, dedup memory is therefore at most the
+//! `dedup` permits × about 150 MB, however many clients ask or never read.
+//! Measured as true peak RSS (release, Apple M3, 8 CPUs, so 2 permits;
+//! answers of 16.5 MB): about 120 MB over idle for one answer and about
+//! 250 to 300 MB with both permits busy, with 8 or 16 concurrent queries
+//! or 32 or 64 connections that never read (S11, "Answer cost").
 
 use std::sync::Arc;
 use std::time::Duration;
