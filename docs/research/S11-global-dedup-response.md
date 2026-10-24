@@ -21,6 +21,9 @@
     as published on 2026-10-23/24, and the reference file
     `Electric_Vehicle_Population_Data_20250917.csv.shard.dedupe` at the
     revision `scripts/fetch-reference-files.sh` pins.
+  - huggingface.co's production CAS (`cas-server.xethub.hf.co`), queried
+    read-only on 2026-10-24, parsed with `xet-core-structures` 1.7.0; see
+    "Observed on huggingface.co".
 - Question (M1): a 1 MiB edit in the middle of a 100 MiB file, re-uploaded
   by stock `hf_xet` 1.7.0 with an empty client cache, sends about 30 MB
   of xorbs to openxet; with a warm cache, about 1.2 MB. Design §1a wants
@@ -31,7 +34,8 @@ Labels used below:
 - **source:** read in `xet-core` at `v1.7.0`; paths relative to the
   repository root.
 - **observed:** measured against `openxet serve`, see "Experiment" and
-  "Implementation".
+  "Implementation"; or, where the text says so, against huggingface.co,
+  see "Observed on huggingface.co".
 
 ## Answer
 
@@ -42,7 +46,8 @@ later xorb needs its own hit on a hash-eligible chunk (about 1 in 1024
 chunks), and the client only dedups from the 8 MiB block in which that hit
 happens. The spec describes an answer that offers many xorbs, and the
 xet-core simulation server answers with the whole shard that registered
-the chunk. With answers offering every xorb of the newest shard that
+the chunk; huggingface.co answers with a shard's xorbs too (8 and 109
+xorbs observed, see "Observed on huggingface.co"). With answers offering every xorb of the newest shard that
 references the matched xorb, stock `hf_xet` 1.7.0 with an empty cache
 sends (observed):
 
@@ -160,8 +165,94 @@ that registered the chunk:
   dedups against older xorbs registers no candidates for them.
 
 The simulation is a test backend, so this is how `xet-core` expects
-answers to look, not a statement about huggingface.co's production
-service, which this note did not query.
+answers to look; the next section records what huggingface.co's
+production service answers.
+
+## Observed on huggingface.co (2026-10-24)
+
+- **Setup.** File `model.safetensors` of the public model
+  `openai-community/gpt2` (548,105,171 bytes, `X-Xet-Hash`
+  `63bed808…8758`). Its v2 reconstruction has 9 terms, each a whole xorb
+  (205 to 1,112 chunks, 8,564 chunks in all). All 9 xorbs were fetched
+  through the reconstruction's URLs and every chunk decoded and hashed
+  (`deserialize_chunk`, `compute_data_hash`); the chunk sizes add up to
+  the file size. The file has 12 hash-eligible chunks besides its first.
+  A CAS read token came from `GET /api/models/{repo}/xet-read-token/main`
+  (S3). Only `GET` and `HEAD` requests were sent; answers were parsed
+  with `MDBShardInfo` from `xet-core-structures` 1.7.0.
+- **Queries.** `GET /v1/chunks/default/{hash}` for the first chunk (three
+  times, and with a second read token), for all 12 eligible chunks, and
+  once with the spec's prefix `default-merkledb`, which answered the same
+  bytes as `default`. A chunk of the file that is not eligible got `404`
+  with a short text body. `200` answers are `application/octet-stream`
+  with `Content-Length`, no caching or expiry headers.
+- **Two distinct answers.** The first chunk and one eligible chunk
+  returned answer A; the other 11 eligible chunks returned answer B.
+  Repeated queries returned the same bytes except the footer's creation
+  and expiry timestamps (2 or 3 bytes differ), so the answer does not
+  depend on which of the shard's chunks was queried.
+
+| | Answer A | Answer B |
+|---|---|---|
+| Body | 5,244,056 B | 458,792 B |
+| Xorbs / chunks | 109 / 109,135 | 8 / 9,543 |
+| File-info entries | 0 | 0 |
+| Xorb and chunk lookup tables | none | none |
+| Order of the xorb section | by xorb hash | not by hash, not the file's term order |
+| Position of the matched xorb | 103 of 109 | 0 to 5, varying with the query |
+| Of the file's own 9 xorbs | none | none |
+| File bytes its keyed hashes match | 514,020,878 (93.8 %), through 13 of its xorbs | 387,312,731 (70.7 %), through 7 of its xorbs |
+
+- **Shape.** Header version 2, footer version 1, an empty file-info
+  section. Each body is exactly header, empty file-info bookend, xorb
+  section and footer (48 B per xorb and per chunk, plus 296 B), so no
+  lookup tables. The footer's `stored_bytes` equals the sum of the offered
+  xorbs' unpacked sizes, so the footer describes the answer, not a larger
+  original. Answer A has `num_bytes_on_disk` 0 for every xorb; answer B
+  carries on-disk sizes.
+- **Keying.** Every chunk hash is keyed: the raw hash of the queried
+  chunk appears nowhere in the body, and
+  `MDBShardInfo::keyed_chunk_hash` of it is found in the matched xorb.
+  `chunk_hash_hmac_key` is non-zero, and it was the same in all 16
+  answers: both shards, both read tokens, over about three minutes.
+  Whether it differs per account or changes over a longer period was not
+  tested.
+- **Expiry.** `shard_key_expiry` is exactly 7 days (604,800 s) after
+  `shard_creation_timestamp`, which is the time of the response.
+- **Which xorbs.** Neither answer offers any of the queried file's own
+  xorbs. The file's content is also stored in other xorbs on the service,
+  and the answer is a shard containing the queried chunk, not
+  necessarily one registered by the upload of the file it came from.
+  Together the two answers match 541,327,375 bytes (98.8 %) of the file.
+- **Size and time.** No count cap is visible: 8 and 109 xorbs, both far
+  below the spec's 64 MB shard maximum. Measured from the client, answer A
+  took 1.6 to 2.0 s, answer B 0.67 to 0.79 s and the `404` 0.26 s,
+  transfer included.
+
+What this means for M1-R30:
+- **Granularity matches.** huggingface.co offers a shard's xorbs, not the
+  single matched xorb and not a small fixed count; that is the content
+  M1-R30 chose. The larger observed answer, 109 xorbs in 5.2 MB, is a
+  twelfth of openxet's 64 MiB budget, so openxet would offer it whole; a
+  shard past the budget is where openxet's answer is cut, a size not seen
+  here.
+- **Form matches:** no file info, no lookup tables, every chunk hash
+  keyed, a 7-day expiry (M1-R4 already used 7 days), and `404` when
+  nothing matches. The non-eligible chunk's `404` is consistent with an
+  index of eligible and first chunks only, which is what openxet's dedup
+  index records (one sample).
+- **Order and key differ, without effect on dedup.** huggingface.co does
+  not put the matched xorb first and keeps one key across answers;
+  openxet orders by the matched xorb only to choose which xorbs fit the
+  budget, and keys each answer freshly. The client indexes every offered
+  chunk whatever the order and keys each cached shard by its own footer
+  (see "What the client does with an answer").
+- **Which shard.** openxet resolves chunk → xorb → the newest visible
+  shard referencing that xorb; huggingface.co returned a shard that
+  holds the chunk, here not the queried file's own. When a chunk is
+  stored in one xorb only, both arrive at the shards that reference it.
+  For dedup against openxet's own
+  data, M1-R30 is therefore at least as good as the observed answer.
 
 ## Experiment
 
@@ -339,12 +430,10 @@ permit; answers can't be cached, as each has a fresh key.
 
 ## Not verified
 
-- huggingface.co's production answer for a multi-xorb file (which xorbs,
-  how many, whether lookup tables are present). The spec and the
-  simulation agree on "many xorbs"; the production service was not
-  queried for this note. Task 10b could not query it either: neither the
-  `HF_COMPAT_TOKEN` secret nor a signed-in 1Password session was available
-  without a prompt, so this stays **unverified**.
+- huggingface.co's answer was observed for one file whose content is
+  stored more than once on the service (see "Observed on huggingface.co").
+  Not observed: an answer for content stored only once, a shard larger
+  than 64 MB, and whether the HMAC key differs per account or over days.
 - The query spacing was read in source but not counted on the wire; the
   experiment logged only matches.
 - Uploads of files larger than 1 GiB through a real client (only the
