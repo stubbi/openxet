@@ -61,11 +61,19 @@ pub const MAX_BATCH_FILES: usize = 1000;
 /// The most terms one batch reconstruction may plan, over all the files it
 /// is answered for; a batch over it is `400 batch_too_large`. With
 /// [`MAX_BATCH_FILES`], it bounds one batch's chunk layouts, signing and
-/// answer, whatever the files hold.
-pub const MAX_BATCH_TERMS: usize = 1_000_000;
+/// answer, whatever the files hold. 100,000 terms reserve about 65 MB of
+/// the memory budget, within an answer's eighth of a 1 GiB budget; no
+/// stock client calls the batch route (S10 §1). Lowered from 1,000,000 by
+/// review I-5 of ruling M1-R40.
+pub const MAX_BATCH_TERMS: usize = 100_000;
 
 // `CasError::BatchTooLarge`'s hint names the cap.
 const _: () = assert!(MAX_BATCH_FILES == 1000);
+
+/// The bytes a stored term takes once decoded: its [`openxet_index::Term`]
+/// (a 32-byte hash and three `u32`s) and its recorded byte range (two
+/// `u32`s).
+const DECODED_TERM_BYTES: u64 = 52;
 
 /// The largest batch body read, in bytes: [`MAX_BATCH_FILES`] keys of about
 /// 100 bytes each as the spec writes them, with room for whitespace.
@@ -133,6 +141,13 @@ async fn single(
     version: Version,
 ) -> Result<Response, CasError> {
     let requested = requested_range(headers)?;
+    // The decoded record is reserved from its stored size before it is
+    // loaded (review I-4 of ruling M1-R40), so a request waiting for memory
+    // holds nothing outside the budget; the answer's bound joins it once the
+    // range is resolved to terms. Both come before any permit.
+    let stored = state.index.term_count(&[file], scope).await?;
+    let decoded = stored.saturating_mul(DECODED_TERM_BYTES);
+    let mut reserved = state.budget.reserve_answer(decoded).await?;
     let (record, bytes) = state
         .index
         .file_with_bytes(&file, scope)
@@ -152,10 +167,9 @@ async fn single(
             .collect(),
         (Some(w), None) => distinct_xorbs(&record.terms[w.terms.clone()]),
     };
-    let reserved = state
-        .budget
-        .reserve_answer(answer::bound(terms, 1, &state.cfg.public_url))
-        .await?;
+    let answer = answer::bound(terms, 1, &state.cfg.public_url);
+    state.budget.check_answer(decoded.saturating_add(answer))?;
+    reserved.merge(state.budget.reserve_answer(answer).await?);
     let permit = validation_permit(state).await?;
     let tables = chunk_layouts(state, scope, xorbs).await?;
 
@@ -265,7 +279,11 @@ async fn batch(
     check_batch_terms(stored)?;
     let reserved = state
         .budget
-        .reserve_answer(answer::bound(stored, files.len(), &state.cfg.public_url))
+        .reserve_answer(
+            (stored as u64)
+                .saturating_mul(DECODED_TERM_BYTES)
+                .saturating_add(answer::bound(stored, files.len(), &state.cfg.public_url)),
+        )
         .await?;
     let mut found = state.index.files(&files, scope).await?;
     let records: Vec<_> = files.iter().filter_map(|f| found.remove(f)).collect();
@@ -634,6 +652,7 @@ mod tests {
             file: &MerkleHash,
             scope: &str,
         ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+            self.file_loads.fetch_add(1, Ordering::SeqCst);
             self.inner.file_with_bytes(file, scope).await
         }
 
@@ -867,12 +886,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_single_file_waits_for_memory_before_its_record_is_decoded() {
+        // Review I-4 of M1-R40: the record (52 bytes a term decoded) is
+        // reserved from its stored term count before it is loaded, so a
+        // request waiting for memory holds nothing outside the budget.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, request) = one_file(dir.path()).await;
+        let wait = Duration::from_millis(300);
+        state.budget = crate::MemoryBudget::new(1 << 20).with_waits(Duration::from_mins(1), wait);
+        let index = CountingIndex::install(&mut state, 0);
+        let _full = state.budget.reserve_upload(1 << 20).await.unwrap();
+
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(index.file_loads.load(Ordering::SeqCst), 0, "decoded first");
+    }
+
+    #[tokio::test]
+    async fn a_single_file_over_its_share_of_the_budget_is_a_final_413() {
+        // Review I-5 of M1-R40: one answer may hold an eighth of the budget;
+        // a whole file too large for that is refused before it is loaded,
+        // with a hint to ask by range.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, request) = one_file(dir.path()).await;
+        state.budget = crate::MemoryBudget::new(1 << 20);
+        // 10,000 stored terms decode to 520 KB, past 128 KiB.
+        let index = CountingIndex::install(&mut state, 10_000);
+
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "answer_too_large", "{json}");
+        assert_eq!(index.file_loads.load(Ordering::SeqCst), 0);
+        assert_eq!(state.budget.available(), 1 << 20);
+    }
+
+    #[tokio::test]
+    async fn a_small_answer_is_served_at_once_while_an_upload_is_queued() {
+        // Review I-2 of M1-R40: a stock client's queued uploads must not
+        // make every download on the node wait and fail.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, request) = one_file(dir.path()).await;
+        state.budget = crate::MemoryBudget::new(4 << 20)
+            .with_waits(Duration::from_mins(1), Duration::from_mins(1));
+        let _held = state.budget.reserve_upload(3 << 20).await.unwrap();
+        let queued = tokio::spawn({
+            let budget = state.budget.clone();
+            async move { budget.reserve_upload(2 << 20).await.map(|_| ()) }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let started = std::time::Instant::now();
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(!queued.is_finished());
+        queued.abort();
+    }
+
+    #[tokio::test]
     async fn a_full_budget_answers_503_memory_busy_after_the_wait() {
         let dir = tempfile::tempdir().unwrap();
         let (mut state, request) = one_file(dir.path()).await;
         let wait = Duration::from_millis(300);
         state.budget = crate::MemoryBudget::new(1 << 20).with_waits(Duration::from_mins(1), wait);
-        let _full = state.budget.reserve_answer(1 << 20).await.unwrap();
+        let _full = state.budget.reserve_upload(1 << 20).await.unwrap();
 
         let started = std::time::Instant::now();
         let response = router(state.clone()).oneshot(request).await.unwrap();
@@ -888,9 +973,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_batch_over_the_whole_memory_budget_is_a_final_413() {
-        // A retryable 503 would make stock clients retry, in vain, for
-        // minutes (S10 "Status codes and retries"); the hint says what helps.
+    async fn a_batch_over_its_share_of_the_memory_budget_is_a_final_413() {
+        // One answer may hold an eighth of the budget (review I-5 of
+        // M1-R40). A retryable 503 would make stock clients retry, in vain,
+        // for minutes (S10 "Status codes and retries"); the hint says what
+        // helps.
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
@@ -923,7 +1010,7 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["code"], "exceeds_memory_budget", "{json}");
+        assert_eq!(json["code"], "answer_too_large", "{json}");
         assert!(
             json["hint"]
                 .as_str()

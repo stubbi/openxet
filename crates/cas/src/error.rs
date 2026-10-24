@@ -202,6 +202,21 @@ pub enum CasError {
         budget: u64,
     },
 
+    /// One reconstruction answer would hold more than its share of the
+    /// process's memory budget, an eighth (review I-5 of ruling M1-R40).
+    /// `413 answer_too_large`, final. Stock clients never reach it: they
+    /// ask for a file by `Range`, at most 8 GB at a time (S10 §1).
+    #[error(
+        "the answer needs about {needed} bytes of server memory; one answer may hold at most \
+         {limit}, an eighth of the server's memory budget"
+    )]
+    AnswerTooLarge {
+        /// The bytes the answer needs.
+        needed: u64,
+        /// An eighth of `server.memory_budget`.
+        limit: u64,
+    },
+
     /// An uploaded xorb's content hash is not the hash in its path.
     /// `400 xorb_hash_mismatch`, final.
     #[error(
@@ -552,8 +567,14 @@ impl CasError {
             Self::ExceedsMemoryBudget { .. } => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "exceeds_memory_budget",
-                "Ask for less at once: split the batch into fewer files, or reconstruct a large \
-                 file alone or by range. The operator can raise `server.memory_budget`.",
+                "Send a smaller body, as stock clients do (xorbs and shards of at most 64 MiB). \
+                 The operator can raise `server.memory_budget`.",
+            ),
+            Self::AnswerTooLarge { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "answer_too_large",
+                "Ask for the file by range, with `Range: bytes={start}-{end}`, as hf_xet does, \
+                 or put fewer files in a batch. The operator can raise `server.memory_budget`.",
             ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,
@@ -658,7 +679,7 @@ impl CasError {
             Self::UnknownXorb { .. } => tracing::warn!(code, reason = %self, "shard rejected"),
             // The server's state, not a fault: one line per refusal, without
             // an error's alarm.
-            Self::MemoryBusy | Self::ExceedsMemoryBudget { .. } => {
+            Self::MemoryBusy | Self::ExceedsMemoryBudget { .. } | Self::AnswerTooLarge { .. } => {
                 tracing::warn!(code, reason = %self, "request refused");
             }
             _ if status.is_server_error() => {
@@ -810,6 +831,19 @@ mod tests {
         )
         .await;
         assert_eq!(reply.headers[RETRY_AFTER], "1");
+    }
+
+    #[tokio::test]
+    async fn an_answer_over_its_share_of_the_budget_is_a_final_413() {
+        let e = CasError::AnswerTooLarge {
+            needed: 2048,
+            limit: 1024,
+        };
+        assert!(!e.is_retryable());
+        let reply = assert_maps(e, StatusCode::PAYLOAD_TOO_LARGE, "answer_too_large").await;
+        assert!(!reply.headers.contains_key(RETRY_AFTER));
+        let hint = reply.body["hint"].as_str().unwrap();
+        assert!(hint.contains("Range"), "{hint}");
     }
 
     #[tokio::test]

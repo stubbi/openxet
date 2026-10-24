@@ -21,48 +21,99 @@
 //!   they queue here, rather than fail into retries the client backs off
 //!   from for seconds. A waiting upload holds only its connection, which
 //!   `server.max_connections` bounds.
-//! - an answer waits up to [`MemoryBudget::ANSWER_WAIT`], 5 s, since it
-//!   holds the file's decoded record meanwhile.
+//! - an answer takes free bytes at once, past queued uploads; one that
+//!   doesn't fit waits up to [`MemoryBudget::ANSWER_WAIT`], 5 s.
 //!
 //! One larger than the whole budget can never succeed: it fails at once
-//! with a final `413 exceeds_memory_budget`, which clients don't retry.
+//! with a final `413 exceeds_memory_budget`, which clients don't retry. One
+//! answer may reserve at most an eighth of the budget, or it fails at once
+//! with a final `413 answer_too_large`.
 //!
 //! Reservations are taken before any permit of the CPU pools, so a request
 //! never holds a `validate` or `commit` permit while it waits for memory.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Notify;
 
 use crate::CasError;
 
-/// The budget's accounting unit, in bytes. A semaphore takes at most
-/// `u32::MAX` permits at once, so counting in KiB lets one reservation be
-/// up to 4 TiB.
+/// The budget's accounting unit, in bytes.
 const UNIT: u64 = 1024;
 
 /// A pool of bytes that requests reserve before buffering. Cloning shares
 /// the pool.
+///
+/// Uploads queue for it in arrival order: a small upload that would fit
+/// waits behind a large one that came first, so no upload is starved.
+/// Answers don't queue behind uploads: one that fits in the free bytes
+/// takes them at once, and only one that doesn't waits, with whatever
+/// upload is at the head of the queue, for bytes to come free (review I-2
+/// of ruling M1-R40). Otherwise a stock client's queued uploads would make
+/// every download on the node wait out its answer wait and fail.
 #[derive(Debug, Clone)]
 pub struct MemoryBudget {
-    units: Arc<Semaphore>,
-    bytes: u64,
+    pool: Arc<Pool>,
     upload_wait: Duration,
     answer_wait: Duration,
 }
 
+#[derive(Debug)]
+struct Pool {
+    /// The whole budget, in units.
+    total: u64,
+    /// The units reserved now.
+    used: Mutex<u64>,
+    /// Woken whenever units are returned.
+    freed: Notify,
+    /// Held by the upload at the head of the queue while it waits for
+    /// room; tokio's mutex is fair, so uploads take turns in arrival order.
+    upload_turn: tokio::sync::Mutex<()>,
+}
+
+impl Pool {
+    /// Takes `units` if they fit now.
+    fn try_take(&self, units: u64) -> bool {
+        let mut used = self.used.lock().unwrap_or_else(PoisonError::into_inner);
+        let fits = *used + units <= self.total;
+        if fits {
+            *used += units;
+        }
+        fits
+    }
+
+    /// Takes `units` once they fit.
+    async fn take(&self, units: u64) {
+        loop {
+            let freed = self.freed.notified();
+            tokio::pin!(freed);
+            // Registered before the check, so a release in between wakes it.
+            freed.as_mut().enable();
+            if self.try_take(units) {
+                return;
+            }
+            freed.await;
+        }
+    }
+
+    fn give_back(&self, units: u64) {
+        if units == 0 {
+            return;
+        }
+        *self.used.lock().unwrap_or_else(PoisonError::into_inner) -= units;
+        self.freed.notify_waiters();
+    }
+}
+
 impl MemoryBudget {
-    /// The least default budget, 1 GiB: room for 15 xorb uploads of the
-    /// largest size in flight at once, or about 25 full answers for
-    /// 100k-term files. The server's default is a quarter of the host's
-    /// memory, but never less than this.
+    /// The budget where the host's memory can't be read, 1 GiB: room for
+    /// 15 xorb uploads of the largest size in flight at once, or about 25
+    /// full answers for 100k-term files.
     pub const DEFAULT_BYTES: u64 = 1 << 30;
 
     /// The smallest budget a server may be configured with: room for three
-    /// of the largest uploads and a few answers for 100k-term files. Below
-    /// about 600 MB, a batch reconstruction of [`crate::MAX_BATCH_TERMS`]
-    /// terms is refused as over the whole budget.
+    /// of the largest uploads and a few answers for 100k-term files.
     pub const MIN_BYTES: u64 = 256 << 20;
 
     /// The largest budget a server may be configured with.
@@ -73,18 +124,26 @@ impl MemoryBudget {
     /// whole burst of uploads, well inside its 300 s read timeout (S10 §4).
     pub const UPLOAD_WAIT: Duration = Duration::from_mins(2);
 
-    /// How long a reconstruction answer waits for bytes to come free
-    /// before it is refused with `503 memory_busy`.
+    /// How long a reconstruction answer that doesn't fit now waits for
+    /// bytes to come free before it is refused with `503 memory_busy`.
     pub const ANSWER_WAIT: Duration = Duration::from_secs(5);
 
-    /// A budget of `bytes` (rounded up to a whole KiB, at most 4 TiB) with
-    /// the default waits.
+    /// The share of the budget one answer may reserve: an eighth, so one
+    /// reader can't hold most of it with a few unread answers (review I-5
+    /// of ruling M1-R40).
+    const ANSWER_SHARE: u64 = 8;
+
+    /// A budget of `bytes`, rounded up to a whole KiB, with the default
+    /// waits.
     #[must_use]
     pub fn new(bytes: u64) -> Self {
-        let units = bytes.div_ceil(UNIT).min(u64::from(u32::MAX));
         Self {
-            units: Arc::new(Semaphore::new(to_usize(units))),
-            bytes: units * UNIT,
+            pool: Arc::new(Pool {
+                total: bytes.div_ceil(UNIT),
+                used: Mutex::new(0),
+                freed: Notify::new(),
+                upload_turn: tokio::sync::Mutex::new(()),
+            }),
             upload_wait: Self::UPLOAD_WAIT,
             answer_wait: Self::ANSWER_WAIT,
         }
@@ -102,70 +161,120 @@ impl MemoryBudget {
     /// The whole budget, in bytes.
     #[must_use]
     pub fn bytes(&self) -> u64 {
-        self.bytes
+        self.pool.total * UNIT
     }
 
-    /// The bytes not reserved right now.
+    /// The bytes not reserved right now, whether or not requests wait.
     #[must_use]
     pub fn available(&self) -> u64 {
-        self.units.available_permits() as u64 * UNIT
+        let used = *self
+            .pool
+            .used
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        (self.pool.total - used) * UNIT
     }
 
-    /// Reserves `bytes` for an upload body, waiting at most the upload
-    /// wait ([`MemoryBudget::reserve`]).
-    pub(crate) async fn reserve_upload(&self, bytes: u64) -> Result<Reservation, CasError> {
-        self.reserve(bytes, self.upload_wait).await
+    /// The most one answer may reserve: an eighth of the budget.
+    pub(crate) fn answer_limit(&self) -> u64 {
+        self.bytes() / Self::ANSWER_SHARE
     }
 
-    /// Reserves `bytes` for a reconstruction answer, waiting at most the
-    /// answer wait ([`MemoryBudget::reserve`]).
-    pub(crate) async fn reserve_answer(&self, bytes: u64) -> Result<Reservation, CasError> {
-        self.reserve(bytes, self.answer_wait).await
-    }
-
-    /// Reserves `bytes`, waiting at most `wait`; reservations are granted
-    /// in the order they were asked for:
+    /// Reserves `bytes` for an upload body, in arrival order among uploads,
+    /// waiting at most the upload wait:
     /// - [`CasError::ExceedsMemoryBudget`] at once if `bytes` exceeds the
     ///   whole budget
     /// - [`CasError::MemoryBusy`] if the wait passes first
-    async fn reserve(&self, bytes: u64, wait: Duration) -> Result<Reservation, CasError> {
+    pub(crate) async fn reserve_upload(&self, bytes: u64) -> Result<Reservation, CasError> {
+        let units = self.units_within(bytes)?;
+        let pool = &self.pool;
+        tokio::time::timeout(self.upload_wait, async {
+            let _turn = pool.upload_turn.lock().await;
+            pool.take(units).await;
+        })
+        .await
+        .map_err(|_| CasError::MemoryBusy)?;
+        Ok(self.reservation(units))
+    }
+
+    /// Reserves `bytes` for a read request's answer (or its body): at once
+    /// if they fit now, past any queued upload; otherwise waiting at most
+    /// the answer wait:
+    /// - [`CasError::AnswerTooLarge`] at once if `bytes` exceeds
+    ///   [`MemoryBudget::answer_limit`]
+    /// - [`CasError::MemoryBusy`] if the wait passes first
+    pub(crate) async fn reserve_answer(&self, bytes: u64) -> Result<Reservation, CasError> {
+        self.check_answer(bytes)?;
         let units = bytes.div_ceil(UNIT);
-        let Some(units) = u32::try_from(units)
-            .ok()
-            .filter(|n| u64::from(*n) * UNIT <= self.bytes)
-        else {
+        if !self.pool.try_take(units) {
+            tokio::time::timeout(self.answer_wait, self.pool.take(units))
+                .await
+                .map_err(|_| CasError::MemoryBusy)?;
+        }
+        Ok(self.reservation(units))
+    }
+
+    /// [`CasError::AnswerTooLarge`] if one answer of `bytes` would exceed
+    /// [`MemoryBudget::answer_limit`].
+    pub(crate) fn check_answer(&self, bytes: u64) -> Result<(), CasError> {
+        let limit = self.answer_limit();
+        if bytes > limit {
+            return Err(CasError::AnswerTooLarge {
+                needed: bytes,
+                limit,
+            });
+        }
+        Ok(())
+    }
+
+    fn units_within(&self, bytes: u64) -> Result<u64, CasError> {
+        let units = bytes.div_ceil(UNIT);
+        if units > self.pool.total {
             return Err(CasError::ExceedsMemoryBudget {
                 needed: bytes,
-                budget: self.bytes,
+                budget: self.bytes(),
             });
-        };
-        let permit = tokio::time::timeout(wait, Arc::clone(&self.units).acquire_many_owned(units))
-            .await
-            .map_err(|_| CasError::MemoryBusy)?
-            .map_err(CasError::internal)?;
-        Ok(Reservation(permit))
+        }
+        Ok(units)
+    }
+
+    fn reservation(&self, units: u64) -> Reservation {
+        Reservation {
+            pool: Arc::clone(&self.pool),
+            units,
+        }
     }
 }
 
 /// Bytes reserved from a [`MemoryBudget`], returned to it when dropped.
 #[derive(Debug)]
-pub(crate) struct Reservation(OwnedSemaphorePermit);
+pub(crate) struct Reservation {
+    pool: Arc<Pool>,
+    units: u64,
+}
 
 impl Reservation {
     /// Returns what is reserved beyond `bytes` to the budget. Never grows
     /// the reservation.
     pub(crate) fn shrink_to(&mut self, bytes: u64) {
-        let keep = to_usize(bytes.div_ceil(UNIT));
-        let held = self.0.num_permits();
-        if keep < held {
-            drop(self.0.split(held - keep));
+        let keep = bytes.div_ceil(UNIT);
+        if keep < self.units {
+            self.pool.give_back(self.units - keep);
+            self.units = keep;
         }
+    }
+
+    /// Adds `other`, from the same budget, to this reservation.
+    pub(crate) fn merge(&mut self, mut other: Reservation) {
+        debug_assert!(Arc::ptr_eq(&self.pool, &other.pool));
+        self.units += std::mem::take(&mut other.units);
     }
 }
 
-/// `n` units, which [`MemoryBudget::new`] keeps within `u32`, as a count.
-fn to_usize(n: u64) -> usize {
-    usize::try_from(n).unwrap_or(usize::MAX)
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.pool.give_back(self.units);
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +343,57 @@ mod tests {
         held.shrink_to(3 * MIB);
         assert_eq!(budget.available(), 4 * MIB - (MIB + UNIT));
         drop(held);
+        assert_eq!(budget.available(), 4 * MIB);
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_fits_skips_queued_uploads() {
+        // Review I-2 of M1-R40: queued uploads must not make reads wait. An
+        // answer that fits in the free bytes now takes them at once, and
+        // `available` counts bytes free though an upload waits (M-5).
+        let budget =
+            MemoryBudget::new(4 * MIB).with_waits(Duration::from_mins(1), Duration::from_mins(1));
+        let _held = budget.reserve_upload(3 * MIB).await.unwrap();
+        let queued = tokio::spawn({
+            let budget = budget.clone();
+            async move { budget.reserve_upload(2 * MIB).await.map(|_| ()) }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!queued.is_finished());
+        assert_eq!(budget.available(), MIB);
+
+        let answer = tokio::time::timeout(Duration::from_secs(1), budget.reserve_answer(MIB / 2))
+            .await
+            .expect("the answer waited behind the queued upload");
+        assert!(answer.is_ok());
+        assert_eq!(budget.available(), MIB / 2);
+        queued.abort();
+    }
+
+    #[tokio::test]
+    async fn uploads_are_granted_in_arrival_order() {
+        // Among uploads the queue is fair: a small one that would fit waits
+        // behind a large one that came first, so large uploads are never
+        // starved.
+        let budget = MemoryBudget::new(4 * MIB);
+        let held = budget.reserve_upload(3 * MIB).await.unwrap();
+        let large = tokio::spawn({
+            let budget = budget.clone();
+            async move { budget.reserve_upload(2 * MIB).await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let small = tokio::spawn({
+            let budget = budget.clone();
+            async move { budget.reserve_upload(MIB).await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!small.is_finished(), "the small upload jumped the queue");
+
+        drop(held);
+        let large = large.await.unwrap();
+        let small = small.await.unwrap();
+        assert_eq!(budget.available(), MIB);
+        drop((large, small));
         assert_eq!(budget.available(), 4 * MIB);
     }
 }
