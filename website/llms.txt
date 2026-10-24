@@ -1,0 +1,25 @@
+# openxet
+
+> openxet is the open-source (Apache-2.0) server and client for the Xet protocol, Hugging Face's chunk-deduplicated storage for large, versioned files. The official clients (hf, huggingface_hub, hf_xet, git-xet, git-lfs, huggingface.js) work against it unmodified. It runs on storage and identity systems the operator already owns, and will be offered as a hosted service at openxet.com. Status: in active development before 1.0; the CAS server (milestone M1) is being built, and the Hub API that stock `hf upload` needs arrives in M2.
+
+openxet is an independent project, not affiliated with or endorsed by Hugging Face.
+
+## Docs
+
+- [README](https://github.com/stubbi/openxet/blob/main/README.md): what openxet is and its current status
+- [Design](https://github.com/stubbi/openxet/blob/main/docs/superpowers/specs/2026-10-23-openxet-design.md): scope, architecture, milestones and the hosted service; the source of truth
+- [CLI reference](https://github.com/stubbi/openxet/blob/main/docs/reference/cli.md): every command, with its `--json` schema
+- [Configuration](https://github.com/stubbi/openxet/blob/main/docs/reference/config.md): config file, environment overrides and dev mode
+- [Exit codes](https://github.com/stubbi/openxet/blob/main/docs/reference/exit-codes.md): stable exit codes and structured errors
+- [Architecture decisions](https://github.com/stubbi/openxet/tree/main/docs/adr): ADRs in force
+
+## Contributing
+
+- [AGENTS.md](https://github.com/stubbi/openxet/blob/main/AGENTS.md): the working agreement for humans and AI agents changing the repository
+- [CONTRIBUTING.md](https://github.com/stubbi/openxet/blob/main/CONTRIBUTING.md): dev setup and pull requests
+- [SECURITY.md](https://github.com/stubbi/openxet/blob/main/SECURITY.md): report vulnerabilities privately
+
+## Optional
+
+- [Xet protocol specification](https://huggingface.co/docs/xet): the protocol openxet implements
+- [Competitive matrix](https://github.com/stubbi/openxet/blob/main/docs/competitive-matrix.md): how openxet compares with other Xet servers
