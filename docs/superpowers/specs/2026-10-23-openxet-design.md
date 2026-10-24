@@ -1674,6 +1674,8 @@ release of the open-source build: it runs the released build (§15).
     reviewed specification and implementation plan before coding; see the
     [URI milestone handoff](../plans/2026-10-24-resource-uri-milestones.md).
   - `openxet purge <file-hash>` (§5.4).
+  - The OpenAPI document for the Hub and CAS routes, generated from code
+    and checked in CI (§7.1).
   - One router: the CAS and Hub routes composed at the builder level under
     a single fallback, since axum can't merge two routers that each carry
     one (issue #46).
@@ -1682,6 +1684,12 @@ release of the open-source build: it runs the released build (§15).
   - The range-binding probe against real AWS S3, R2, Garage, GCS and
     Azure, and the presigned-URL signing benchmarks (ADR 0002).
   - OIDC and webhook auth.
+  - Delegated, attenuated agent tokens (§7.1): chosen repositories or
+    buckets, read or write, an expiry in hours, optional byte and
+    operation caps, revocable. Their web UI comes in M6.
+  - Per-tenant rate limits and quotas, and per-credential shares of the
+    memory budget (M1-R40, §15), verified under abuse load with the load
+    harness (issues [#55](https://github.com/stubbi/openxet/issues/55) and [#57](https://github.com/stubbi/openxet/issues/57)).
   - **Load testing** (issue [#55](https://github.com/stubbi/openxet/issues/55)), a deliverable rather than a one-off
     proof:
     - a reproducible harness in `loadtest/`, with stock `hf_xet` where
@@ -1710,6 +1718,8 @@ release of the open-source build: it runs the released build (§15).
   - Readiness that checks the index and the bucket (issue #49).
   - Metrics, tracing, and the rest of the HTTP read gateway.
   - Metering (§5.7) and the admin API that exposes it.
+  - The audit log, attributing each action to a human, or to an agent on
+    behalf of a human (§7.1); the web UI shows it in M6.
   - Server-side chunking for non-Xet clients.
   - Git over SSH (`git-lfs-authenticate`, `git-lfs-transfer`), with
     post-quantum key exchange first (ADR 0011, issue [#67](https://github.com/stubbi/openxet/issues/67)).
@@ -1727,6 +1737,9 @@ release of the open-source build: it runs the released build (§15).
     one-key `batch` commits per second per deployment (§5.8's shard
     registration rate), with a one-key commit's p99 within 20 ms of the
     object store's own PUT p99.
+  - Full export of repositories and buckets, the first milestone with
+    both primitives: an operator or tenant can take everything out, tested
+    by restoring the export into a fresh deployment (§1, no lock-in).
   - The bucket rows of the security tests (§5.9 requirements 2 and 7),
     including the `addFile` and `copyFile` checks of §5.4.
   - Cache tier.
@@ -1745,7 +1758,12 @@ release of the open-source build: it runs the released build (§15).
     endpoint isolation and unchanged stock-client paths must pass; third-party
     native support is never assumed. The URI milestone handoff defines the
     acceptance checks and dependencies on implemented resource kinds.
-  - The minimal self-service web UI (§10.10).
+  - The minimal self-service web UI (§10.10), with OIDC sign-in, the
+    delegated-token and audit-log views.
+  - `openxet mcp`, the MCP server, and approval gates for agent-initiated
+    destructive or costly actions (§7.1).
+  - Budgets and alerts on metered bytes and egress, per tenant and per
+    token, with writes stopping at a hard budget (reads never do).
   - The two-way compatibility suite, including nightly runs against
     huggingface.co.
 
@@ -1762,17 +1780,19 @@ release of the open-source build: it runs the released build (§15).
   - Time-to-first-upload check.
 - **M8: openxet.com hosted service** (§15). Features, pricing and the
   end-to-end experience per spike S13 (draft PR #59), pending the owner's
-  approval of pricing and positioning. It delivers the 60 s journey from
-  the landing page to a working `hf upload`. It meters logical and
-  physical bytes and bills each tenant on its own deduplicated bytes,
-  never crediting dedup across tenants, since a bill that drops when
-  another tenant holds the same chunks would reveal that they exist
-  (S12). It ships the agent features on the hosted service: delegated
-  tokens, approval gates and MCP (§7.1). Load and capacity tests, with
-  the M3 harness against a production-size staging stack, run before
-  launch and before each scale step, and verify per-tenant rate limits
-  under abuse load (issue [#55](https://github.com/stubbi/openxet/issues/55)). Anything it needs from the core ships in the
-  open-source build first (§15).
+  approval of pricing and positioning. Everything it needs from the core
+  ships in the open-source build first: delegated tokens and per-tenant
+  rate limits and quotas in M3, the audit log in M4, full export in M5,
+  and the web UI, MCP, approval gates, budgets and alerts in M6. M8 adds
+  only the hosted parts:
+  - the 60 s journey from the landing page to a working `hf upload`,
+    with sign-in through an identity provider only (GitHub, Google, SSO).
+    openxet never owns users, so this is the same OIDC and authorizer
+    seams self-hosters use;
+  - billing on metering (§5.7), under the rule in §15;
+  - load and capacity tests with the M3 harness against a
+    production-size staging stack, before launch and before each scale
+    step (issue [#55](https://github.com/stubbi/openxet/issues/55)).
 
 ## 13. Left to the builder
 
@@ -1839,8 +1859,16 @@ self-hosting better too.
 - Enforced quotas and per-tenant rate limits.
 - Bounds on how much one writer's registrations shape the dedup answers
   other tenants get under `global` visibility (issue #50).
-- Metering accurate enough to bill.
-- Self-service sign-up via the web UI.
+- Metering accurate enough to bill. Each tenant is billed on its own
+  deduplicated bytes, as if it were alone, never crediting dedup across
+  tenants: a bill that drops when another tenant holds the same chunks
+  would reveal that they exist ([S12](../../research/S12-s3-api-and-dedup-economics.md);
+  its ADR, S12's "stand-alone billing", is still to be written). These
+  billed bytes are counted per tenant on their own, so their sum exceeds
+  physical storage; §1a's 1% target concerns physical bytes attributed to
+  tenants, not billed bytes.
+- Self-service sign-up via the web UI (M6), through the operator's
+  identity provider only.
 - Admin tooling for abuse and takedowns.
 - Zero-downtime rolling upgrades.
 
