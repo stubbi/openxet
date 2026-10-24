@@ -1013,3 +1013,34 @@ fn no_proxy_is_honoured_and_a_proxy_is_named() {
     assert!(message.contains(&proxy), "{message}");
     assert!(message.contains("proxy"), "{message}");
 }
+
+#[test]
+fn download_creates_missing_parent_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(&dir.path().join("data"));
+    let cache = dir.path().join("cache");
+    let path = dir.path().join("a.bin");
+    let data = noise(1000, 13);
+    std::fs::write(&path, &data).unwrap();
+    let hash = upload(&server, &cache, &[&path])[0]["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let out_path = dir.path().join("models/v1/a.bin");
+
+    let out = run(server
+        .client(&cache)
+        .args(["download", &hash, "--json", "--output"])
+        .arg(&out_path));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(std::fs::read(&out_path).unwrap(), data);
+    // User output directories get the usual mode (the umask's), not the
+    // cache's 0700: compare with one this process creates.
+    #[cfg(unix)]
+    {
+        let reference = dir.path().join("reference");
+        std::fs::create_dir(&reference).unwrap();
+        assert_eq!(mode_of(&dir.path().join("models")), mode_of(&reference));
+        assert_eq!(mode_of(&dir.path().join("models/v1")), mode_of(&reference));
+    }
+}

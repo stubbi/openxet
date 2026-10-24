@@ -49,6 +49,13 @@ pub enum ClientError {
     /// The output exists and may not be replaced. Nothing was written.
     #[error("{} exists; nothing was downloaded", path.display())]
     OutputExists { path: PathBuf },
+    /// The output's filesystem can't create the file without risking a
+    /// replace (no exclusive rename, no hard links). Nothing was written.
+    #[error(
+        "{}: this filesystem can't create the file without risking replacing one ({source})",
+        path.display()
+    )]
+    NoClobberUnsupported { path: PathBuf, source: io::Error },
     /// The server refused the upload's shard; `message` is the server's,
     /// without control characters.
     #[error("the server rejected the upload: {message}")]

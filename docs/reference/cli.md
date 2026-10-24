@@ -198,6 +198,16 @@ written.
   planted at any name is never followed), then synced and renamed (with
   `--force`) or linked (without) to `PATH`, so `PATH` is either absent or
   complete. A failed or interrupted download removes the partial file.
+  Only `SIGKILL` or a power loss can leave one behind: a hidden
+  `.<name>.XXXXXX.openxet-partial` next to the output, which is safe to
+  delete.
+- **Directories.** Missing parent directories of `PATH` are created, with
+  the usual mode for your umask, as `hf_xet` does.
+- **Filesystems without safe landing.** Without `--force`, the file is
+  placed with an exclusive rename or a hard link, so it can never replace a
+  file that appeared meanwhile. Where the filesystem supports neither (for
+  example SMB or exFAT on macOS, FAT on Linux), the download fails with
+  `no_clobber_unsupported` and writes nothing; pass `--force` there.
 
 ## Endpoint, token and cache
 

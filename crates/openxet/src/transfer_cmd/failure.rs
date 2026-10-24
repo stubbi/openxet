@@ -12,45 +12,20 @@ pub(super) fn usage_error(code: &'static str, message: &str, hint: &'static str)
 /// the client's, which never holds the token (`ClientError`'s invariant).
 pub(super) fn client_error(err: &ClientError) -> CliError {
     let message = err.to_string();
+    if let Some(usage) = usage_failure(err, &message) {
+        return usage;
+    }
     let (code, hint): (&'static str, &'static str) = match err {
-        ClientError::InvalidEndpoint { .. } => {
-            return usage_error(
-                "invalid_endpoint",
-                &message,
-                "Set OPENXET_ENDPOINT (or --endpoint) to the endpoint `openxet serve` prints, \
-                 such as http://127.0.0.1:8080.",
-            );
-        }
-        ClientError::InvalidHash => {
-            return usage_error(
-                "invalid_hash",
-                &message,
-                "Pass the Xet hash `openxet upload` printed for the file: 64 characters 0-9 \
-                 and a-f.",
-            );
-        }
-        ClientError::OutputExists { .. } => {
-            return usage_error(
-                "output_exists",
-                &message,
-                "Pass `--force` to replace it, or choose another `--output` path.",
-            );
-        }
-        ClientError::InvalidInput { problems } => {
-            let files = problems
-                .iter()
-                .map(|p| FileError {
-                    path: p.path.to_string_lossy().into_owned(),
-                    problem: p.problem.code(),
-                })
-                .collect();
-            return usage_error(
-                "invalid_input",
-                &format!("{message}; nothing was uploaded"),
-                "Pass paths of existing, readable regular files; directories are not uploaded.",
-            )
-            .with_files(files);
-        }
+        ClientError::NoClobberUnsupported { .. } => (
+            "no_clobber_unsupported",
+            "This filesystem can't land a file safely without overwriting. Pass `--force` to \
+             let the download replace any file at the path, or choose an `--output` on another \
+             filesystem.",
+        ),
+        ClientError::InvalidEndpoint { .. }
+        | ClientError::InvalidHash
+        | ClientError::OutputExists { .. }
+        | ClientError::InvalidInput { .. } => unreachable!("handled by usage_failure"),
         ClientError::TokenExpired { .. } => (
             "token_expired",
             "Get a new token, for example with `openxet token mint`, and set OPENXET_TOKEN.",
@@ -108,6 +83,45 @@ pub(super) fn client_error(err: &ClientError) -> CliError {
     CliError::new(code, message, hint)
 }
 
+/// The failures that are the caller's to fix before anything runs (exit 2).
+fn usage_failure(err: &ClientError, message: &str) -> Option<CliError> {
+    Some(match err {
+        ClientError::InvalidEndpoint { .. } => usage_error(
+            "invalid_endpoint",
+            message,
+            "Set OPENXET_ENDPOINT (or --endpoint) to the endpoint `openxet serve` prints, \
+             such as http://127.0.0.1:8080.",
+        ),
+        ClientError::InvalidHash => usage_error(
+            "invalid_hash",
+            message,
+            "Pass the Xet hash `openxet upload` printed for the file: 64 characters 0-9 \
+             and a-f.",
+        ),
+        ClientError::OutputExists { .. } => usage_error(
+            "output_exists",
+            message,
+            "Pass `--force` to replace it, or choose another `--output` path.",
+        ),
+        ClientError::InvalidInput { problems } => {
+            let files = problems
+                .iter()
+                .map(|p| FileError {
+                    path: p.path.to_string_lossy().into_owned(),
+                    problem: p.problem.code(),
+                })
+                .collect();
+            usage_error(
+                "invalid_input",
+                &format!("{message}; nothing was uploaded"),
+                "Pass paths of existing, readable regular files; directories are not uploaded.",
+            )
+            .with_files(files)
+        }
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -147,6 +161,10 @@ mod tests {
                 actual: 2,
             },
             ClientError::OutputExists { path: "o".into() },
+            ClientError::NoClobberUnsupported {
+                path: "o".into(),
+                source: std::io::Error::from(std::io::ErrorKind::Unsupported),
+            },
             ClientError::UploadRejected {
                 message: "xorb … is not stored on this server".into(),
             },
@@ -160,4 +178,14 @@ mod tests {
             assert!(!cli.hint.is_empty(), "{cli:?}");
         }
     }
+}
+
+#[test]
+fn no_clobber_unsupported_points_at_force() {
+    let cli = client_error(&ClientError::NoClobberUnsupported {
+        path: "o".into(),
+        source: std::io::Error::from(std::io::ErrorKind::Unsupported),
+    });
+    assert_eq!(cli.code, "no_clobber_unsupported");
+    assert!(cli.hint.contains("--force"), "{cli:?}");
 }

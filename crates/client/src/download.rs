@@ -103,12 +103,14 @@ pub async fn download(
 }
 
 /// A new, empty file next to `out`, with the mode a plain create would
-/// give it.
+/// give it. Missing parent directories are created, as `hf_xet` does,
+/// with the usual mode (the umask's).
 fn partial_file(out: &Path) -> Result<NamedTempFile, ClientError> {
     let dir = out
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
+    fs::create_dir_all(dir).map_err(|err| ClientError::io(dir, err))?;
     let name = out.file_name().ok_or_else(|| {
         ClientError::io(
             out,
@@ -142,16 +144,25 @@ fn land(partial: NamedTempFile, out: &Path, overwrite: bool) -> Result<(), Clien
     } else {
         partial.persist_noclobber(out)
     };
-    landed.map_err(|err| {
-        if err.error.kind() == io::ErrorKind::AlreadyExists && !overwrite {
-            ClientError::OutputExists {
-                path: out.to_owned(),
-            }
-        } else {
-            ClientError::io(out, err.error)
-        }
-    })?;
+    // On failure the error owns the partial file, and dropping it removes it.
+    landed.map_err(|err| landing_error(err.error, out, overwrite))?;
     sync_parent(out).map_err(|err| ClientError::io(out, err))
+}
+
+/// Why landing failed. Without `overwrite`, a filesystem that can neither
+/// rename without replacing nor hard-link (macOS SMB and exFAT give
+/// `ENOTSUP`, FAT on Linux `EPERM` from `link`, and a link across devices
+/// `EXDEV`) can't land the file safely: openxet fails closed and says so.
+fn landing_error(err: io::Error, out: &Path, overwrite: bool) -> ClientError {
+    let path = out.to_owned();
+    match err.kind() {
+        _ if overwrite => ClientError::io(path, err),
+        io::ErrorKind::AlreadyExists => ClientError::OutputExists { path },
+        io::ErrorKind::Unsupported
+        | io::ErrorKind::PermissionDenied
+        | io::ErrorKind::CrossesDevices => ClientError::NoClobberUnsupported { path, source: err },
+        _ => ClientError::io(path, err),
+    }
 }
 
 /// Makes the rename durable: on Unix, a directory entry survives a crash
@@ -210,6 +221,26 @@ mod tests {
         land(partial_with(dir.path(), &fresh, b"newer"), &fresh, false).unwrap();
         assert_eq!(std::fs::read(&fresh).unwrap(), b"newer");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_filesystem_without_no_clobber_landing_says_so() {
+        let out = Path::new("dir/o");
+        for kind in [
+            io::ErrorKind::Unsupported,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::CrossesDevices,
+        ] {
+            let err = landing_error(io::Error::from(kind), out, false);
+            assert!(
+                matches!(err, ClientError::NoClobberUnsupported { .. }),
+                "{kind:?}: {err:?}"
+            );
+            let err = landing_error(io::Error::from(kind), out, true);
+            assert!(matches!(err, ClientError::Io { .. }), "{kind:?}: {err:?}");
+        }
+        let err = landing_error(io::Error::from(io::ErrorKind::AlreadyExists), out, false);
+        assert!(matches!(err, ClientError::OutputExists { .. }), "{err:?}");
     }
 
     #[test]
