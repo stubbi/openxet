@@ -11,11 +11,24 @@
 //! `offset_into_first_range` bytes into the first term and trims after the
 //! last (S10 §1).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use openxet_index::{ChunkTable, FileRecord, Term};
+use foldhash::fast::RandomState;
+use openxet_index::{ChunkLayout, FileRecord, Term, TermBytes};
 use openxet_protocol::{MerkleHash, hash_to_hex};
+
+/// A map keyed by xorb hash, for the per-request maps of a reconstruction,
+/// which a 100k-term answer queries several times per term: with `SipHash`
+/// they took about 10 ms of it. foldhash is no defence against an attacker
+/// who can both choose keys and watch one map's timings, but these keys are
+/// BLAKE3 outputs no caller can choose without a preimage search, and each
+/// map lives for one request under its own random seed, so no key list
+/// collides in every map.
+pub(crate) type XorbMap<V> = HashMap<MerkleHash, V, RandomState>;
+
+/// A set of xorb hashes, as [`XorbMap`].
+pub(crate) type XorbSet = HashSet<MerkleHash, RandomState>;
 
 /// What answers a file range: the terms in file order and one fetch
 /// descriptor per stored byte range, before any URL is signed.
@@ -41,6 +54,8 @@ pub(crate) struct PlannedTerm {
     /// The sum of the chunks' uncompressed lengths, which the client checks
     /// against what it decodes (S10 §1).
     pub(crate) unpacked_length: u32,
+    /// The index in [`Plan::fetches`] of the descriptor holding the term.
+    pub(crate) fetch: usize,
 }
 
 /// One fetch descriptor: chunks `chunks.0..chunks.1` of `xorb`, stored at
@@ -82,6 +97,32 @@ pub(crate) struct Window {
     pub(crate) terms: Range<usize>,
     /// Where the first of those terms starts in the file.
     first_term_at: u64,
+    /// Where the last of those terms ends in the file, exclusive.
+    last_term_end: u64,
+}
+
+impl Window {
+    /// Whether the term starting at `at` and holding `len` bytes lies
+    /// wholly inside the window, so a plan keeps all of its chunks.
+    fn holds_whole(&self, at: u64, len: u32) -> bool {
+        at >= self.start && at + u64::from(len) <= self.end + 1
+    }
+
+    /// The indices of the window's terms a plan trims to the range: at
+    /// most its first and its last. Only they need their xorbs' layouts
+    /// when the file's [`TermBytes`] are known.
+    pub(crate) fn trimmed(&self, file: &FileRecord) -> Vec<usize> {
+        let (first, last) = (self.terms.start, self.terms.end - 1);
+        let mut out = Vec::with_capacity(2);
+        if !self.holds_whole(self.first_term_at, file.terms[first].unpacked_bytes) {
+            out.push(first);
+        }
+        let last_len = file.terms[last].unpacked_bytes;
+        if last != first && !self.holds_whole(self.last_term_end - u64::from(last_len), last_len) {
+            out.push(last);
+        }
+        out
+    }
 }
 
 /// The window of `file` that `range` (inclusive, its end clamped to the
@@ -132,18 +173,26 @@ pub(crate) fn window(
         end,
         terms: first..last,
         first_term_at,
+        last_term_end: at,
     }))
 }
 
-/// The plan answering `range` of `file` (see [`window`]), with `tables`
-/// holding the chunk table of every xorb the window's terms name.
+/// The plan answering `range` of `file` (see [`window`]).
+///
+/// With the file's [`TermBytes`], a term the window holds whole is planned
+/// from its recorded bytes, and `tables` needs the chunk layouts only of
+/// the xorbs of the terms [`Window::trimmed`] names. Without them, `tables`
+/// holds the layout of every xorb the window's terms name. Both give the
+/// same plan: the bytes were derived from the layouts at registration,
+/// which also checked each term against its chunks (ruling M1-R17).
 ///
 /// Consecutive terms of the same xorb whose chunk ranges are adjacent share
 /// one descriptor; every other term gets its own. A descriptor never holds
 /// more than one range (ADR 0002 §1), and its bytes are
 /// `offsets[a]..=offsets[b] - 1` for chunks `a..b`.
 ///
-/// Linear in the window's terms and their chunks.
+/// Linear in the window's terms, and in the chunks of the terms planned
+/// from their layouts.
 ///
 /// # Errors
 ///
@@ -151,7 +200,8 @@ pub(crate) fn window(
 /// disagrees with a term.
 pub(crate) fn plan(
     file: &FileRecord,
-    tables: &HashMap<MerkleHash, ChunkTable>,
+    bytes: Option<&TermBytes>,
+    tables: &XorbMap<ChunkLayout>,
     range: Option<(u64, u64)>,
 ) -> Result<Plan, PlanError> {
     let Some(window) = window(file, range)? else {
@@ -160,85 +210,137 @@ pub(crate) fn plan(
     let mut out = Plan {
         offset_into_first_range: 0,
         terms: Vec::with_capacity(window.terms.len()),
-        fetches: Vec::new(),
+        // At most one per term.
+        fetches: Vec::with_capacity(window.terms.len()),
     };
     let mut term_at = window.first_term_at;
     for (i, term) in file.terms[window.terms.clone()].iter().enumerate() {
-        let table = tables.get(&term.xorb).ok_or_else(|| {
-            PlanError::Inconsistent(format!(
-                "file {}: no chunk table for xorb {}",
-                hash_to_hex(&file.hash),
-                hash_to_hex(&term.xorb)
-            ))
-        })?;
-        let chunks = term_chunks(file, term, table)?;
-
-        // The first chunk kept, and where it starts in the file.
-        let mut first = 0;
-        let mut chunk_at = term_at;
-        if i == 0 {
-            while chunk_at + chunks[first].1 <= window.start {
-                chunk_at += chunks[first].1;
-                first += 1;
-                if first == chunks.len() {
-                    return Err(short_term(file, term));
-                }
+        let recorded = bytes
+            .filter(|_| window.holds_whole(term_at, term.unpacked_bytes))
+            .map(|b| b[window.terms.start + i]);
+        // A term held whole has no offset into it either.
+        let (kept, unpacked_length, stored) = if let Some((start, end)) = recorded {
+            (
+                (term.chunk_start, term.chunk_end),
+                term.unpacked_bytes,
+                (u64::from(start), u64::from(end) - 1),
+            )
+        } else {
+            let trimmed = trim(file, term, tables, &window, term_at, i == 0)?;
+            if i == 0 {
+                out.offset_into_first_range = trimmed.offset;
             }
-            out.offset_into_first_range = window.start - chunk_at;
-        }
-        // The chunks up to the one holding the window's last byte.
-        let mut kept_end = first;
-        let mut at = chunk_at;
-        while kept_end < chunks.len() && at <= window.end {
-            at += chunks[kept_end].1;
-            kept_end += 1;
-        }
-        if kept_end == chunks.len() && at - term_at != u64::from(term.unpacked_bytes) {
-            return Err(short_term(file, term));
-        }
-        let unpacked_length = u32::try_from(at - chunk_at).map_err(|_| short_term(file, term))?;
-
-        // Chunk indices fit u32: `term_chunks` bounded them by the term's.
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "bounded by the term's u32 chunk range"
-        )]
-        let kept = (
-            term.chunk_start + first as u32,
-            term.chunk_start + kept_end as u32,
-        );
-        out.terms.push(PlannedTerm {
-            xorb: term.xorb,
-            chunks: kept,
-            unpacked_length,
-        });
-        let bytes = stored_bytes(file, term, table, kept)?;
+            (trimmed.kept, trimmed.unpacked_length, trimmed.bytes)
+        };
         match out.fetches.last_mut() {
             // The previous term's descriptor is always the last one.
             Some(last) if last.xorb == term.xorb && last.chunks.1 == kept.0 => {
                 last.chunks.1 = kept.1;
-                last.bytes.1 = bytes.1;
+                last.bytes.1 = stored.1;
             }
             _ => out.fetches.push(Fetch {
                 xorb: term.xorb,
                 chunks: kept,
-                bytes,
+                bytes: stored,
             }),
         }
+        out.terms.push(PlannedTerm {
+            xorb: term.xorb,
+            chunks: kept,
+            unpacked_length,
+            fetch: out.fetches.len() - 1,
+        });
         term_at += u64::from(term.unpacked_bytes);
     }
     Ok(out)
 }
 
-/// `term`'s chunks in `table`: `(hash, uncompressed length)` each.
+/// What a term planned from its xorb's layout keeps.
+struct Trimmed {
+    /// The chunk range, end-exclusive.
+    kept: (u32, u32),
+    /// The kept chunks' uncompressed bytes.
+    unpacked_length: u32,
+    /// Their stored bytes, end-inclusive.
+    bytes: (u64, u64),
+    /// Where the window starts in the first kept chunk; meaningful for the
+    /// window's first term only.
+    offset: u64,
+}
+
+/// `term`, starting at `term_at` in the file, trimmed to `window` from its
+/// xorb's layout: from the chunk holding the window's first byte if it is
+/// the window's first term, to the chunk holding its last byte.
+fn trim(
+    file: &FileRecord,
+    term: &Term,
+    tables: &XorbMap<ChunkLayout>,
+    window: &Window,
+    term_at: u64,
+    first_term: bool,
+) -> Result<Trimmed, PlanError> {
+    let table = tables.get(&term.xorb).ok_or_else(|| {
+        PlanError::Inconsistent(format!(
+            "file {}: no chunk table for xorb {}",
+            hash_to_hex(&file.hash),
+            hash_to_hex(&term.xorb)
+        ))
+    })?;
+    let chunks = term_chunks(file, term, table)?;
+
+    // The first chunk kept, and where it starts in the file.
+    let mut first = 0;
+    let mut chunk_at = term_at;
+    let mut offset = 0;
+    if first_term {
+        while chunk_at + u64::from(chunks[first]) <= window.start {
+            chunk_at += u64::from(chunks[first]);
+            first += 1;
+            if first == chunks.len() {
+                return Err(short_term(file, term));
+            }
+        }
+        offset = window.start - chunk_at;
+    }
+    // The chunks up to the one holding the window's last byte.
+    let mut kept_end = first;
+    let mut at = chunk_at;
+    while kept_end < chunks.len() && at <= window.end {
+        at += u64::from(chunks[kept_end]);
+        kept_end += 1;
+    }
+    if kept_end == chunks.len() && at - term_at != u64::from(term.unpacked_bytes) {
+        return Err(short_term(file, term));
+    }
+    let unpacked_length = u32::try_from(at - chunk_at).map_err(|_| short_term(file, term))?;
+
+    // Chunk indices fit u32: `term_chunks` bounded them by the term's.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "bounded by the term's u32 chunk range"
+    )]
+    let kept = (
+        term.chunk_start + first as u32,
+        term.chunk_start + kept_end as u32,
+    );
+    let bytes = stored_bytes(file, term, table, kept)?;
+    Ok(Trimmed {
+        kept,
+        unpacked_length,
+        bytes,
+        offset,
+    })
+}
+
+/// The uncompressed lengths of `term`'s chunks in `table`.
 fn term_chunks<'t>(
     file: &FileRecord,
     term: &Term,
-    table: &'t ChunkTable,
-) -> Result<&'t [(MerkleHash, u64)], PlanError> {
+    table: &'t ChunkLayout,
+) -> Result<&'t [u32], PlanError> {
     let range = term.chunk_start as usize..term.chunk_end as usize;
-    match table.hashes.get(range) {
-        Some(chunks) if !chunks.is_empty() && table.offsets.len() == table.hashes.len() + 1 => {
+    match table.lengths.get(range) {
+        Some(chunks) if !chunks.is_empty() && table.offsets.len() == table.lengths.len() + 1 => {
             Ok(chunks)
         }
         _ => Err(PlanError::Inconsistent(format!(
@@ -247,7 +349,7 @@ fn term_chunks<'t>(
             term.chunk_start,
             term.chunk_end,
             hash_to_hex(&term.xorb),
-            table.hashes.len()
+            table.lengths.len()
         ))),
     }
 }
@@ -256,7 +358,7 @@ fn term_chunks<'t>(
 fn stored_bytes(
     file: &FileRecord,
     term: &Term,
-    table: &ChunkTable,
+    table: &ChunkLayout,
     (a, b): (u32, u32),
 ) -> Result<(u64, u64), PlanError> {
     let start = u64::from(table.offsets[a as usize]);
@@ -297,7 +399,7 @@ mod tests {
         hash: MerkleHash,
         chunks: Vec<Vec<u8>>,
         stored: Vec<u8>,
-        table: ChunkTable,
+        table: ChunkLayout,
     }
 
     fn test_xorb(index: usize, lengths: &[u32]) -> TestXorb {
@@ -321,11 +423,8 @@ mod tests {
         offsets.push(stored.len() as u32);
         TestXorb {
             hash: chunk_hash(&[index as u8]),
-            table: ChunkTable {
-                hashes: chunks
-                    .iter()
-                    .map(|d| (chunk_hash(d), d.len() as u64))
-                    .collect(),
+            table: ChunkLayout {
+                lengths: chunks.iter().map(|d| d.len() as u32).collect(),
                 offsets: offsets.into(),
             },
             chunks,
@@ -373,8 +472,22 @@ mod tests {
         (record, bytes)
     }
 
-    fn tables(xorbs: &[TestXorb]) -> HashMap<MerkleHash, ChunkTable> {
+    fn tables(xorbs: &[TestXorb]) -> XorbMap<ChunkLayout> {
         xorbs.iter().map(|x| (x.hash, x.table.clone())).collect()
+    }
+
+    /// The [`TermBytes`] the index records for `file`.
+    fn term_bytes(file: &FileRecord, tables: &XorbMap<ChunkLayout>) -> TermBytes {
+        file.terms
+            .iter()
+            .map(|t| {
+                let offsets = &tables[&t.xorb].offsets;
+                (
+                    offsets[t.chunk_start as usize],
+                    offsets[t.chunk_end as usize],
+                )
+            })
+            .collect()
     }
 
     /// Checks `plan` against the file it answers, as the client reads it,
@@ -400,15 +513,13 @@ mod tests {
         }
         let mut out = Vec::new();
         for term in &plan.terms {
-            let fetch = plan
-                .fetches
-                .iter()
-                .find(|f| {
-                    f.xorb == term.xorb
-                        && f.chunks.0 <= term.chunks.0
-                        && term.chunks.1 <= f.chunks.1
-                })
-                .expect("every term lies inside one descriptor of its xorb");
+            let fetch = &plan.fetches[term.fetch];
+            assert!(
+                fetch.xorb == term.xorb
+                    && fetch.chunks.0 <= term.chunks.0
+                    && term.chunks.1 <= fetch.chunks.1,
+                "every term lies inside the descriptor it names"
+            );
             let xorb = by_hash[&term.xorb];
             let (s, e) = fetch.bytes;
             let payloads = decode(&xorb.stored[s as usize..=e as usize]);
@@ -416,9 +527,9 @@ mod tests {
             let lo = (term.chunks.0 - fetch.chunks.0) as usize;
             let hi = (term.chunks.1 - fetch.chunks.0) as usize;
             let data: Vec<u8> = payloads[lo..hi].concat();
-            let lengths: u64 = xorb.table.hashes[term.chunks.0 as usize..term.chunks.1 as usize]
+            let lengths: u64 = xorb.table.lengths[term.chunks.0 as usize..term.chunks.1 as usize]
                 .iter()
-                .map(|(_, len)| len)
+                .map(|&len| u64::from(len))
                 .sum();
             assert_eq!(u64::from(term.unpacked_length), lengths);
             assert_eq!(data.len() as u64, lengths);
@@ -427,9 +538,9 @@ mod tests {
         // Tight: the offset stays inside the first chunk, and the last
         // chunk holds a byte of the range.
         if let (Some(first), Some(last)) = (plan.terms.first(), plan.terms.last()) {
-            let first_len = by_hash[&first.xorb].table.hashes[first.chunks.0 as usize].1;
+            let first_len = u64::from(by_hash[&first.xorb].table.lengths[first.chunks.0 as usize]);
             assert!(plan.offset_into_first_range < first_len);
-            let last_len = by_hash[&last.xorb].table.hashes[last.chunks.1 as usize - 1].1;
+            let last_len = by_hash[&last.xorb].table.lengths[last.chunks.1 as usize - 1];
             let offset = plan.offset_into_first_range as usize;
             assert!(out.len() - offset >= needed);
             assert!(out.len() - (last_len as usize) < offset + needed);
@@ -481,16 +592,33 @@ mod tests {
             match range {
                 Some((start, _)) if start >= size => {
                     prop_assert_eq!(
-                        plan(&file, &tables(&xorbs), range),
+                        plan(&file, None, &tables(&xorbs), range),
                         Err(PlanError::Unsatisfiable { size })
                     );
                 }
                 _ => {
                     let (start, end) = range.map_or((0, size - 1), |(s, e)| (s, e.min(size - 1)));
-                    let plan = plan(&file, &tables(&xorbs), range).unwrap();
+                    let plan = plan(&file, None, &tables(&xorbs), range).unwrap();
                     let needed = (end - start + 1) as usize;
                     let got = check(&plan, &xorbs, needed);
                     prop_assert_eq!(&got[..], &bytes[start as usize..=end as usize]);
+
+                    // From the terms' recorded bytes and only the trimmed
+                    // terms' layouts, the plan is the same.
+                    let all = tables(&xorbs);
+                    let recorded = term_bytes(&file, &all);
+                    let window = window(&file, range).unwrap().unwrap();
+                    let trimmed: XorbMap<ChunkLayout> = window
+                        .trimmed(&file)
+                        .iter()
+                        .map(|&t| file.terms[t].xorb)
+                        .map(|x| (x, all[&x].clone()))
+                        .collect();
+                    prop_assert!(window.trimmed(&file).len() <= 2);
+                    prop_assert_eq!(
+                        super::plan(&file, Some(&recorded), &trimmed, range).unwrap(),
+                        plan
+                    );
                 }
             }
         }
@@ -503,7 +631,7 @@ mod tests {
             &xorbs,
             &[(0, 0, 2), (0, 2, 3), (1, 0, 1), (0, 3, 4), (0, 0, 1)],
         );
-        let plan = plan(&file, &tables(&xorbs), None).unwrap();
+        let plan = plan(&file, None, &tables(&xorbs), None).unwrap();
         let chunks: Vec<(usize, (u32, u32))> = plan
             .fetches
             .iter()
@@ -519,10 +647,13 @@ mod tests {
             size: 0,
             terms: vec![],
         };
-        assert_eq!(plan(&file, &HashMap::new(), None), Ok(Plan::default()));
+        assert_eq!(
+            plan(&file, None, &XorbMap::default(), None),
+            Ok(Plan::default())
+        );
         for range in [(0, 0), (0, u64::MAX), (1, 5)] {
             assert_eq!(
-                plan(&file, &HashMap::new(), Some(range)),
+                plan(&file, None, &XorbMap::default(), Some(range)),
                 Err(PlanError::Unsatisfiable { size: 0 })
             );
         }
@@ -532,11 +663,14 @@ mod tests {
     fn a_record_that_disagrees_with_its_tables_is_inconsistent() {
         let xorbs = [test_xorb(0, &[3, 4])];
         let (file, _) = file_of(&xorbs, &[(0, 0, 2)]);
-        let inconsistent = |file: &FileRecord, tables: &HashMap<MerkleHash, ChunkTable>| {
-            matches!(plan(file, tables, None), Err(PlanError::Inconsistent(_)))
+        let inconsistent = |file: &FileRecord, tables: &XorbMap<ChunkLayout>| {
+            matches!(
+                plan(file, None, tables, None),
+                Err(PlanError::Inconsistent(_))
+            )
         };
 
-        assert!(inconsistent(&file, &HashMap::new()), "a missing table");
+        assert!(inconsistent(&file, &XorbMap::default()), "a missing table");
         let mut wrong_size = file.clone();
         wrong_size.size += 1;
         assert!(

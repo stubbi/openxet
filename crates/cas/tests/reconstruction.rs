@@ -1473,3 +1473,29 @@ async fn reconstruction_paths_are_checked_before_authentication() {
         .await
         .assert_error(400, "invalid_path");
 }
+
+#[tokio::test]
+async fn reconstruction_answers_carry_a_content_length() {
+    // An answer goes out as several body frames; its exact size still
+    // reaches the client as a Content-Length, never as chunked encoding.
+    let server = TestServer::start_default().await;
+    let file = synthetic_file(
+        &server,
+        &server.write_token,
+        SCOPE_A,
+        Visibility::Global,
+        &five_chunks(),
+        &[(0, 2), (3, 5)],
+    )
+    .await;
+    let replies = [
+        reconstruct(&server, "v2", &file.hash, None, &server.read_token).await,
+        reconstruct(&server, "v1", &file.hash, None, &server.read_token).await,
+        batch_get(&server, &[file.hash], &server.read_token).await,
+    ];
+    for reply in replies {
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        assert_eq!(reply.headers[CONTENT_LENGTH], reply.body.len().to_string());
+        assert!(!reply.headers.contains_key("transfer-encoding"));
+    }
+}

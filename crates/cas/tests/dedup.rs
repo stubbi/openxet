@@ -17,7 +17,9 @@ use common::{
     WrapIndex, bearer, config,
 };
 use openxet_cas::Clock as _;
-use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, Term, Visibility};
+use openxet_index::{
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+};
 use openxet_protocol::{
     DedupAnswer, MerkleHash, chunk_hash, hash_to_hex, is_dedup_eligible, read_dedup_answer,
     read_upload_shard,
@@ -447,6 +449,15 @@ impl Index for BrokenIndex {
         Ok(HashMap::new())
     }
 
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        self.inner.chunk_layouts(xorbs, scope, vis).await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
@@ -459,6 +470,22 @@ impl Index for BrokenIndex {
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
         self.inner.file(file, scope).await
+    }
+
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        self.inner.files(files, scope).await
+    }
+
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+        self.inner.file_with_bytes(file, scope).await
     }
 
     async fn dedup_xorb(

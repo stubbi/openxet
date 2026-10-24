@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openxet_index::{
-    ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, IndexError, NewFile, SqliteIndex,
-    Term, Visibility,
+    ChunkLayout, ChunkTable, FAULT_AFTER_FIRST_FILE_SCOPE, FileRecord, Index, IndexError, NewFile,
+    SqliteIndex, Term, Visibility,
 };
 use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use tempfile::TempDir;
@@ -172,6 +172,73 @@ async fn file_only_readable_in_registered_scope() {
     );
     assert_eq!(ok(index.file(&f.record.hash, B).await), None);
     assert_eq!(ok(index.file(&h("file/unknown"), A).await), None);
+}
+
+#[tokio::test]
+async fn files_answer_each_scopes_own_registrations_in_one_call() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, _) = put(&index, "a", 3, A).await;
+    let (xb, _) = put(&index, "b", 2, B).await;
+    let fa = file("a", xa, 3);
+    let fa2 = file("a2", xa, 1);
+    // The same file hash, registered in B over B's own xorb.
+    let mut fb = file("a", xb, 2);
+    fb.first_chunk = None;
+    let only_b = file("only-b", xb, 2);
+    let registered = [fa.clone(), fa2.clone()];
+    ok(index
+        .register_shard(&h("shard-a"), &registered, A, Visibility::PerScope)
+        .await);
+    ok(index
+        .register_shard(
+            &h("shard-b"),
+            &[fb.clone(), only_b.clone()],
+            B,
+            Visibility::PerScope,
+        )
+        .await);
+    let unknown = h("file/unknown");
+    let asked = [
+        fa.record.hash,
+        unknown,
+        only_b.record.hash,
+        fa2.record.hash,
+        fa.record.hash,
+    ];
+
+    assert_eq!(
+        ok(index.files(&asked, A).await),
+        HashMap::from([
+            (fa.record.hash, fa.record.clone()),
+            (fa2.record.hash, fa2.record.clone()),
+        ])
+    );
+    assert_eq!(
+        ok(index.files(&asked, B).await),
+        HashMap::from([
+            (fb.record.hash, fb.record.clone()),
+            (only_b.record.hash, only_b.record.clone()),
+        ])
+    );
+    assert!(ok(index.files(&[], A).await).is_empty());
+}
+
+#[tokio::test]
+async fn files_handles_more_files_than_one_query_binds() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xorb, _) = put(&index, "x", 1, A).await;
+    let files: Vec<NewFile> = (0..1200).map(|i| file(&format!("f{i}"), xorb, 1)).collect();
+    ok(index
+        .register_shard(&h("shard"), &files, A, Visibility::PerScope)
+        .await);
+    let asked: Vec<MerkleHash> = files.iter().map(|f| f.record.hash).collect();
+    let records = ok(index.files(&asked, A).await);
+    assert_eq!(records.len(), 1200);
+    for f in &files {
+        assert_eq!(records.get(&f.record.hash), Some(&f.record));
+    }
 }
 
 #[tokio::test]
@@ -393,7 +460,7 @@ async fn chunk_tables_returns_only_present_visible() {
 }
 
 #[tokio::test]
-async fn chunk_tables_handles_more_xorbs_than_one_query_binds() {
+async fn chunk_tables_and_layouts_handle_more_xorbs_than_one_query_binds() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;
     let mut asked = Vec::new();
@@ -402,6 +469,156 @@ async fn chunk_tables_handles_more_xorbs_than_one_query_binds() {
     }
     let tables = ok(index.chunk_tables(&asked, A, Visibility::PerScope).await);
     assert_eq!(tables.len(), 1200);
+    let layouts = ok(index.chunk_layouts(&asked, A, Visibility::PerScope).await);
+    assert_eq!(layouts.len(), 1200);
+}
+
+/// `table`'s lengths and offsets: the layout the index must answer for it.
+fn layout_of(table: &ChunkTable) -> ChunkLayout {
+    ChunkLayout {
+        lengths: table
+            .hashes
+            .iter()
+            .map(|(_, len)| u32::try_from(*len).unwrap_or(u32::MAX))
+            .collect(),
+        offsets: table.offsets.clone(),
+    }
+}
+
+/// A table whose chunks differ in length, so a layout that mixes up
+/// lengths and offsets or entries can't pass.
+fn uneven_table(label: &str, n: u32) -> ChunkTable {
+    let lengths: Vec<u64> = (0..n).map(|i| u64::from(1000 + i * 37)).collect();
+    let mut offsets = vec![0u32];
+    for i in 0..n {
+        offsets.push(offsets[i as usize] + 500 + i * 11);
+    }
+    ChunkTable {
+        hashes: lengths
+            .iter()
+            .enumerate()
+            .map(|(i, len)| (h(&format!("{label}/chunk{i}")), *len))
+            .collect(),
+        offsets: offsets.into(),
+    }
+}
+
+#[tokio::test]
+async fn chunk_layouts_answer_as_chunk_tables_do_without_hashes() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xa, ta) = (h("xorb/a"), uneven_table("a", 7));
+    let (xb, tb) = (h("xorb/b"), uneven_table("b", 3));
+    ok(index.put_xorb(&xa, 9000, &ta, &[], A).await);
+    ok(index.put_xorb(&xb, 9000, &tb, &[], B).await);
+    // A second put keeps the first table, and so the first layout.
+    ok(index.put_xorb(&xa, 9000, &tb, &[], A).await);
+    let missing = h("xorb/missing");
+    let asked = [xa, xb, missing, xa];
+
+    let per_scope = ok(index.chunk_layouts(&asked, A, Visibility::PerScope).await);
+    assert_eq!(per_scope, HashMap::from([(xa, layout_of(&ta))]));
+    let global = ok(index.chunk_layouts(&asked, A, Visibility::Global).await);
+    assert_eq!(
+        global,
+        HashMap::from([(xa, layout_of(&ta)), (xb, layout_of(&tb))])
+    );
+    assert!(ok(index.chunk_layouts(&[], A, Visibility::Global).await).is_empty());
+}
+
+#[tokio::test]
+async fn chunk_layouts_of_xorbs_stored_before_layouts_come_from_their_tables() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    let index = open_at(&path).await;
+    let (xorb, t) = (h("xorb/old"), uneven_table("old", 5));
+    ok(index.put_xorb(&xorb, 9000, &t, &[], A).await);
+    drop(index);
+    // As a database written before migration 0003 holds it.
+    let db = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+    ok(sqlx::query("DELETE FROM xorb_layouts").execute(&db).await);
+    db.close().await;
+
+    let index = open_at(&path).await;
+    assert_eq!(
+        ok(index.chunk_layouts(&[xorb], A, Visibility::PerScope).await),
+        HashMap::from([(xorb, layout_of(&t))])
+    );
+}
+
+#[tokio::test]
+async fn registration_records_where_each_term_is_stored() {
+    let dir = ok(TempDir::new());
+    let path = dir.path().join("index.sqlite");
+    let index = open_at(&path).await;
+    let (xa, ta) = (h("xorb/a"), uneven_table("a", 7));
+    let (xb, tb) = (h("xorb/b"), uneven_table("b", 3));
+    ok(index.put_xorb(&xa, 9000, &ta, &[], A).await);
+    ok(index.put_xorb(&xb, 9000, &tb, &[], A).await);
+    let terms = [(xa, 0, 2), (xb, 1, 3), (xa, 2, 7), (xa, 0, 1)];
+    let record = FileRecord {
+        hash: h("file/bytes"),
+        size: 0,
+        terms: terms
+            .iter()
+            .map(|&(xorb, chunk_start, chunk_end)| Term {
+                xorb,
+                chunk_start,
+                chunk_end,
+                unpacked_bytes: 1,
+            })
+            .collect(),
+    };
+    let new = NewFile {
+        record: record.clone(),
+        sha256: None,
+        first_chunk: None,
+    };
+    ok(index
+        .register_shard(&h("shard/bytes"), &[new], A, Visibility::PerScope)
+        .await);
+    let expected: Vec<(u32, u32)> = terms
+        .iter()
+        .map(|&(xorb, start, end)| {
+            let offsets = if xorb == xa { &ta.offsets } else { &tb.offsets };
+            (offsets[start as usize], offsets[end as usize])
+        })
+        .collect();
+    assert_eq!(
+        ok(index.file_with_bytes(&record.hash, A).await),
+        Some((record.clone(), Some(expected)))
+    );
+    assert_eq!(ok(index.file_with_bytes(&record.hash, B).await), None);
+    drop(index);
+
+    // As a database written before migration 0004 holds it.
+    let db = ok(sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display())).await);
+    ok(sqlx::query("UPDATE file_scopes SET term_bytes = NULL")
+        .execute(&db)
+        .await);
+    db.close().await;
+    let index = open_at(&path).await;
+    assert_eq!(
+        ok(index.file_with_bytes(&record.hash, A).await),
+        Some((record, None))
+    );
+}
+
+#[tokio::test]
+async fn a_term_past_its_xorbs_chunks_is_refused_at_registration() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let (xorb, _) = put(&index, "x", 3, A).await;
+    let mut f = file("past", xorb, 3);
+    f.record.terms[0].chunk_end = 4;
+    let refused = index
+        .register_shard(&h("shard/past"), &[f.clone()], A, Visibility::PerScope)
+        .await;
+    assert!(
+        matches!(refused, Err(IndexError::InvalidInput(_))),
+        "{refused:?}"
+    );
+    assert_eq!(ok(index.file(&f.record.hash, A).await), None);
 }
 
 #[tokio::test]

@@ -32,7 +32,10 @@ use axum::body::Bytes;
 use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
-use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
+use openxet_index::{
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, TermBytes,
+    Visibility,
+};
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
 use openxet_storage::{Bucket, Key, LocalBucket, RangeStream, StorageError};
@@ -720,6 +723,15 @@ impl Index for SlowIndex {
         self.inner.chunk_tables(xorbs, scope, vis).await
     }
 
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        self.inner.chunk_layouts(xorbs, scope, vis).await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
@@ -732,6 +744,22 @@ impl Index for SlowIndex {
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
         self.inner.file(file, scope).await
+    }
+
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        self.inner.files(files, scope).await
+    }
+
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+        self.inner.file_with_bytes(file, scope).await
     }
 
     async fn dedup_xorb(
@@ -753,9 +781,10 @@ impl Index for SlowIndex {
     }
 }
 
-/// An index that answers `chunk_tables` with nothing, as an index that
-/// lost rows would, for tests of the integrity checks on reads. Everything
-/// else is the wrapped index's.
+/// An index that answers `chunk_tables` and `chunk_layouts` with nothing,
+/// as an index that lost rows would, and files without their recorded term
+/// bytes, so every reconstruction needs the missing layouts: for tests of
+/// the integrity checks on reads. Everything else is the wrapped index's.
 pub struct TablelessIndex {
     /// The index answering every other call.
     pub inner: Arc<dyn Index>,
@@ -801,6 +830,15 @@ impl Index for TablelessIndex {
         Ok(HashMap::new())
     }
 
+    async fn chunk_layouts(
+        &self,
+        _: &[MerkleHash],
+        _: &str,
+        _: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+        Ok(HashMap::new())
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
@@ -813,6 +851,24 @@ impl Index for TablelessIndex {
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
         self.inner.file(file, scope).await
+    }
+
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+        self.inner.files(files, scope).await
+    }
+
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+        // Without the recorded bytes, every term needs its layout.
+        let found = self.inner.file_with_bytes(file, scope).await?;
+        Ok(found.map(|(record, _)| (record, None)))
     }
 
     async fn dedup_xorb(

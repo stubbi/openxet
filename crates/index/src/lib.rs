@@ -19,7 +19,7 @@ use openxet_protocol::MerkleHash;
 #[cfg(feature = "fault-injection")]
 pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;
-pub use types::{ChunkTable, FileRecord, NewFile, Scope, Term, Visibility};
+pub use types::{ChunkLayout, ChunkTable, FileRecord, NewFile, Scope, Term, TermBytes, Visibility};
 
 /// The index's operations. Every write is idempotent: content is addressed by
 /// hash, so repeating a call with the same arguments changes nothing and
@@ -80,6 +80,20 @@ pub trait Index: Send + Sync + 'static {
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError>;
 
+    /// The [`ChunkLayout`]s of `xorbs`, as [`Index::chunk_tables`] answers
+    /// their tables: what reconstruction planning reads, without loading the
+    /// chunk hashes.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn chunk_layouts(
+        &self,
+        xorbs: &[MerkleHash],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError>;
+
     /// Registers the files of a verified shard to `scope`, in one
     /// transaction: either everything is recorded or nothing is.
     ///
@@ -128,6 +142,32 @@ pub trait Index: Send + Sync + 'static {
     ///
     /// [`IndexError::Database`] or [`IndexError::Corrupt`].
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError>;
+
+    /// [`Index::file`], with the [`TermBytes`] recorded when `scope`
+    /// registered it: `None` for a file registered before they were kept.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn file_with_bytes(
+        &self,
+        file: &MerkleHash,
+        scope: &str,
+    ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError>;
+
+    /// The reconstructions `scope` registered for `files`, as
+    /// [`Index::file`] answers each, in a few queries rather than one per
+    /// file. A file not registered to `scope` is absent from the map;
+    /// duplicates in `files` are answered once.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn files(
+        &self,
+        files: &[MerkleHash],
+        scope: &str,
+    ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError>;
 
     /// The xorb to offer for a global dedup query on `chunk`: of the visible
     /// xorbs that list `chunk` as a dedup candidate, the one first ingested

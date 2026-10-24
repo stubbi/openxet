@@ -1146,6 +1146,104 @@ fn sign_xorb_range_rejects_reversed_range() {
     );
 }
 
+/// The signed URL as `sign_xorb_range` built it before the batch signer:
+/// the canonical string in one `format!`, the query through `Url`.
+fn reference_signed_url(
+    key: [u8; 32],
+    base: &Url,
+    xorb: &MerkleHash,
+    start: u64,
+    end: u64,
+    exp: u64,
+) -> String {
+    let xorb_hex = hash_to_hex(xorb);
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key).expect("any key length");
+    mac.update(format!("xorb\n{xorb_hex}\n{start}-{end}\n{exp}").as_bytes());
+    let sig = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    let mut url = base.clone();
+    url.set_path(&format!(
+        "{}/v1/transfer/xorbs/{xorb_hex}",
+        base.path().trim_end_matches('/')
+    ));
+    url.set_fragment(None);
+    url.set_query(None);
+    url.query_pairs_mut()
+        .append_pair("range", &format!("{start}-{end}"))
+        .append_pair("exp", &exp.to_string())
+        .append_pair("sig", &sig);
+    url.into()
+}
+
+#[test]
+fn batch_signed_urls_equal_the_reference_byte_for_byte() {
+    // xorshift64*, fixed seed.
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move || {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    };
+    let bases = [
+        "https://cas.example",
+        "https://cas.example/",
+        "https://cas.example/prefix/",
+        "http://127.0.0.1:8080/a//b///",
+        "https://user@cas.example:8443/p%20q/?stale=1#frag",
+        "https://bücher.example/ü/",
+        "http://[::1]:9000",
+    ];
+    let key = [7; 32];
+    let signer = url_signer();
+    for i in 0..5_000 {
+        let base = Url::parse(bases[i % bases.len()]).expect("url");
+        let mut raw = [0u8; 32];
+        for chunk in raw.chunks_mut(8) {
+            chunk.copy_from_slice(&next().to_le_bytes());
+        }
+        let xorb = MerkleHash::from(raw);
+        // Small and huge numbers both, and the largest.
+        let bound = |r: u64| match r % 7 {
+            0 => u64::MAX,
+            1 | 2 => r,
+            _ => r % 100_000_000,
+        };
+        let (a, b) = (bound(next()), bound(next()));
+        let (start, end) = (a.min(b), a.max(b));
+        let now = if i.is_multiple_of(50) {
+            u64::MAX
+        } else {
+            next() % (1 << 40)
+        };
+        let exp = now.saturating_add(UrlSigner::DEFAULT_LIFETIME.as_secs());
+        let expected = reference_signed_url(key, &base, &xorb, start, end, exp);
+
+        let urls = signer.transfer_urls(&base, now);
+        let mut batch = String::from("kept:");
+        urls.xorb(&xorb)
+            .push_signed(start, end, &mut batch)
+            .expect("ordered range");
+        assert_eq!(batch.strip_prefix("kept:"), Some(expected.as_str()));
+        let single = signer
+            .sign_xorb_range(&base, &xorb, start, end, now)
+            .expect("ordered range");
+        assert_eq!(single.as_str(), expected);
+    }
+}
+
+#[test]
+fn batch_signing_refuses_a_reversed_range_and_writes_nothing() {
+    let signer = url_signer();
+    let base = Url::parse("https://cas.example").expect("url");
+    let urls = signer.transfer_urls(&base, NOW);
+    let mut out = String::from("before");
+    assert_eq!(
+        urls.xorb(&xorb(12)).push_signed(9, 7, &mut out),
+        Err(AuthError::ReversedRange { start: 9, end: 7 })
+    );
+    assert_eq!(out, "before");
+}
+
 #[test]
 fn auth_errors_never_contain_the_credential() {
     let s = signer();

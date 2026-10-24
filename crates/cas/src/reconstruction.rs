@@ -12,7 +12,7 @@
 //! ruling M1-R16); for any other caller it reads as never stored, `404`.
 //! Each answer is planned by [`crate::plan`] and every fetch descriptor gets
 //! its own URL to the transfer route, signed for exactly its byte range
-//! (ADR 0002). A `validate` permit is held from loading the chunk tables to
+//! (ADR 0002). A `validate` permit is held from loading the chunk layouts to
 //! the serialized answer, and planning, signing and serialization run on a
 //! blocking thread, as other CPU-bound request work does (rulings M1-R8,
 //! M1-R25): a file of 100k terms signs 100k URLs. A batch is capped at
@@ -22,24 +22,28 @@
 //! on the caller's scope and carries URLs that act as credentials (design
 //! §5.9 req 3).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet, VecDeque};
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, RawQuery, Request, State};
 use axum::handler::Handler as _;
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use openxet_index::ChunkTable;
+use http_body::{Frame, SizeHint};
+use openxet_index::ChunkLayout;
 use openxet_protocol::{MerkleHash, hash_to_hex};
-use serde::ser::{SerializeStruct as _, Serializer};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::OwnedSemaphorePermit;
-use url::Url;
 
+use crate::answer::{self, Signer, Version};
 use crate::blocking::blocking;
-use crate::plan::{self, Fetch, Plan, PlanError, PlannedTerm};
+use crate::plan::{self, PlanError, XorbMap, XorbSet};
 use crate::routes::{Routes, on};
 use crate::{AppState, CasError, ReadAccess, body, path};
 
@@ -50,7 +54,7 @@ pub const MAX_BATCH_FILES: usize = 1000;
 
 /// The most terms one batch reconstruction may plan, over all the files it
 /// is answered for; a batch over it is `400 batch_too_large`. With
-/// [`MAX_BATCH_FILES`], it bounds one batch's chunk tables, signing and
+/// [`MAX_BATCH_FILES`], it bounds one batch's chunk layouts, signing and
 /// answer, whatever the files hold.
 pub const MAX_BATCH_TERMS: usize = 1_000_000;
 
@@ -91,15 +95,6 @@ impl FromRequestParts<AppState> for FilePath {
     }
 }
 
-/// Which answer shape a single-file reconstruction takes (S10 §1).
-#[derive(Debug, Clone, Copy)]
-enum Version {
-    /// `xorbs`: a list of `{url, ranges: [descriptor]}` per xorb.
-    V2,
-    /// `fetch_info`: a list of `{range, url, url_range}` per xorb.
-    V1,
-}
-
 /// `GET /v2/reconstructions/{file}`, the route `hf_xet` prefers.
 async fn v2(
     FilePath(file): FilePath,
@@ -127,7 +122,7 @@ async fn v1(
 ///   the empty file has no satisfiable range, and without a `Range` it is
 ///   an answer with no terms (S10 §1)
 /// - `400 invalid_range` for a `Range` that isn't one byte range
-/// - `500` if the index's record disagrees with its chunk tables, never a
+/// - `500` if the index's record disagrees with its chunk layouts, never a
 ///   partial plan
 async fn single(
     state: &AppState,
@@ -137,29 +132,32 @@ async fn single(
     version: Version,
 ) -> Result<Response, CasError> {
     let requested = requested_range(headers)?;
-    let record = state
+    let (record, bytes) = state
         .index
-        .file(&file, scope)
+        .file_with_bytes(&file, scope)
         .await?
         .ok_or(CasError::FileNotFound)?;
     let range = resolve(requested, record.size)?;
     let window = plan::window(&record, range).map_err(planning_failed)?;
-    let xorbs = window.map_or_else(Vec::new, |w| distinct_xorbs(&record.terms[w.terms]));
+    let terms = window.as_ref().map_or(0, |w| w.terms.len());
+    // With the terms' recorded bytes, only the terms trimmed to the range
+    // need their xorbs' layouts.
+    let xorbs = match (&window, &bytes) {
+        (None, _) => Vec::new(),
+        (Some(w), Some(_)) => w
+            .trimmed(&record)
+            .iter()
+            .map(|&t| record.terms[t].xorb)
+            .collect(),
+        (Some(w), None) => distinct_xorbs(&record.terms[w.terms.clone()]),
+    };
     let permit = validation_permit(state).await?;
-    let tables = chunk_tables(state, scope, xorbs).await?;
+    let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(permit, move || {
-        let plan = plan::plan(&record, &tables, range).map_err(planning_failed)?;
-        let mut catalog = Catalog::default();
-        catalog.add(&plan.fetches);
-        catalog.sign(&signer)?;
-        let answer = Single {
-            plan: &plan,
-            catalog: &catalog,
-            version,
-        };
-        serde_json::to_vec(&answer).map_err(CasError::internal)
+    let body = render(state, permit, terms, move |workers| {
+        let plan = plan::plan(&record, bytes.as_ref(), &tables, range).map_err(planning_failed)?;
+        answer::single(&plan, version, &signer, workers)
     })
     .await?;
     tracing::debug!(file = %hash_to_hex(&file), "reconstruction answered");
@@ -248,12 +246,8 @@ async fn batch(
             limit: MAX_BATCH_FILES,
         });
     }
-    let mut records = Vec::new();
-    for file in &files {
-        if let Some(record) = state.index.file(file, scope).await? {
-            records.push(record);
-        }
-    }
+    let mut found = state.index.files(&files, scope).await?;
+    let records: Vec<_> = files.iter().filter_map(|f| found.remove(f)).collect();
     let terms: usize = records.iter().map(|r| r.terms.len()).sum();
     if terms > MAX_BATCH_TERMS {
         return Err(CasError::BatchTooManyTerms {
@@ -263,28 +257,19 @@ async fn batch(
     }
     let xorbs = distinct_xorbs(records.iter().flat_map(|r| &r.terms));
     let permit = validation_permit(state).await?;
-    let tables = chunk_tables(state, scope, xorbs).await?;
+    let tables = chunk_layouts(state, scope, xorbs).await?;
 
     let signer = Signer::new(state);
-    let body = render(permit, move || {
+    let body = render(state, permit, terms, move |workers| {
         let plans = records
             .iter()
             .map(|record| {
-                plan::plan(record, &tables, None)
+                plan::plan(record, None, &tables, None)
                     .map(|plan| (record.hash, plan))
                     .map_err(planning_failed)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut catalog = Catalog::default();
-        for (_, plan) in &plans {
-            catalog.add(&plan.fetches);
-        }
-        catalog.sign(&signer)?;
-        serde_json::to_vec(&Batch {
-            plans: &plans,
-            catalog: &catalog,
-        })
-        .map_err(CasError::internal)
+        answer::batch(&plans, &signer, workers)
     })
     .await?;
     tracing::debug!(files = files.len(), "batch reconstruction answered");
@@ -378,7 +363,7 @@ fn resolve(range: Option<ByteRange>, size: u64) -> Result<Option<(u64, u64)>, Ca
 
 /// The distinct xorbs `terms` name, in order of first use.
 fn distinct_xorbs<'a>(terms: impl IntoIterator<Item = &'a openxet_index::Term>) -> Vec<MerkleHash> {
-    let mut seen = HashSet::new();
+    let mut seen = XorbSet::default();
     terms
         .into_iter()
         .map(|t| t.xorb)
@@ -386,27 +371,27 @@ fn distinct_xorbs<'a>(terms: impl IntoIterator<Item = &'a openxet_index::Term>) 
         .collect()
 }
 
-/// The chunk tables of `xorbs`, every one of which a file registered to
+/// The chunk layouts of `xorbs`, every one of which a file registered to
 /// `scope` names. Registration checked each was visible to `scope` (ruling
 /// M1-R17), so a missing one is an index fault: `500`, logged as an
 /// integrity anomaly.
-async fn chunk_tables(
+async fn chunk_layouts(
     state: &AppState,
     scope: &str,
     xorbs: Vec<MerkleHash>,
-) -> Result<HashMap<MerkleHash, ChunkTable>, CasError> {
+) -> Result<XorbMap<ChunkLayout>, CasError> {
     let tables = state
         .index
-        .chunk_tables(&xorbs, scope, state.cfg.visibility)
+        .chunk_layouts(&xorbs, scope, state.cfg.visibility)
         .await?;
     if let Some(missing) = xorbs.iter().find(|x| !tables.contains_key(x)) {
         return Err(CasError::internal(format!(
-            "integrity anomaly: a registered file names xorb {}, whose chunk table the index \
+            "integrity anomaly: a registered file names xorb {}, whose chunk layout the index \
              doesn't hold",
             hash_to_hex(missing)
         )));
     }
-    Ok(tables)
+    Ok(tables.into_iter().collect())
 }
 
 /// The answer to a [`PlanError`]. An inconsistent record is logged, with
@@ -420,8 +405,8 @@ fn planning_failed(e: PlanError) -> CasError {
     }
 }
 
-/// A `validate` permit, taken before a plan's chunk tables are loaded and
-/// held until its answer is serialized: the tables are most of a large
+/// A `validate` permit, taken before a plan's chunk layouts are loaded and
+/// held until its answer is serialized: the layouts are much of a large
 /// plan's memory, and planning, signing and serializing its CPU (rulings
 /// M1-R8, M1-R25).
 async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, CasError> {
@@ -431,280 +416,74 @@ async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, Cas
         .map_err(CasError::internal)
 }
 
-/// Runs `work` on a blocking thread holding `permit` ([`blocking`]).
+/// Runs `work` on a blocking thread holding `permit` ([`blocking`]), for an
+/// answer of `terms` terms. `work` gets how many threads may write the
+/// answer: one, plus one per extra `validate` permit.
+///
+/// Extra permits (ruling M1-R34):
+/// - are taken only if free right now, never waited for, so a reconstruction
+///   never jumps uploads queued for a permit
+/// - number at most half, rounded down, of the permits that were free
+///   counting the request's own, and at most what the answer is worth
+///   ([`answer::workers_for`]). Of `f` such permits the request holds at
+///   most `1 + f / 2`, so uploads keep the other `f.div_ceil(2) - 1`: on 4
+///   free permits an answer gets 3 writers, on 8 it gets 5 and leaves 3.
+/// - are held until `work` returns, error or not, so the threads stay
+///   within the CPU bound of rulings M1-R8 and M1-R25
+///
+/// A busy server, with no permit free beside the request's own, writes the
+/// answer on one thread.
 async fn render(
+    state: &AppState,
     permit: OwnedSemaphorePermit,
-    work: impl FnOnce() -> Result<Vec<u8>, CasError> + Send + 'static,
-) -> Result<Vec<u8>, CasError> {
-    blocking(permit, work).await?.1
+    terms: usize,
+    work: impl FnOnce(usize) -> Result<Vec<Bytes>, CasError> + Send + 'static,
+) -> Result<Vec<Bytes>, CasError> {
+    let free = state.validate.available_permits() + 1;
+    let wanted = (answer::workers_for(terms) - 1).min(free / 2);
+    let extra = (1..=wanted).rev().find_map(|n| {
+        let n = u32::try_from(n).ok()?;
+        let permits = Arc::clone(&state.validate).try_acquire_many_owned(n).ok()?;
+        Some((permits, n as usize))
+    });
+    blocking(permit, move || {
+        let (_held, workers) = extra.map_or((None, 1), |(permits, n)| (Some(permits), 1 + n));
+        work(workers)
+    })
+    .await?
+    .1
 }
 
-fn json(body: Vec<u8>) -> Response {
-    ([(CONTENT_TYPE, "application/json")], body).into_response()
+/// A JSON answer sent as `parts`, with their total as its Content-Length.
+fn json(parts: Vec<Bytes>) -> Response {
+    (
+        [(CONTENT_TYPE, "application/json")],
+        Body::new(Frames(parts.into())),
+    )
+        .into_response()
 }
 
-/// What signing a transfer URL needs, owned for a blocking thread.
-struct Signer {
-    urls: Arc<openxet_auth::UrlSigner>,
-    base: Url,
-    now: u64,
-}
+/// A body of the given frames, of an exact size known up front, so the
+/// server sends a Content-Length as for one buffer.
+struct Frames(VecDeque<Bytes>);
 
-impl Signer {
-    fn new(state: &AppState) -> Self {
-        Self {
-            urls: Arc::clone(&state.urls),
-            base: state.cfg.public_url.clone(),
-            now: state.clock.now(),
-        }
-    }
-}
+impl http_body::Body for Frames {
+    type Data = Bytes;
+    type Error = Infallible;
 
-/// The fetch descriptors of one answer, each signed once, grouped by xorb.
-/// A descriptor two terms or two files share is listed once.
-#[derive(Default)]
-struct Catalog {
-    /// The distinct xorbs, in order of first use, and their hex names.
-    xorbs: Vec<(MerkleHash, String)>,
-    /// Where each xorb is in `xorbs`.
-    index: HashMap<MerkleHash, usize>,
-    /// Per entry of `xorbs`, its descriptors' indices in `fetches`.
-    groups: Vec<Vec<usize>>,
-    fetches: Vec<Fetch>,
-    /// The signed URL of each of `fetches`.
-    urls: Vec<Url>,
-    seen: HashSet<(MerkleHash, (u32, u32))>,
-}
-
-impl Catalog {
-    fn add(&mut self, fetches: &[Fetch]) {
-        for fetch in fetches {
-            if !self.seen.insert((fetch.xorb, fetch.chunks)) {
-                continue;
-            }
-            let xorb = self.xorb(&fetch.xorb);
-            self.groups[xorb].push(self.fetches.len());
-            self.fetches.push(*fetch);
-        }
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        Poll::Ready(self.0.pop_front().map(|part| Ok(Frame::data(part))))
     }
 
-    fn xorb(&mut self, xorb: &MerkleHash) -> usize {
-        *self.index.entry(*xorb).or_insert_with(|| {
-            self.xorbs.push((*xorb, hash_to_hex(xorb)));
-            self.groups.push(Vec::new());
-            self.xorbs.len() - 1
-        })
+    fn is_end_stream(&self) -> bool {
+        self.0.is_empty()
     }
 
-    /// The hex name of `xorb`, which a term of an added plan names.
-    fn name(&self, xorb: &MerkleHash) -> &str {
-        &self.xorbs[self.index[xorb]].1
-    }
-
-    /// Signs one URL per descriptor, for exactly its byte range (ADR 0002).
-    fn sign(&mut self, signer: &Signer) -> Result<(), CasError> {
-        self.urls = self
-            .fetches
-            .iter()
-            .map(|f| {
-                signer
-                    .urls
-                    .sign_xorb_range(&signer.base, &f.xorb, f.bytes.0, f.bytes.1, signer.now)
-            })
-            .collect::<Result<_, _>>()?;
-        Ok(())
-    }
-}
-
-/// A `{start, end}` range: chunk indices (end-exclusive) or bytes
-/// (end-inclusive), as S10 §1 types each.
-#[derive(Serialize)]
-struct Span<T> {
-    start: T,
-    end: T,
-}
-
-/// One term: `{hash, unpacked_length, range}`.
-#[derive(Serialize)]
-struct TermJson<'a> {
-    hash: &'a str,
-    unpacked_length: u32,
-    range: Span<u32>,
-}
-
-/// One v2 descriptor: `{chunks, bytes}`.
-#[derive(Serialize)]
-struct Descriptor {
-    chunks: Span<u32>,
-    bytes: Span<u64>,
-}
-
-/// One v2 fetch entry, always of a single descriptor (ADR 0002 §1).
-#[derive(Serialize)]
-struct EntryV2<'a> {
-    url: &'a str,
-    ranges: [Descriptor; 1],
-}
-
-/// One v1 `fetch_info` entry.
-#[derive(Serialize)]
-struct EntryV1<'a> {
-    range: Span<u32>,
-    url: &'a str,
-    url_range: Span<u64>,
-}
-
-/// A plan's terms, as a JSON list.
-struct Terms<'a> {
-    terms: &'a [PlannedTerm],
-    catalog: &'a Catalog,
-}
-
-impl Serialize for Terms<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_seq(self.terms.iter().map(|t| TermJson {
-            hash: self.catalog.name(&t.xorb),
-            unpacked_length: t.unpacked_length,
-            range: Span {
-                start: t.chunks.0,
-                end: t.chunks.1,
-            },
-        }))
-    }
-}
-
-/// The catalog's entries per xorb: v2's `xorbs` or v1's `fetch_info`.
-struct Entries<'a> {
-    catalog: &'a Catalog,
-    version: Version,
-}
-
-impl Serialize for Entries<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let catalog = self.catalog;
-        s.collect_map(
-            catalog
-                .xorbs
-                .iter()
-                .zip(&catalog.groups)
-                .map(|((_, name), fetches)| {
-                    (
-                        name,
-                        Group {
-                            catalog,
-                            fetches,
-                            version: self.version,
-                        },
-                    )
-                }),
-        )
-    }
-}
-
-/// One xorb's entries.
-struct Group<'a> {
-    catalog: &'a Catalog,
-    fetches: &'a [usize],
-    version: Version,
-}
-
-impl Serialize for Group<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let spans = |i: usize| {
-            let fetch = &self.catalog.fetches[i];
-            (
-                self.catalog.urls[i].as_str(),
-                Span {
-                    start: fetch.chunks.0,
-                    end: fetch.chunks.1,
-                },
-                Span {
-                    start: fetch.bytes.0,
-                    end: fetch.bytes.1,
-                },
-            )
-        };
-        let entries = self.fetches.iter().map(|&i| spans(i));
-        match self.version {
-            Version::V2 => s.collect_seq(entries.map(|(url, chunks, bytes)| EntryV2 {
-                url,
-                ranges: [Descriptor { chunks, bytes }],
-            })),
-            Version::V1 => s.collect_seq(entries.map(|(url, range, url_range)| EntryV1 {
-                range,
-                url,
-                url_range,
-            })),
-        }
-    }
-}
-
-/// A single-file answer: v2's `{offset_into_first_range, terms, xorbs}` or
-/// v1's `{offset_into_first_range, terms, fetch_info}` (S10 §1).
-struct Single<'a> {
-    plan: &'a Plan,
-    catalog: &'a Catalog,
-    version: Version,
-}
-
-impl Serialize for Single<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut out = s.serialize_struct("Reconstruction", 3)?;
-        out.serialize_field(
-            "offset_into_first_range",
-            &self.plan.offset_into_first_range,
-        )?;
-        out.serialize_field(
-            "terms",
-            &Terms {
-                terms: &self.plan.terms,
-                catalog: self.catalog,
-            },
-        )?;
-        let entries = Entries {
-            catalog: self.catalog,
-            version: self.version,
-        };
-        match self.version {
-            Version::V2 => out.serialize_field("xorbs", &entries)?,
-            Version::V1 => out.serialize_field("fetch_info", &entries)?,
-        }
-        out.end()
-    }
-}
-
-/// A batch answer: `{files, fetch_info}` (S10 §1).
-struct Batch<'a> {
-    plans: &'a [(MerkleHash, Plan)],
-    catalog: &'a Catalog,
-}
-
-impl Serialize for Batch<'_> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        struct Files<'a>(&'a Batch<'a>);
-        impl Serialize for Files<'_> {
-            fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                s.collect_map(self.0.plans.iter().map(|(file, plan)| {
-                    (
-                        hash_to_hex(file),
-                        Terms {
-                            terms: &plan.terms,
-                            catalog: self.0.catalog,
-                        },
-                    )
-                }))
-            }
-        }
-        let mut out = s.serialize_struct("BatchReconstruction", 2)?;
-        out.serialize_field("files", &Files(self))?;
-        out.serialize_field(
-            "fetch_info",
-            &Entries {
-                catalog: self.catalog,
-                version: Version::V1,
-            },
-        )?;
-        out.end()
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.0.iter().map(|part| part.len() as u64).sum())
     }
 }
 
@@ -712,6 +491,7 @@ impl Serialize for Batch<'_> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -719,7 +499,9 @@ mod tests {
     use axum::http::HeaderValue;
     use axum::http::header::AUTHORIZATION;
     use openxet_auth::{Mode, StaticToken};
-    use openxet_index::{FileRecord, Index, IndexError, NewFile, Term, Visibility};
+    use openxet_index::{
+        ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+    };
     use tokio::sync::Semaphore;
     use tower::ServiceExt as _;
 
@@ -731,7 +513,7 @@ mod tests {
     const BEARER: &str = "Bearer";
     const READ: &str = "oxt_unit_read";
 
-    /// An index counting its `chunk_tables` calls.
+    /// An index counting its `chunk_tables` and `chunk_layouts` calls.
     struct CountingIndex {
         inner: Arc<dyn Index>,
         table_loads: Arc<AtomicUsize>,
@@ -771,6 +553,16 @@ mod tests {
             self.inner.chunk_tables(xorbs, scope, vis).await
         }
 
+        async fn chunk_layouts(
+            &self,
+            xorbs: &[MerkleHash],
+            scope: &str,
+            vis: Visibility,
+        ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError> {
+            self.table_loads.fetch_add(1, Ordering::SeqCst);
+            self.inner.chunk_layouts(xorbs, scope, vis).await
+        }
+
         async fn register_shard(
             &self,
             shard: &MerkleHash,
@@ -787,6 +579,22 @@ mod tests {
             scope: &str,
         ) -> Result<Option<FileRecord>, IndexError> {
             self.inner.file(file, scope).await
+        }
+
+        async fn files(
+            &self,
+            files: &[MerkleHash],
+            scope: &str,
+        ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+            self.inner.files(files, scope).await
+        }
+
+        async fn file_with_bytes(
+            &self,
+            file: &MerkleHash,
+            scope: &str,
+        ) -> Result<Option<(FileRecord, Option<TermBytes>)>, IndexError> {
+            self.inner.file_with_bytes(file, scope).await
         }
 
         async fn dedup_xorb(
@@ -882,6 +690,158 @@ mod tests {
             answer.abort();
         }
         drop(held);
+    }
+
+    /// The writer threads `render` grants a 100k-term answer when `held`
+    /// of 8 `validate` permits are taken elsewhere, and the permits free
+    /// while it writes; asserts every permit comes back after.
+    async fn writers_with(held: u32, fails: bool) -> (usize, usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![]).await;
+        state.validate = Arc::new(Semaphore::new(8));
+        let others = Arc::clone(&state.validate)
+            .acquire_many_owned(held)
+            .await
+            .unwrap();
+        let permit = validation_permit(&state).await.unwrap();
+        let validate = Arc::clone(&state.validate);
+        let seen = Arc::new(std::sync::Mutex::new((0, 0)));
+        let record = Arc::clone(&seen);
+        let result = render(&state, permit, 100_000, move |workers| {
+            *record.lock().unwrap() = (workers, validate.available_permits());
+            if fails {
+                return Err(CasError::internal("work failed"));
+            }
+            Ok(vec![Bytes::from_static(b"{}")])
+        })
+        .await;
+        assert_eq!(result.is_err(), fails);
+        assert_eq!(
+            state.validate.available_permits(),
+            8 - held as usize,
+            "render kept permits"
+        );
+        drop(others);
+        *seen.lock().unwrap()
+    }
+
+    #[tokio::test]
+    async fn extra_writers_take_at_most_half_the_free_permits_and_return_them() {
+        // Ruling M1-R34. With 3 of 8 held, 5 were free counting the
+        // request's own: 2 extra writers, and 2 permits stay free.
+        assert_eq!(writers_with(3, false).await, (3, 2));
+        assert_eq!(
+            writers_with(3, true).await,
+            (3, 2),
+            "an error returns them too"
+        );
+        // All 8 free: 4 extra, 3 stay free.
+        assert_eq!(writers_with(0, false).await, (5, 3));
+        // 4 free, as on a 4-vCPU node: 3 writers.
+        assert_eq!(writers_with(4, false).await, (3, 1));
+    }
+
+    #[tokio::test]
+    async fn a_busy_pool_writes_on_one_thread() {
+        // Only the request's own permit was free.
+        assert_eq!(writers_with(7, false).await, (1, 0));
+        // One more: half of 2 is one extra.
+        assert_eq!(writers_with(6, false).await, (2, 0));
+    }
+
+    /// A clock stopped at one second, so two answers sign the same URLs.
+    struct Stopped;
+
+    impl crate::Clock for Stopped {
+        fn now(&self) -> u64 {
+            1_800_000_000
+        }
+    }
+
+    #[tokio::test]
+    async fn an_answer_written_on_one_thread_is_the_same_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.validate = Arc::new(Semaphore::new(8));
+        state.clock = Arc::new(Stopped);
+        let xorbs: Vec<MerkleHash> = (0..2u8)
+            .map(|x| openxet_protocol::chunk_hash(&[x]))
+            .collect();
+        let table = ChunkTable {
+            hashes: (0..1024u32)
+                .map(|c| (openxet_protocol::chunk_hash(&c.to_le_bytes()), 100))
+                .collect(),
+            offsets: (0..=1024u32).map(|c| c * 108).collect(),
+        };
+        for xorb in &xorbs {
+            state
+                .index
+                .put_xorb(xorb, 1024 * 108, &table, &[], "s")
+                .await
+                .unwrap();
+        }
+        // Enough terms for three writers, alternating xorbs so none merge.
+        let terms: Vec<Term> = (0..40_000u32)
+            .map(|i| Term {
+                xorb: xorbs[(i % 2) as usize],
+                chunk_start: (i / 2) % 1024,
+                chunk_end: (i / 2) % 1024 + 1,
+                unpacked_bytes: 100,
+            })
+            .collect();
+        let file = FileRecord {
+            hash: openxet_protocol::chunk_hash(b"large"),
+            size: 40_000 * 100,
+            terms,
+        };
+        let new = NewFile {
+            record: file.clone(),
+            sha256: None,
+            first_chunk: None,
+        };
+        state
+            .index
+            .register_shard(&xorbs[0], &[new], "s", Visibility::Global)
+            .await
+            .unwrap();
+        let get = |path: String| {
+            router(state.clone()).oneshot(
+                Request::get(path)
+                    .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        };
+        let paths = [
+            format!("/v2/reconstructions/{}", hash_to_hex(&file.hash)),
+            format!("/v1/reconstructions/{}", hash_to_hex(&file.hash)),
+            format!("/v1/reconstructions?file_id={}", hash_to_hex(&file.hash)),
+        ];
+        for path in paths {
+            let threaded = get(path.clone()).await.unwrap();
+            assert_eq!(threaded.status(), StatusCode::OK);
+            let threaded = axum::body::to_bytes(threaded.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            // All but the request's own permit held: one writer.
+            let held = Arc::clone(&state.validate)
+                .acquire_many_owned(7)
+                .await
+                .unwrap();
+            let single = get(path.clone()).await.unwrap();
+            assert_eq!(single.status(), StatusCode::OK);
+            let single = axum::body::to_bytes(single.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            drop(held);
+            assert!(threaded == single, "{path}: the bytes differ");
+        }
     }
 
     fn range(value: &str) -> Result<Option<ByteRange>, CasError> {

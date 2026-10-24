@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 pub use error::{AuthError, ForbiddenReason};
 pub use jwt::{GeneratedKeypair, MAX_TOKEN_BYTES, PublicKey, TokenSigner, generate_keypair};
-pub use signed_url::{TransferQuery, UrlSigner};
+pub use signed_url::{TransferQuery, TransferUrls, UrlSigner, XorbUrls};
 pub use static_tokens::StaticToken;
 
 /// What a credential may do within its scope. `Write` implies `Read`.
