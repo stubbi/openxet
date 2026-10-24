@@ -82,14 +82,15 @@ pub enum CasError {
     #[error("the file is not stored on this server for this credential's scope")]
     FileNotFound,
 
-    /// A reconstruction's `Range` starts at or past the end of the file,
-    /// or a transfer range runs past the stored xorb.
-    /// `416 range_not_satisfiable` with `Content-Range: bytes */{size}`,
-    /// which `hf_xet` reads, on a reconstruction, as the end of the file
-    /// (S10 §1).
+    /// A reconstruction's `Range` starts at or past the end of the file, or
+    /// is the empty suffix `bytes=-0`. `416 range_not_satisfiable` with
+    /// `Content-Range: bytes */{size}`, which `hf_xet` reads as the end of
+    /// the file (S10 §1). A signed transfer range past the stored xorb is
+    /// not this: the index and the bucket disagree, a `500`
+    /// (`transfer::refused_read`).
     #[error("the requested range lies past the end of the content, which is {size} bytes")]
     RangeNotSatisfiable {
-        /// The file's size, or the stored xorb's.
+        /// The file's size.
         size: u64,
     },
 
