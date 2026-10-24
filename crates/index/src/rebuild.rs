@@ -1,6 +1,6 @@
-//! The index's scope and content tables rebuilt from the bucket alone (ruling M1-R37,
-//! non-negotiable 2), and the same tables read from a live index, so a test
-//! can prove the two agree. This is the core of `openxet reindex`
+//! The index's scope and content tables rebuilt from the bucket alone
+//! (ruling M1-R37, non-negotiable 2), and the same tables read from a live
+//! index, so a test can prove the two agree. This is the core of `openxet reindex`
 //! (<https://github.com/stubbi/openxet/issues/26>), which will write the
 //! rebuilt rows into a fresh index.
 //!

@@ -362,7 +362,7 @@ nothing either.
 What a tenant keeps covers whole xorbs, not just the chunks it used. A
 file that referenced even one chunk of another tenant's xorb makes the
 whole xorb its tenant's: after the switch, that tenant still gets `HEAD`
-`200` and dedup matches for every chunk of it. It never gets another
+`200` and dedup matches for its dedup-eligible chunks. It never gets another
 tenant's raw chunk hashes, and under `global` it could see all of this
 anyway. An operator who needs tenants isolated from their first upload
 starts on `per-tenant`.

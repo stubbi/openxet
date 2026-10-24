@@ -176,11 +176,11 @@ impl TokenSigner {
     /// # Errors
     ///
     /// [`AuthError::InvalidClaims`] for a token the verifier would reject:
-    /// an empty or control-character `subject`, `scope` or `tenant`, a `tenant`
-    /// starting with `scope:`, a
-    /// `scope` or `tenant` over [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES),
-    /// `exp <= now`, `exp` more than this signer's lifetime limit after
-    /// `now`, or claims that make the token longer than [`MAX_TOKEN_BYTES`].
+    /// an empty or control-character `subject`, `scope` or `tenant`, a
+    /// `tenant` starting with `scope:`, a `scope` or `tenant` over
+    /// [`MAX_SCOPE_BYTES`](crate::MAX_SCOPE_BYTES), `exp <= now`, `exp` more
+    /// than this signer's lifetime limit after `now`, or claims that make
+    /// the token longer than [`MAX_TOKEN_BYTES`].
     pub fn sign_with_tenant(
         &self,
         subject: &str,

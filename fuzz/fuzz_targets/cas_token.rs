@@ -6,8 +6,8 @@
 //!   principal raw bytes can yield is the configured static token's, for
 //!   exactly that token (seeded by fuzz/seed.sh).
 //! - odd: the rest describes claims, a token for them is minted with the
-//!   trusted key, with or without a `tenant` claim, and bytes of it are flipped. Unflipped, it authenticates
-//!   as exactly the minted principal; flipped, it either fails or still
+//!   trusted key, with or without a `tenant` claim, and bytes of it are
+//!   flipped. Unflipped, it authenticates as exactly the minted principal; flipped, it either fails or still
 //!   yields exactly that principal, never another one.
 
 #![no_main]

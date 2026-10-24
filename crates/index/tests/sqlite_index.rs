@@ -1284,8 +1284,9 @@ async fn ties_on_the_number_break_on_shard_then_tenant() {
 
 /// Migration 0005 carries a database written before tenants existed: each
 /// scope becomes its own tenant, `scope:` and its name (ruling M1-R43),
-/// owning the xorbs it uploaded and those its registered shards reference (ruling M1-R39), and registration numbers
-/// continue past the highest one recorded.
+/// owning the xorbs it uploaded and those its registered shards reference
+/// (ruling M1-R39), and registration numbers continue past the highest one
+/// recorded.
 #[tokio::test]
 async fn migration_0005_makes_each_scope_its_own_tenant() {
     let dir = ok(TempDir::new());

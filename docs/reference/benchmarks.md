@@ -229,8 +229,8 @@ Since ruling M1-R37 each commit also takes a registration number from
 the index and creates the shard's registration record in the bucket
 before registering, as `ingest` does. The last row, one run at similar
 load, matches the `fullfsync` row up to 32 permits and is about a quarter
-lower above it, where the extra counter commit competes for the one
-writer. 4 × CPUs is past the plateau, so it never limits throughput on
+lower above it, likely because the extra counter commit competes for
+the one writer. 4 × CPUs is past the plateau, so it never limits throughput on
 local storage; what it bounds is memory, which ruling M1-R24 sets it for. A
 remote bucket's slower puts overlap under the same permits, so the number
 stays right until a bucket's latency makes 32 concurrent puts the limit.
