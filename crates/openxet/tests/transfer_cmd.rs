@@ -219,17 +219,32 @@ fn json_stderr(out: &Output) -> Value {
     error
 }
 
-/// Deterministic bytes that don't compress or dedup within themselves.
+/// Deterministic bytes that don't compress or dedup within themselves,
+/// distinct for every `seed`: splitmix64 (Steele, Lea and Flood, 2014),
+/// whose output is a bijection of its counter, so no two seeds share a
+/// stream.
 fn noise(len: usize, seed: u64) -> Vec<u8> {
-    let mut state = seed | 1;
-    (0..len)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state.to_le_bytes()[0]
-        })
-        .collect()
+    let mut state = seed;
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        out.extend_from_slice(&(z ^ (z >> 31)).to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
+#[test]
+fn noise_differs_for_every_seed() {
+    let streams: Vec<Vec<u8>> = (0..64).map(|seed| noise(64, seed)).collect();
+    for (i, a) in streams.iter().enumerate() {
+        for (j, b) in streams.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "seeds {i} and {j} give the same noise");
+        }
+    }
 }
 
 fn sha256_hex(data: &[u8]) -> String {
