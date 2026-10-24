@@ -20,7 +20,7 @@ use openxet_index::Visibility;
 use serde::Serialize;
 use url::Url;
 
-use crate::{duration, secret, size};
+use crate::{duration, host_memory, secret, size};
 
 /// Where a setting's value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,6 +530,16 @@ impl Checker<'_> {
 
 const SECOND: Duration = Duration::from_secs(1);
 
+/// The default `server.memory_budget` for a host with `memory` bytes
+/// (ruling M1-R40): a quarter of it, leaving the rest to the index, the
+/// CPU-bound work and the system, rounded down to a whole MiB; at least
+/// [`MemoryBudget::DEFAULT_BYTES`] (also when `memory` is unknown) and at
+/// most [`MemoryBudget::MAX_BYTES`].
+fn default_memory_budget(memory: Option<u64>) -> u64 {
+    let quarter = memory.map_or(0, |m| m / 4) & !((1 << 20) - 1);
+    quarter.clamp(MemoryBudget::DEFAULT_BYTES, MemoryBudget::MAX_BYTES)
+}
+
 /// The default `server.max_connections`: far more than the few dozen
 /// connections a busy client opens, well below the open-file limits
 /// servers are given.
@@ -658,11 +668,11 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
     );
     let memory_budget = c.size(
         "server.memory_budget",
-        MemoryBudget::DEFAULT_BYTES,
+        default_memory_budget(host_memory::total()),
         (MemoryBudget::MIN_BYTES, MemoryBudget::MAX_BYTES),
-        "Upload bodies and reconstruction answers reserve from it; when it is full, requests \
-         wait up to 5s, then get 503 memory_busy, which clients retry. 1GiB is the default; \
-         leave room for the rest of the process.",
+        "Upload bodies and reconstruction answers reserve from it; uploads queue up to 120s \
+         for room, then get 503 memory_busy. The default is a quarter of this host's memory, \
+         at least 1GiB; leave room for the rest of the process.",
     );
     let max_connections = int(
         c,
@@ -1205,10 +1215,11 @@ mod tests {
     #[test]
     fn the_memory_budget_is_a_size_within_its_bounds() {
         let config = load_toml("", &[]).config.unwrap();
-        assert_eq!(config.memory_budget, 1 << 30);
+        let default = default_memory_budget(host_memory::total());
+        assert_eq!(config.memory_budget, default);
         assert_eq!(
             config.cas(Url::parse("http://x").unwrap()).memory_budget,
-            1 << 30
+            default
         );
 
         let config = load_toml("[server]\nmemory_budget = \"3GiB\"\n", &[])
@@ -1226,6 +1237,17 @@ mod tests {
         }
         let loaded = load_toml("[server]\nmemory_budget = 1073741824\n", &[]);
         assert_eq!(problem_keys(&loaded), ["server.memory_budget"]);
+    }
+
+    #[test]
+    fn the_default_memory_budget_is_a_quarter_of_memory_and_at_least_1gib() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(default_memory_budget(Some(16 * GIB)), 4 * GIB);
+        assert_eq!(default_memory_budget(Some(2 * GIB)), GIB);
+        assert_eq!(default_memory_budget(None), GIB);
+        assert_eq!(default_memory_budget(Some(8 << 40)), 1 << 40);
+        // Rounded down to a whole MiB, so `config check` shows a size.
+        assert_eq!(default_memory_budget(Some(16_303_312 * 1024)), 3980 << 20);
     }
 
     #[test]

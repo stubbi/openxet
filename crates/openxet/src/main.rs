@@ -5,6 +5,7 @@ mod config;
 mod config_cmd;
 mod duration;
 mod error;
+mod host_memory;
 mod logging;
 mod output;
 mod preflight;

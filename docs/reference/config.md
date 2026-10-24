@@ -61,7 +61,7 @@ unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
 | `body_read_timeout` | `300s` | `1s` to `1h` | The longest gap allowed between two parts of a request body. It matches `hf_xet`'s own 300 s read timeout. |
 | `body_min_rate` | `4096` | `1` to `1048576` | The least average rate of a request body, in bytes per second, after a first `body_read_timeout`: a body of `n` bytes may take `body_read_timeout + n / body_min_rate`. The default lets a 64 MiB xorb take up to 4.6 hours over a very slow link. |
-| `memory_budget` | `1GiB` | `256MiB` to `1TiB` | The most memory request data may hold at once: upload bodies being buffered and reconstruction answers waiting to be sent. See [Memory](#memory). |
+| `memory_budget` | a quarter of the memory, at least `1GiB` | `256MiB` to `1TiB` | The most memory request data may hold at once: upload bodies being buffered and reconstruction answers waiting to be sent. The default is a quarter of the host's physical memory, or of the container's cgroup memory limit on Linux if lower, rounded down to a MiB; `1GiB` where neither can be read. `config check` shows the value in effect. See [Memory](#memory). |
 | `max_connections` | `4096` | `1` to `1000000` | The most connections open at once. Past it, a new connection waits unaccepted in the listen backlog until one closes, then is served. Keep it below the process's open-file limit (`ulimit -n`). |
 | `shutdown_grace` | `30s` | `1s` to `10m` | On `SIGTERM` or `SIGINT`, how long in-flight requests get to finish. |
 
