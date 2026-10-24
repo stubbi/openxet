@@ -413,21 +413,24 @@ async fn validation_permit(state: &AppState) -> Result<OwnedSemaphorePermit, Cas
 /// Extra permits (ruling M1-R34):
 /// - are taken only if free right now, never waited for, so a reconstruction
 ///   never jumps uploads queued for a permit
-/// - number at most half of the permits free at that moment, rounded down,
-///   so uploads always keep capacity, and at most what the answer is worth
-///   ([`answer::workers_for`])
+/// - number at most half, rounded down, of the permits that were free
+///   counting the request's own, and at most what the answer is worth
+///   ([`answer::workers_for`]). Of `f` such permits the request holds at
+///   most `1 + f / 2`, so uploads keep the other `f.div_ceil(2) - 1`: on 4
+///   free permits an answer gets 3 writers, on 8 it gets 5 and leaves 3.
 /// - are held until `work` returns, error or not, so the threads stay
 ///   within the CPU bound of rulings M1-R8 and M1-R25
 ///
-/// A busy server, with one permit or none free, writes the answer on one
-/// thread.
+/// A busy server, with no permit free beside the request's own, writes the
+/// answer on one thread.
 async fn render(
     state: &AppState,
     permit: OwnedSemaphorePermit,
     terms: usize,
     work: impl FnOnce(usize) -> Result<Vec<Bytes>, CasError> + Send + 'static,
 ) -> Result<Vec<Bytes>, CasError> {
-    let wanted = (answer::workers_for(terms) - 1).min(state.validate.available_permits() / 2);
+    let free = state.validate.available_permits() + 1;
+    let wanted = (answer::workers_for(terms) - 1).min(free / 2);
     let extra = (1..=wanted).rev().find_map(|n| {
         let n = u32::try_from(n).ok()?;
         let permits = Arc::clone(&state.validate).try_acquire_many_owned(n).ok()?;
@@ -704,24 +707,26 @@ mod tests {
 
     #[tokio::test]
     async fn extra_writers_take_at_most_half_the_free_permits_and_return_them() {
-        // Ruling M1-R34. With 3 of 8 held and the request's own taken, 4
-        // are free: 2 extra writers, and 2 permits stay free for uploads.
+        // Ruling M1-R34. With 3 of 8 held, 5 were free counting the
+        // request's own: 2 extra writers, and 2 permits stay free.
         assert_eq!(writers_with(3, false).await, (3, 2));
         assert_eq!(
             writers_with(3, true).await,
             (3, 2),
             "an error returns them too"
         );
-        // All 8 free: 7 after the request's own, 3 extra.
-        assert_eq!(writers_with(0, false).await, (4, 4));
+        // All 8 free: 4 extra, 3 stay free.
+        assert_eq!(writers_with(0, false).await, (5, 3));
+        // 4 free, as on a 4-vCPU node: 3 writers.
+        assert_eq!(writers_with(4, false).await, (3, 1));
     }
 
     #[tokio::test]
     async fn a_busy_pool_writes_on_one_thread() {
-        // One permit free after the request's own: half of it is none.
-        assert_eq!(writers_with(6, false).await, (1, 1));
-        // None free.
+        // Only the request's own permit was free.
         assert_eq!(writers_with(7, false).await, (1, 0));
+        // One more: half of 2 is one extra.
+        assert_eq!(writers_with(6, false).await, (2, 0));
     }
 
     /// A clock stopped at one second, so two answers sign the same URLs.
