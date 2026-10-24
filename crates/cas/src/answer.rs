@@ -278,10 +278,11 @@ impl<'a> Entries<'a> {
 struct Json(String);
 
 /// Generous upper bounds on each part's bytes, so the buffer is allocated
-/// once: a term is at most 147 bytes, a descriptor 270 plus its URL's base,
-/// a xorb's key or a file's 68.
+/// once. With its comma and every number at its type's maximum, a term is
+/// at most 151 bytes, a descriptor 341 plus its URL's base, and a xorb's
+/// or a file's key with its brackets 70.
 const TERM_BYTES: usize = 160;
-const FETCH_BYTES: usize = 300;
+const FETCH_BYTES: usize = 350;
 const NAME_BYTES: usize = 70;
 
 impl Json {
