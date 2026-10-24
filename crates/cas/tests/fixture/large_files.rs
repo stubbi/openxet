@@ -19,7 +19,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::header::{AUTHORIZATION, RANGE};
 use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
-use openxet_cas::{AppState, BodyDeadline, CasConfig, SendDeadline, router};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, router};
 use openxet_index::{ChunkTable, FileRecord, Index as _, NewFile, SqliteIndex, Term, Visibility};
 use openxet_protocol::{MerkleHash, VerifyLimits, hash_to_hex};
 use openxet_storage::LocalBucket;
@@ -170,7 +170,8 @@ fn state(dir: &Path, index: SqliteIndex) -> AppState {
             verify_limits: VerifyLimits::default(),
             heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
             body_deadline: BodyDeadline::DEFAULT,
-            dedup_send: SendDeadline::DEFAULT,
+            send_deadline: SendDeadline::DEFAULT,
+            memory_budget: MemoryBudget::DEFAULT_BYTES,
         },
     )
 }

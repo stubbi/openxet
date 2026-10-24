@@ -29,8 +29,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, RawQuery, Request, State};
-use axum::handler::Handler as _;
+use axum::extract::{FromRequestParts, RawQuery, Request, State};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, RANGE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method, StatusCode};
@@ -67,17 +66,12 @@ const BATCH_BODY_LIMIT: u64 = 256 * 1024;
 
 /// The reconstruction routes and `HEAD /v1/files/{hash}`.
 pub(crate) fn routes() -> Routes {
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "256 KiB fits the usize of every target"
-    )]
-    let batch_limit = DefaultBodyLimit::max(BATCH_BODY_LIMIT as usize);
     Routes::new()
         .route("/v2/reconstructions/{hash}", on(Method::GET, v2).private())
         .route("/v1/reconstructions/{hash}", on(Method::GET, v1).private())
         .route(
             "/v1/reconstructions",
-            on(Method::POST, batch_post.layer(batch_limit))
+            on(Method::POST, batch_post)
                 .on(Method::GET, batch_get)
                 .private(),
         )
@@ -181,14 +175,16 @@ async fn batch_post(State(state): State<AppState>, request: Request) -> Result<R
         Ok(ReadAccess(principal)) => principal,
         Err(e) => return Err(body::refuse_unread(e, &parts.headers, body, BATCH_BODY_LIMIT).await),
     };
-    let body = body::buffer(
+    let (body, reserved) = body::buffer(
         Request::from_parts(parts, body),
         BATCH_BODY_LIMIT,
         batch_too_long,
+        &state.budget,
     )
     .await?;
     let keys: Vec<BatchKey> =
         serde_json::from_slice(&body).map_err(|_| CasError::InvalidBatch.into_response())?;
+    drop((body, reserved));
     let mut files = Vec::with_capacity(keys.len());
     for key in keys {
         if key.prefix != "default" {

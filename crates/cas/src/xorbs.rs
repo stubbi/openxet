@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Request, State};
-use axum::handler::Handler as _;
+use axum::extract::{FromRequestParts, Request, State};
 use axum::http::header::CONTENT_LENGTH;
 use axum::http::request::Parts;
 use axum::http::{Method, StatusCode};
@@ -24,25 +23,13 @@ use crate::{AppState, CasError, ReadAccess, WriteAccess, body, path};
 /// S10 "Conventions for every route") and where the bucket keeps xorbs.
 const PREFIX: &str = "default";
 
-/// [`MAX_XORB_BODY_BYTES`] as a buffer length.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "64.5 MiB fits the usize of every target with a 32-bit or wider address space"
-)]
-const BODY_LIMIT: usize = MAX_XORB_BODY_BYTES as usize;
-
 /// `POST` and `HEAD /v1/xorbs/{prefix}/{hash}` (S10 §3). Both answers
 /// depend on the caller's scope (`was_inserted`, and `HEAD` under
 /// `PerScope` visibility), so they are private.
 pub(crate) fn routes() -> Routes {
     Routes::new().route(
         "/v1/xorbs/{prefix}/{hash}",
-        on(
-            Method::POST,
-            upload.layer(DefaultBodyLimit::max(BODY_LIMIT)),
-        )
-        .on(Method::HEAD, head)
-        .private(),
+        on(Method::POST, upload).on(Method::HEAD, head).private(),
     )
 }
 
@@ -77,6 +64,8 @@ struct Uploaded {
 ///   computed hash must be the path's.
 /// - Bucket first, then index (design §5.3). A failed put registers
 ///   nothing, so the index never names bytes the bucket lacks.
+/// - The body's length is reserved from the memory budget before it is
+///   read, until the xorb is registered ([`body::buffer`]).
 /// - Idempotent: `hf_xet` resends the whole body on a `5xx` or a lost
 ///   answer (S10 §3), and a repeat answers `200` with `was_inserted: false`.
 ///   `was_inserted` is per scope, so it never reveals another scope's
@@ -123,7 +112,10 @@ async fn store(
     scope: &str,
     request: Request,
 ) -> Result<bool, Response> {
-    let body = body::buffer(request, MAX_XORB_BODY_BYTES, too_large).await?;
+    // Held until the xorb is registered: the body's bytes live until the
+    // bucket put ends.
+    let (body, _reserved) =
+        body::buffer(request, MAX_XORB_BODY_BYTES, too_large, &state.budget).await?;
     let stored = validate(state, body)
         .await
         .map_err(IntoResponse::into_response)?;
@@ -280,7 +272,13 @@ mod tests {
             subject: "unit".to_owned(),
         };
         let app = router(test_support::state(dir.path(), vec![token]).await);
-        let body = Full::new(Bytes::from(vec![0u8; BODY_LIMIT + 1])).map_frame(|frame| frame);
+        let body = Full::new(Bytes::from(vec![
+            0u8;
+            usize::try_from(MAX_XORB_BODY_BYTES)
+                .unwrap()
+                + 1
+        ]))
+        .map_frame(|frame| frame);
         let body = Body::new(body);
         assert_eq!(body.size_hint().upper(), None, "the length must be unknown");
 
@@ -299,6 +297,84 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "xorb_too_large");
+    }
+
+    fn write_token() -> StaticToken {
+        StaticToken {
+            sha256: StaticToken::digest(WRITE),
+            scope: "s".to_owned(),
+            mode: Mode::Write,
+            subject: "unit".to_owned(),
+        }
+    }
+
+    fn post(body: Body) -> Request {
+        Request::post(format!("/v1/xorbs/default/{}", "0".repeat(64)))
+            .header(AUTHORIZATION, format!("{BEARER} {WRITE}"))
+            .body(body)
+            .unwrap()
+    }
+
+    async fn assert_memory_busy(response: Response) {
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "1");
+        assert_eq!(response.headers()[CONNECTION], "close");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "memory_busy", "{json}");
+    }
+
+    #[tokio::test]
+    async fn uploads_wait_for_the_memory_budget_then_get_503_memory_busy() {
+        // Ruling M1-R40: a body reserves its declared length before it is
+        // read, until the request ends. With room for one 600 KiB body, a
+        // second waits for the budget's wait, then is refused unread.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![write_token()]).await;
+        let wait = std::time::Duration::from_millis(300);
+        state.budget = crate::MemoryBudget::new(1 << 20, wait);
+        let app = router(state.clone());
+
+        let (mut stalled, body) = test_support::declared_body(600 << 10);
+        let first = tokio::spawn(app.clone().oneshot(post(body)));
+        stalled
+            .send_data(Bytes::from(vec![0; 100 << 10]))
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while state.budget.available() == 1 << 20 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the first upload reserves its length");
+        assert_eq!(state.budget.available(), (1 << 20) - (600 << 10));
+
+        let (_unsent, body) = test_support::declared_body(600 << 10);
+        let started = std::time::Instant::now();
+        let second = app.clone().oneshot(post(body)).await.unwrap();
+        assert!(started.elapsed() >= wait, "{:?}", started.elapsed());
+        assert_memory_busy(second).await;
+
+        drop(stalled);
+        let first = first.await.unwrap().unwrap();
+        assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(state.budget.available(), 1 << 20, "the request ended");
+    }
+
+    #[tokio::test]
+    async fn an_upload_over_the_whole_budget_is_refused_at_once() {
+        // A chunked body reserves the route's limit, 64.5 MiB, which a
+        // 1 MiB budget can never hold: no wait helps, so none is spent.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_support::state(dir.path(), vec![write_token()]).await;
+        state.budget = crate::MemoryBudget::new(1 << 20, std::time::Duration::from_mins(1));
+        let body = Body::new(Full::new(Bytes::from(vec![0u8; 10])).map_frame(|frame| frame));
+
+        let started = std::time::Instant::now();
+        let response = router(state).oneshot(post(body)).await.unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_memory_busy(response).await;
     }
 
     #[tokio::test]

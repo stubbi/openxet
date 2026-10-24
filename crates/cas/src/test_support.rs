@@ -4,8 +4,14 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
+
+use axum::body::{Body, Bytes};
+use http_body::{Frame, SizeHint};
+use http_body_util::channel::{Channel, Sender};
 
 use openxet_auth::{Authenticator, StaticToken, UrlSigner};
 use openxet_index::{
@@ -34,7 +40,8 @@ pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {
             verify_limits: VerifyLimits::default(),
             heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
             body_deadline: crate::BodyDeadline::DEFAULT,
-            dedup_send: crate::SendDeadline::DEFAULT,
+            send_deadline: crate::SendDeadline::DEFAULT,
+            memory_budget: crate::MemoryBudget::DEFAULT_BYTES,
         },
     )
 }
@@ -155,5 +162,33 @@ impl Index for PermitProbe {
         vis: Visibility,
     ) -> Result<Option<Vec<MerkleHash>>, IndexError> {
         self.inner.dedup_shard_xorbs(xorb, scope, vis).await
+    }
+}
+
+/// A request body declaring `len` bytes, as hyper's body for a
+/// `Content-Length` does, whose bytes the test sends by hand.
+pub(crate) fn declared_body(len: u64) -> (Sender<Bytes>, Body) {
+    let (tx, body) = Channel::<Bytes>::new(16);
+    (tx, Body::new(Declared { inner: body, len }))
+}
+
+struct Declared {
+    inner: Channel<Bytes>,
+    len: u64,
+}
+
+impl http_body::Body for Declared {
+    type Data = Bytes;
+    type Error = <Channel<Bytes> as http_body::Body>::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.len)
     }
 }

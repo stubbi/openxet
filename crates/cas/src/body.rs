@@ -2,41 +2,57 @@
 //! before it is read.
 
 use axum::body::{Body, Bytes, HttpBody as _};
-use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
-use axum::extract::{FromRequest as _, Request};
+use axum::extract::Request;
 use axum::http::HeaderMap;
 use axum::http::header::EXPECT;
 use axum::response::{IntoResponse as _, Response};
 use http_body_util::BodyExt as _;
 
-use crate::CasError;
+use crate::budget::Reservation;
 use crate::deadline::{BodyTimedOut, timed_out};
 use crate::error::closing;
+use crate::{CasError, MemoryBudget};
 
-/// The body of `request`, which the route's `DefaultBodyLimit` caps at
-/// `limit` bytes. `too_large` is the route's `413`.
+/// The body of `request`, of at most `limit` bytes, and the memory it
+/// holds, reserved from `budget` before a byte of it is read (ruling
+/// M1-R40). `too_large` is the route's `413`.
 ///
-/// hyper's size hint is exact when the request declares a Content-Length.
-/// Unlike other refusals, a body declared over the limit is not drained: it
-/// can't be within the limit, and no stock client sends one, so the `413`
-/// goes out unread and closes the connection rather than read up to the
-/// limit for nothing.
+/// - hyper's size hint is exact when the request declares a
+///   Content-Length. A body declared over the limit is refused before it is
+///   read: it can't be within the limit, and no stock client sends one, so
+///   the `413` goes out unread and closes the connection rather than read
+///   up to the limit for nothing.
+/// - The reservation is the declared length, or the limit for a body that
+///   declares none, and the buffer is allocated to it once, so buffering
+///   never holds a second copy while it grows.
+/// - A full budget refuses the body unread with `503 memory_busy`, closing
+///   the connection; stock clients retry it (S10 "Status codes and
+///   retries").
 pub(crate) async fn buffer(
     request: Request,
     limit: u64,
     too_large: fn() -> CasError,
-) -> Result<Bytes, Response> {
-    if request.body().size_hint().lower() > limit {
+    budget: &MemoryBudget,
+) -> Result<(Bytes, Reservation), Response> {
+    let hint = request.body().size_hint();
+    if hint.lower() > limit {
         return Err(closing(too_large()));
     }
-    Bytes::from_request(request, &())
-        .await
-        .map_err(|rejection| match rejection {
-            BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_)) => {
-                closing(too_large())
+    let declared = hint.upper().unwrap_or(limit).min(limit);
+    let reservation = budget.reserve(declared).await.map_err(closing)?;
+    let mut body = request.into_body();
+    let capacity = usize::try_from(declared).map_err(|e| CasError::internal(e).into_response())?;
+    let mut buffer = Vec::with_capacity(capacity);
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|err| unreadable(&err))?;
+        if let Some(data) = frame.data_ref() {
+            if (buffer.len() + data.len()) as u64 > limit {
+                return Err(closing(too_large()));
             }
-            rejection => unreadable(&rejection),
-        })
+            buffer.extend_from_slice(data);
+        }
+    }
+    Ok((Bytes::from(buffer), reservation))
 }
 
 /// The answer to a body that failed while being read: `408` if it fell

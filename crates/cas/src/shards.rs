@@ -23,8 +23,7 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, FromRequestParts as _, Request, State};
-use axum::handler::Handler as _;
+use axum::extract::{FromRequestParts as _, Request, State};
 use axum::http::Method;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
@@ -41,15 +40,9 @@ use tokio::task::JoinHandle;
 use tracing::Instrument as _;
 
 use crate::blocking::blocking;
+use crate::budget::Reservation;
 use crate::routes::{Routes, on};
 use crate::{AppState, CasError, RequestId, WriteAccess, body};
-
-/// [`MAX_UPLOAD_SHARD_BYTES`] as a buffer length.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "64 MiB fits the usize of every target with a 32-bit or wider address space"
-)]
-const BODY_LIMIT: usize = MAX_UPLOAD_SHARD_BYTES as usize;
 
 /// Event lines buffered for a client that reads slowly. The work never
 /// waits on the client: progress reaches the stream over an unbounded
@@ -62,20 +55,8 @@ type Lookup = HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>>;
 /// `POST /v1/shards` and `POST /v2/shards` (S10 §4).
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route(
-            "/v1/shards",
-            on(
-                Method::POST,
-                upload_v1.layer(DefaultBodyLimit::max(BODY_LIMIT)),
-            ),
-        )
-        .route(
-            "/v2/shards",
-            on(
-                Method::POST,
-                upload_v2.layer(DefaultBodyLimit::max(BODY_LIMIT)),
-            ),
-        )
+        .route("/v1/shards", on(Method::POST, upload_v1))
+        .route("/v2/shards", on(Method::POST, upload_v2))
 }
 
 /// The v1 answer. `hf_xet` decodes `result` as a `u8` enum, `0` "exists"
@@ -96,7 +77,7 @@ async fn upload_v1(
     State(state): State<AppState>,
     request: Request,
 ) -> Result<Json<Registered>, Response> {
-    let (scope, shard) = accept(&state, request).await?;
+    let (scope, shard, _reserved) = accept(&state, request).await?;
     let inserted = ingest(&state, &scope, shard, &Progress::none())
         .await
         .map_err(IntoResponse::into_response)?;
@@ -132,12 +113,15 @@ async fn upload_v1(
 /// finds it registered and gets `result: 0`.
 async fn upload_v2(State(state): State<AppState>, request: Request) -> Result<Response, Response> {
     let request_id = request.extensions().get::<RequestId>().copied();
-    let (scope, shard) = accept(&state, request).await?;
+    let (scope, shard, reserved) = accept(&state, request).await?;
     let (progress, events) = mpsc::unbounded_channel();
     let span = tracing::Span::current();
     let work = tokio::spawn({
         let state = state.clone();
         async move {
+            // The body's share of the memory budget stays with the work,
+            // which outlives a client that leaves (ruling M1-R40).
+            let _reserved = reserved;
             let outcome = ingest(&state, &scope, shard, &Progress(Some(progress))).await;
             if let Err(e) = &outcome {
                 e.log();
@@ -167,10 +151,14 @@ async fn upload_v2(State(state): State<AppState>, request: Request) -> Result<Re
         .into_response())
 }
 
-/// The caller's scope and the shard body: the credential first, then the
-/// body within [`MAX_UPLOAD_SHARD_BYTES`]. A refusal is a status on both
-/// versions, final for the client (S10 §4).
-async fn accept(state: &AppState, request: Request) -> Result<(String, Bytes), Response> {
+/// The caller's scope, the shard body and its share of the memory budget:
+/// the credential first, then the body within [`MAX_UPLOAD_SHARD_BYTES`]
+/// ([`body::buffer`]). A refusal is a status on both versions: final for
+/// the client, but for `503 memory_busy`, which it retries (S10 §4).
+async fn accept(
+    state: &AppState,
+    request: Request,
+) -> Result<(String, Bytes, Reservation), Response> {
     let (mut parts, body) = request.into_parts();
     let principal = match WriteAccess::from_request_parts(&mut parts, state).await {
         Ok(WriteAccess(principal)) => principal,
@@ -178,13 +166,14 @@ async fn accept(state: &AppState, request: Request) -> Result<(String, Bytes), R
             return Err(body::refuse_unread(e, &parts.headers, body, MAX_UPLOAD_SHARD_BYTES).await);
         }
     };
-    let shard = body::buffer(
+    let (shard, reserved) = body::buffer(
         Request::from_parts(parts, body),
         MAX_UPLOAD_SHARD_BYTES,
         too_large,
+        &state.budget,
     )
     .await?;
-    Ok((principal.scope, shard))
+    Ok((principal.scope, shard, reserved))
 }
 
 fn too_large() -> CasError {
@@ -602,6 +591,55 @@ mod tests {
         assert!(a.unwrap() && b.unwrap());
         assert_eq!(bucket.most.load(Ordering::SeqCst), 1);
         assert_eq!(state.commit.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_detached_v2_upload_keeps_its_memory_budget_until_its_work_ends() {
+        // Ruling M1-R40: a `/v2/shards` upload's work outlives a client
+        // that leaves, and so does the body it holds, so its share of the
+        // memory budget goes back only when the work ends.
+        use axum::http::header::AUTHORIZATION;
+        use openxet_auth::{Mode, StaticToken};
+        use tower::ServiceExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest("oxt_unit_write"),
+            scope: "s".to_owned(),
+            mode: Mode::Write,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        state.validate = Arc::new(Semaphore::new(1));
+        let budget = state.budget.bytes();
+        let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
+
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::post("/v2/shards")
+                    .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
+                    .body(Body::from(vec![0u8; 4096]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        drop(response);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            state.budget.available(),
+            budget - 4096,
+            "the queued work holds its body's share"
+        );
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state.budget.available() < budget {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the share is returned when the work ends");
     }
 
     #[tokio::test]

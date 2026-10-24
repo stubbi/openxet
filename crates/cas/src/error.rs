@@ -181,6 +181,27 @@ pub enum CasError {
     #[error("the server is busy answering other dedup queries")]
     DedupBusy,
 
+    /// The process's memory budget stayed full for the whole wait (ruling
+    /// M1-R40). `503 memory_busy` with `Retry-After: 1`, which stock
+    /// clients retry with backoff (S10 "Status codes and retries").
+    #[error("the server is holding as much request data in memory as it may; try again shortly")]
+    MemoryBusy,
+
+    /// The request needs more memory than the process's whole budget
+    /// (ruling M1-R40). `503 memory_busy` with `Retry-After: 1`, like
+    /// [`CasError::MemoryBusy`]: stock clients can't tell the two apart,
+    /// and the message says why a retry won't help.
+    #[error(
+        "the request needs about {needed} bytes of server memory, more than the server's whole \
+         memory budget of {budget} bytes"
+    )]
+    OverMemoryBudget {
+        /// The bytes the request needs.
+        needed: u64,
+        /// The budget, `server.memory_budget`.
+        budget: u64,
+    },
+
     /// An uploaded xorb's content hash is not the hash in its path.
     /// `400 xorb_hash_mismatch`, final.
     #[error(
@@ -521,6 +542,19 @@ impl CasError {
                 "Nothing to fix: clients treat this as no match and continue the upload. If it \
                  persists, the server needs more CPUs for dedup answers.",
             ),
+            Self::MemoryBusy => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "memory_busy",
+                "Retry after the `Retry-After` delay; stock clients do so automatically. If it \
+                 persists, upload fewer files at once, or the operator can raise \
+                 `server.memory_budget`.",
+            ),
+            Self::OverMemoryBudget { .. } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "memory_busy",
+                "Ask for less at once: split the batch, or reconstruct a range of the file. \
+                 The operator can raise `server.memory_budget`.",
+            ),
             Self::XorbHashMismatch { .. } => (
                 StatusCode::BAD_REQUEST,
                 "xorb_hash_mismatch",
@@ -596,9 +630,13 @@ impl CasError {
     }
 
     /// Whether a retry may succeed: the index or the bucket was
-    /// unavailable. A request's fault or a server bug stays on retry.
+    /// unavailable, or the memory budget full. A request's fault, one over
+    /// the whole budget, or a server bug stays on retry.
     pub(crate) fn is_retryable(&self) -> bool {
-        matches!(self, Self::Unavailable { .. } | Self::NotReady)
+        matches!(
+            self,
+            Self::Unavailable { .. } | Self::NotReady | Self::MemoryBusy
+        )
     }
 
     /// Logs the failure inside the request's span, so under its request id:
@@ -618,6 +656,11 @@ impl CasError {
                 tracing::warn!(code, reason = %reason.detail(), "shard rejected");
             }
             Self::UnknownXorb { .. } => tracing::warn!(code, reason = %self, "shard rejected"),
+            // The server's state, not a fault: one line per refusal, without
+            // an error's alarm.
+            Self::MemoryBusy | Self::OverMemoryBudget { .. } => {
+                tracing::warn!(code, reason = %self, "request refused");
+            }
             _ if status.is_server_error() => {
                 tracing::error!(code, error = self as &dyn StdError, "request failed");
             }
@@ -644,7 +687,9 @@ impl IntoResponse for CasError {
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
-        if let Self::NotReady | Self::DedupBusy = self {
+        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy | Self::OverMemoryBudget { .. } =
+            self
+        {
             response
                 .headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
@@ -755,6 +800,24 @@ mod tests {
             message.contains("7s") && message.contains("512"),
             "{message}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_full_memory_budget_is_a_retryable_503_with_retry_after() {
+        for (e, retryable) in [
+            (CasError::MemoryBusy, true),
+            (
+                CasError::OverMemoryBudget {
+                    needed: 2048,
+                    budget: 1024,
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(e.is_retryable(), retryable);
+            let reply = assert_maps(e, StatusCode::SERVICE_UNAVAILABLE, "memory_busy").await;
+            assert_eq!(reply.headers[RETRY_AFTER], "1");
+        }
     }
 
     #[tokio::test]

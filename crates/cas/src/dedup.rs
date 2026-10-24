@@ -157,7 +157,7 @@ async fn query(
         bytes = body.len(),
         "dedup match offered"
     );
-    let deadline = state.cfg.dedup_send.for_len(body.len() as u64);
+    let deadline = state.cfg.send_deadline.for_len(body.len() as u64);
     let body = answer_body(body, permit, deadline);
     Ok(([(CONTENT_TYPE, "application/octet-stream")], body).into_response())
 }

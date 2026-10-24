@@ -274,7 +274,8 @@ pub fn config(visibility: Visibility) -> CasConfig {
         verify_limits: VerifyLimits::default(),
         heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
         body_deadline: BodyDeadline::DEFAULT,
-        dedup_send: openxet_cas::SendDeadline::DEFAULT,
+        send_deadline: openxet_cas::SendDeadline::DEFAULT,
+        memory_budget: openxet_cas::MemoryBudget::DEFAULT_BYTES,
     }
 }
 
