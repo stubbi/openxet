@@ -96,6 +96,27 @@ shows logical and stored bytes (§10.10).
 - People who don't want to run anything get the same thing, done perfectly, on
   **openxet.com** (§15).
 
+### Visitors become fans *(decided by the user, 2026-10-24)*
+
+"First time visitors must become loyal fans that love us. This must hold
+for the open source project as much as for the hosted service." Every
+change, doc and decision is judged by what a first-time visitor, human
+or agent, experiences. It holds through these commitments, each with
+its proof in §16:
+- **Time to wow:** an upload in under 60 s hosted and under 2 min
+  self-hosted, with the dedup savings shown right away.
+- **No dead ends:** every error says the next step, and every doc example
+  runs in CI.
+- **Honesty:** claim only what is measured, and publish the method.
+- **No lock-in:** full export. Hub compatibility makes leaving easy, so
+  people stay by choice.
+- **Fair, predictable pricing** on openxet.com: no surprise bills.
+- **Community:** published issue and PR response times, a mentored
+  first-PR path, credit for every contributor, a public roadmap, and
+  feedback visibly acted on.
+- **Parity:** openxet.com runs the open-source build, so self-hosters get
+  the same quality (§15).
+
 ## 1a. User value model *(decided by the user)*
 
 What users get from openxet, and how each value is measured. The targets
@@ -1723,6 +1744,7 @@ guilt/xet-server.
 | Release engineering | Boring, predictable releases | SemVer; changelog generated from Conventional Commits; release train cadence; upgrade tests between consecutive versions; a stated support window |
 | UX (humans and agents) | Best on both (§7.1) | Time-to-first-upload measured per release; the agent leg of the suite; accessibility (WCAG 2.2 AA) checked for the web UI |
 | Operations / hosted | openxet.com is the reference deployment (§15) | Public status page and SLO; chaos and failover drills in CI; disaster-recovery restore tested on a schedule |
+| First visit (§1, visitors become fans) | First-time visitors, of the project and of openxet.com, become loyal fans | **Time to wow:** an upload in < 60 s hosted and < 2 min self-hosted, measured per release. **No dead ends:** every error carries a next step (checked by the agent leg) and every doc example runs in CI. **Honesty:** every published number links its measurement. **No lock-in:** a full export, tested by restoring it into a fresh deployment. **Fair, predictable pricing:** published prices, budgets and alerts. **Community:** issue and PR response times published, a mentored first-PR path, every contributor credited in release notes, a public roadmap, and a changelog that names the feedback it acts on. **Parity:** openxet.com runs the released build (§15). **Metrics,** published per release: time to first success, first-response time, contributor return rate and hosted retention |
 
 Bus factor is a real risk while one person leads the project. Governance work
 starts at M0, not after 1.0.

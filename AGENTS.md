@@ -70,6 +70,13 @@ faster path, a doc example that actually runs) rather than what is
 convenient for us. Failure looks like this, even if the code works:
 slow, hard to set up, or users' feedback going nowhere.
 
+**Visitors become fans** (the owner's bar, design §1): first-time
+visitors must become loyal fans, of the open-source project as much as
+of openxet.com. Judge each change by what a first-time visitor, human or
+agent, meets: a working upload within minutes, no dead ends, only
+measured claims, no lock-in, and feedback visibly acted on. Design §16
+lists the proofs and the metrics we publish.
+
 ## The bar: best in class on every dimension
 
 No other project should come remotely close, in protocol correctness,
