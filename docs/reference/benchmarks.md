@@ -58,8 +58,19 @@ is CI with every change below but the writer threads, so one writer.
 takes at most half of them (ruling M1-R34), which on CI's 4-vCPU runner
 means 2 writers instead of 4.
 
-The Linux runner meets the gate with about 11 ms of p99 margin. The
-shared local host passes or fails it with its neighbours' load: at load
+**With the cap, the Linux runner's margin depends on the machine it
+lands on.** The "Now" column is the fastest of three runs of the same
+code. The other two, on runners slower across every shape, failed the
+unmerged full shape: 43.7 / 53.1 ms and 42.9 / 52.0 ms p50 / p99 (merged
+full 19.3 / 26.2 and 19.8 / 25.3 ms). Estimated from the one-writer
+p50 (66.2 ms, "Before threads") and these two-writer ones (about 43 ms),
+the request's sequential part (record, layouts, plan, catalog) takes
+about 20 ms there and the part the writers share about 46 ms, so 2
+writers leave no p99 margin where 4 left about 20 ms. Taking that
+margin back is part of
+<https://github.com/stubbi/openxet/issues/43>.
+
+The shared local host passes or fails it with its neighbours' load: at load
 average 10 to 22, runs of the same code had unmerged p99s from 34 ms to
 97 ms while the p50s stayed within a millisecond. The macOS runner, a
 3-vCPU VM, missed the p99 for the unmerged shape even with every writer,
