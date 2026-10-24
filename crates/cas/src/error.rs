@@ -128,7 +128,7 @@ pub enum CasError {
     InvalidBatch,
 
     /// A shard's file references a xorb that isn't visible to the caller:
-    /// missing, or under `PerScope` another scope's, which reads the same
+    /// missing, or under `PerTenant` another tenant's, which reads the same
     /// (ruling M1-R17). `400 unknown_xorb`, which clients don't retry.
     ///
     /// The message carries the stale-cache note (ruling M1-R5): on
@@ -158,7 +158,7 @@ pub enum CasError {
     InvalidPath,
 
     /// No xorb with the path's hash is visible to the caller.
-    /// `404 xorb_not_found`; under `PerScope` visibility another scope's
+    /// `404 xorb_not_found`; under `PerTenant` visibility another tenant's
     /// xorb reads the same as a missing one.
     #[error("xorb {} is not stored on this server", hash_to_hex(.xorb))]
     XorbNotFound {
@@ -169,8 +169,8 @@ pub enum CasError {
     /// No xorb visible to the caller offers the queried chunk for global
     /// dedup. `404 not_found`, which `hf_xet` reads as "no match" and
     /// continues the upload (S10 §2). The answer is the same whether the
-    /// chunk was never stored or, under `PerScope` visibility, is another
-    /// scope's, and it names nothing from the request.
+    /// chunk was never stored or, under `PerTenant` visibility, is another
+    /// tenant's, and it names nothing from the request.
     #[error("no xorb on this server offers the chunk for deduplication")]
     NoDedupMatch,
 
@@ -379,7 +379,7 @@ impl From<StorageError> for CasError {
             // Every supported bucket is read-after-write consistent (ruling
             // M1-R21), so an object the index names but the bucket lacks is
             // data loss or a bug. A retry would only hide it.
-            StorageError::NotFound { key } => {
+            StorageError::NotFound { ref key } => {
                 tracing::error!(
                     %key,
                     "integrity fault: the index names an object the bucket lacks"
@@ -390,6 +390,8 @@ impl From<StorageError> for CasError {
             StorageError::RangeOutOfBounds { .. } | StorageError::SizeConflict { .. } => {
                 Self::internal(e)
             }
+            // A record in the bucket doesn't decode: the operator must look.
+            StorageError::CorruptRecord { .. } => Self::internal(e),
             _ => Self::internal(e),
         }
     }
@@ -1043,7 +1045,7 @@ mod tests {
             .finish();
 
         let error = tracing::subscriber::with_default(subscriber, || {
-            CasError::from(StorageError::NotFound { key })
+            CasError::from(StorageError::NotFound { key: Box::new(key) })
         });
 
         let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
@@ -1065,7 +1067,7 @@ mod tests {
     async fn storage_range_out_of_bounds_is_500_internal() {
         assert_maps(
             StorageError::RangeOutOfBounds {
-                key: Key::Xorb(MerkleHash::default()),
+                key: Box::new(Key::Xorb(MerkleHash::default())),
                 start: 1,
                 end_inclusive: 2,
                 size: 1,
@@ -1080,7 +1082,7 @@ mod tests {
     async fn storage_size_conflict_is_500_internal() {
         assert_maps(
             StorageError::SizeConflict {
-                key: Key::Shard(MerkleHash::default()),
+                key: Box::new(Key::Shard(MerkleHash::default())),
                 existing: 1,
                 new: 2,
             },

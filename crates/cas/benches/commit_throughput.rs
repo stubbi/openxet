@@ -19,13 +19,26 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::Bytes;
-use openxet_index::{ChunkTable, FileRecord, Index, NewFile, SqliteIndex, Term, Visibility};
+use openxet_index::{
+    ChunkTable, FileRecord, Index, NewFile, Registrant, SqliteIndex, Term, Visibility,
+};
 use openxet_protocol::{MerkleHash, chunk_hash};
-use openxet_storage::{Bucket, Key, LocalBucket};
+use openxet_storage::{Bucket, Key, LocalBucket, Registration};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 const SCOPE: &str = "bench";
+/// The tenant the bench registers for.
+const TENANT: &str = "scope:bench";
+
+/// A registration to [`SCOPE`] numbered `seq`.
+fn by(seq: u64) -> Registrant<'static> {
+    Registrant {
+        scope: SCOPE,
+        tenant: TENANT,
+        seq,
+    }
+}
 const SHARDS: usize = 400;
 const FILES_PER_SHARD: u32 = 4;
 const STORED_SHARD_BYTES: usize = 64 * 1024;
@@ -71,7 +84,7 @@ fn files(label: &str, xorb: MerkleHash) -> Vec<NewFile> {
 async fn put_xorb(index: &SqliteIndex, label: &str) -> MerkleHash {
     let xorb = h(&format!("{label}/x"));
     index
-        .put_xorb(&xorb, 2400, &table(label), &[], SCOPE)
+        .put_xorb(&xorb, 2400, &table(label), &[], TENANT)
         .await
         .unwrap();
     xorb
@@ -100,8 +113,20 @@ async fn shard_commits(permits: usize) -> f64 {
             let body = Bytes::from(vec![u8::try_from(i % 251).unwrap(); STORED_SHARD_BYTES]);
             let _permit = commit.acquire().await.unwrap();
             bucket.put(&Key::Shard(shard), body).await.unwrap();
+            // As `ingest` does: the registration record, then the index.
+            let seq = index.next_registration_seq().await.unwrap();
+            let record = Registration {
+                scope: SCOPE.to_owned(),
+                tenant: TENANT.to_owned(),
+                shard,
+                seq,
+            };
+            bucket
+                .create(&record.key(), record.to_bytes())
+                .await
+                .unwrap();
             index
-                .register_shard(&shard, &files(&label, xorb), SCOPE, Visibility::Global)
+                .register_shard(&shard, &files(&label, xorb), by(seq), Visibility::Global)
                 .await
                 .unwrap();
         });
@@ -113,11 +138,12 @@ async fn shard_commits(permits: usize) -> f64 {
 async fn commit_pair(index: Arc<SqliteIndex>, i: usize) {
     let label = format!("p{i}");
     let xorb = put_xorb(&index, &label).await;
+    let seq = index.next_registration_seq().await.unwrap();
     index
         .register_shard(
             &h(&format!("{label}/shard")),
             &files(&label, xorb),
-            SCOPE,
+            by(seq),
             Visibility::Global,
         )
         .await

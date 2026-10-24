@@ -13,7 +13,7 @@ use openxet_protocol::{
     MAX_XORB_BODY_BYTES, MerkleHash, ProtocolError, StoredXorb, hash_to_hex, is_dedup_eligible,
     xorb_with_footer,
 };
-use openxet_storage::Key;
+use openxet_storage::{Key, XorbOwner};
 use serde::Serialize;
 use tracing::Instrument as _;
 
@@ -25,8 +25,8 @@ use crate::{AppState, CasError, ReadAccess, WriteAccess, body, path};
 const PREFIX: &str = "default";
 
 /// `POST` and `HEAD /v1/xorbs/{prefix}/{hash}` (S10 §3). Both answers
-/// depend on the caller's scope (`was_inserted`, and `HEAD` under
-/// `PerScope` visibility), so they are private.
+/// depend on the caller's tenant (`was_inserted`, and `HEAD` under
+/// `PerTenant` visibility), so they are private.
 pub(crate) fn routes() -> Routes {
     Routes::new().route(
         "/v1/xorbs/{prefix}/{hash}",
@@ -51,7 +51,7 @@ impl FromRequestParts<AppState> for XorbPath {
 /// error (S10 §3).
 #[derive(Serialize)]
 struct Uploaded {
-    /// Whether the xorb was new to the caller's scope.
+    /// Whether the xorb was new to the caller's tenant.
     was_inserted: bool,
 }
 
@@ -70,7 +70,7 @@ struct Uploaded {
 ///   read, until the xorb is registered ([`body::buffer`]).
 /// - Idempotent: `hf_xet` resends the whole body on a `5xx` or a lost
 ///   answer (S10 §3), and a repeat answers `200` with `was_inserted: false`.
-///   `was_inserted` is per scope, so it never reveals another scope's
+///   `was_inserted` is per tenant, so it never reveals another tenant's
 ///   upload (design §5.4).
 async fn upload(
     State(state): State<AppState>,
@@ -86,7 +86,7 @@ async fn upload(
     let result = store(
         &state,
         hash,
-        &principal.scope,
+        &principal.tenant,
         Request::from_parts(parts, body),
     )
     .await;
@@ -111,7 +111,7 @@ async fn authorize(
 async fn store(
     state: &AppState,
     hash: MerkleHash,
-    scope: &str,
+    tenant: &str,
     request: Request,
 ) -> Result<bool, Response> {
     let (body, reserved) = body::buffer(
@@ -130,7 +130,7 @@ async fn store(
     // the client's retry finds it stored.
     let work = tokio::spawn(
         {
-            let (state, scope) = (state.clone(), scope.to_owned());
+            let (state, tenant) = (state.clone(), tenant.to_owned());
             async move {
                 let _reserved = reserved;
                 let stored = validate(&state, body).await?;
@@ -140,7 +140,7 @@ async fn store(
                         computed: stored.hash,
                     });
                 }
-                register(&state, &scope, stored).await
+                register(&state, &tenant, stored).await
             }
         }
         .instrument(tracing::Span::current()),
@@ -211,9 +211,9 @@ fn rejected(reason: ProtocolError) -> CasError {
     }
 }
 
-/// Stores the validated xorb, then registers it to `scope`. Returns whether
-/// it was new to `scope`.
-async fn register(state: &AppState, scope: &str, stored: StoredXorb) -> Result<bool, CasError> {
+/// Stores the validated xorb and `tenant`'s ownership record, then registers
+/// both in the index. Returns whether `tenant` didn't own the xorb yet.
+async fn register(state: &AppState, tenant: &str, stored: StoredXorb) -> Result<bool, CasError> {
     let StoredXorb {
         hash,
         chunks,
@@ -244,19 +244,28 @@ async fn register(state: &AppState, scope: &str, stored: StoredXorb) -> Result<b
         .bucket
         .put(&Key::Xorb(hash), Bytes::from(bytes))
         .await?;
-    // The bytes are durable from here. If the index write fails, the client
-    // retries the whole upload on the 5xx: the put repeats as a no-op and
+    // The tenant's ownership goes to the bucket before the index records it
+    // (ruling M1-R37), so a rebuilt index still knows which tenant may see
+    // the xorb. The record's bytes depend only on its key, so a repeat is a
+    // no-op.
+    let owner = XorbOwner {
+        tenant: tenant.to_owned(),
+        xorb: hash,
+    };
+    state.bucket.put(&owner.key(), owner.to_bytes()).await?;
+    // Both are durable from here. If the index write fails, the client
+    // retries the whole upload on the 5xx: the puts repeat as no-ops and
     // the registration completes. A bucket object no index row names costs
     // only space until garbage collection; the reverse never happens.
     Ok(state
         .index
-        .put_xorb(&hash, size, &table, &eligible, scope)
+        .put_xorb(&hash, size, &table, &eligible, tenant)
         .await?)
 }
 
 /// `HEAD /v1/xorbs/default/{hash}`: `200` with the stored size as
 /// `Content-Length` and an empty body, or `404` if the xorb isn't visible to
-/// the caller's scope (<https://huggingface.co/docs/xet/api#7-head-xorb>).
+/// the caller's tenant (<https://huggingface.co/docs/xet/api#7-head-xorb>).
 async fn head(
     XorbPath(hash): XorbPath,
     ReadAccess(principal): ReadAccess,
@@ -264,7 +273,7 @@ async fn head(
 ) -> Result<Response, CasError> {
     let size = state
         .index
-        .xorb_size(&hash, &principal.scope, state.cfg.visibility)
+        .xorb_size(&hash, &principal.tenant, state.cfg.visibility)
         .await?
         .ok_or(CasError::XorbNotFound { xorb: hash })?;
     Ok((StatusCode::OK, [(CONTENT_LENGTH, size)]).into_response())
@@ -298,6 +307,7 @@ mod tests {
             scope: "s".to_owned(),
             mode: Mode::Write,
             subject: "unit".to_owned(),
+            tenant: None,
         };
         let app = router(test_support::state(dir.path(), vec![token]).await);
         let body = Full::new(Bytes::from(vec![
@@ -333,6 +343,7 @@ mod tests {
             scope: "s".to_owned(),
             mode: Mode::Write,
             subject: "unit".to_owned(),
+            tenant: None,
         }
     }
 
@@ -551,8 +562,9 @@ mod tests {
         assert_eq!(bucket.finished.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(state.commit.available_permits(), 1, "commit released early");
         assert!(state.budget.available() < whole, "budget released early");
-        test_support::eventually("the put ends and releases both", || {
-            bucket.finished.load(std::sync::atomic::Ordering::SeqCst) == 1
+        // Two puts: the xorb, then its owner record (ruling M1-R37).
+        test_support::eventually("the puts end and release both", || {
+            bucket.finished.load(std::sync::atomic::Ordering::SeqCst) == 2
                 && state.commit.available_permits() == 2
                 && state.budget.available() == whole
         })

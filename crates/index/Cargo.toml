@@ -12,10 +12,17 @@ repository.workspace = true
 # atomicity test can observe a rolled-back transaction. Never enable it in a
 # shipped build.
 fault-injection = []
+# Test-only: `rebuild_scope_tables`, which rebuilds the scope tables from a
+# bucket, and `SqliteIndex::scope_tables`, which reads them, so tests can
+# prove the bucket is the source of truth (ruling M1-R37). The core of
+# `reindex` (issue #26). Never enable it in a shipped build.
+test-support = ["dep:openxet-storage", "dep:bytes"]
 
 [dependencies]
 async-trait = "0.1"
+bytes = { version = "1.12.1", optional = true }
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
+openxet-storage = { path = "../storage", version = "0.0.0", optional = true }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio", "migrate", "macros"] }
 thiserror = "2"
 tokio = { version = "1", features = ["time"] }

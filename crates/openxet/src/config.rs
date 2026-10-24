@@ -219,7 +219,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
     ),
 ];
 
-const STATIC_TOKEN_FIELDS: &[&str] = &["sha256", "scope", "mode", "subject"];
+const STATIC_TOKEN_FIELDS: &[&str] = &["sha256", "scope", "mode", "subject", "tenant"];
 
 fn kind_of(key: &str) -> Option<Kind> {
     let (section, name) = key.split_once('.')?;
@@ -708,17 +708,28 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "On SIGTERM or SIGINT, in-flight requests get this long to finish.",
     );
 
+    // `per-scope` was renamed before any release (ruling M1-R38).
+    let renamed = matches!(
+        c.raw.values.get("cas.dedup_visibility"),
+        Some((toml::Value::String(text), _)) if text == "per-scope"
+    );
     let visibility = c.parsed(
         "cas.dedup_visibility",
         (Visibility::Global, "global"),
         |text| match text {
             "global" => Some(Visibility::Global),
-            "per-scope" => Some(Visibility::PerScope),
+            "per-tenant" => Some(Visibility::PerTenant),
             _ => None,
         },
-        "must be `global` or `per-scope`",
-        "`global` deduplicates across scopes; `per-scope` keeps each scope's xorbs invisible to \
-         the others.",
+        "must be `global` or `per-tenant`",
+        if renamed {
+            "`per-scope` was renamed to `per-tenant`, which isolates tenants; with no tenant on \
+             your tokens each scope is its own tenant, as before. Set dedup_visibility = \
+             \"per-tenant\"."
+        } else {
+            "`global` deduplicates across tenants; `per-tenant` keeps each tenant's xorbs \
+             invisible to the others."
+        },
     );
     let url_lifetime = c.duration(
         "cas.url_lifetime",
@@ -951,7 +962,10 @@ fn static_tokens(c: &mut Checker<'_>) -> Option<Vec<StaticToken>> {
             } else {
                 "read"
             };
-            format!("{} ({}, {mode})", t.subject, t.scope)
+            match &t.tenant {
+                Some(tenant) => format!("{} ({}, tenant {tenant}, {mode})", t.subject, t.scope),
+                None => format!("{} ({}, {mode})", t.subject, t.scope),
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -983,7 +997,7 @@ fn static_token(
                 None,
                 source,
                 "is not a static token field",
-                "A static token has sha256, scope, mode and subject.",
+                "A static token has sha256, scope, mode and subject, and optionally tenant.",
             );
             ok = false;
         }
@@ -1007,6 +1021,21 @@ fn static_token(
         field("mode"),
         field("subject"),
     );
+    let tenant = match table.get("tenant") {
+        None => Some(None),
+        Some(toml::Value::String(text)) => Some(Some(text.clone())),
+        other => {
+            c.raw.problem_toml(
+                format!("{at}.tenant"),
+                other,
+                source,
+                "must be a string when given",
+                "The tenant groups scopes for `per-tenant` dedup visibility; leave it out to use \
+                 the scope.",
+            );
+            None
+        }
+    };
     let digest = sha256.as_deref().and_then(parse_sha256);
     if sha256.is_some() && digest.is_none() {
         c.raw.problem(
@@ -1037,6 +1066,7 @@ fn static_token(
         scope: scope?,
         mode: mode?,
         subject: subject?,
+        tenant: tenant?,
     };
     ok.then_some(token)
 }
@@ -1131,8 +1161,8 @@ fn authenticator(
                 None,
                 &source,
                 reason,
-                "Give every static token a non-empty subject and scope without control \
-                 characters (scope at most 1024 bytes).",
+                "Give every static token a non-empty subject and scope, and optionally a tenant, \
+                 without control characters (scope and tenant at most 1024 bytes).",
             );
             None
         }
@@ -1354,6 +1384,56 @@ mod tests {
         );
     }
 
+    /// A static token may name its tenant (ruling M1-R38); one that isn't a
+    /// valid tenant is refused like a bad scope.
+    #[test]
+    fn the_renamed_per_scope_value_says_what_replaced_it() {
+        let loaded = load_toml("[cas]\ndedup_visibility = \"per-scope\"\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["cas.dedup_visibility"]);
+        let hint = &loaded.problems[0].hint;
+        assert!(hint.contains("renamed to `per-tenant`"), "{hint}");
+        let loaded = load_toml("[cas]\ndedup_visibility = \"tenants\"\n", &[]);
+        assert!(!loaded.problems[0].hint.contains("renamed"));
+    }
+
+    #[test]
+    fn a_static_token_may_name_its_tenant() {
+        let entry = |tenant: &str| {
+            format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nscope = \"org/model\"\nmode = \"read\"\n\
+                 subject = \"ci\"\ntenant = {tenant}\n",
+                "a".repeat(64)
+            )
+        };
+        let loaded = load_toml(&entry("\"org\""), &[]);
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let summary = &loaded
+            .settings
+            .iter()
+            .find(|s| s.key == "auth.static_tokens")
+            .unwrap()
+            .value;
+        assert!(
+            summary.contains("ci (org/model, tenant org, read)"),
+            "{summary}"
+        );
+        assert!(loaded.config.unwrap().auth.is_some());
+
+        assert_eq!(
+            problem_keys(&load_toml(&entry("7"), &[])),
+            ["auth.static_tokens[0].tenant"]
+        );
+        assert_eq!(
+            problem_keys(&load_toml(&entry("\"org\\n\""), &[])),
+            ["auth.static_tokens[0]"]
+        );
+        assert_eq!(
+            problem_keys(&load_toml(&entry("\"scope:org\""), &[])),
+            ["auth.static_tokens[0]"],
+            "`scope:` is reserved for defaulted tenants"
+        );
+    }
+
     #[test]
     fn an_empty_auth_section_is_not_dev_mode() {
         let loaded = load_toml("[auth]\n", &[]);
@@ -1437,7 +1517,7 @@ mod tests {
         let loaded = load_toml(&example, &[]);
         assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
         let config = loaded.config.unwrap();
-        assert_eq!(config.visibility, Visibility::PerScope);
+        assert_eq!(config.visibility, Visibility::PerTenant);
         assert!(config.auth.is_some());
     }
 

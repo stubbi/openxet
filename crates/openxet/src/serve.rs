@@ -22,7 +22,7 @@ use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
 use openxet_cas::{AppState, router, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
 use openxet_index::SqliteIndex;
-use openxet_storage::{LocalBucket, create_private_dir_all};
+use openxet_storage::{LocalBucket, StorageError, create_private_dir_all};
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
@@ -351,10 +351,16 @@ async fn open(
             )
         })?;
     let bucket = LocalBucket::open(&dir.join("bucket")).map_err(|err| {
+        let hint = if matches!(err, StorageError::NoHardLinks { .. }) {
+            "Move the data directory to a filesystem with hard links, such as ext4, XFS, APFS \
+             or NTFS (--data-dir or server.data_dir)."
+        } else {
+            "Check that the data directory is writable."
+        };
         CliError::new(
             "storage",
             format!("could not open the bucket in {}: {err}", dir.display()),
-            "Check that the data directory is writable.",
+            hint,
         )
     })?;
     let key = transfer_key(config)?;
@@ -369,6 +375,7 @@ async fn open(
             scope: DEV_SCOPE.to_owned(),
             mode: Mode::Write,
             subject: DEV_SUBJECT.to_owned(),
+            tenant: None,
         };
         let auth = Authenticator::new(vec![dev], vec![], config.max_token_lifetime)
             .map_err(|err| CliError::new("config", err.to_string(), "Fix [auth]."))?;

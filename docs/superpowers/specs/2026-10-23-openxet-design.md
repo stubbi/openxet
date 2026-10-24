@@ -64,7 +64,7 @@ release benchmark rig or as a release check.
 | Control and sovereignty | Their bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse | Per-PR CI |
 | Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) | Per-PR CI; Scorecard as a release check |
 | Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) | Release check (upgrade tests) |
-| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-scope` tenants; savings shown on every repo page | Per-PR CI |
+| Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-tenant` tenants; savings shown on every repo page | Per-PR CI |
 | Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks | Per-PR CI |
 
 **Where openxet beats huggingface.co:**
@@ -82,7 +82,7 @@ release benchmark rig or as a release check.
   the cache tier offsets the rest, and the benchmark suite tracks ranges
   per GB read.
 - **Global dedup vs privacy.** Global dedup reveals whether a chunk
-  already exists, even through HMAC-keyed answers. `per-scope` dedup
+  already exists, even through HMAC-keyed answers. `per-tenant` dedup
   (§5.4) removes that signal and costs cross-tenant savings.
 - **Direct vs proxied downloads** (ADR 0002). Direct presigned URLs save
   node bandwidth but need a store that binds a signature to one range.
@@ -354,10 +354,21 @@ from:
 - an optional cache tier
 - a fast index
 
-**The bucket is the source of truth.** Xorbs, uploaded shards, and Hub-layer
-commit objects are written to the bucket. The database is an index that
-`openxet reindex` can rebuild from the bucket. Losing the database must never
-lose data.
+**The bucket is the source of truth.** Xorbs, uploaded shards, Hub-layer
+commit objects and storage-only pins are written to the bucket, and so is
+who may read what *(ruling M1-R37)*:
+- a **registration record** per shard registered to a scope
+  (`registrations/{scope}/{tenant}/{shard}`, holding the scope, the tenant
+  and a sequence number), written before the index records the
+  registration and never changed after;
+- an **ownership record** per xorb a tenant uploaded
+  (`xorb-owners/{tenant}/{xorb}`).
+
+Scopes and tenants appear in keys only as the SHA-256 of their name. The
+database is an index that `openxet reindex` can rebuild from the bucket:
+every scope table follows from these records with the stored shards and
+xorbs. Losing the database must never lose data, nor anyone's access to
+it.
 
 Durability details *(builder-check calls)*:
 - Commit objects and storage-only pins are written to the bucket
@@ -432,13 +443,20 @@ exactly.
 for its users either through an admin endpoint or by signing them itself
 with a configured key. It then stores Xet file hashes in its own database.
 
-**Scopes and tenants (builder-check call):**
+**Scopes and tenants (builder-check call, ruling M1-R38):**
 - A **scope** is the unit of access. In the Hub layer a scope is a repo
   (`{type}/{namespace}/{name}`), matching HF's repo-scoped Xet tokens. In
-  storage-only mode it is an opaque string the platform chooses.
-- A **tenant** is the unit of isolation for `per-scope` dedup and metering.
-  In the Hub layer it is the namespace, the first path segment; in
-  storage-only mode it is configurable.
+  storage-only mode it is an opaque string the platform chooses. Files
+  are read and registered per scope.
+- A **tenant** is the unit of isolation for `per-tenant` dedup and
+  metering. Every principal carries one. In the Hub layer it is the
+  namespace, the first path segment. In storage-only mode it is the CAS
+  token's optional `tenant` claim (ADR 0007) or a static token's
+  configured `tenant`. When none is given it is `scope:` followed by the
+  scope, and no explicit tenant may start with `scope:` *(ruling
+  M1-R43)*, so a scope named like a tenant never joins it. So the scopes
+  of one tenant share dedup under `per-tenant`: an org's fine-tune dedups
+  against its base model in another repo.
 - A commit in repo B may only reference files registered to repo B. A file
   already in repo A is registered to B by uploading it to B; dedup makes
   that nearly free, because only a shard is sent.
@@ -472,30 +490,35 @@ Xorbs remain globally content-addressed and shared.
 
 **Global-dedup visibility** is configurable:
 - `global`, the default, follows HF's model with HMAC-protected responses.
-- `per-scope` is for multi-tenant hosting, where revealing whether a chunk
-  already exists across tenants is unacceptable.
+- `per-tenant` is for multi-tenant hosting, where revealing whether a
+  chunk already exists across tenants is unacceptable.
 
 A dedup answer offers every xorb of the newest visible shard that
 references the matched xorb, up to 16 MiB, so one hit lets a client with an
 empty cache dedup a whole earlier upload (rulings M1-R30, M1-R32, S11); under
-`per-scope` that shard must be registered to the caller's scope and only
-the caller's xorbs are offered.
+`per-tenant` that shard must be registered for the caller's tenant and
+only the tenant's xorbs are offered.
 
-**Existence checks in `per-scope` mode** answer per scope too, or they
-would reveal what dedup answers hide. Every check that says whether
-something exists is filtered by the caller's scope:
-- `HEAD /v1/xorbs/…`, `HEAD /v1/files/…` and dedup lookups
-  (`GET /v1/chunks/…`)
+**Existence checks in `per-tenant` mode** answer per tenant too, or they
+would reveal what dedup answers hide. Every check that says whether a xorb
+exists is filtered by the caller's tenant, and every check that says
+whether a file exists by the caller's scope:
+- `HEAD /v1/xorbs/…` and dedup lookups (`GET /v1/chunks/…`), by tenant
 - the xorb lookups of shard verification (`verify_shard`'s
-  `XorbChunkLookup`)
+  `XorbChunkLookup`), by tenant
+- `HEAD /v1/files/…` and reconstructions, by scope, in either mode
 
-A xorb counts as registered to a scope once it was uploaded under that
-scope or a file registered to the scope references it. A xorb or file not
-registered to the caller's scope answers exactly as if it were absent
+A tenant owns a xorb once it was uploaded under the tenant or a file
+registered for the tenant references it *(ruling M1-R39)*. The second is
+recorded in every mode, so switching `global` to `per-tenant` leaves every
+registered file readable and its upload dedupable by its own tenant. A
+xorb the caller's tenant doesn't own answers exactly as if it were absent
 (`404`, no dedup match, `UnknownXorb`), so the client uploads it, which
-registers it to its scope. Storage stays shared: the upload of a xorb
-already stored writes nothing new. Test:
-`per_scope_existence_checks_hide_other_tenants`.
+makes the tenant an owner. Storage stays shared: the upload of a xorb
+already stored writes only its small ownership record. Tests:
+`per_tenant_existence_checks_hide_other_tenants`,
+`per_tenant_scopes_of_one_tenant_share_dedup`,
+`switching_global_to_per_tenant_keeps_reads_and_dedup`.
 
 ### 5.5 Data paths
 
@@ -635,7 +658,7 @@ step.
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
 | 2 | **Credentials are repo-scoped.** CAS tokens and capability `href`s are scoped to one repo; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's repo check; user credentials are authorized per repo on every Hub and CAS route. A foreign repo answers `403`, or `404` where the caller can't read it, never revealing a private repo's existence. Repo creation is authorized per namespace (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repo's credential; `repo_create_authorized_per_namespace` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
-| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-scope`, §5.4) is available. In `per-scope` mode every existence check (`HEAD` of xorbs and files, dedup lookups, shard xorb lookups) answers as absent for anything not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_scope_dedup_isolates_tenants`, `per_scope_multi_xorb_answer_hides_foreign_xorbs`, `per_scope_existence_checks_hide_other_tenants` |
+| 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-tenant`, §5.4) is available. In `per-tenant` mode every existence check (`HEAD` of xorbs, dedup lookups, shard xorb lookups) answers as absent for any xorb the caller's tenant doesn't own, and `HEAD` of files for any file not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_tenant_dedup_isolates_tenants`, `per_tenant_multi_xorb_answer_hides_foreign_xorbs`, `per_tenant_existence_checks_hide_other_tenants`, `per_tenant_scopes_of_one_tenant_share_dedup` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
 | 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
 | 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. | `acknowledged_xorb_write_is_visible`, `acknowledged_shard_write_is_visible`, `acked_write_survives_sigkill` |
@@ -1542,7 +1565,7 @@ openxet.com needs from the core is built into the core, which makes
 self-hosting better too.
 
 **What this adds to the core:**
-- Hard multi-tenant isolation (per-scope dedup visibility, pools per tenant,
+- Hard multi-tenant isolation (per-tenant dedup visibility, pools per tenant,
   noisy-neighbour limits).
 - Enforced quotas and per-tenant rate limits.
 - Bounds on how much one writer's registrations shape the dedup answers
@@ -1644,6 +1667,10 @@ decides, with superseded parts marked.
 | M1-R34 | A reconstruction renders with extra blocking threads up to half of the free `validate` permits, counting the request's own permit, so one large answer never starves uploads. | benchmarks reference |
 | M1-R35 | A required CI gate must pass 10 of 10 runs before it merges; a flaky gate is fixed, never loosened. | §8, benchmarks reference |
 | M1-R36 | The documentation site is rendered from `docs/` with a pinned mdBook at deploy time, and nothing generated is committed; `llms.txt` and per-page Markdown are generated, and CI builds and link-checks the site and requires every reference page in its navigation. | §7.1 |
+| M1-R37 | Who may read what lives in the bucket before the index. A shard registration first creates, only if absent, `registrations/{sha256(scope)}/{sha256(tenant)}/{shard hex}` holding `{"v":1,"scope","tenant","shard","seq"}`; every retry reuses that record and its number. A xorb upload puts `xorb-owners/{sha256(tenant)}/{xorb hex}` holding `{"v":1,"tenant","xorb"}` before the index records the owner. The index keeps, per file and scope, the row of the lowest `(seq, shard, tenant)`, so its tables equal what the records, stored shards and stored xorbs rebuild. | §5.3, `openxet-storage`, issue #26 |
+| M1-R38 | Every principal carries a tenant: a CAS token's optional `tenant` claim, a static token's configured `tenant`, or the default of M1-R43. Xorb visibility, dedup answers, xorb existence checks and shard verification lookups key by tenant; file reads and registrations by scope. `per-scope` visibility is renamed `per-tenant`. | §5.4, ADR 0007 |
+| M1-R39 | Registering a shard makes the registering tenant an owner of every xorb its files reference, in every visibility mode, in the same transaction and in the bucket record, so switching `global` to `per-tenant` never breaks a read or a dedup answer. Ownership covers the whole xorb. | §5.4 |
 | M1-R40 | One process-wide memory budget bounds buffered request bodies and built reconstruction answers: `server.memory_budget`, by default a quarter of the memory the process may use (on Linux the smallest cgroup limit over it, if lower), from 256 MiB to 1 TiB, and 1 GiB where memory can't be read; a budget over half the memory is warned about. Reservations and the `commit` permit are held by the work they guard, so they outlive a client that leaves while uncancellable work runs. Uploads reserve their `Content-Length` (the route's limit if none, never more than declared) before a byte is read, until stored and registered; they queue in arrival order, unread, up to 120 s. A reconstruction reserves its decoded record from the stored term count before loading it, then its answer's bound, then its size until sent, under a send deadline of 30 s plus 1 s per MiB; an answer that fits takes free bytes at once, past queued uploads, and one that doesn't waits up to 5 s. After its wait a request gets `503 memory_busy` with `Retry-After: 1`. One answer may reserve at most an eighth of the budget, else a final `413 answer_too_large`; an upload over the whole budget gets a final `413 exceeds_memory_budget`. A batch holds at most 100,000 terms, checked from stored term counts before decoding; the count runs before any permit, not under the validation permit (accepted deviation: the reservation sized from it must precede the permit, the one order every request takes them in). Xorb commits take a `commit` permit. `accept` is capped by `server.max_connections` (default 4096); further connections wait in the listen backlog. Per-credential budget shares and connection limits are M3's, with rate limiting. | §5.8, S10 |
 | M1-R41 | This register lists every ruling that tracked code or docs cite. | §17 |
 | M1-R42 | Signed transfer URLs live 30 to 60 minutes (60 by default), so a leaked URL, or one issued before a purge, stops working within the hour; supersedes M1-R19's 24 h URL cap. | §5.4, §5.5, ADR 0002 |
+| M1-R43 | A credential that names no tenant is in tenant `scope:` followed by its scope, and no explicit tenant may start with `scope:`, so a scope named like a tenant never joins it. Migration 0005 and the bucket records use the same default. | §5.4, ADR 0007 |

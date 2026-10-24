@@ -55,7 +55,7 @@ unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | --- | ------- | ------ | ------- |
 | `bind` | `127.0.0.1:8080` | an IP address and port | Where to listen. `0.0.0.0:8080` or `[::]:8080` listens on every interface and then needs `public_url`. `hf_xet`'s default CAS endpoint is `http://localhost:8080`. |
 | `public_url` | `http://` and the bound address | absolute `http` or `https` URL of an origin root | The URL clients reach the server at. Every transfer URL is built from it. |
-| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key` and, in dev mode, `dev-token`. |
+| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
 | `log_format` | `text` | `text` or `json` | Log lines on stderr. |
 | `log_level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | openxet's own log level. Other libraries log warnings and errors only. `debug` logs one line per request. |
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
@@ -142,7 +142,7 @@ host name instead. A trailing `/` is allowed and ignored.
 
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
-| `dedup_visibility` | `global` | `global` or `per-scope` | Whether one scope's xorbs are visible to another. See [Dedup visibility](#dedup-visibility). |
+| `dedup_visibility` | `global` | `global` or `per-tenant` | Whether one tenant's xorbs are visible to another. See [Dedup visibility](#dedup-visibility). |
 | `url_lifetime` | `60m` | `30m` to `60m` | How long a signed transfer URL is valid. See [Transfer URLs](#transfer-urls). |
 | `heartbeat_interval` | `5s` | `1s` to `2m` | How often a `/v2/shards` upload stream repeats its progress while the upload is verified and committed. `hf_xet` fails a stream that is silent for 300 s. |
 | `transfer_key_file` | `<data_dir>/transfer.key` | a file path | The key that signs transfer URLs. Set explicitly, the file must exist. See [Keys and tokens on disk](#keys-and-tokens-on-disk). |
@@ -248,6 +248,7 @@ sha256 = "<64 lowercase hex characters>"
 scope = "ci"
 mode = "write"      # or "read"
 subject = "ci-bot"  # who the token acts for
+tenant = "ci"       # optional; `scope:` and the scope when left out
 ```
 
 `openxet token generate --scope ci --mode write --subject ci-bot` prints a
@@ -255,6 +256,9 @@ new token and this entry. Give each token its own `subject`, so the audit
 log tells them apart. A presented token is hashed and compared against
 every configured hash in constant time. `scope` and `subject` must not be
 empty or contain control characters, and `scope` is at most 1024 bytes.
+`tenant` names the [tenant](#tenants) the scope belongs to. It follows the
+same rules as `scope` and may not start with `scope:`; without it the
+tenant is `scope:` and the scope.
 `write` may upload; `read` may download and query.
 
 ## CAS tokens
@@ -277,9 +281,11 @@ openxet accepts exactly this:
 - **Header:** exactly `{"alg":"EdDSA","typ":"JWT","kid":"<kid>"}`. Any other
   algorithm or header parameter is refused.
 - **Claims:** `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and
-  `iat` (Unix seconds), plus an optional `nbf`. Any other claim, such as
-  `aud`, `iss` or `jti`, makes the token invalid, since openxet can't honour
-  it. `sub` and `scope` follow the static-token rules above.
+  `iat` (Unix seconds), plus an optional `nbf` and an optional `tenant`
+  (a string naming the [tenant](#tenants) the scope belongs to; without it
+  the tenant is `scope:` and the scope). Any other claim, such as `aud`,
+  `iss` or `jti`, makes the token invalid, since openxet can't honour it. `sub`,
+  `scope` and `tenant` follow the static-token rules above.
 - **Time:** a token is valid while `now < exp` and invalid from the `exp`
   second on, with no leeway (stock clients refresh 30 s before `exp`).
   It is invalid before `nbf`. `exp` may lie at most `max_token_lifetime`
@@ -303,12 +309,29 @@ hour. A URL whose `exp` lies further ahead than this server's
 the longer lifetime. Clients recover by requesting a fresh reconstruction,
 which `hf_xet` does on the `403` by itself.
 
+## Tenants
+
+Every credential names a **scope**, the unit of access: files are read
+and registered per scope. It also names a **tenant**, the unit of
+isolation: under [`per-tenant` visibility](#dedup-visibility) the scopes
+of one tenant share xorbs and dedup, and different tenants don't. A CAS
+token names its tenant in the optional `tenant` claim and a static token
+in its optional `tenant` field. Without one, the tenant is `scope:` followed
+by the scope, so each such scope is a tenant of its own. No explicit tenant
+may start with `scope:` (ruling M1-R43): a scope named like a tenant, say
+`org`, never lands in tenant `org`, whether or not its tokens name one. A
+platform whose customers each own several
+scopes (repos, projects) gives all of a customer's tokens that customer's
+tenant, so a fine-tune uploaded to one project dedups against the base
+model uploaded to another.
+
 ## Dedup visibility
 
 Files are always visible only in the scope they were uploaded to.
-`dedup_visibility` decides xorbs, the deduplicated chunk containers:
+`dedup_visibility` decides xorbs, the deduplicated chunk containers,
+between [tenants](#tenants):
 
-- `global` (the default): every stored xorb is visible to every scope. An
+- `global` (the default): every stored xorb is visible to every tenant. An
   upload skips any chunk stored by anyone, which saves the most space and
   bandwidth.
 
@@ -318,15 +341,31 @@ Files are always visible only in the scope they were uploaded to.
   more than the edit: about 1.1 MB for a 1 MiB edit of a 100 MiB file.
   The price is what one matching chunk reveals: anyone who holds one
   chunk of an upload learns that upload's xorb hashes, chunk counts and
-  chunk lengths (never its data or raw chunk hashes); choose `per-scope`
+  chunk lengths (never its data or raw chunk hashes); choose `per-tenant`
   if tenants must not learn that about each other.
-- `per-scope`: a scope sees only xorbs uploaded with its own credentials.
-  To any other scope, another scope's xorb reads as absent: `HEAD` of it
+- `per-tenant`: a tenant sees only the xorbs it owns: those uploaded with
+  its credentials, in any of its scopes, and those its registered files
+  reference. To any other tenant such a xorb reads as absent: `HEAD` of it
   answers `404`, dedup queries find no match in it, and a shard that
   references it is refused with `unknown_xorb`. A dedup answer offers only
-  xorbs of the scope's own uploads. So no scope can learn what
-  another has stored, and each scope uploads its own copy of shared data
-  (stored once in the bucket, all the same).
+  xorbs of the tenant's own uploads. So no tenant can learn what another
+  has stored, and each tenant uploads its own copy of shared data (stored
+  once in the bucket, all the same), while the scopes of one tenant
+  deduplicate against each other.
+
+Switching a running deployment from `global` to `per-tenant` keeps
+everything working: every file stays readable in its scope, and a tenant
+keeps owning the xorbs its files reference even if another tenant uploaded
+them, so its uploads keep deduplicating against them. Switching back loses
+nothing either.
+
+What a tenant keeps covers whole xorbs, not just the chunks it used. A
+file that referenced even one chunk of another tenant's xorb makes the
+whole xorb its tenant's: after the switch, that tenant still gets `HEAD`
+`200` and dedup matches for its dedup-eligible chunks. It never gets another
+tenant's raw chunk hashes, and under `global` it could see all of this
+anyway. An operator who needs tenants isolated from their first upload
+starts on `per-tenant`.
 
 Dedup answers get their own share of the server, a quarter of its CPUs (at
 least one answer at a time). A query that waits 1 s for its turn answers
@@ -379,7 +418,7 @@ data_dir = "/var/lib/openxet"
 log_format = "json"
 
 [cas]
-dedup_visibility = "per-scope"
+dedup_visibility = "per-tenant"
 url_lifetime = "60m"
 
 [auth]

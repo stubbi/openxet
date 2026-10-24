@@ -53,9 +53,9 @@ pub enum AuthError {
         reason: &'static str,
     },
 
-    /// A configured static token has an invalid subject or scope.
+    /// A configured static token has an invalid subject, scope or tenant.
     #[error(
-        "static token #{index} is misconfigured: {reason}; give every static token a non-empty subject and scope without control characters (scope at most 1024 bytes)"
+        "static token #{index} is misconfigured: {reason}; give every static token a non-empty subject and scope, and optionally a tenant, without control characters (scope and tenant at most 1024 bytes)"
     )]
     InvalidStaticToken {
         /// The token's position in the configured list, counting from 0.

@@ -13,12 +13,14 @@ use std::sync::Arc;
 use common::shard::hf_xet_shard;
 use common::xorb::{HF_XET_XORB, chunk_data, hf_xet_xorb, stored, xorb_of, xorb_path};
 use common::{
-    DEDUP_MERKLEDB_PATH, DEDUP_PATH, OTHER_PREFIX_DEDUP_PATH, Reply, SCOPE_A, TestServer,
+    DEDUP_MERKLEDB_PATH, DEDUP_PATH, OTHER_PREFIX_DEDUP_PATH, Reply, SCOPE_A, SCOPE_B, TestServer,
     WrapIndex, bearer, config,
 };
+use openxet_auth::Mode;
 use openxet_cas::Clock as _;
 use openxet_index::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Term, TermBytes, Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, Term, TermBytes,
+    Visibility,
 };
 use openxet_protocol::{
     DedupAnswer, MerkleHash, chunk_hash, hash_to_hex, is_dedup_eligible, read_dedup_answer,
@@ -233,10 +235,10 @@ async fn non_eligible_chunk_is_404() {
 }
 
 #[tokio::test]
-async fn per_scope_dedup_isolates_tenants() {
-    // §5.9 req 4: under `PerScope`, another scope's chunk answers exactly as
-    // one never stored.
-    let isolated = TestServer::start(config(Visibility::PerScope)).await;
+async fn per_tenant_dedup_isolates_tenants() {
+    // §5.9 req 4: under `PerTenant`, another tenant's chunk answers exactly
+    // as one never stored.
+    let isolated = TestServer::start(config(Visibility::PerTenant)).await;
     let (body, eligible, _) = mixed_xorb();
     let xorb = upload_xorb(&isolated, body.clone(), &isolated.write_token).await;
 
@@ -273,6 +275,97 @@ async fn per_scope_dedup_isolates_tenants() {
     );
 }
 
+/// §5.9 req 4 with explicit tenants (ruling M1-R38): under `PerTenant`, two
+/// scopes of one tenant share dedup and shard verification, so a fine-tune
+/// uploaded to one scope dedups against a base model in the other, while
+/// files stay per scope. Another tenant sees nothing of either.
+#[tokio::test]
+async fn per_tenant_scopes_of_one_tenant_share_dedup() {
+    let server = TestServer::start(config(Visibility::PerTenant)).await;
+    let base = server.token("org/base", Some("org"), Mode::Write);
+    let tune = server.token("org/fine-tune", Some("org"), Mode::Write);
+    let tune_read = server.token("org/fine-tune", Some("org"), Mode::Read);
+    let other = server.token("other/repo", Some("other"), Mode::Write);
+    let xorb = upload_xorb(&server, hf_xet_xorb(), &base).await;
+    upload_shard(&server, &base).await;
+    let first = capture_first_chunk();
+
+    assert_offers(&query(&server, &first, &tune_read).await, &first, &xorb);
+    let head = |token: &str| {
+        Reply::of(
+            server
+                .request(Method::HEAD, &xorb_path(&xorb))
+                .header(AUTHORIZATION, bearer(token)),
+        )
+    };
+    assert_eq!(head(&tune_read).await.status, 200);
+
+    let file = format!(
+        "/v1/files/{}",
+        hash_to_hex(&read_upload_shard(&hf_xet_shard()[..]).unwrap().files[1].file_hash)
+    );
+    let head_file = |token: &str| {
+        Reply::of(
+            server
+                .request(Method::HEAD, &file)
+                .header(AUTHORIZATION, bearer(token)),
+        )
+    };
+    assert_eq!(
+        head_file(&tune_read).await.status,
+        404,
+        "files are per scope"
+    );
+    upload_shard(&server, &tune).await;
+    assert_eq!(head_file(&tune_read).await.status, 200);
+
+    let foreign = query(&server, &first, &other).await;
+    let never = query(&server, &MerkleHash::default(), &other).await;
+    assert_no_match(&foreign);
+    assert_eq!(foreign.body, never.body);
+    assert_eq!(head(&other).await.status, 404);
+    assert_eq!(head_file(&other).await.status, 404);
+    Reply::of(
+        server
+            .request(Method::POST, "/v1/shards")
+            .header(AUTHORIZATION, bearer(&other))
+            .body(hf_xet_shard()),
+    )
+    .await
+    .assert_error(400, "unknown_xorb");
+}
+
+/// Ruling M1-R43 (F-A review I-1): a credential naming no tenant is in
+/// tenant `scope:{scope}`, which no explicit tenant can equal. So a token
+/// for scope `org` without a claim never sees tenant `org`'s xorbs, and
+/// the other way round.
+#[tokio::test]
+async fn a_scope_named_like_a_tenant_stays_out_of_it() {
+    let server = TestServer::start(config(Visibility::PerTenant)).await;
+    let tenant_org = server.token("org/base", Some("org"), Mode::Write);
+    let scope_org = server.token("org", None, Mode::Write);
+    let (body, eligible, _) = mixed_xorb();
+    let xorb = upload_xorb(&server, body, &tenant_org).await;
+    let other = upload_xorb(&server, labelled_xorb("scope-org", 3, false), &scope_org).await;
+    let head = |xorb: MerkleHash, token: String| {
+        Reply::of(
+            server
+                .request(Method::HEAD, &xorb_path(&xorb))
+                .header(AUTHORIZATION, bearer(&token)),
+        )
+    };
+    assert_eq!(head(xorb, tenant_org.clone()).await.status, 200);
+    assert_eq!(head(xorb, scope_org.clone()).await.status, 404);
+    assert_eq!(head(other, scope_org.clone()).await.status, 200);
+    assert_eq!(head(other, tenant_org.clone()).await.status, 404);
+    assert_offers(
+        &query(&server, &eligible, &tenant_org).await,
+        &eligible,
+        &xorb,
+    );
+    assert_no_match(&query(&server, &eligible, &scope_org).await);
+}
+
 #[tokio::test]
 async fn unauthenticated_is_401() {
     let server = TestServer::start_default().await;
@@ -291,7 +384,7 @@ async fn unauthenticated_is_401() {
 async fn dedup_response_is_cache_control_no_store() {
     // §5.9 req 3: each answer is keyed per request and depends on the
     // caller's authorization, so no cache may keep one, nor the 404 that
-    // under `PerScope` another scope gets.
+    // under `PerTenant` another tenant gets.
     let server = TestServer::start_default().await;
     let (body, eligible, _) = mixed_xorb();
     upload_xorb(&server, body, &server.write_token).await;
@@ -458,14 +551,18 @@ impl Index for BrokenIndex {
         self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
@@ -608,7 +705,16 @@ async fn register_file(
                 first_chunk: Some(first),
             };
             index
-                .register_shard(&shard, &[new], scope, vis)
+                .register_shard(
+                    &shard,
+                    &[new],
+                    Registrant {
+                        scope,
+                        tenant: &openxet_auth::default_tenant(scope),
+                        seq: index.next_registration_seq().await.unwrap(),
+                    },
+                    vis,
+                )
                 .await
                 .unwrap();
             first
@@ -691,25 +797,26 @@ async fn dedup_answer_falls_back_without_a_shard() {
 }
 
 #[tokio::test]
-async fn per_scope_multi_xorb_answer_hides_foreign_xorbs() {
-    // §5.9 req 4 under `PerScope`: a shard registered while visibility was
-    // `Global` may reference another scope's xorb. Read under `PerScope`,
-    // the answer offers only the caller's xorbs and names no other.
-    let server = TestServer::start(config(Visibility::PerScope)).await;
+async fn per_tenant_multi_xorb_answer_hides_foreign_xorbs() {
+    // §5.9 req 4 under `PerTenant`: another tenant may have registered,
+    // while visibility was `Global`, a shard over the caller's xorb and its
+    // own. Read under `PerTenant`, the caller's answer offers only its own
+    // xorbs and names no other.
+    let server = TestServer::start(config(Visibility::PerTenant)).await;
     let mine = upload_xorb(
         &server,
         labelled_xorb("mine", 3, false),
         &server.write_token,
     )
     .await;
-    let foreign_body = labelled_xorb("foreign", 3, false);
+    let foreign_body = labelled_xorb("foreign", 3, true);
     let foreign_chunks = stored(&foreign_body).chunks.hashes;
     let foreign = upload_xorb(&server, foreign_body, &server.other_scope_token).await;
     let first = register_file(
         &server,
         "mixed",
         &[mine, foreign],
-        SCOPE_A,
+        SCOPE_B,
         Visibility::Global,
     )
     .await;
@@ -719,20 +826,22 @@ async fn per_scope_multi_xorb_answer_hides_foreign_xorbs() {
     assert_eq!(read.xorbs, vec![mine]);
     assert!(
         !answer.body.windows(32).any(|w| w == foreign.as_bytes()),
-        "the answer names another scope's xorb"
+        "the answer names another tenant's xorb"
     );
     for (chunk, _) in &*foreign_chunks {
         assert!(!reveals(&answer.body, chunk));
     }
 
-    // Another scope's chunk is still exactly a "never stored".
-    let foreign_query = query(&server, &first, &server.other_scope_read_token).await;
-    let never = query(
-        &server,
-        &MerkleHash::default(),
-        &server.other_scope_read_token,
-    )
-    .await;
+    // The registering tenant owns every xorb its file references (ruling
+    // M1-R39), so its answer offers the whole upload.
+    let theirs = query(&server, &first, &server.other_scope_read_token).await;
+    assert_eq!(offered(&theirs, &first).xorbs, sorted(&[mine, foreign]));
+
+    // The other tenant's dedup candidate is still exactly a "never stored"
+    // to the caller.
+    let eligible = foreign_chunks.last().unwrap().0;
+    let foreign_query = query(&server, &eligible, &server.read_token).await;
+    let never = query(&server, &MerkleHash::default(), &server.read_token).await;
     assert_no_match(&foreign_query);
     assert_eq!(foreign_query.body, never.body);
 }

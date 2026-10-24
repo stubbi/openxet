@@ -87,10 +87,26 @@ pub struct NewFile {
 /// Which xorbs an existence check may see (design §5.4, §5.9 req 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
-    /// Every stored xorb is visible to every scope: cross-tenant dedup.
+    /// Every stored xorb is visible to every tenant: cross-tenant dedup.
     Global,
-    /// A scope sees only xorbs uploaded to it; any other answers as absent.
-    PerScope,
+    /// A tenant sees only the xorbs it owns: those uploaded under it and
+    /// those its registered files reference. Any other answers as absent.
+    PerTenant,
+}
+
+/// Who registers a shard (ruling M1-R38), and the registration's number
+/// (ruling M1-R37): the same three facts its bucket record holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Registrant<'a> {
+    /// The scope the files are registered to.
+    pub scope: &'a str,
+    /// The tenant the scope belongs to, which comes to own the files'
+    /// xorbs.
+    pub tenant: &'a str,
+    /// The registration's sequence number, from
+    /// [`Index::next_registration_seq`](crate::Index::next_registration_seq)
+    /// or the bucket record of an earlier attempt.
+    pub seq: u64,
 }
 
 const HASH_LEN: usize = 32;

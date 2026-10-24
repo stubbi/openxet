@@ -1,14 +1,18 @@
 //! openxet's index: which xorbs, files and shards exist, which scopes they
-//! are registered to, and which xorb to offer for a dedup query.
+//! are registered to, which tenants own which xorbs, and which xorb to offer
+//! for a dedup query.
 //!
 //! The index is rebuildable: the bucket is the source of truth (design
-//! §5.3), and every row can be recomputed from stored xorbs and shards.
+//! §5.3), and every row can be recomputed from stored xorbs and shards and
+//! the bucket's registration and xorb-owner records (ruling M1-R37).
 //! Nodes are stateless, so implementations must stay correct with several
 //! processes writing at once; SQLite ships now and Postgres comes behind the
 //! same [`Index`] trait in M3 (design §5.2, §5.8).
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "test-support")]
+mod rebuild;
 mod sqlite;
 mod types;
 
@@ -16,28 +20,34 @@ use std::collections::HashMap;
 
 use openxet_protocol::MerkleHash;
 
+#[cfg(feature = "test-support")]
+pub use rebuild::{FileRow, RebuildError, ScopeTables, rebuild_scope_tables};
 #[cfg(feature = "fault-injection")]
 pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;
-pub use types::{ChunkLayout, ChunkTable, FileRecord, NewFile, Scope, Term, TermBytes, Visibility};
+pub use types::{
+    ChunkLayout, ChunkTable, FileRecord, NewFile, Registrant, Scope, Term, TermBytes, Visibility,
+};
 
 /// The index's operations. Every write is idempotent: content is addressed by
 /// hash, so repeating a call with the same arguments changes nothing and
 /// reports `false`.
 ///
-/// `scope` is the caller's scope (design §5.4). Files are always visible only
-/// in the scopes they were registered to. Xorbs are content-addressed and
-/// shared; whether another scope's xorb is visible depends on [`Visibility`].
+/// Files are read and registered per **scope**, the caller's unit of access:
+/// they are always visible only in the scopes they were registered to.
+/// Xorbs are content-addressed and shared; whether one is visible to the
+/// caller's **tenant**, its unit of isolation, depends on [`Visibility`]
+/// (design §5.4, ruling M1-R38).
 #[async_trait::async_trait]
 pub trait Index: Send + Sync + 'static {
-    /// Records a stored xorb of `size` bytes with its chunk table, registers
-    /// it to `scope`, and records `eligible` (its chunks that pass
+    /// Records a stored xorb of `size` bytes with its chunk table, records
+    /// `tenant` as an owner, and records `eligible` (its chunks that pass
     /// `is_dedup_eligible`) as dedup candidates.
     ///
-    /// Returns `true` if the xorb was not yet registered to `scope`. A xorb
-    /// that already exists keeps its size, table and ingestion order; only
-    /// the scope membership and dedup candidates are added. Reporting per
-    /// scope means the answer never reveals another scope's uploads.
+    /// Returns `true` if `tenant` didn't own the xorb yet. A xorb that
+    /// already exists keeps its size, table and ingestion order; only the
+    /// owner and dedup candidates are added. Reporting per tenant means the
+    /// answer never reveals another tenant's uploads.
     ///
     /// # Errors
     ///
@@ -50,11 +60,11 @@ pub trait Index: Send + Sync + 'static {
         size: u64,
         table: &ChunkTable,
         eligible: &[MerkleHash],
-        scope: &str,
+        tenant: &str,
     ) -> Result<bool, IndexError>;
 
     /// The stored size of `xorb`, or `None` if it is missing or not visible
-    /// to `scope` under `vis`.
+    /// to `tenant` under `vis`.
     ///
     /// # Errors
     ///
@@ -62,11 +72,11 @@ pub trait Index: Send + Sync + 'static {
     async fn xorb_size(
         &self,
         xorb: &MerkleHash,
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<Option<u64>, IndexError>;
 
-    /// The chunk tables of `xorbs` that are stored and visible to `scope`
+    /// The chunk tables of `xorbs` that are stored and visible to `tenant`
     /// under `vis`. A missing or invisible xorb is absent from the map;
     /// duplicates in `xorbs` are answered once.
     ///
@@ -76,7 +86,7 @@ pub trait Index: Send + Sync + 'static {
     async fn chunk_tables(
         &self,
         xorbs: &[MerkleHash],
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError>;
 
@@ -90,47 +100,65 @@ pub trait Index: Send + Sync + 'static {
     async fn chunk_layouts(
         &self,
         xorbs: &[MerkleHash],
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<HashMap<MerkleHash, ChunkLayout>, IndexError>;
 
-    /// Registers the files of a verified shard to `scope`, in one
-    /// transaction: either everything is recorded or nothing is.
+    /// A new registration sequence number, higher than every one this index
+    /// handed out before. A registration takes one before it writes its
+    /// bucket record (ruling M1-R37).
     ///
-    /// - Every xorb named by a file's terms must be visible to `scope` under
-    ///   `vis` (ruling M1-R17): stored, and under [`Visibility::PerScope`]
-    ///   also registered to `scope`. Otherwise the call fails with
-    ///   [`IndexError::UnknownXorb`], and the answer is the same whether the
-    ///   xorb is stored elsewhere or not at all, so it reveals nothing about
-    ///   other scopes.
-    /// - Each file is registered to `scope` with its own reconstruction,
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] if the write fails, or
+    /// [`IndexError::Corrupt`].
+    async fn next_registration_seq(&self) -> Result<u64, IndexError>;
+
+    /// Registers the files of a verified shard to `by.scope`, for
+    /// `by.tenant`, as registration number `by.seq`, in one transaction:
+    /// either everything is recorded or nothing is. The caller has written
+    /// the registration's bucket record first (ruling M1-R37).
+    ///
+    /// - Every xorb named by a file's terms must be visible to `by.tenant`
+    ///   under `vis` (ruling M1-R17): stored, and under
+    ///   [`Visibility::PerTenant`] also owned by the tenant. Otherwise the
+    ///   call fails with [`IndexError::UnknownXorb`], and the answer is the
+    ///   same whether the xorb is stored elsewhere or not at all, so it
+    ///   reveals nothing about other tenants.
+    /// - `by.tenant` becomes an owner of every xorb the files reference, in
+    ///   every visibility mode (ruling M1-R39), so a later switch to
+    ///   [`Visibility::PerTenant`] never hides a registered file's xorbs
+    ///   from its own tenant.
+    /// - Each file is registered to the scope with its own reconstruction,
     ///   SHA-256 and `shard`. Reconstructions are kept per scope (ruling
     ///   M1-R16): the same file hash may be stored over different xorbs in
     ///   different scopes, and each scope reads back only its own.
-    /// - A file already registered to `scope` keeps its first registration;
-    ///   a later shard's terms for it describe the same bytes and are
-    ///   ignored.
+    /// - Of several registrations of one file to one scope, the one with
+    ///   the lowest `(seq, shard bytes, tenant)` is kept, whichever
+    ///   committed first, as a rebuild from the bucket's records keeps it;
+    ///   all describe the same bytes.
     /// - Each file's `first_chunk` becomes a dedup candidate for its first
     ///   term's xorb.
     /// - The shard's distinct term xorbs are recorded in term order (the
     ///   order of first reference across its files), for
-    ///   [`Index::dedup_shard_xorbs`]. A shard newly registered to `scope`
-    ///   becomes the newest registration.
+    ///   [`Index::dedup_shard_xorbs`], where the newest registration is the
+    ///   one with the highest `seq`.
     ///
-    /// Returns `true` if the shard or any of its files was newly registered
-    /// to `scope`, `false` if all of it already was.
+    /// Returns `true` if the shard was newly registered to the scope for
+    /// the tenant, or any of its files to the scope, and `false` if all of
+    /// it already was.
     ///
     /// # Errors
     ///
     /// [`IndexError::UnknownXorb`] for a term xorb that isn't visible,
-    /// [`IndexError::InvalidInput`] if a size doesn't fit the store, and
-    /// [`IndexError::Database`] if the write fails. Nothing is recorded on
-    /// error.
+    /// [`IndexError::InvalidInput`] if a size or `seq` doesn't fit the
+    /// store, and [`IndexError::Database`] if the write fails. Nothing is
+    /// recorded on error.
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError>;
 
@@ -189,17 +217,17 @@ pub trait Index: Send + Sync + 'static {
     async fn dedup_xorb(
         &self,
         chunk: &MerkleHash,
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<Option<MerkleHash>, IndexError>;
 
     /// The xorbs a global dedup answer offers alongside `xorb` (ruling
     /// M1-R30): those of the newest registered shard whose files reference
     /// `xorb`, in that shard's term order, as [`Index::register_shard`]
-    /// recorded them. Under [`Visibility::PerScope`] the shard must be
-    /// registered to `scope` and "newest" counts only `scope`'s
-    /// registrations; under [`Visibility::Global`] any scope's count. Only
-    /// xorbs visible to `scope` under `vis` are listed, so the answer names
+    /// recorded them. Under [`Visibility::PerTenant`] the shard must be
+    /// registered for `tenant` and "newest" counts only `tenant`'s
+    /// registrations; under [`Visibility::Global`] any tenant's count. Only
+    /// xorbs visible to `tenant` under `vis` are listed, so the answer names
     /// no other xorb. `None` if no such shard lists a visible xorb.
     ///
     /// # Errors
@@ -208,7 +236,7 @@ pub trait Index: Send + Sync + 'static {
     async fn dedup_shard_xorbs(
         &self,
         xorb: &MerkleHash,
-        scope: &str,
+        tenant: &str,
         vis: Visibility,
     ) -> Result<Option<Vec<MerkleHash>>, IndexError>;
 }
@@ -257,9 +285,9 @@ pub enum IndexError {
          tracked in https://github.com/stubbi/openxet/issues/26"
     )]
     Corrupt(String),
-    /// A shard's file names a xorb that isn't visible to the caller's scope:
-    /// not stored, or under [`Visibility::PerScope`] stored only for other
-    /// scopes. Both cases read the same, so the error can't probe them.
+    /// A shard's file names a xorb that isn't visible to the caller's tenant:
+    /// not stored, or under [`Visibility::PerTenant`] owned only by other
+    /// tenants. Both cases read the same, so the error can't probe them.
     #[error(
         "a file in the shard references xorb {xorb}, which is not stored on this server; upload \
          the xorb before the shard that references it"

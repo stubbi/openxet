@@ -105,21 +105,21 @@ impl FromRequestParts<AppState> for ChunkPath {
 
 /// Answers with the shard offering the xorbs the index names for `chunk`,
 /// or `404 not_found`. A missing chunk, an ineligible one (the index holds
-/// only eligible and first chunks) and, under `PerScope`, another scope's
+/// only eligible and first chunks) and, under `PerTenant`, another tenant's
 /// all answer alike.
 async fn query(
     ChunkPath(chunk): ChunkPath,
     ReadAccess(principal): ReadAccess,
     State(state): State<AppState>,
 ) -> Result<Response, CasError> {
-    let (scope, vis) = (principal.scope.as_str(), state.cfg.visibility);
+    let (tenant, vis) = (principal.tenant.as_str(), state.cfg.visibility);
     let xorb = state
         .index
-        .dedup_xorb(&chunk, scope, vis)
+        .dedup_xorb(&chunk, tenant, vis)
         .await?
         .ok_or(CasError::NoDedupMatch)?;
     let order = offer_order(
-        state.index.dedup_shard_xorbs(&xorb, scope, vis).await?,
+        state.index.dedup_shard_xorbs(&xorb, tenant, vis).await?,
         xorb,
     );
     let key = fresh_key()?;
@@ -131,7 +131,7 @@ async fn query(
         .await
         .map_err(|_| CasError::DedupBusy)?
         .map_err(CasError::internal)?;
-    let tables = load_tables(&state, &order, scope, vis).await?;
+    let tables = load_tables(&state, &order, tenant, vis).await?;
     if tables.first().is_none_or(|(first, _)| *first != xorb) {
         // Nothing deletes a xorb in M1, so the dedup row and the chunk table
         // disagree. The client loses only this dedup match.
@@ -186,13 +186,13 @@ fn offer_order(shard: Option<Vec<MerkleHash>>, matched: MerkleHash) -> Vec<Merkl
 async fn load_tables(
     state: &AppState,
     order: &[MerkleHash],
-    scope: &str,
+    tenant: &str,
     vis: Visibility,
 ) -> Result<Vec<(MerkleHash, Arc<[(MerkleHash, u64)]>)>, CasError> {
     let mut tables = Vec::with_capacity(order.len());
     let mut bytes = 0;
     for batch in order.chunks(TABLES_PER_LOAD) {
-        let mut loaded = state.index.chunk_tables(batch, scope, vis).await?;
+        let mut loaded = state.index.chunk_tables(batch, tenant, vis).await?;
         for xorb in batch {
             if let Some(table) = loaded.remove(xorb) {
                 bytes += dedup_answer_xorb_bytes(table.hashes.len());
@@ -262,6 +262,7 @@ mod tests {
             scope: "s".to_owned(),
             mode,
             subject: "unit".to_owned(),
+            tenant: None,
         }
     }
 

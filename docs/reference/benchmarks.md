@@ -43,8 +43,9 @@ pins the file shape, so it can't pass on an easy file. Both files have
 
 Each shape gets 200 full-file and 200 random-range
 `GET /v2/reconstructions`, one at a time, in process through the router
-and a SQLite index on disk, timed to the body's last byte. The index uses
-per-scope visibility, the costlier check. The gate runs on the Linux
+and a SQLite index on disk, timed to the body's last byte. The server uses
+`per-tenant` visibility, as a multi-tenant host does; reconstruction reads
+chunk layouts the same way in either mode. The gate runs on the Linux
 runner only, as the other release-build gate does.
 
 p50 / p99 in ms:
@@ -215,6 +216,7 @@ SQLite index on the local SSD, with the semaphore at each size:
 | Shards/s, before `fullfsync` (Task 16, quieter host) | 151 | 193 | 172 | 196 | 220 | 202 | 217 | 219 |
 | Shards/s, before `fullfsync` (rerun, load 7 to 25) | 52 | 61 | 48 | 95 | 111 | 115 | 119 | 126 |
 | Shards/s, with `fullfsync` (same load) | 18–57 | 51–61 | 58–66 | 59–62 | 72–73 | 67–77 | 79–85 | 78–87 |
+| Shards/s, also writing the registration record and taking its number (M1-R37; load 13 to 17) | 48 | 47 | 59 | 68 | 70 | 72 | 64 | 59 |
 
 The two rows taken under load ran back to back, minutes apart, with only
 the pragma changed; the first row is the original measurement, on a less
@@ -223,8 +225,13 @@ every registration is a durable SQLite commit, and one writer at a time
 holds the database (design §5.8's index scaling is M3's Postgres), so the
 plateau is the rate of durable index commits. `fullfsync` makes each of
 those commits slower, which lowers the plateau on macOS (next section).
-4 × CPUs is past the plateau, so it never limits throughput on local
-storage; what it bounds is memory, which ruling M1-R24 sets it for. A
+Since ruling M1-R37 each commit also takes a registration number from
+the index and creates the shard's registration record in the bucket
+before registering, as `ingest` does. The last row, one run at similar
+load, matches the `fullfsync` row up to 32 permits and is about a quarter
+lower above it, likely because the extra counter commit competes for
+the one writer. 4 × CPUs is past the plateau, so it never limits throughput on
+local storage; what it bounds is memory, which ruling M1-R24 sets it for. A
 remote bucket's slower puts overlap under the same permits, so the number
 stays right until a bucket's latency makes 32 concurrent puts the limit.
 

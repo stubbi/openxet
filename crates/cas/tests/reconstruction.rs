@@ -19,9 +19,9 @@ use common::{
     FILE_PATH, PROBE_BODIES, RECONSTRUCTION_V1_PATH, RECONSTRUCTION_V2_PATH, ROUTES, Reply, Route,
     SCOPE_A, TRANSFER_PATH, TablelessIndex, TestServer, UNAUTHENTICATED, XORB_PATH, bearer, config,
 };
-use openxet_auth::UrlSigner;
+use openxet_auth::{Mode, UrlSigner};
 use openxet_cas::{Clock as _, MAX_BATCH_FILES, MAX_BATCH_TERMS};
-use openxet_index::{FileRecord, NewFile, Term, Visibility};
+use openxet_index::{FileRecord, NewFile, Registrant, Term, Visibility};
 use openxet_protocol::{
     MerkleHash, chunk_hash, decode_fetched_chunks, file_hash, hash_from_hex, hash_to_hex,
     read_upload_shard,
@@ -144,7 +144,16 @@ async fn synthetic_file(
     server
         .on_server(async move {
             index
-                .register_shard(&shard, &[file], scope, vis)
+                .register_shard(
+                    &shard,
+                    &[file],
+                    Registrant {
+                        scope,
+                        tenant: &openxet_auth::default_tenant(scope),
+                        seq: index.next_registration_seq().await.unwrap(),
+                    },
+                    vis,
+                )
                 .await
                 .unwrap()
         })
@@ -368,7 +377,16 @@ async fn register_empty_file(server: &TestServer, vis: Visibility) -> MerkleHash
     server
         .on_server(async move {
             index
-                .register_shard(&chunk_hash(b"empty"), &[file], SCOPE_A, vis)
+                .register_shard(
+                    &chunk_hash(b"empty"),
+                    &[file],
+                    Registrant {
+                        scope: SCOPE_A,
+                        tenant: &openxet_auth::default_tenant(SCOPE_A),
+                        seq: index.next_registration_seq().await.unwrap(),
+                    },
+                    vis,
+                )
                 .await
                 .unwrap()
         })
@@ -930,7 +948,7 @@ async fn send_aimed(server: &TestServer, route: &Route, token: Option<&str>) -> 
 
 #[tokio::test]
 async fn credential_scoped_to_repo() {
-    // Design §5.9 req 2, the CAS half. Under per-scope visibility, scope B's
+    // Design §5.9 req 2, the CAS half. Under per-tenant visibility, scope B's
     // read and write tokens, on every route and aimed at scope A's data:
     // - a write route with the read token is `403`
     // - a read of A's xorb, chunk or file is `404`, and a batch leaves A's
@@ -939,7 +957,7 @@ async fn credential_scoped_to_repo() {
     //   naming A's xorb is refused as naming an unknown xorb
     // and no answer carries A's data. Scope A's own read token is the
     // control: the same requests succeed for it.
-    let server = TestServer::start(config(Visibility::PerScope)).await;
+    let server = TestServer::start(config(Visibility::PerTenant)).await;
     upload_capture(&server, &server.write_token).await;
     let unknown = "is not stored on this server";
 
@@ -1009,14 +1027,14 @@ async fn credential_scoped_to_repo() {
 }
 
 #[tokio::test]
-async fn per_scope_existence_checks_hide_other_tenants() {
-    // Design §5.4 "Existence checks in per-scope mode", §5.9 req 4: to
-    // scope B, a server holding scope A's xorb, chunks and files answers
+async fn per_tenant_existence_checks_hide_other_tenants() {
+    // Design §5.4 "Existence checks in per-tenant mode", §5.9 req 4: to
+    // scope B, of another tenant, a server holding scope A's xorb, chunks and files answers
     // exactly as an empty one, on every route: `HEAD` of xorbs and files,
     // dedup lookups and the xorb lookups of shard verification included.
-    let holding = TestServer::start(config(Visibility::PerScope)).await;
+    let holding = TestServer::start(config(Visibility::PerTenant)).await;
     upload_capture(&holding, &holding.write_token).await;
-    let empty = TestServer::start(config(Visibility::PerScope)).await;
+    let empty = TestServer::start(config(Visibility::PerTenant)).await;
 
     for route in ROUTES {
         for (holding_token, empty_token) in [
@@ -1500,4 +1518,84 @@ async fn reconstruction_answers_carry_a_content_length() {
         assert_eq!(reply.headers[CONTENT_LENGTH], reply.body.len().to_string());
         assert!(!reply.headers.contains_key("transfer-encoding"));
     }
+}
+
+/// Ruling M1-R39 (M1 final review I2): an operator who starts on `global`
+/// and later switches to `per-tenant` breaks nothing. Tenant B registers
+/// files over tenant A's xorb under `global`; after the switch B's whole
+/// and ranged reconstructions still download byte-exact, B's dedup query
+/// still matches and B can register the shard again, while a third tenant
+/// still sees none of it.
+#[tokio::test]
+async fn switching_global_to_per_tenant_keeps_reads_and_dedup() {
+    let server = TestServer::start(config(Visibility::Global)).await;
+    let xorb = hash_from_hex(HF_XET_XORB).unwrap();
+    let reply = Reply::of(
+        server
+            .request(Method::POST, &xorb_path(&xorb))
+            .header(AUTHORIZATION, bearer(&server.write_token))
+            .body(hf_xet_xorb()),
+    )
+    .await;
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let shard = || {
+        server
+            .request(Method::POST, "/v1/shards")
+            .header(AUTHORIZATION, bearer(&server.other_scope_token))
+            .body(hf_xet_shard())
+    };
+    assert_eq!(Reply::of(shard()).await.json()["result"], 1);
+
+    let server = server.restart(config(Visibility::PerTenant)).await;
+    let b = server.other_scope_read_token.clone();
+    for (file, expected) in capture_files() {
+        if expected.is_empty() {
+            continue;
+        }
+        let whole = reconstruct(&server, "v2", &file, None, &b).await;
+        assert_eq!(whole.status, 200, "{}", whole.body);
+        assert_eq!(download_v2(&server, &whole.json()).await, expected);
+
+        let (start, end) = (1, expected.len() - 2);
+        let range = format!("bytes={start}-{end}");
+        let ranged = reconstruct(&server, "v2", &file, Some(&range), &b).await;
+        assert_eq!(ranged.status, 200, "{}", ranged.body);
+        let mut got = download_v2(&server, &ranged.json()).await;
+        got.truncate(end - start + 1);
+        assert!(got == expected[start..=end], "{range} of {file}");
+    }
+
+    let shard = read_upload_shard(&hf_xet_shard()[..]).unwrap();
+    let segment = &shard.files[1].segments[0];
+    let first = stored(&hf_xet_xorb()).chunks.hashes[segment.chunk_start as usize].0;
+    let dedup = |token: String| {
+        Reply::of(
+            server
+                .request(
+                    Method::GET,
+                    &format!("/v1/chunks/default/{}", hash_to_hex(&first)),
+                )
+                .header(AUTHORIZATION, bearer(&token)),
+        )
+    };
+    assert_eq!(dedup(b.clone()).await.status, 200);
+    let again = Reply::of(
+        server
+            .request(Method::POST, "/v1/shards")
+            .header(AUTHORIZATION, bearer(&server.other_scope_token))
+            .body(hf_xet_shard()),
+    )
+    .await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.json()["result"], 0);
+
+    let stranger = server.token("tenant-c/repo", None, Mode::Read);
+    assert_eq!(dedup(stranger.clone()).await.status, 404);
+    let head = Reply::of(
+        server
+            .request(Method::HEAD, &xorb_path(&xorb))
+            .header(AUTHORIZATION, bearer(&stranger)),
+    )
+    .await;
+    assert_eq!(head.status, 404);
 }

@@ -15,8 +15,8 @@ use http_body_util::channel::{Channel, Sender};
 
 use openxet_auth::{Authenticator, StaticToken, UrlSigner};
 use openxet_index::{
-    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, TermBytes,
-    Visibility,
+    ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, SqliteIndex,
+    TermBytes, Visibility,
 };
 use openxet_protocol::{MerkleHash, VerifyLimits};
 use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
@@ -116,14 +116,18 @@ impl Index for PermitProbe {
         self.inner.chunk_layouts(xorbs, scope, vis).await
     }
 
+    async fn next_registration_seq(&self) -> Result<u64, IndexError> {
+        self.inner.next_registration_seq().await
+    }
+
     async fn register_shard(
         &self,
         shard: &MerkleHash,
         files: &[NewFile],
-        scope: &str,
+        by: Registrant<'_>,
         vis: Visibility,
     ) -> Result<bool, IndexError> {
-        self.inner.register_shard(shard, files, scope, vis).await
+        self.inner.register_shard(shard, files, by, vis).await
     }
 
     async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
@@ -237,6 +241,14 @@ impl Bucket for BlockingBucket {
         })
         .await
         .unwrap()
+    }
+
+    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
+        self.inner.create(key, bytes).await
+    }
+
+    async fn list(&self, kind: openxet_storage::KeyKind) -> Result<Vec<Key>, StorageError> {
+        self.inner.list(kind).await
     }
 
     async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {

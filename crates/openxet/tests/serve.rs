@@ -568,7 +568,7 @@ fn config_env_override() {
     let out = run(openxet()
         .args(["config", "check", "--json", "--config"])
         .arg(&config)
-        .env("OPENXET_CAS__DEDUP_VISIBILITY", "per-scope")
+        .env("OPENXET_CAS__DEDUP_VISIBILITY", "per-tenant")
         .env("OPENXET_SERVER__LOG_FORMAT", "json"));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let report = json_stdout(&out);
@@ -583,7 +583,7 @@ fn config_env_override() {
             .unwrap_or_else(|| panic!("{key} is not reported: {report}"))
             .clone()
     };
-    assert_eq!(setting("cas.dedup_visibility")["value"], "per-scope");
+    assert_eq!(setting("cas.dedup_visibility")["value"], "per-tenant");
     assert_eq!(
         setting("cas.dedup_visibility")["source"],
         "env OPENXET_CAS__DEDUP_VISIBILITY"
@@ -772,6 +772,7 @@ async fn token_mint_verifies() {
     assert_eq!(minted["schema"], "openxet.token-mint.v1");
     assert_eq!(minted["kid"], keygen["kid"]);
     assert_eq!(minted["scope"], "team/models");
+    assert_eq!(minted["tenant"], "scope:team/models");
     assert_eq!(minted["mode"], "read");
     let exp = minted["exp"].as_u64().unwrap();
     assert_eq!(exp - minted["iat"].as_u64().unwrap(), 3600);
@@ -780,6 +781,21 @@ async fn token_mint_verifies() {
         .as_str()
         .unwrap()
         .to_owned();
+
+    let out = run(openxet()
+        .args([
+            "token",
+            "mint",
+            "--json",
+            "--scope",
+            "team/models",
+            "--tenant",
+            "team",
+        ])
+        .args(["--mode", "read", "--key"])
+        .arg(&key));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(json_stdout(&out)["tenant"], "team");
 
     let out = mint("read", "31d");
     assert_eq!(out.status.code(), Some(1));
@@ -829,14 +845,18 @@ async fn token_generate_configures_a_static_token() {
         "write",
         "--subject",
         "ci-bot",
+        "--tenant",
+        "ci-org",
     ]));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let generated = json_stdout(&out);
     assert_eq!(generated["schema"], "openxet.token-generate.v1");
+    assert_eq!(generated["tenant"], "ci-org");
     let token = generated["token"].as_str().unwrap().to_owned();
     assert!(is_oxt_token(&token), "{token}");
     let toml = generated["config"].as_str().unwrap();
     assert!(!toml.contains(&token), "the config snippet holds the token");
+    assert!(toml.contains("tenant = \"ci-org\"\n"), "{toml}");
 
     let config = write_config(dir.path(), toml);
     let server = Server::start(

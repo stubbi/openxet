@@ -20,7 +20,9 @@ use axum::http::Request;
 use axum::http::header::{AUTHORIZATION, RANGE};
 use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, router};
-use openxet_index::{ChunkTable, FileRecord, Index as _, NewFile, SqliteIndex, Term, Visibility};
+use openxet_index::{
+    ChunkTable, FileRecord, Index as _, NewFile, Registrant, SqliteIndex, Term, Visibility,
+};
 use openxet_protocol::{MerkleHash, VerifyLimits, hash_to_hex};
 use openxet_storage::LocalBucket;
 use tempfile::TempDir;
@@ -149,6 +151,7 @@ fn state(dir: &Path, index: SqliteIndex) -> AppState {
         scope: SCOPE.to_owned(),
         mode: Mode::Read,
         subject: "large-files".to_owned(),
+        tenant: None,
     };
     AppState::new(
         Arc::new(index),
@@ -166,7 +169,7 @@ fn state(dir: &Path, index: SqliteIndex) -> AppState {
             public_url: Url::parse("https://cas.example.com").unwrap(),
             // The costlier visibility check: every layout read also checks
             // the xorb's scope.
-            visibility: Visibility::PerScope,
+            visibility: Visibility::PerTenant,
             verify_limits: VerifyLimits::default(),
             heartbeat_interval: CasConfig::DEFAULT_HEARTBEAT_INTERVAL,
             body_deadline: BodyDeadline::DEFAULT,
@@ -213,7 +216,16 @@ pub async fn seed(index: &SqliteIndex, scope: &str, terms: u32) -> [(Shape, File
         })
         .collect();
     index
-        .register_shard(&synthetic(4, terms, 0), &new, scope, Visibility::PerScope)
+        .register_shard(
+            &synthetic(4, terms, 0),
+            &new,
+            Registrant {
+                scope,
+                tenant: scope,
+                seq: 1,
+            },
+            Visibility::PerTenant,
+        )
         .await
         .unwrap();
     files
