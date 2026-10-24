@@ -6,7 +6,7 @@ benchmark, and a speed regression fails CI.
 
 | What | Kind | Command |
 |---|---|---|
-| Reconstruction latency, design §5.8 | CI gate (Linux runner) | `cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture` |
+| Reconstruction latency, design §5.8 | CI gate (Linux runner); locally, needs a quiet machine | `cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture` |
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 
@@ -45,23 +45,50 @@ runner only, as the other release-build gate does.
 
 p50 / p99 in ms:
 
-| Shape | Start (local) | Now (local) | Before threads (CI Linux) | Now (CI Linux) | Now (CI macOS) |
-|---|---|---|---|---|---|
-| unmerged full | 246 / 679 | 26.3 / 41.3 | 66.2 / 73.6 | **24.8 / 28.2** | 57.5 / 90.3 |
-| unmerged range | 74 / 486 | 15.3 / 35.6 | 25.3 / 59.8 | **14.7 / 23.8** | 31.1 / 70.3 |
-| merged full | 50 / 93 | 15.0 / 16.6 | 19.7 / 25.9 | **13.2 / 15.7** | 23.7 / 32.8 |
-| merged range | 14 / 42 | 5.9 / 13.0 | 7.7 / 18.7 | **5.2 / 12.6** | 10.1 / 23.0 |
+| Shape | Start (local) | Before threads (CI Linux) | All writers (CI Linux) | All writers (CI macOS) | Now, M1-R34 cap (local) | Now, M1-R34 cap (CI Linux) |
+|---|---|---|---|---|---|---|
+| unmerged full | 246 / 679 | 66.2 / 73.6 | 24.8 / 28.2 | 57.5 / 90.3 | 28.1 / 33.9 | **30.6 / 39.2** |
+| unmerged range | 74 / 486 | 25.3 / 59.8 | 14.7 / 23.8 | 31.1 / 70.3 | 15.2 / 43.1 | **15.2 / 29.1** |
+| merged full | 50 / 93 | 19.7 / 25.9 | 13.2 / 15.7 | 23.7 / 32.8 | 15.8 / 22.3 | **14.2 / 18.4** |
+| merged range | 14 / 42 | 7.7 / 18.7 | 5.2 / 12.6 | 10.1 / 23.0 | 6.8 / 14.1 | **5.7 / 12.4** |
 
 "Start" is the gate against the code before this work. "Before threads"
-is CI with every change below but the last.
+is CI with every change below but the writer threads, so one writer.
+"All writers" let an answer take every free `validate` permit; "Now"
+takes at most half of them (ruling M1-R34), which on CI's 4-vCPU runner
+means 2 writers instead of 4.
 
-The Linux runner meets the gate with margin, and the shared local host
-passed it at load average 15. Its tails vary with the neighbours,
-though: an earlier local run of the same code at similar load had a p99
-of 62 ms (unmerged full) and 97 ms (unmerged range). The macOS runner, a
-3-vCPU VM, misses the p99 for the unmerged shape, with p50s within it.
-The gate keeps the one threshold and runs where CI's timings are stable;
-the macOS runner's numbers are recorded here, not gated.
+The Linux runner meets the gate with about 11 ms of p99 margin. The
+shared local host passes or fails it with its neighbours' load: at load
+average 10 to 22, runs of the same code had unmerged p99s from 34 ms to
+97 ms while the p50s stayed within a millisecond. The macOS runner, a
+3-vCPU VM, missed the p99 for the unmerged shape even with every writer,
+with p50s within it. The gate keeps the one threshold and runs where CI's
+timings are stable; the macOS runner's numbers are recorded here, not
+gated.
+
+**Run it on a quiet machine.** With 200 samples, the p99 is the third
+slowest request, so three scheduler stalls fail it. On a busy host the
+p50s stay steady while the p99 fails: that is load, not a regression.
+
+### What the gate proves, and what it doesn't
+
+The gate proves that one reconstruction at a time, on an otherwise idle
+node, against an index of 1,000 xorbs, answers the worst-case 100k-term
+file within 50 ms at p99. On that idle node the answer is written by
+several threads: each past the first runs under a `validate` permit that
+is free at that moment, at most half of the free ones (ruling M1-R34), so
+CI's 4-vCPU Linux runner writes on 2 threads and the 8-core M3 on 4.
+
+It doesn't prove design §5.8's target: p99 < 50 ms **at 1,000 requests/s
+per node, against an index of 10⁷ files and 10⁷ xorbs**, which §16 assigns
+to the release rig. Under load the free permits run out and an answer is
+written on one thread. Single-threaded, the unmerged 100k-term full
+answer took 66.2 ms p50 and 73.6 ms p99 on CI Linux ("Before threads"
+above) and 39.9 ms p50 locally, so the worst-case shape likely misses
+50 ms under load on a 4-vCPU-class node. Measuring §5.8 under load on the
+release rig, and the single-thread headroom it may need, is tracked in
+<https://github.com/stubbi/openxet/issues/43>.
 
 ### What each change bought
 
@@ -79,6 +106,14 @@ answer.
 
 Tried and dropped: reading the layouts of 1,000 xorbs in four concurrent
 queries took 5.1 ms against 6.4 ms for one, not worth the code.
+
+What the layouts cost: `xorb_layouts` repeats 8 of the 40 bytes per chunk
+that `xorbs.chunk_table` holds, 20% more chunk-table index. At design
+§5.8's sizing of 1 PB of unique data (about 1.6×10¹⁰ chunks) that is about
+128 GB more index, for planning that reads a fifth of the bytes. Its rows
+reference `xorbs` with a foreign key, so garbage collection must delete a
+xorb's layout row before its `xorbs` row. (Migration 0003 itself is left
+unedited: sqlx checksums applied migrations, comments included.)
 
 Where the unmerged full answer's time went before the writer threads,
 locally: file record 2.5 ms, window 0.4 ms, layouts 5.8 ms, plan 2.6 ms,

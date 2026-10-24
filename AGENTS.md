@@ -195,7 +195,9 @@ evaluating existing Xet servers; see `docs/competitive-matrix.md`).
 Run from the repository root. The toolchain is pinned in
 `rust-toolchain.toml`; `cargo nextest` needs `cargo install cargo-nextest
 --locked` once. CI runs these same commands (`.github/workflows/ci.yml`), so
-green locally means green there. Keep this list exact and current. The
+green locally means green there, except for the latency gate: timed, it
+needs a quiet machine, and a p99 failure with steady p50s on a busy host is
+load, not a regression. Keep this list exact and current. The
 criterion benchmarks are for humans, not CI gates: record their results, with
 the machine, in `docs/reference/benchmarks.md`.
 
@@ -204,7 +206,7 @@ cargo build                                                # build the workspace
 scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
 cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
-cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build (CI gate)
+cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate)
 cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo clippy --workspace --all-targets -- -D warnings      # lint (CI gate)
