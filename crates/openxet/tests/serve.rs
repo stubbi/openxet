@@ -446,15 +446,18 @@ async fn dev_mode_banner_is_ready_to_paste() {
     assert!(banner.contains("scope \"default\" (write)"), "{banner}");
     // Stock macOS and Debian have `python3`, not always `python`.
     assert!(banner.contains("pip install hf_xet"), "{banner}");
-    assert!(banner.contains("  python3 -c 'import hf_xet;"), "{banner}");
-    // hf_xet 1.7.0: upload_files(file_paths, endpoint, token_info,
-    // token_refresher, progress_updater, _repo_type), token_info = (token, exp).
+    // hf_xet 1.7.0's XetSession API, as huggingface_hub 2.2.0 uses it;
+    // `upload_files` is deprecated. One line, so it pastes as printed.
     assert!(
         banner.contains(&format!(
-            "hf_xet.upload_files([\"model.bin\"], \"{endpoint}\", (\"{token}\", 2**62), None, None, None)"
+            "  python3 -c 'import hf_xet; c = hf_xet.XetSession().new_upload_commit(\
+             endpoint=\"{endpoint}\", token=\"{token}\", token_expiry_unix_secs=2**62); \
+             u = c.start_upload_file(\"model.bin\"); c.wait_to_finish(); \
+             print(u.result().xet_info.hash)'\n"
         )),
         "{banner}"
     );
+    assert!(!banner.contains("upload_files"), "{banner}");
     assert!(
         banner.contains(&format!("OPENXET_ENDPOINT={endpoint}")),
         "{banner}"
