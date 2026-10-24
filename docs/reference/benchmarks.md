@@ -9,6 +9,7 @@ benchmark, and a speed regression fails CI.
 | Reconstruction latency, design §5.8 | CI gate (Linux runner); locally, needs a quiet machine | `cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture` |
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
+| Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
 
 Criterion keeps its last run under `target/criterion` and reports the
 change on the next one. The benches are not CI gates: shared runners vary
@@ -201,22 +202,29 @@ serializer the first pass's hashes and offsets.
 ## Shard commit throughput (M1-R24)
 
 A shard commit is the bucket write of the stored shard and its index
-registration, under the `commit` semaphore (4 × CPUs permits, 32 here).
-Measured with a scripted run: 400 shards of 4 files each (64 KiB stored
-shard, one term per file) committed concurrently to a `LocalBucket` and a
+registration, under the `commit` semaphore (4 × CPUs permits, 32 on the
+local machine). The bench commits 400 shards of 4 files each (64 KiB
+stored shard, one term per file) concurrently to a `LocalBucket` and a
 SQLite index on the local SSD, with the semaphore at each size:
+`cargo bench -p openxet-cas --bench commit_throughput`.
 
 | Permits | 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 |
 |---|---|---|---|---|---|---|---|---|
-| Shards/s | 151 | 193 | 172 | 196 | 220 | 202 | 217 | 219 |
+| Shards/s, before `fullfsync` (Task 16, quieter host) | 151 | 193 | 172 | 196 | 220 | 202 | 217 | 219 |
+| Shards/s, before `fullfsync` (rerun, load 7 to 25) | 52 | 61 | 48 | 95 | 111 | 115 | 119 | 126 |
+| Shards/s, with `fullfsync` (same load) | 18–57 | 51–61 | 58–66 | 59–62 | 72–73 | 67–77 | 79–85 | 78–87 |
 
-Throughput levels off from 2 permits at about 200 shards/s: every
-registration is a durable SQLite write, and one writer at a time holds
-the database (design §5.8's index scaling is M3's Postgres). 4 × CPUs is
-past the plateau, so it never limits throughput on local storage; what it
-bounds is memory, which ruling M1-R24 sets it for. A remote bucket's
-slower puts overlap under the same permits, so the number stays right
-until a bucket's latency makes 32 concurrent puts the limit.
+The two rows taken under load ran back to back, minutes apart, with only
+the pragma changed; the first row is the original measurement, on a less
+loaded host, kept for reference. Throughput levels off past a few permits:
+every registration is a durable SQLite commit, and one writer at a time
+holds the database (design §5.8's index scaling is M3's Postgres), so the
+plateau is the rate of durable index commits. `fullfsync` makes each of
+those commits slower, which lowers the plateau on macOS (next section).
+4 × CPUs is past the plateau, so it never limits throughput on local
+storage; what it bounds is memory, which ruling M1-R24 sets it for. A
+remote bucket's slower puts overlap under the same permits, so the number
+stays right until a bucket's latency makes 32 concurrent puts the limit.
 
 ## SQLite `fullfsync` on macOS
 
@@ -224,25 +232,28 @@ On macOS, `fsync` returns once the bytes reach the drive's cache, so a
 commit acknowledged under `synchronous=FULL` alone could be lost on power
 loss. The index therefore also sets `PRAGMA fullfsync=ON`, which makes
 SQLite sync with `F_FULLFSYNC`, as the bucket's `sync_all` already does.
-Linux ignores the pragma, so CI and Linux servers pay nothing.
+SQLite has no `F_FULLFSYNC` to use on Linux and ignores the pragma there,
+so Linux servers and the Linux CI runner are unaffected. macOS hosts pay
+the cost below, and so does CI's `macos-latest` job when it runs the test
+suite.
 
-Measured on the local machine with a scripted run: 200 index commit pairs
-(a `put_xorb` and a `register_shard` of 4 files, each its own durable
-transaction) one after another, then 200 pairs concurrently, three rounds
-on a fresh index each, with and without the pragma (debug build with
-optimised dependencies; the time is in the sync, not in openxet's code):
+Measured on the local machine (Apple M3, internal SSD, macOS 15.6.1;
+load average 7 to 25 from other builds) with the same bench's second
+part: 200 index commit pairs (a `put_xorb` and a `register_shard` of 4
+files, each its own durable transaction) one after another, then 200
+concurrently, three rounds on a fresh index each, with and without the
+pragma:
 
 | | Sequential, per pair | Sequential pairs/s | Concurrent pairs/s |
 |---|---|---|---|
-| `synchronous=FULL` | 0.34–0.50 ms | 2,013–2,927 | 2,179–3,027 |
-| plus `fullfsync=ON` | 5.0–6.4 ms | 156–199 | 155–221 |
+| `synchronous=FULL` | 0.38–0.43 ms | 2,319–2,610 | 2,421–2,563 |
+| plus `fullfsync=ON` | 8.5–15 ms | 66–118 | 71–119 |
 
-About 2.5–3 ms per durable commit, a tenth of the throughput. For a whole
-upload this costs less than the table suggests: each object the bucket
-stores already pays an `F_FULLFSYNC` for the file and one for its
-directory, which is why shard commits level off at about 200 per second
-(above). Durability of an acknowledged write (design §5.9 req 7) comes
-first, and servers on Linux are unaffected.
+One further round with the pragma took 73 ms per pair while another build
+saturated the disk. Each durable index commit costs about 4–7 ms more
+with `F_FULLFSYNC`, and whole shard commits fall from about 115–126 to
+about 70–87 per second (table above). Durability of an acknowledged write
+(design §5.9 req 7) comes first.
 
 ## Stock client behaviour that sizes the server
 

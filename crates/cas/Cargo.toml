@@ -62,3 +62,7 @@ harness = false
 [[bench]]
 name = "xorb_ingest"
 harness = false
+
+[[bench]]
+name = "commit_throughput"
+harness = false
