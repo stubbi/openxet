@@ -242,15 +242,16 @@ async fn batch(
             limit: MAX_BATCH_FILES,
         });
     }
+    // The cap is checked from the stored term counts before any file is
+    // loaded, so a batch over it costs no decoding (ruling M1-R40).
+    let stored = state.index.term_count(&files, scope).await?;
+    check_batch_terms(usize::try_from(stored).unwrap_or(usize::MAX))?;
     let mut found = state.index.files(&files, scope).await?;
     let records: Vec<_> = files.iter().filter_map(|f| found.remove(f)).collect();
     let terms: usize = records.iter().map(|r| r.terms.len()).sum();
-    if terms > MAX_BATCH_TERMS {
-        return Err(CasError::BatchTooManyTerms {
-            terms,
-            limit: MAX_BATCH_TERMS,
-        });
-    }
+    // Checked again on what was loaded, for a file registered between the
+    // two reads.
+    check_batch_terms(terms)?;
     let xorbs = distinct_xorbs(records.iter().flat_map(|r| &r.terms));
     let permit = validation_permit(state).await?;
     let tables = chunk_layouts(state, scope, xorbs).await?;
@@ -270,6 +271,18 @@ async fn batch(
     .await?;
     tracing::debug!(files = files.len(), "batch reconstruction answered");
     Ok(json(body))
+}
+
+/// `400 batch_too_large` for a batch of more than [`MAX_BATCH_TERMS`]
+/// terms.
+fn check_batch_terms(terms: usize) -> Result<(), CasError> {
+    if terms > MAX_BATCH_TERMS {
+        return Err(CasError::BatchTooManyTerms {
+            terms,
+            limit: MAX_BATCH_TERMS,
+        });
+    }
+    Ok(())
 }
 
 /// `HEAD /v1/files/{file}`: `200` with the file's size as `Content-Length`
@@ -509,10 +522,27 @@ mod tests {
     const BEARER: &str = "Bearer";
     const READ: &str = "oxt_unit_read";
 
-    /// An index counting its `chunk_tables` and `chunk_layouts` calls.
+    /// An index counting its `chunk_tables` and `chunk_layouts` calls in
+    /// `table_loads` and its `files` calls in `file_loads`, whose
+    /// `term_count` adds `extra_terms`.
     struct CountingIndex {
         inner: Arc<dyn Index>,
         table_loads: Arc<AtomicUsize>,
+        file_loads: Arc<AtomicUsize>,
+        extra_terms: u64,
+    }
+
+    impl CountingIndex {
+        fn install(state: &mut AppState, extra_terms: u64) -> Arc<Self> {
+            let index = Arc::new(Self {
+                inner: Arc::clone(&state.index),
+                table_loads: Arc::new(AtomicUsize::new(0)),
+                file_loads: Arc::new(AtomicUsize::new(0)),
+                extra_terms,
+            });
+            state.index = Arc::clone(&index) as Arc<dyn Index>;
+            index
+        }
     }
 
     #[async_trait::async_trait]
@@ -582,11 +612,12 @@ mod tests {
             files: &[MerkleHash],
             scope: &str,
         ) -> Result<HashMap<MerkleHash, FileRecord>, IndexError> {
+            self.file_loads.fetch_add(1, Ordering::SeqCst);
             self.inner.files(files, scope).await
         }
 
         async fn term_count(&self, files: &[MerkleHash], scope: &str) -> Result<u64, IndexError> {
-            self.inner.term_count(files, scope).await
+            Ok(self.inner.term_count(files, scope).await? + self.extra_terms)
         }
 
         async fn file_with_bytes(
@@ -628,11 +659,7 @@ mod tests {
             subject: "unit".to_owned(),
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
-        let table_loads = Arc::new(AtomicUsize::new(0));
-        state.index = Arc::new(CountingIndex {
-            inner: Arc::clone(&state.index),
-            table_loads: Arc::clone(&table_loads),
-        });
+        let table_loads = Arc::clone(&CountingIndex::install(&mut state, 0).table_loads);
         state.validate = Arc::new(Semaphore::new(1));
         let xorb = openxet_protocol::chunk_hash(b"xorb");
         let table = ChunkTable {
@@ -690,6 +717,48 @@ mod tests {
             answer.abort();
         }
         drop(held);
+    }
+
+    #[tokio::test]
+    async fn a_batch_over_the_term_cap_is_refused_before_any_file_is_loaded() {
+        // Ruling M1-R40 (review finding I4): the cap is checked from the
+        // stored term counts, so a batch naming huge files never decodes
+        // their term lists only to refuse them.
+        let dir = tempfile::tempdir().unwrap();
+        let token = StaticToken {
+            sha256: StaticToken::digest(READ),
+            scope: "s".to_owned(),
+            mode: Mode::Read,
+            subject: "unit".to_owned(),
+        };
+        let mut state = test_support::state(dir.path(), vec![token]).await;
+        let index = CountingIndex::install(&mut state, MAX_BATCH_TERMS as u64 + 1);
+        let file = openxet_protocol::chunk_hash(b"file");
+
+        let response = router(state)
+            .oneshot(
+                Request::get(format!(
+                    "/v1/reconstructions?file_id={}",
+                    hash_to_hex(&file)
+                ))
+                .header(AUTHORIZATION, format!("{BEARER} {READ}"))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "batch_too_large", "{json}");
+        assert_eq!(
+            index.file_loads.load(Ordering::SeqCst),
+            0,
+            "a file was loaded"
+        );
     }
 
     /// The writer threads `render` grants a 100k-term answer when `held`
