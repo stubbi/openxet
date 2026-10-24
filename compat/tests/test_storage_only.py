@@ -27,6 +27,7 @@ from conftest import (
     HARNESS_ENV,
     RECONSTRUCTION_ROUTE,
     SCRUBBED_PREFIXES,
+    V1_RECONSTRUCTION_ROUTE,
     XORB_ROUTE,
     isolated_env,
     openxet_serve,
@@ -71,6 +72,7 @@ class Clients:
     def hf_xet(self, server, request: dict, token=None, exp=None):
         token = token or server.token
         exp = exp or server.token_exp or STATIC_EXP
+        server.uses_credential(token)
         env = isolated_env(
             self.fresh_root(),
             OPENXET_COMPAT_TOKEN=token,
@@ -202,13 +204,23 @@ def test_upload_download_round_trip(openxet_server, clients, tmp_path):
     assert len(infos) == len(paths)
     for path, info in zip(paths, infos):
         assert info["size"] == path.stat().st_size
-        # hf_xet 1.7.0 reports 64 zeros as an empty file's sha256 (observed);
-        # it is computed client-side and never reaches the server.
-        if info["size"]:
-            assert info["sha256"] == sha256(path)
+        # hf_xet 1.7.0 reports 64 zeros as an empty file's sha256 (observed),
+        # not the SHA-256 of no bytes. It is computed client-side and never
+        # reaches the server; pinned so a client change shows up here.
+        expected = "0" * 64 if info["size"] == 0 else sha256(path)
+        assert info["sha256"] == expected, path.name
         dest = tmp_path / f"{path.name}.out"
+        mark = openxet_server.mark()
         clients.hf_xet_download(openxet_server, dest, info)
         assert dest.read_bytes() == path.read_bytes(), path.name
+        # hf_xet falls back to v1 silently if v2 fails, so a broken v2 route
+        # would otherwise go unnoticed here. An empty file's only block
+        # starts at EOF and answers 416, which the client reads as the end.
+        openxet_server.settle()
+        statuses = openxet_server.statuses("GET", RECONSTRUCTION_ROUTE, mark)
+        assert statuses and set(statuses) <= {200, 416}, (path.name, statuses)
+        assert (200 in statuses) == (info["size"] > 0), (path.name, statuses)
+        assert openxet_server.requests("GET", V1_RECONSTRUCTION_ROUTE, mark) == 0, path.name
     assert len({info["hash"] for info in infos}) == len(paths)
 
 
@@ -303,7 +315,7 @@ def test_wrong_scope_token_fails(openxet_bin, clients, tmp_path):
 
         mark = server.mark()
         dest = tmp_path / "b.out"
-        code, _, stderr = clients.hf_xet_download_result(
+        code, _, _ = clients.hf_xet_download_result(
             server, dest, info, team_b["token"], STATIC_EXP
         )
         server.settle()
@@ -313,7 +325,6 @@ def test_wrong_scope_token_fails(openxet_bin, clients, tmp_path):
     assert statuses, "the wrong-scope download never reached the server"
     assert all(400 <= s < 500 for s in statuses), statuses
     assert not dest.exists() or dest.read_bytes() != path.read_bytes()
-    assert team_b["token"] not in stderr
 
 
 def _kid(public_key_pem: bytes) -> str:
@@ -367,7 +378,7 @@ def test_platform_minted_jwt_with_pyjwt(openxet_bin, clients, tmp_path):
         with_aud = mint({**claims, "aud": "openxet"})
         mark = server.mark()
         other = write_noise(tmp_path / "q.bin", MiB, 11)
-        code, _, stderr = clients.hf_xet(
+        code, _, _ = clients.hf_xet(
             server, {"op": "upload", "paths": [str(other)]}, with_aud, claims["exp"]
         )
         server.settle()
@@ -386,7 +397,6 @@ def test_platform_minted_jwt_with_pyjwt(openxet_bin, clients, tmp_path):
         status == 401 if route != "unmatched" else status == 404 for route, status in answered
     ), answered
     assert any(route != "unmatched" for route, _ in answered), answered
-    assert with_aud not in stderr
 
 
 @pytest.mark.pinned
@@ -401,8 +411,8 @@ def test_version_floor_recorded():
 
 def test_fresh_cache_edit_bytes_recorded(openxet_server, clients, tmp_path, record_measurement):
     # Design §1a: a 1 MiB edit in the middle of a 100 MiB file, re-uploaded
-    # by stock hf_xet with an empty cache. Recorded, not asserted, here: the
-    # bound is asserted in Rust by `fresh_cache_edit_dedups_against_the_server`.
+    # by stock hf_xet with an empty cache. Recorded, not asserted, here:
+    # Task 10b adds the assertion of the bound.
     size, edit = 100 * MiB, MiB
     original = write_noise(tmp_path / "original.bin", size, 12)
     edited = tmp_path / "edited.bin"

@@ -241,6 +241,7 @@ def _openxet_tests_need_binary(request):
 XORB_ROUTE = "/v1/xorbs/{prefix}/{hash}"
 DEDUP_ROUTE = "/v1/chunks/{prefix}/{hash}"
 RECONSTRUCTION_ROUTE = "/v2/reconstructions/{hash}"
+V1_RECONSTRUCTION_ROUTE = "/v1/reconstructions/{hash}"
 
 SERVE_PATIENCE = 120.0
 
@@ -262,6 +263,25 @@ class OpenxetServer:
         self.scope: str | None = ready["scope"]
         self.data_dir = data_dir
         self._lines = lines
+        self._credentials: set[str] = {self.token} if self.token else set()
+
+    def uses_credential(self, credential: str) -> None:
+        """Registers a credential a client sends, so teardown can prove the
+        server never logged it (design §5.9)."""
+        self._credentials.add(credential)
+
+    def assert_no_credential_logged(self) -> None:
+        log = "".join(self._lines)
+        # A JWT's signature segment counts on its own: the server must not
+        # log any part that authenticates a request.
+        fragments = set(self._credentials) | {
+            c.rsplit(".", 1)[1] for c in self._credentials if c.count(".") == 2
+        }
+        leaked = sum(1 for fragment in fragments if fragment in log)
+        assert not leaked, (
+            f"the server log holds {leaked} of the {len(fragments)} credentials "
+            "or JWT signatures the test sent"
+        )
 
     def log(self) -> list[dict]:
         entries = []
@@ -296,13 +316,23 @@ class OpenxetServer:
         ]
 
     def settle(self) -> None:
-        """Waits until every request the server started has been answered."""
+        """Waits until the log holds every request answered before this call.
+
+        Matching `started` and `finished` counts alone could pass while the
+        drain thread has yet to read a request's lines, and a missed
+        `POST /v1/xorbs` would make a "no xorb sent" check pass falsely. So a
+        barrier `GET /healthz` goes last: once its `finished` line is read,
+        every line written before it has been read too.
+        """
+        before = len(self._requests("finished processing request", "GET", "/healthz", 0))
+        assert httpx.get(f"{self.endpoint}/healthz", timeout=5).status_code == 200
         deadline = time.monotonic() + SERVE_PATIENCE
         while True:
             messages = [entry.get("fields", {}).get("message") for entry in self.log()]
-            if messages.count("finished processing request") >= messages.count(
-                "started processing request"
-            ):
+            barrier = len(self._requests("finished processing request", "GET", "/healthz", 0))
+            if barrier > before and messages.count(
+                "finished processing request"
+            ) >= messages.count("started processing request"):
                 return
             assert time.monotonic() < deadline, "the server log never settled"
             time.sleep(0.02)
@@ -376,11 +406,14 @@ def openxet_serve(openxet_bin: str, root: Path, config: Path | None = None):
         while httpx.get(f"{ready['endpoint']}/readyz", timeout=5).status_code != 200:
             assert time.monotonic() < deadline, "openxet serve never became ready"
             time.sleep(0.05)
-        yield OpenxetServer(proc, ready, data_dir, lines)
+        server = OpenxetServer(proc, ready, data_dir, lines)
+        yield server
     finally:
         proc.kill()
         proc.wait()
         drainer.join(5)
+    # Reached only when the test body passed, so it never masks its failure.
+    server.assert_no_credential_logged()
 
 
 @pytest.fixture
