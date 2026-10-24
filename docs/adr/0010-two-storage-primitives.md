@@ -88,7 +88,10 @@ and then that labels are generic, not a fixed set.
    `/api/spaces/…`, `/api/kernels/…`, and the prefixed resolve and Git
    URLs, are views of the same repository through one label:
    - Creating a repository through a typed route adds that type's label
-     (`POST /api/repos/create` with `type`).
+     (`POST /api/repos/create` with `type`). A create with no `type` is
+     the `model` view and adds the `model` label, as on huggingface.co:
+     `create_repo` sends `type` only for non-model types (`hf_api.py`
+     line 4641).
    - Listing through a typed route (`/api/models?…`) returns only
      repositories with its label.
    - Reading or writing an existing repository through a typed route
@@ -120,7 +123,12 @@ and then that labels are generic, not a fixed set.
 5. **Names are unique across labels.** Unlike huggingface.co, a model
    and a dataset can't share `{namespace}/{name}`. Creating
    `datasets/foo/bar` while a repository `foo/bar` exists answers `409`
-   in the shape above, `url` included, naming the existing repository.
+   in the shape above. Create is authorized on the namespace before the
+   name is looked up, so only callers allowed to create there see the
+   `409`; for a caller who can't read the existing repository it carries
+   no labels. Its `url` is the requested view's own URL
+   (`{public_url}/{type prefix}{namespace}/{name}`), which `RepoUrl`
+   parses (`hf_api.py` lines 545–571).
    An importer or mirror (design §10.6) that meets two Hub repositories
    of different types under one name maps the second to `{name}-{type}`
    and reports the mapping.
@@ -139,8 +147,17 @@ and then that labels are generic, not a fixed set.
      than the key's current one, and keeps tombstones for deleted keys,
      so the index and `reindex` pick the same last writer, and applying
      a record twice changes nothing.
-   - A periodic snapshot `bucket-snapshot/{sha256(scope)}/{seq}` bounds
-     replay: `reindex` reads the latest snapshot plus the later records.
+   - A sweeper aborts a `seq` still pending past the request deadline by
+     creating that same log key, only if absent, with an abort record.
+     Writer and sweeper race on one create-only key, so exactly one
+     wins, and a writer that loses reports the write as failed. A write
+     takes effect if and only if its record, not an abort, owns its
+     `seq`, and it is acknowledged only then.
+   - A snapshot `bucket-snapshot/{sha256(scope)}/{seq}` is taken only at
+     a watermark, the highest `seq` with every lower one applied or
+     aborted. `reindex` replays from the latest snapshot, skips aborts,
+     and sets the next `seq` above the highest record it found, aborts
+     included.
    - Overwriting or deleting a key only drops a reference; bytes leave
      through GC (non-negotiable 3).
 

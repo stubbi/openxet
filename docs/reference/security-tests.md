@@ -45,6 +45,8 @@ its clients sent (`assert_no_credential_in_log`).
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
 | 2 | `credential_scoped_to_repo`, Hub routes | pending | M2 |
 | 2 | `repo_create_authorized_per_namespace` | pending | M2 |
+| 2 | `wrong_type_without_read_access_matches_unknown_repo` | pending | M2 |
+| 2 | `create_collision_authorized_first` | pending | M2 |
 | 2 | `credential_scoped_to_repo`, bucket routes | pending | M5 |
 | 2 | `bucket_create_authorized_per_namespace` | pending | M5 |
 | 2 | `bucket_add_file_hash_must_be_readable` | pending | M5 |
@@ -91,7 +93,17 @@ Notes on what some tests cover:
 - `acknowledged_bucket_key_write_is_visible` acknowledges key writes,
   kills the server, deletes the database, runs `reindex` from the
   object-store bucket alone, and expects every acknowledged key with its
-  last writer.
+  last writer. It also stalls a writer between allocating its `seq` and
+  creating its record until a sweeper aborts that `seq`, and expects the
+  write to fail and to stay absent after `reindex`.
+- `wrong_type_without_read_access_matches_unknown_repo` reads a
+  repository through a typed route whose label it lacks, with a
+  credential that can't read it, and compares status, headers (apart
+  from per-request ids and dates) and body with an unknown repository's.
+- `create_collision_authorized_first` creates a taken name in a
+  namespace the caller may not create in and expects the same `403` as
+  for a free name; with create but no read access, the `409` carries no
+  labels.
 - `per_tenant_existence_checks_hide_other_tenants` checks that, to another
   tenant, a `per-tenant` server holding a tenant's data answers every CAS
   route exactly as an empty server would.

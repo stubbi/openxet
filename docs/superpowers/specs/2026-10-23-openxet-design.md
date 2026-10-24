@@ -475,6 +475,10 @@ A bucket primitive's keys are written there too (§10.4, ADR 0010):
   holding every key's file and sequence number as of `seq`), which bounds
   what `reindex` replays.
 
+And so are labels (§10.4): a **label record** per repository and per
+bucket, holding its labels, rewritten on each change before the change
+is acknowledged.
+
 Scopes and tenants appear in keys only as the SHA-256 of their name. The
 database is an index that `openxet reindex` can rebuild from the bucket:
 every scope table follows from these records with the stored shards and
@@ -786,7 +790,7 @@ step.
 | # | Requirement | Tests |
 |---|---|---|
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
-| 2 | **Credentials are scoped to one repository or bucket.** CAS tokens and capability `href`s are scoped to one repository or bucket; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's scope check; user credentials are authorized per repository or bucket on every Hub and CAS route. A foreign repository or bucket answers `403`, or `404` where the caller can't read it, never revealing a private one's existence. Repository and bucket creation is authorized per namespace (§5.4). A bucket `batch` that adds or copies a file by Xet hash names a file the caller can read, or gets the `404` of an unknown hash (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repository's or bucket's credential, bucket routes included; `repo_create_authorized_per_namespace`; `bucket_create_authorized_per_namespace`; `bucket_add_file_hash_must_be_readable`; `bucket_copy_file_requires_source_read` |
+| 2 | **Credentials are scoped to one repository or bucket.** CAS tokens and capability `href`s are scoped to one repository or bucket; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's scope check; user credentials are authorized per repository or bucket on every Hub and CAS route. A foreign repository or bucket answers `403`, or `404` where the caller can't read it, never revealing a private one's existence. Repository and bucket creation is authorized per namespace (§5.4). A bucket `batch` that adds or copies a file by Xet hash names a file the caller can read, or gets the `404` of an unknown hash (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repository's or bucket's credential, bucket routes included; `repo_create_authorized_per_namespace`; `bucket_create_authorized_per_namespace`; `bucket_add_file_hash_must_be_readable`; `bucket_copy_file_requires_source_read`; `wrong_type_without_read_access_matches_unknown_repo`; `create_collision_authorized_first` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-tenant`, §5.4) is available. In `per-tenant` mode every existence check (`HEAD` of xorbs, dedup lookups, shard xorb lookups) answers as absent for any xorb the caller's tenant doesn't own, and `HEAD` of files for any file not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_tenant_dedup_isolates_tenants`, `per_tenant_multi_xorb_answer_hides_foreign_xorbs`, `per_tenant_existence_checks_hide_other_tenants`, `per_tenant_scopes_of_one_tenant_share_dedup` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
@@ -847,9 +851,12 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   LFS endpoint. The unprefixed resolve route is the `model` view, as on
   huggingface.co; the unprefixed Git URL `/{namespace}/{name}.git` is
   openxet's own address and serves the repository whatever its labels.
-- `POST /api/repos/create` with a `type` adds that type's label, and
-  listing through a typed route (`/api/models?…`) returns only
-  repositories with its label.
+- `POST /api/repos/create` with a `type` adds that type's label. A
+  create with no `type` is the `model` view and adds the `model` label,
+  as on huggingface.co: `create_repo` in `huggingface_hub` 2.2.0 sends
+  `type` only when `repo_type` isn't `None` (`hf_api.py` line 4641), so
+  a default `hf upload foo/bar` creates a model. Listing through a typed
+  route (`/api/models?…`) returns only repositories with its label.
 - Reading or writing a repository through a typed route whose label it
   lacks answers `404` with `X-Error-Code: RepoNotFound` (S3 fixture
   `24-repo-info-not-found`), so stock clients raise
@@ -868,10 +875,24 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
 - Names are unique across labels, unlike huggingface.co. Creating
   `datasets/foo/bar` while `foo/bar` exists answers `409` in the shape
   `create_repo` reads (S3 fixtures `05` and `06`): `{"error", "url"}`,
-  the message in `X-Error-Message`, naming the existing repository. With
-  `exist_ok=True` that reads as success, and the next call through the
-  `dataset` view gets the `404` above, whose hint says how to add the
-  label.
+  with the message in `X-Error-Message`. With `exist_ok=True` that reads
+  as success, and the next call through the `dataset` view gets the
+  `404` above, whose hint says how to add the label.
+  - The create is authorized on the namespace before the name is looked
+    up, so a caller who may not create there gets the same `403` whether
+    or not the name exists, and only callers allowed to create in the
+    namespace ever see the `409`.
+  - For a caller who can't read the existing repository, the `409`'s
+    `error` and `X-Error-Message` name only the requested name and
+    carry no labels.
+  - `url` is the requested view's own URL,
+    `{public_url}/{type prefix}{namespace}/{name}`, as in the fixtures.
+    `create_repo(exist_ok=True)` returns `RepoUrl(d["url"],
+    endpoint=…)` (`hf_api.py` line 4723), and `RepoUrl` parses it with
+    `parse_hf_uri` against the client's endpoint, raising `HfUriError`
+    on a URL it can't parse (`hf_api.py` lines 545–571); `hf upload`
+    then uses its `repo_id`. So `public_url` must be the endpoint
+    clients use.
 - Labels are changed through openxet's own API and CLI, never the Hub
   API.
 - `huggingface_hub` 2.2.0 creates, reads and downloads `kernel`
@@ -879,6 +900,8 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   functions accept only `REPO_TYPES`), so kernels are written over Git
   with `git-xet`.
 - Compatibility tests planned for M2, with stock `huggingface_hub`:
+  `untyped_create_is_model` (`hf upload foo/bar` with no `--repo-type`,
+  then `repo_info` and `snapshot_download` both work),
   `typed_route_view_filters_by_label`,
   `wrong_type_route_is_repo_not_found`,
   `wrong_type_with_read_access_shows_label_hint`,
@@ -1290,10 +1313,18 @@ Retries stay idempotent:
 - Applying a record again changes nothing, because its `seq` is not
   higher than the ones it already set.
 - A node that crashes after step 3 leaves a pending `seq` with a durable
-  record. Any node finishes it by applying the record, or drops the
-  number once the request deadline has passed with no record. A write
-  can thus become visible without its acknowledgement, never
-  acknowledged without being durable.
+  record, and any node finishes it by applying the record. A write can
+  thus become visible without its acknowledgement, never acknowledged
+  without being durable.
+- A sweeper aborts a `seq` still pending past the request deadline by
+  creating that same key, `bucket-log/{sha256(scope)}/{seq}`, only if
+  absent, holding an abort record. Writer and sweeper race on one
+  create-only key, so exactly one wins. A stalled writer whose create
+  loses reports the write as failed, so the client's failure matches
+  the log, and the client's retry gets a new `seq`.
+
+The invariant: a write takes effect if and only if its record, not an
+abort, owns its `seq`, and it is acknowledged only then.
 - A client that retries a whole request writes a new record with the
   same operations, which leaves the keys as one write would.
 
@@ -1305,10 +1336,14 @@ a bucket's key mapping lives nowhere else. An acknowledged key lost with
 the database would leave its data unaddressable (non-negotiable 2, §5.9
 req 7).
 
-Periodically a node writes `bucket-snapshot/{sha256(scope)}/{seq}`.
-`reindex` reads the latest snapshot plus the records after it, so its
-work is bounded by the snapshot interval, not by the bucket's history.
-Records a snapshot covers leave through GC like any other object.
+Periodically a node writes `bucket-snapshot/{sha256(scope)}/{seq}`, only
+at a watermark: the highest `seq` such that every lower `seq` is applied
+or aborted, so a snapshot covers exactly a complete prefix of the log.
+`reindex` replays from the latest snapshot, skips abort records, and
+sets the bucket's next `seq` above the highest record it found, aborts
+included. Its work is bounded by the snapshot interval, not by the
+bucket's history. Records a snapshot covers leave through GC like any
+other object.
 
 Cost: one extra object-store PUT per request, next to the xorb, shard and
 registration writes the upload already makes, so small objects stay
