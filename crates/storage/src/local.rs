@@ -11,6 +11,10 @@
 //! `hex` is [`hash_to_hex`]. The two-character prefix directory keeps any one
 //! directory from growing unbounded. `.tmp` lives under the root so the final
 //! rename never crosses a filesystem and stays atomic.
+//!
+//! On unix, every directory the bucket creates is mode `0700` and every
+//! object `0600`: the bucket holds every scope's data, and only the server
+//! may read it. The umask can only narrow these modes, never widen them.
 
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -74,7 +78,7 @@ impl LocalBucket {
         let xorbs = root.join("xorbs");
         let skeleton = [tmp.clone(), root.join("shards"), xorbs.join("default")];
         for dir in &skeleton {
-            fs::create_dir_all(dir).map_err(io("create bucket directory", dir))?;
+            create_private_dir_all(dir).map_err(io("create bucket directory", dir))?;
         }
         // Without this, a power loss right after the first put can drop the
         // skeleton's own directory entries and the object with them.
@@ -100,6 +104,30 @@ impl LocalBucket {
         let hex = hash_to_hex(hash);
         dir.join(&hex[..2]).join(hex)
     }
+}
+
+/// Creates `dir` and its missing parents, each mode `0700` on unix.
+fn create_private_dir_all(dir: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+/// Creates the new file `path`, mode `0600` on unix.
+fn create_private_file(path: &Path) -> std::io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 fn io<'a>(op: &'static str, path: &'a Path) -> impl FnOnce(std::io::Error) -> StorageError + 'a {
@@ -194,7 +222,7 @@ fn write_and_publish(
     final_path: &Path,
     bytes: &[u8],
 ) -> Result<(), StorageError> {
-    let mut file = File::create_new(tmp_path).map_err(io("create temp file", tmp_path))?;
+    let mut file = create_private_file(tmp_path).map_err(io("create temp file", tmp_path))?;
     file.write_all(bytes)
         .map_err(io("write temp file", tmp_path))?;
     durable
@@ -203,7 +231,7 @@ fn write_and_publish(
     drop(file);
 
     let prefix_dir = final_path.parent().unwrap_or(final_path);
-    fs::create_dir_all(prefix_dir).map_err(io("create directory", prefix_dir))?;
+    create_private_dir_all(prefix_dir).map_err(io("create directory", prefix_dir))?;
     // Before the rename, so a crash never leaves the object under a prefix
     // directory whose own entry was lost.
     if let Some(grandparent) = prefix_dir.parent() {
@@ -669,5 +697,34 @@ mod tests {
             );
             drop(stalled);
         });
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn directories_and_objects_are_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("bucket");
+        let bucket = LocalBucket::open(&root).unwrap();
+        bucket
+            .put(&Key::Xorb(chunk_hash(b"private")), Bytes::from_static(b"x"))
+            .await
+            .unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let mut dirs = vec![root];
+        let mut objects = 0;
+        while let Some(dir) = dirs.pop() {
+            assert_eq!(mode(&dir), 0o700, "{}", dir.display());
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    assert_eq!(mode(&path), 0o600, "{}", path.display());
+                    objects += 1;
+                }
+            }
+        }
+        assert_eq!(objects, 1);
     }
 }
