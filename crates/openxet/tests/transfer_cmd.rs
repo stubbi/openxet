@@ -12,7 +12,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead as _, BufReader, Read as _};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -207,6 +206,12 @@ fn json_stdout(out: &Output) -> Value {
         )
     })
 }
+
+/// An endpoint nothing can listen on: no socket is ever bound to port 0
+/// (binding 0 picks a free port instead), so connecting fails at once on
+/// every platform. A port read from a dropped listener could meanwhile be
+/// taken by a concurrent test's `openxet serve --port 0`.
+const NEVER_LISTENING: &str = "http://127.0.0.1:0";
 
 fn json_stderr(out: &Output) -> Value {
     let error: Value = serde_json::from_slice(&out.stderr).unwrap_or_else(|err| {
@@ -672,13 +677,7 @@ fn unreachable_endpoint_is_actionable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.bin");
     std::fs::write(&path, b"x").unwrap();
-    // A port nothing listens on.
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let endpoint = format!("http://127.0.0.1:{port}");
+    let endpoint = NEVER_LISTENING.to_owned();
 
     let started = Instant::now();
     let out = run(openxet()
@@ -1085,15 +1084,8 @@ fn no_proxy_is_honoured_and_a_proxy_is_named() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.bin");
     std::fs::write(&path, b"x").unwrap();
-    let closed = || {
-        TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
-    };
-    let endpoint = format!("http://127.0.0.1:{}", closed());
-    let proxy = format!("http://127.0.0.1:{}", closed());
+    let endpoint = NEVER_LISTENING.to_owned();
+    let proxy = "http://localhost:0".to_owned();
     let attempt = |no_proxy: &str| {
         let started = Instant::now();
         let out = run(openxet()
