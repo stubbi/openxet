@@ -1,8 +1,10 @@
 //! CAS-token authentication of untrusted bearer bytes (ADR 0007; rulings
 //! M1-R18, M1-R19). Input byte 0 picks the mode:
 //!
-//! - even: the rest is the bearer as sent. It never panics, and a principal
-//!   it yields passes the identity checks every token's claims must pass.
+//! - even: the rest is the bearer as sent. It never panics. A CAS token
+//!   can't pass without a signature from the trusted key, so the only
+//!   principal raw bytes can yield is the configured static token's, for
+//!   exactly that token (seeded by fuzz/seed.sh).
 //! - odd: the rest describes claims, a token for them is minted with the
 //!   trusted key, and bytes of it are flipped. Unflipped, it authenticates
 //!   as exactly the minted principal; flipped, it either fails or still
@@ -17,7 +19,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use libfuzzer_sys::arbitrary::{Result as ArbitraryResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use openxet_auth::{Authenticator, MAX_SCOPE_BYTES, Mode, Principal, TokenSigner};
+use openxet_auth::{Authenticator, MAX_SCOPE_BYTES, Mode, Principal, StaticToken, TokenSigner};
 
 /// A fixed `now`, so a minted token's validity never depends on the clock.
 const NOW: u64 = 1_800_000_000;
@@ -39,7 +41,7 @@ fn keys() -> &'static (TokenSigner, Authenticator) {
         );
         let signer = TokenSigner::from_pem(&pem).expect("a valid Ed25519 key");
         let authenticator = Authenticator::new(
-            Vec::new(),
+            vec![static_token()],
             vec![signer.public_key()],
             Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
         )
@@ -56,11 +58,27 @@ fn assert_valid_identity(principal: &Principal) {
     assert!(principal.scope.len() <= MAX_SCOPE_BYTES, "{principal:?}");
 }
 
+/// The one static token configured: `oxt_` and 43 `A`s, which is 32 zero
+/// bytes in base64url. Built here, so no token-shaped string is committed.
+fn static_secret() -> String {
+    format!("oxt_{}", "A".repeat(43))
+}
+
+fn static_token() -> StaticToken {
+    StaticToken {
+        sha256: StaticToken::digest(&static_secret()),
+        scope: "model/org/repo".to_owned(),
+        mode: Mode::Read,
+        subject: "fuzz".to_owned(),
+    }
+}
+
 fn raw(bearer: &[u8]) {
     let Ok(bearer) = std::str::from_utf8(bearer) else {
         return;
     };
     if let Ok(principal) = keys().1.authenticate(bearer, NOW) {
+        assert_eq!(bearer, static_secret(), "{principal:?}");
         assert_valid_identity(&principal);
     }
 }
@@ -68,7 +86,11 @@ fn raw(bearer: &[u8]) {
 fn minted(input: &mut Unstructured<'_>) -> ArbitraryResult<()> {
     let subject: String = input.arbitrary()?;
     let scope: String = input.arbitrary()?;
-    let mode = if input.arbitrary()? { Mode::Write } else { Mode::Read };
+    let mode = if input.arbitrary()? {
+        Mode::Write
+    } else {
+        Mode::Read
+    };
     let max = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
     let lifetime = Duration::from_secs(input.int_in_range(1..=max)?);
     let flips: Vec<(u16, u8)> = input.arbitrary()?;
