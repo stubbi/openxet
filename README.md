@@ -10,12 +10,34 @@ The goal: the official tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`,
 bucket, identity stays in your login system, and only changed chunks move.
 A hosted version will be available at [openxet.com](https://openxet.com).
 
-> **Status: foundation in place, server not yet usable.** The protocol crate
-> (hashing, xorb and shard validation on `xet-core`'s crates) and the CI and
-> compatibility harness exist; the CAS server is next (milestone M1).
-> The approved design is in
-> [`docs/superpowers/specs/2026-10-23-openxet-design.md`](docs/superpowers/specs/2026-10-23-openxet-design.md).
-> Contributor and agent guidance is in [`AGENTS.md`](AGENTS.md).
+> **Status: the storage server works; the Hub API is next.** Milestone M1
+> is done: `openxet serve` is a Xet CAS that stock `hf_xet` (1.7.0 and
+> newer) uploads to and downloads from directly, with global dedup,
+> verified uploads, scoped tokens and signed, range-bound download URLs.
+> It runs on local disk with a SQLite index. Next, M2 adds the Hub API, so
+> `hf upload`, `huggingface_hub` and Git work too; S3, GCS, Azure and
+> Postgres come in M3. There is no release yet.
+
+## Try it
+
+[Quickstart](docs/quickstart-storage-only.md): start a server and upload
+and download a file with `hf_xet` and with the `openxet` command line.
+Once `openxet` is built, the whole walkthrough takes under a second; CI
+runs it on every change.
+
+## Documentation
+
+- [Quickstart](docs/quickstart-storage-only.md)
+- [Server configuration](docs/reference/config.md),
+  [command line](docs/reference/cli.md),
+  [exit codes](docs/reference/exit-codes.md) and
+  [CAS routes](docs/reference/routes.md)
+- [Security tests](docs/reference/security-tests.md): each security
+  requirement and the test that enforces it
+- [Changelog](CHANGELOG.md)
+- [Design](docs/superpowers/specs/2026-10-23-openxet-design.md),
+  [architecture decisions](docs/adr/) and the
+  [competitive matrix](docs/competitive-matrix.md)
 
 ## Project
 

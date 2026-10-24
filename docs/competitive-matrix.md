@@ -207,6 +207,42 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 \* kebyn's kill landed during Hub staging, before the CAS write, so the run
 didn't exercise a crash inside the CAS.
 
+## 2026-10-24: openxet at M1
+
+openxet's first measured column, at the end of milestone M1 (`275750a`
+plus the M1 docs). M1 is the storage-only CAS, so the checks that need the
+Hub API, Git or LFS name the milestone that brings them instead of a
+grade. Every grade is measured, by hand or by a test that runs in CI.
+
+Method: release build of `openxet serve` on local disk, dev mode (auth
+on), Apple M3 laptop with 8 cores, macOS. Stock `hf_xet` 1.7.0 through its
+`XetSession` API, each client run with a fresh Xet cache unless noted. The
+1 GiB file is `os.urandom`, so incompressible.
+
+| Check | openxet M1 | Evidence |
+|---|---|---|
+| 1 Setup from README (L14) | PASS (storage only) | README → [quickstart](quickstart-storage-only.md): 1 min 43 s from `cargo install` with an empty Cargo cache to the first upload (99 s build, 3 s `pip install hf_xet`, 0.5 s server start, upload, download). CI runs the quickstart on every PR and fails it past 2 minutes. The `hf upload` form of L14 needs the Hub API: M2 |
+| 2 `whoami` (L2) | M2 | No Hub API yet |
+| 3 `hf upload` uses Xet (L1, L16–L18) | M2 | Stock `hf_xet` uploads over Xet already (checks 5–8, 11); `hf upload` needs the Hub API |
+| 4 `hf download`, `resolve` headers (L3) | M2 | No Hub API yet |
+| 5 Downloads with no extra headers (L4, function only) | PASS | `hf_xet` 1.7.0 downloads with auth on and no extra headers: every data URL is signed for one byte range (`compat/tests/test_storage_only.py`) |
+| 6 Range (L5) | PASS (reconstruction) | A 1000-byte range of the 1 GiB file plans 1 term and 78,572 bytes to fetch, chunk granularity. A 300 MiB download is planned in two or more ranged blocks (`test_range_and_empty_file`). Range on `resolve`: M2 |
+| 7 Dedup, same machine | PASS | Re-uploading a file `hf_xet` already uploaded sends 0 B: `Uploaded 0 B of 4.0 MiB (100% deduplicated)` (quickstart) |
+| 8 Dedup, second machine: bytes sent for a 1 MB edit (L15) | PASS | 1,141,116 B of xorbs sent for a 1 MiB edit in the middle of a 100 MiB file, fresh cache (`test_fresh_cache_edit_bytes_recorded`). An identical re-upload with a fresh cache sends no xorb (`test_reupload_global_dedup`) |
+| 9 Python Hub API (L19) | M2 | No Hub API yet |
+| 10 Git: `git-xet`, `git-lfs` (L7, L8, L20) | M2 | No Git or LFS yet |
+| 11 1 GiB incompressible (L9, L24) | PASS | 1 GiB uploaded in one run, downloaded byte-identical |
+| 12 SIGKILL (L10, L21) | PASS* | `acked_write_survives_sigkill` (`crates/openxet/tests/serve.rs`, CI): a xorb and shard acknowledged before the server is killed are served after restart |
+| 13 Integrity tool (L11) | M4 | `verify` comes with M4 |
+| 15 Storage overhead (L13) | PASS | 1 GiB stored as 1,074,540,976 B of xorbs (+0.07%), plus 0.8 MB of shards and a 1.4 MB index: +0.3% in total; no per-chunk objects |
+| 16 Performance (1 GiB up / down) | PASS (337 / 292 MB/s) | Upload 3.19 s, download 3.68 s, local; server peak RSS 643 MiB |
+| 17 Code | Info | `xet-core`'s crates for formats and hashing; golden tests on the reference files; fuzzing of the xorb and shard parsers; real `hf_xet` in CI, never a replay (L23); each §5.9 security requirement mapped to its test ([security tests](reference/security-tests.md)) |
+
+\* A hands-on kill of a client mid-upload, as run for the other
+projects, is not yet done; the grade rests on the server-side test.
+
+Maintenance (check 18) is a judgement we don't make about ourselves.
+
 ## Lessons we turn into tests
 
 Each item becomes a case in our compatibility suite or a unit test. The plans
