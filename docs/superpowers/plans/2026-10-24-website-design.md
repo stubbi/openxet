@@ -52,12 +52,12 @@ The product architecture and ADRs retain precedence over presentation.
 **Files:** `design.md`, `docs/design.md`,
 `docs/research/website-design-2026-10-24.md`, `docs/SUMMARY.md`, `AGENTS.md`.
 
-- [ ] Record stakeholder needs, current-state evidence and reference findings.
-- [ ] Define tokens, typography, layouts, components and their interaction states.
-- [ ] Define voice, information architecture, SEO intent, agent contracts,
+- [x] Record stakeholder needs, current-state evidence and reference findings.
+- [x] Define tokens, typography, layouts, components and their interaction states.
+- [x] Define voice, information architecture, SEO intent, agent contracts,
   hosted/waitlist/launch transitions, metrics and change governance.
-- [ ] Have an independent builder check the design; resolve material gaps.
-- [ ] Publish root design through a docs include, without maintaining two copies.
+- [x] Have an independent builder check the design; resolve material gaps.
+- [x] Publish root design through a docs include, without maintaining two copies.
 
 ## Task 2: First release — documentation foundations
 
@@ -69,11 +69,11 @@ The product architecture and ADRs retain precedence over presentation.
 navigation. It produces page-specific escaped metadata, one canonical per page,
 Markdown alternates, sitemap entries and llms.txt without changing page paths.
 
-- [ ] Write failing tests for canonical/description/Markdown output and observed
+- [x] Write failing tests for canonical/description/Markdown output and observed
   navigation/search accessibility defects, then demonstrate the failure.
-- [ ] Implement the smallest fixes, preserving mdBook behavior and architecture.
-- [ ] Run tests, build the site and check internal links.
-- [ ] Obtain independent review, open a PR, wait for required CI, merge and
+- [x] Implement the smallest fixes, preserving mdBook behavior and architecture.
+- [x] Run tests, build the site and check internal links.
+- [x] Obtain independent review, open a PR, wait for required CI, merge and
   verify the deployment. Record the live baseline and result.
 
 ## Task 3: Hosted waitlist service
@@ -87,12 +87,12 @@ Errors have `code`, `message`, `hint`. No anonymous list/read API. Browser origi
 are restricted to openxet.com and the service's own origin. The public site's
 database stays private. A receipt capability supports cancelling a request.
 
-- [ ] Record the operational choice and privacy/retention boundary in the ADR.
-- [ ] Create the Sites project once and persist its opaque identifier.
-- [ ] Write meaningful failing handler tests, then implement input validation,
+- [x] Record the operational choice and privacy/retention boundary in the ADR.
+- [x] Create the Sites project once and persist its opaque identifier.
+- [x] Write meaningful failing handler tests, then implement input validation,
   duplicate handling, rate bounds, durable save, cancellation and private storage.
-- [ ] Build and review the migrations; test with a disposable local database.
-- [ ] Deploy through the supported Sites workflow, enable public anonymous form
+- [x] Build and review the migrations; test with a disposable local database.
+- [x] Deploy through the supported Sites workflow, enable public anonymous form
   access as required by the user's public waitlist, and verify one synthetic
   signup and cancellation. No launch emails are sent during this task.
 
@@ -107,11 +107,11 @@ and waitlist form. The form calls only the deployed service; it retains input
 on recoverable error and provides durable-save confirmation and a private
 cancellation link. Sign-up/sign-in remain unavailable.
 
-- [ ] Implement the documented tokens and homepage content order; create original
+- [x] Implement the documented tokens and homepage content order; create original
   diagrams inspired by the research. Mark examples as illustrative.
-- [ ] Test interaction math independently; test waitlist success/failure behavior
+- [x] Test interaction math independently; test waitlist success/failure behavior
   where meaningful. Inspect actual page rendering and keyboard behavior.
-- [ ] Align docs, 404, social metadata/image and privacy/contact information.
+- [x] Align docs, 404, social metadata/image and privacy/contact information.
 - [ ] Run build/link checks and a local accessibility/performance review.
 - [ ] Review, PR, CI, merge, verify live page and waitlist; record release result.
 

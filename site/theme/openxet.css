@@ -1,48 +1,64 @@
-/* openxet's look on mdBook's theme: the palette and fonts of
-   website/index.html. mdBook's "light" and "rust" themes take the light
-   palette; "navy" (the dark default), "coal" and "ayu" take the dark one. */
+/* Shared tokens follow design.md; mdBook keeps its explicit theme choice. */
+@font-face {
+    font-family: "IBM Plex Sans";
+    src: url("/assets/fonts/ibm-plex-sans-latin-variable.woff2") format("woff2");
+    font-weight: 400 600;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Manrope";
+    src: url("/assets/fonts/manrope-latin-variable.woff2") format("woff2");
+    font-weight: 400 800;
+    font-display: swap;
+}
+@font-face {
+    font-family: "IBM Plex Mono";
+    src: url("/assets/fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+    font-weight: 400;
+    font-display: swap;
+}
 
 :root {
-    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
-    --mono-font: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono-font: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --content-max-width: 850px;
 }
 
 .light, .rust, html:not(.js) {
-    --bg: #fafaf9;
-    --fg: #0c0c0b;
-    --muted: #5c5c57;
-    --line: #d9d8d3;
-    --faint: #e7e6e2;
+    --bg: #F5F7FB;
+    --fg: #142238;
+    --muted: #526079;
+    --line: #D3DBEA;
+    --faint: #E8EDFF;
     --card: #ffffff;
-    --accent: #0f7a55;
-    --accent-soft: #d6efe4;
+    --accent: #304BCE;
+    --accent-soft: #E8EDFF;
     --color-scheme: light;
 }
 
 .navy, .coal, .ayu {
-    --bg: #0c0c0b;
-    --fg: #ededea;
-    --muted: #a3a29c;
-    --line: #2b2b28;
-    --faint: #1b1b19;
-    --card: #121211;
-    --accent: #4fd1a1;
-    --accent-soft: #11392b;
+    --bg: #101A2B;
+    --fg: #EDF2FB;
+    --muted: #B2BCD0;
+    --line: #394963;
+    --faint: #26365A;
+    --card: #17243A;
+    --accent: #A5B7FF;
+    --accent-soft: #26365A;
     --color-scheme: dark;
 }
 
 /* Without JavaScript mdBook can't switch themes, so follow the system. */
 @media (prefers-color-scheme: dark) {
     html:not(.js) {
-        --bg: #0c0c0b;
-        --fg: #ededea;
-        --muted: #a3a29c;
-        --line: #2b2b28;
-        --faint: #1b1b19;
-        --card: #121211;
-        --accent: #4fd1a1;
-        --accent-soft: #11392b;
+        --bg: #101A2B;
+        --fg: #EDF2FB;
+        --muted: #B2BCD0;
+        --line: #394963;
+        --faint: #26365A;
+        --card: #17243A;
+        --accent: #A5B7FF;
+        --accent-soft: #26365A;
         --color-scheme: dark;
     }
 }
@@ -84,6 +100,7 @@ html {
 }
 
 .content h1, .content h2, .content h3 {
+    font-family: "Manrope", var(--sans);
     letter-spacing: -0.02em;
     font-weight: 620;
 }
@@ -105,7 +122,7 @@ html {
 }
 
 .menu-title {
-    font-family: var(--mono-font);
+    font-family: "Manrope", var(--sans);
     font-weight: 600;
     letter-spacing: -0.02em;
 }
@@ -114,3 +131,6 @@ html {
 .github-only {
     display: none;
 }
+
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

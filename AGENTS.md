@@ -240,8 +240,9 @@ OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest 
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it, plus the HF baseline against huggingface.co (nightly)
 cargo nextest list --workspace --message-format json > /tmp/tests.json && python3 -I scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the Rust tests that run (CI gate)
 uv run --frozen --directory compat pytest --collect-only -q > /tmp/compat-tests.txt && python3 -I scripts/check-security-tests-map.py --pytest /tmp/compat-tests.txt # the same for the compat tests (CI gate)
-scripts/build-site.sh                                      # openxet.com, landing + docs/, into target/site/public; needs mdbook 0.5.4 (CI: docs-site; main deploys it)
+scripts/build-site.sh                                      # openxet.com, landing + docs/, into target/site/public; needs mdbook 0.5.4, Python 3 and Node.js 22+ (CI: docs-site; main deploys it)
 mdbook serve site --open                                   # live preview of the docs site while editing docs/
+npm test --prefix hosted/waitlist                           # waitlist handler/store tests; Node 26.7.0, no dependency install (CI: hosted waitlist)
 ```
 
 Exit codes and JSON output schemas are documented in `docs/reference/`.

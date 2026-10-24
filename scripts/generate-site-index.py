@@ -15,7 +15,7 @@ HTML is patched at parsed tag boundaries, leaving scripts and examples intact.
 
 import re
 import sys
-from html import escape as html_escape
+from html import escape as html_escape, unescape as html_unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -126,6 +126,8 @@ class DocsPage(HTMLParser):
         self.head_closed = False
         self.heading = ""
         self.tables = []
+        self.table_caption = None
+        self.list_items = []
         self.feed(source)
         self.close()
 
@@ -141,6 +143,17 @@ class DocsPage(HTMLParser):
             self.in_head = True
         if tag == "main":
             self.in_main = True
+        if self.in_main and tag == "li":
+            self.list_items.append({"text": [], "checkboxes": []})
+        if self.in_main and self.list_items:
+            if tag in ("p", "br", "ul", "ol"):
+                self.list_items[-1]["text"].append(" ")
+            # mdBook's task controls have no ID or label; authored controls keep
+            # their existing naming, including labels associated with an ID.
+            if (tag == "input" and values.get("type", "").lower() == "checkbox"
+                    and "disabled" in values and not values.get("id")
+                    and not values.get("aria-label") and not values.get("aria-labelledby")):
+                self.list_items[-1]["checkboxes"].append((position, original, values))
         if values.get("id") == "openxet-page-tools":
             self.has_page_tools = True
         name = (values.get("name") or "").lower()
@@ -168,7 +181,8 @@ class DocsPage(HTMLParser):
         if self.in_main and tag in ("h1", "h2", "h3", "h4", "h5", "h6") and values.get("id"):
             self.heading = values["id"]
         if self.in_main and tag == "table":
-            self.tables.append([position, original, values, self.heading, False])
+            self.tables.append([position, original, values, self.heading, False, self.table_caption])
+            self.table_caption = None
         if tag == "caption" and self.tables:
             self.tables[-1][4] = True
         replacement = tag_html(tag, values)
@@ -177,6 +191,15 @@ class DocsPage(HTMLParser):
 
     def handle_endtag(self, tag):
         position = self.position()
+        if self.in_main and tag == "li" and self.list_items:
+            item = self.list_items.pop()
+            label = " ".join("".join(item["text"]).split())
+            if label:
+                for start, original, values in item["checkboxes"]:
+                    values["aria-label"] = label
+                    self.edits.append((start, len(original), tag_html("input", values)))
+        if self.in_main and self.list_items and tag in ("p", "ul", "ol"):
+            self.list_items[-1]["text"].append(" ")
         if tag == "head":
             addition = self.metadata
             if self.noindex:
@@ -189,7 +212,13 @@ class DocsPage(HTMLParser):
             self.edits.append((position, end - position, "</div>"))
             self.menu_heading = False
         if tag == "table" and self.tables:
-            start, original, values, heading, caption = self.tables.pop()
+            start, original, values, heading, caption, authored_caption = self.tables.pop()
+            if authored_caption:
+                text, comment_start, comment_length = authored_caption
+                self.edits.append((comment_start, comment_length, ""))
+                if not caption:
+                    self.edits.append((start + len(original), 0, f"<caption>{html_escape(text)}</caption>"))
+                    caption = True
             if heading and not caption and not values.get("aria-label") and not values.get("aria-labelledby"):
                 values["aria-labelledby"] = heading
                 self.edits.append((start, len(original), tag_html("table", values)))
@@ -200,6 +229,24 @@ class DocsPage(HTMLParser):
                     f'<a href="{html_escape(self.markdown, quote=True)}">Read this page as Markdown</a>'
                     ' · <a href="https://github.com/stubbi/openxet/issues/new/choose">Report a docs issue</a></p>\n'))
             self.in_main = False
+
+    def handle_data(self, text):
+        if self.in_main and self.list_items:
+            self.list_items[-1]["text"].append(text)
+
+    def handle_entityref(self, name):
+        self.handle_data(html_unescape(f"&{name};"))
+
+    def handle_charref(self, name):
+        self.handle_data(html_unescape(f"&#{name};"))
+
+    def handle_comment(self, text):
+        # Markdown keeps this author-supplied title next to its table; HTML gets
+        # a native caption rather than repeating a shared section heading.
+        if self.in_main and text.strip().startswith("table-caption:"):
+            caption = text.strip().removeprefix("table-caption:").strip()
+            if caption:
+                self.table_caption = (caption, self.position(), len(text) + 7)
 
     def rendered(self) -> str:
         if not self.head_closed:

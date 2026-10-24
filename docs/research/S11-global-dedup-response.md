@@ -397,6 +397,8 @@ chunks each straight in the index and times 30 sequential queries of the
 file's first chunk over HTTP against the CAS test server, plus 30 calls
 of `dedup_shard` alone (observed):
 
+<!-- table-caption: Dedup answer size and latency by shard size -->
+
 | Shard | Chunks | Answer | `dedup_shard` median | HTTP median (p90) |
 |---|---|---|---|---|
 | 17 xorbs, like a 1 GiB file | 17,000 | 817,160 B | 2.5 ms | 5.9 ms (13 ms) |
@@ -413,6 +415,8 @@ Apple M3 with 8 CPUs, so 2 `dedup` permits; one shard of 200 xorbs of
 8192 chunks, so every answer is a full 16.5 MB. True peak RSS, from
 `/usr/bin/time -l`, by the re-review; the idle process after setup is
 38.5 MB (observed, two runs each):
+
+<!-- table-caption: Peak process memory under dedup request load -->
 
 | Load | Peak RSS after the fix | Before (64 MiB, `validate` permits) |
 |---|---|---|

@@ -41,7 +41,8 @@ Links are written relative to the file, as GitHub shows them; the build
 points links to files outside the book at GitHub.
 
 Preview while you edit, with [mdBook](https://rust-lang.github.io/mdBook/)
-0.5.4 (`cargo install mdbook --version 0.5.4 --locked`) and `python3`, from
+0.5.4 (`cargo install mdbook --version 0.5.4 --locked`), Python 3 and Node.js 22+
+for the full site build, from
 the repository root:
 
 ```bash
@@ -55,7 +56,7 @@ job runs it, then checks every link and anchor in the built site and in
 `docs/` offline with [lychee](https://lychee.cli.rs/) 0.24.2:
 
 ```bash
-lychee --offline --include-fragments --root-dir "$PWD/target/site/public" \
+lychee --offline --include-fragments --index-files index.html,. --root-dir "$PWD/target/site/public" \
   --exclude-path docs/SUMMARY.md target/site/public docs
 ```
 
@@ -64,3 +65,9 @@ link. Its description comes from a `<!-- description: ... -->` comment, or the
 opening prose paragraph. A missing description fails the build. Indexable
 marketing pages need a canonical URL matching their published path; all such
 pages enter the sitemap. Pages marked `noindex` stay out.
+
+When several tables share a heading, give each a factual title using
+`<!-- table-caption: What this table measures -->` immediately before it.
+The HTML build renders a native caption, and the Markdown keeps the annotation.
+Task-list checkboxes get accessible names from their own item's text, without
+including nested tasks.

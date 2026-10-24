@@ -1,372 +1,219 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>openxet: open-source Xet storage on infrastructure you own</title>
-<meta name="description" content="openxet is the open-source server for the Xet protocol. The official Hugging Face clients work against it unmodified. Your bucket, your identity, and only changed chunks move.">
-<link rel="canonical" href="https://openxet.com/">
-<meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0c0c0b" media="(prefers-color-scheme: dark)">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="sitemap" type="application/xml" href="/sitemap.xml">
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="openxet">
-<meta property="og:url" content="https://openxet.com/">
-<meta property="og:title" content="openxet: Xet storage on infrastructure you own">
-<meta property="og:description" content="The open-source server for the Xet protocol. Official Hugging Face clients, unmodified. Your bucket, your identity, only changed chunks move.">
-<meta property="og:image" content="https://openxet.com/og.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"openxet","url":"https://openxet.com/","codeRepository":"https://github.com/stubbi/openxet","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source server and client for the Xet protocol, chunk-deduplicated storage for large, versioned files."}
-</script>
-<style>
-:root {
-  --bg: #fafaf9;
-  --fg: #0c0c0b;
-  --muted: #5c5c57;
-  --faint: #e7e6e2;
-  --line: #d9d8d3;
-  --card: #ffffff;
-  --accent: #0f7a55;
-  --accent-soft: #d6efe4;
-  --chunk: #d4d3cd;
-  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
-  --max: 68rem;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c0c0b;
-    --fg: #ededea;
-    --muted: #a3a29c;
-    --faint: #1b1b19;
-    --line: #2b2b28;
-    --card: #121211;
-    --accent: #4fd1a1;
-    --accent-soft: #11392b;
-    --chunk: #2e2e2b;
-  }
-}
-*, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 400 1rem/1.6 var(--sans);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-a { color: inherit; text-decoration-color: var(--line); text-underline-offset: .2em; }
-a:hover { text-decoration-color: currentColor; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
-code, pre { font-family: var(--mono); font-size: .9em; }
-.skip { position: absolute; left: -999px; top: .5rem; background: var(--fg); color: var(--bg); padding: .5rem .75rem; z-index: 10; }
-.skip:focus { left: 1rem; }
-.wrap { max-width: var(--max); margin: 0 auto; padding: 0 1.25rem; }
-
-header.top { border-bottom: 1px solid var(--line); }
-header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 3.75rem; }
-.logo { display: inline-flex; align-items: center; gap: .55rem; font: 600 1.05rem/1 var(--mono); letter-spacing: -.02em; text-decoration: none; }
-.logo svg { width: 22px; height: 22px; }
-nav ul { display: flex; gap: 1.5rem; list-style: none; margin: 0; padding: 0; font-size: .925rem; }
-nav a { text-decoration: none; color: var(--muted); }
-nav a:hover { color: var(--fg); }
-@media (max-width: 40rem) { nav .opt { display: none; } }
-
-.hero { padding: 6rem 0 4.5rem; }
-.pill { display: inline-flex; align-items: center; gap: .5rem; font: 500 .8rem/1 var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; text-decoration: none; }
-.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-h1 { font-size: clamp(2.4rem, 6vw, 4.25rem); line-height: 1.04; letter-spacing: -.035em; font-weight: 650; margin: 1.5rem 0 1.25rem; max-width: 16ch; }
-h1 em { font-style: normal; color: var(--muted); }
-.lede { font-size: clamp(1.05rem, 2vw, 1.2rem); color: var(--muted); max-width: 40rem; margin: 0 0 2.25rem; }
-.lede strong { color: var(--fg); font-weight: 500; }
-.ctas { display: flex; flex-wrap: wrap; gap: .75rem; }
-.btn { display: inline-flex; align-items: center; gap: .5rem; height: 2.75rem; padding: 0 1.15rem; border-radius: .5rem; font-weight: 500; font-size: .95rem; text-decoration: none; border: 1px solid var(--line); }
-.btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.btn.primary:hover { opacity: .88; }
-.btn:not(.primary):hover { border-color: var(--muted); }
-.btn svg { width: 18px; height: 18px; }
-
-.term { margin-top: 3.5rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--card); overflow: hidden; }
-.term .bar { display: flex; justify-content: space-between; align-items: center; padding: .65rem 1rem; border-bottom: 1px solid var(--line); font: .78rem/1 var(--mono); color: var(--muted); }
-.term .dots { display: flex; gap: 6px; }
-.term .dots span { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); border: 1px solid var(--line); }
-.term pre { margin: 0; padding: 1.25rem 1.25rem 1.4rem; overflow-x: auto; line-height: 1.85; font-size: .875rem; }
-.term .c { color: var(--muted); }
-.term .p { color: var(--accent); user-select: none; }
-.term .ok { color: var(--accent); }
-
-section { padding: 5rem 0; border-top: 1px solid var(--line); }
-.kicker { font: 500 .78rem/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 1rem; }
-h2 { font-size: clamp(1.6rem, 3.4vw, 2.3rem); line-height: 1.15; letter-spacing: -.025em; font-weight: 620; margin: 0 0 1rem; max-width: 26ch; }
-.sub { color: var(--muted); max-width: 40rem; margin: 0; }
-
-.dedup { margin-top: 2.75rem; display: grid; gap: 1.5rem; }
-.dedup figure { margin: 0; border: 1px solid var(--line); border-radius: .75rem; background: var(--card); padding: 1.5rem; }
-.dedup svg { display: block; width: 100%; height: auto; }
-.dedup .row-label { display: flex; justify-content: space-between; font: .8rem/1.4 var(--mono); color: var(--muted); margin-bottom: .75rem; gap: 1rem; }
-.dedup .row-label b { color: var(--fg); font-weight: 500; }
-.dedup .gap { height: 1.5rem; }
-.chunk { fill: var(--chunk); }
-.chunk.new { fill: var(--accent); }
-@media (prefers-reduced-motion: no-preference) {
-  .chunk.new { animation: pulse 2.8s ease-in-out infinite; }
-  .chunk.new:nth-of-type(2n) { animation-delay: .4s; }
-}
-@keyframes pulse { 50% { opacity: .45; } }
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: .75rem; overflow: hidden; }
-.stats div { padding: 1.25rem 1.5rem; background: var(--card); display: flex; flex-direction: column; justify-content: space-between; }
-.stats div + div { border-left: 1px solid var(--line); }
-.stats dt { font: .78rem/1.3 var(--mono); color: var(--muted); }
-.stats dd { margin: .35rem 0 0; font-size: 1.65rem; font-weight: 600; letter-spacing: -.02em; }
-@media (max-width: 40rem) {
-  .dedup figure { padding: 1rem; }
-  .dedup .row-label span + span { display: none; }
-  .stats div { padding: 1rem; }
-  .stats dd { font-size: 1.2rem; }
-}
-.note { font-size: .85rem; color: var(--muted); margin: 0; }
-
-.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: .75rem; overflow: hidden; margin-top: 2.75rem; }
-.grid article { background: var(--bg); padding: 1.75rem 1.5rem 2rem; }
-.grid h3 { font-size: 1.02rem; font-weight: 600; letter-spacing: -.01em; margin: .9rem 0 .4rem; }
-.grid p { margin: 0; color: var(--muted); font-size: .94rem; }
-.grid .ic { width: 28px; height: 28px; color: var(--accent); }
-@media (max-width: 56rem) { .grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 36rem) { .grid { grid-template-columns: 1fr; } }
-
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
-@media (max-width: 52rem) { .split { grid-template-columns: 1fr; } }
-ol.rules { list-style: none; margin: 0; padding: 0; counter-reset: r; }
-ol.rules li { counter-increment: r; display: grid; grid-template-columns: 2.5rem 1fr; padding: 1.1rem 0; border-top: 1px solid var(--line); }
-ol.rules li:last-child { border-bottom: 1px solid var(--line); }
-ol.rules li::before { content: counter(r, decimal-leading-zero); font: .8rem/1.9 var(--mono); color: var(--muted); }
-ol.rules b { font-weight: 600; display: block; }
-ol.rules span { color: var(--muted); font-size: .94rem; }
-
-.hosted { border: 1px solid var(--line); border-radius: 1rem; padding: clamp(1.75rem, 5vw, 3.5rem); background: var(--card); position: relative; overflow: hidden; }
-.hosted::after { content: ""; position: absolute; right: -6rem; top: -6rem; width: 18rem; height: 18rem; border-radius: 50%; background: radial-gradient(closest-side, var(--accent-soft), transparent); pointer-events: none; }
-.hosted ul { list-style: none; padding: 0; margin: 2rem 0 2.25rem; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem 2rem; max-width: 46rem; }
-.hosted li { display: flex; gap: .65rem; align-items: baseline; }
-.hosted li::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 2px; background: var(--accent); transform: translateY(-.1rem); }
-@media (max-width: 40rem) { .hosted ul { grid-template-columns: 1fr; } }
-
-.road { list-style: none; margin: 2.75rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: .75rem; overflow: hidden; }
-.road li { background: var(--bg); padding: 1.25rem 1.25rem 1.4rem; }
-.road .m { font: 600 .8rem/1 var(--mono); display: flex; justify-content: space-between; align-items: center; }
-.road .s { font: .7rem/1 var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .25rem .5rem; }
-.road .done .s { color: var(--muted); }
-.road .now .s { color: var(--accent); border-color: var(--accent); }
-.road h3 { font-size: .95rem; font-weight: 600; margin: .8rem 0 .25rem; }
-.road p { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.5; }
-@media (max-width: 56rem) { .road { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 30rem) { .road { grid-template-columns: 1fr; } }
-
-footer { border-top: 1px solid var(--line); padding: 2.5rem 0 3rem; font-size: .875rem; color: var(--muted); }
-footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1.5rem; }
-footer ul { display: flex; flex-wrap: wrap; gap: 1.25rem; list-style: none; margin: 0; padding: 0; }
-footer a { text-decoration: none; }
-footer a:hover { color: var(--fg); }
-footer p { margin: 0; max-width: 34rem; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>openxet — open-source storage for large files</title>
+  <meta name="description" content="Keep whole files. Upload only new parts. openxet is open-source Xet storage for models, datasets and more. Try the storage server or join the hosted waitlist.">
+  <link rel="canonical" href="https://openxet.com/">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101A2B" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+  <link rel="preload" href="/assets/fonts/manrope-latin-variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/assets/site.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="openxet">
+  <meta property="og:url" content="https://openxet.com/">
+  <meta property="og:title" content="openxet — Large files. Lighter uploads.">
+  <meta property="og:description" content="Open-source storage that reuses the parts of a file it already has. Hosted service coming soon; the storage-only server is ready to try.">
+  <meta property="og:image" content="https://openxet.com/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="openxet: Large files. Lighter uploads. An illustrative file reuses seven parts and uploads one new part. Hosted service coming soon.">
+  <meta name="twitter:card" content="summary_large_image">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"openxet","url":"https://openxet.com/","codeRepository":"https://github.com/stubbi/openxet","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source server and client for the Xet protocol. The storage-only server and command line are available from source; the hosted service is coming soon."}
+  </script>
+  <script type="module" src="/assets/site.mjs"></script>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-
-<header class="top">
-  <div class="wrap">
-    <a class="logo" href="/" aria-label="openxet home">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5" fill="currentColor"/><rect x="13" y="2" width="9" height="9" rx="1.5" fill="currentColor" opacity=".35"/><rect x="2" y="13" width="9" height="9" rx="1.5" fill="currentColor" opacity=".35"/><rect x="13" y="13" width="9" height="9" rx="1.5" fill="#0f7a55"/></svg>
-      openxet
-    </a>
-    <nav aria-label="Primary">
-      <ul>
-        <li class="opt"><a href="#dedup">How it works</a></li>
-        <li class="opt"><a href="#hosted">Hosted</a></li>
-        <li class="opt"><a href="#roadmap">Roadmap</a></li>
-        <li><a href="/docs/">Docs</a></li>
-        <li><a href="https://github.com/stubbi/openxet">GitHub</a></li>
-      </ul>
-    </nav>
-  </div>
-</header>
-
-<main id="main">
-  <div class="hero">
-    <div class="wrap">
-      <a class="pill" href="#roadmap"><i aria-hidden="true"></i>Open source · in active development</a>
-      <h1>Xet storage on infrastructure <em>you own.</em></h1>
-      <p class="lede">openxet is the open-source server for the <a href="https://huggingface.co/docs/xet">Xet protocol</a>, the chunk-deduplicated storage behind Hugging Face. <strong>The official clients work against it unmodified.</strong> Your bucket, your identity, and only changed chunks move.</p>
-      <div class="ctas">
-        <a class="btn primary" href="https://github.com/stubbi/openxet">
-          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-          Star on GitHub
-        </a>
-        <a class="btn" href="/docs/superpowers/specs/2026-10-23-openxet-design.html">Read the design</a>
-      </div>
-
-      <div class="term" role="figure" aria-label="Example terminal session">
-        <div class="bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span>one command, one variable</span></div>
-<pre><code><span class="p">$ </span>openxet serve
-<span class="c">  ready · export HF_ENDPOINT=http://127.0.0.1:8080 HF_TOKEN=oxt_…</span>
-<span class="p">$ </span>export HF_ENDPOINT=http://127.0.0.1:8080 HF_TOKEN=oxt_…
-<span class="p">$ </span>hf upload acme/llm-ft ./checkpoint
-<span class="c">  10.0 GB file, 1.0 MB changed since last revision</span>
-<span class="ok">  ✓ uploaded 1.9 MB · deduplicated 99.98%</span></code></pre>
-      </div>
-      <p class="note" style="margin-top:.9rem">The target workflow. <code>openxet serve</code> and the CAS work today; stock <code>hf upload</code> lands with the Hub layer in M2.</p>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/" aria-label="openxet home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>
+        openxet
+      </a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="#hosting">Hosting</a>
+        <a href="/docs/">Docs</a>
+        <a href="https://github.com/stubbi/openxet">GitHub</a>
+      </nav>
+      <a class="button button-primary header-action" href="/waitlist/">Join the waitlist</a>
+      <details class="mobile-menu">
+        <summary aria-label="Navigation menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
+        <nav aria-label="Mobile navigation">
+          <a href="#how-it-works">How it works</a>
+          <a href="#hosting">Hosting</a>
+          <a href="/docs/">Docs</a>
+          <a href="https://github.com/stubbi/openxet">GitHub</a>
+        </nav>
+      </details>
     </div>
-  </div>
+  </header>
 
-  <section id="dedup" aria-labelledby="dedup-h">
-    <div class="wrap">
-      <p class="kicker">How it works</p>
-      <h2 id="dedup-h">A 1 MB edit to a 10 GB checkpoint moves megabytes, not gigabytes.</h2>
-      <p class="sub">Clients split files into content-defined chunks of about 64 KB and hash them. openxet answers which chunks it already stores, across every file and revision, so only new chunks are packed into xorbs and uploaded.</p>
-
-      <div class="dedup">
-        <figure>
-          <figcaption class="row-label"><span><b>revision 1</b> · 10 GB, every chunk new</span><span>uploaded once</span></figcaption>
-          <svg viewBox="0 0 700 74" role="img" aria-label="A grid of chunks, all stored.">
-            <defs><pattern id="cells" width="14" height="14" patternUnits="userSpaceOnUse"><rect class="chunk" width="11" height="11" rx="2"/></pattern></defs>
-            <rect width="700" height="74" fill="url(#cells)"/>
-          </svg>
-          <div class="gap"></div>
-          <figcaption class="row-label"><span><b>revision 2</b> · 1 MB changed</span><span>only the green chunks move</span></figcaption>
-          <svg viewBox="0 0 700 74" role="img" aria-label="The same grid of chunks, with a handful highlighted as new.">
-            <rect width="700" height="74" fill="url(#cells)"/>
-            <rect class="chunk new" x="168" y="14" width="11" height="11" rx="2"/>
-            <rect class="chunk new" x="182" y="14" width="11" height="11" rx="2"/>
-            <rect class="chunk new" x="196" y="14" width="11" height="11" rx="2"/>
-            <rect class="chunk new" x="462" y="42" width="11" height="11" rx="2"/>
-            <rect class="chunk new" x="476" y="42" width="11" height="11" rx="2"/>
-          </svg>
-        </figure>
-        <dl class="stats">
-          <div><dt>file size</dt><dd>10 GB</dd></div>
-          <div><dt>bytes changed</dt><dd>1 MB</dd></div>
-          <div><dt>bytes uploaded <small>(target)</small></dt><dd>≤ 2 MB</dd></div>
-        </dl>
-        <p class="note">Targets are measured by the benchmark and compatibility suites, with results published per release.</p>
+  <main id="main">
+    <section class="wrap hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="category">Open-source storage for large files</p>
+        <h1 id="hero-title">Large files.<br><span>Lighter uploads.</span></h1>
+        <p class="lead">A new version doesn’t have to mean another full upload. openxet stores your files and reuses the parts it already has.</p>
+        <div class="actions">
+          <a class="button button-primary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
+        </div>
+        <p class="availability">Hosted service coming soon.<br><a href="/docs/quickstart-storage-only.html">Try the storage-only server today.</a></p>
       </div>
-    </div>
-  </section>
 
-  <section aria-labelledby="feat-h">
-    <div class="wrap">
-      <p class="kicker">Why openxet</p>
-      <h2 id="feat-h">Plug-and-play infrastructure, not a Hugging Face copy.</h2>
-      <p class="sub">A small surface with clear seams. It runs on the storage and identity systems you already have and forces no opinions on you.</p>
-      <div class="grid">
-        <article>
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>
-          <h3>The tools you already use</h3>
-          <p><code>hf</code>, <code>huggingface_hub</code>, <code>hf_xet</code>, <code>git-xet</code> and <code>huggingface.js</code> work unmodified. Formats match <code>xet-core</code> byte for byte, in both directions.</p>
-        </article>
-        <article>
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
-          <h3>Your bucket is the truth</h3>
-          <p>S3, GCS, Azure or local disk. The database is a rebuildable index; lose it and <code>reindex</code> restores everything from the bucket.</p>
-        </article>
-        <article>
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-          <h3>Your identity provider</h3>
-          <p>OIDC, webhooks or static tokens. openxet never owns users: no passwords, no profiles, no sign-up database.</p>
-        </article>
-        <article>
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-11 6"/></svg>
-          <h3>Git anywhere</h3>
-          <p>Keep repos on GitHub, GitLab or Gitea and large files in openxet through <code>git-xet</code>. Or host the Git repos in openxet itself.</p>
-        </article>
-        <article>
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="15" width="7" height="5" rx="1.5"/><rect x="14" y="15" width="7" height="5" rx="1.5" stroke-dasharray="2 2"/></svg>
-          <h3>Laptop to petabytes</h3>
-          <p>One binary with zero-config dev mode. Stateless nodes: scale by adding more, with no redesign.</p>
-        </article>
-        <article>
-          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13.5 6l-3 12"/></svg>
-          <h3>For humans and agents</h3>
-          <p>Readable output and safe defaults for people. <code>--json</code> with versioned schemas, stable exit codes, structured errors and MCP for agents.</p>
-        </article>
-      </div>
-    </div>
-  </section>
+      <figure class="file-example" data-file-example>
+        <figcaption class="example-heading">
+          <span>What changes between uploads</span>
+          <span class="example-kind">Illustrative example</span>
+        </figcaption>
+        <div class="file-comparison" aria-hidden="true">
+          <div class="file-label"><span>Already stored</span><span>8 parts</span></div>
+          <div class="file-parts previous-parts">
+            <span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span><span>H</span>
+          </div>
+          <div class="comparison-guide"><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span></div>
+          <div class="file-label"><span>Your next version</span><span>8 parts</span></div>
+          <div class="file-parts updated-parts">
+            <span data-updated-part>A</span><span data-updated-part>B</span><span class="is-new" data-updated-part>I+</span><span data-updated-part>D</span><span data-updated-part>E</span><span data-updated-part>F</span><span data-updated-part>G</span><span data-updated-part>H</span>
+          </div>
+          <div class="file-legend"><span><i></i> Reused</span><span><i class="new-key">+</i> New</span></div>
+          <div class="transfer-tray">
+            <p class="transfer-label">New data to upload</p>
+            <div class="file-parts transfer-parts" data-upload-tray><span class="is-new">I+</span></div>
+          </div>
+        </div>
+        <div class="example-answer" aria-live="polite" aria-atomic="true">
+          <p class="example-result" data-example-result>7 parts reused · 1 new part to upload</p>
+          <p data-example-explanation>Your file stays whole. Only the new part needs uploading.</p>
+        </div>
+        <div class="example-controls" role="group" aria-label="Choose a file example" data-example-controls hidden>
+          <button type="button" data-scenario="small" aria-pressed="true">Small edit</button>
+          <button type="button" data-scenario="same" aria-pressed="false">Same file</button>
+          <button type="button" data-scenario="new" aria-pressed="false">All new</button>
+        </div>
+        <p class="example-caveat">Eight equal parts make the idea visible. Real parts vary in size; savings depend on the file and the edit.</p>
+      </figure>
+    </section>
 
-  <section aria-labelledby="rules-h">
-    <div class="wrap split">
-      <div>
-        <p class="kicker">Non-negotiables</p>
-        <h2 id="rules-h">Boring to run, by design.</h2>
-        <p class="sub">These hold for every change, and each is enforced by a test. A change that weakens one is a release blocker.</p>
+    <section class="wrap section how-section" id="how-it-works" aria-labelledby="how-title">
+      <span class="anchor-alias" id="dedup" aria-hidden="true"></span>
+      <div class="section-intro">
+        <h2 id="how-title">Keep the whole file.<br>Send what’s new.</h2>
+        <p>When you change a dataset, update a model or rebuild an artifact, some of its contents may stay the same. openxet gives those parts a second use.</p>
       </div>
-      <ol class="rules">
-        <li><div><b>Protocol exactness</b><span>Data written by openxet reads with stock clients and huggingface.co tooling, and the reverse.</span></div></li>
-        <li><div><b>The bucket is the source of truth</b><span>Losing the database never loses data.</span></div></li>
-        <li><div><b>Nothing is deleted outside garbage collection</b><span>Explicit, logged, with a grace period.</span></div></li>
-        <li><div><b>openxet never owns users</b><span>Every token is bound to an external identity.</span></div></li>
-        <li><div><b>No telemetry</b><span>Not by default, and never without explicit opt-in. This site has no tracking either.</span></div></li>
+      <ol class="process">
+        <li><span class="step-number" aria-hidden="true">1</span><h3>Find the parts</h3><p>The upload tool splits your file into small pieces, called chunks, and identifies each one by its contents.</p></li>
+        <li><span class="step-number" aria-hidden="true">2</span><h3>Reuse what’s there</h3><p>It checks which chunks are already stored. Matching chunks can be reused, even across different files.</p></li>
+        <li><span class="step-number" aria-hidden="true">3</span><h3>Upload the new pieces</h3><p>Only new chunks need uploading. When you download, the pieces come back together as your complete file.</p></li>
       </ol>
-    </div>
-  </section>
+      <p class="section-note">This is <strong>deduplication</strong>, using the Xet protocol developed by Hugging Face. <a href="https://huggingface.co/docs/xet/index">Read how Xet works <span aria-hidden="true">↗</span></a></p>
+    </section>
 
-  <section id="hosted" aria-labelledby="hosted-h">
-    <div class="wrap">
-      <div class="hosted">
-        <p class="kicker">openxet.com · coming</p>
-        <h2 id="hosted-h">Don't want to run anything? We'll host it.</h2>
-        <p class="sub">The hosted service runs the released open-source build. There is no private fork and no hosted-only core feature.</p>
-        <ul>
-          <li><span>Landing page to a working <code>hf upload</code> in under 60 seconds</span></li>
-          <li><span>Free tier with no time limit and no card to start</span></li>
-          <li><span>Bring your own S3, GCS or Azure bucket</span></li>
-          <li><span>EU region from day one</span></li>
-          <li><span>Dedup savings shown on every page, in bytes and money</span></li>
-          <li><span>Support from every page, replies within one business day</span></li>
-        </ul>
-        <div class="ctas">
-          <a class="btn primary" href="https://github.com/stubbi/openxet/subscription">Watch the repo for launch</a>
-          <a class="btn" href="https://github.com/stubbi/openxet/issues/new/choose">Become a design partner</a>
+    <section class="hosting-section" id="hosting" aria-labelledby="hosting-title">
+      <span class="anchor-alias" id="hosted" aria-hidden="true"></span>
+      <div class="wrap section">
+        <div class="section-intro">
+          <h2 id="hosting-title">Choose who runs<br>your storage.</h2>
+          <p>openxet brings the Xet protocol to storage you can operate yourself or use as a service. The hosted service will run the same open-source code.</p>
+        </div>
+        <div class="hosting-choices">
+          <article class="hosting-choice hosting-featured">
+            <p class="choice-status">Coming soon</p>
+            <h3>Hosted by openxet</h3>
+            <p>Store your files without operating a storage server. We’ll run the service, so you can get on with your work.</p>
+            <dl><dt>Operated by</dt><dd>openxet</dd><dt>Data lives in</dt><dd>The hosted service</dd></dl>
+            <p class="choice-detail">Hosting locations, limits and pricing will be published before launch.</p>
+            <a class="button button-primary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a>
+          </article>
+          <article class="hosting-choice">
+            <p class="choice-status">Storage-only preview available</p>
+            <h3>On your infrastructure</h3>
+            <p>Run the storage server where you need it. Start locally, inspect the code and keep the data under your control.</p>
+            <dl><dt>Operated by</dt><dd>You or your team</dd><dt>Data lives in</dt><dd>Your storage directory today</dd></dl>
+            <p class="choice-detail">The current preview uses local disk and SQLite. Build it from source to try it.</p>
+            <a class="button button-secondary" href="/docs/quickstart-storage-only.html">Run the quickstart <span aria-hidden="true">→</span></a>
+          </article>
+        </div>
+        <div class="integration-path" id="integrate">
+          <div><h3>Building storage into your product?</h3><p>Keep your own interface and authorization decisions. Today, your platform can call an openxet installation’s storage API and issue scoped tokens. Hosted integration will depend on the service’s published capabilities at launch.</p></div>
+          <div class="reference-links"><a href="/docs/reference/routes.html">Explore the storage API <span aria-hidden="true">→</span></a><a href="/docs/reference/config.html#cas-tokens">Platform-signed tokens <span aria-hidden="true">→</span></a></div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section id="roadmap" aria-labelledby="road-h">
-    <div class="wrap">
-      <p class="kicker">Roadmap</p>
-      <h2 id="road-h">Built in the open, straight through to 1.0.</h2>
-      <p class="sub">Every milestone ships behind the same bar: the compatibility suite against real clients, golden vectors and published benchmarks.</p>
-      <ol class="road">
-        <li class="done"><div class="m">M0<span class="s">done</span></div><h3>Foundation</h3><p>Protocol crate on <code>xet-core</code>, CI, compatibility harness, spikes.</p></li>
-        <li class="now"><div class="m">M1<span class="s">in progress</span></div><h3>CAS core</h3><p>Xorbs, shards, global dedup, reconstruction, <code>openxet serve</code>.</p></li>
-        <li><div class="m">M2<span class="s">next</span></div><h3>Hub API and Git</h3><p><code>hf upload</code> and <code>download</code> unmodified, Git hosting, LFS for <code>git-xet</code>.</p></li>
-        <li><div class="m">M3<span class="s">planned</span></div><h3>Production backends</h3><p>Postgres, S3, GCS, Azure, OIDC, multi-node.</p></li>
-        <li><div class="m">M4<span class="s">planned</span></div><h3>Operations</h3><p>GC, <code>reindex</code>, <code>verify</code>, metering, Git over SSH.</p></li>
-        <li><div class="m">M5<span class="s">planned</span></div><h3>Reach</h3><p>Cache tier, pull-through mirror, pools and data residency.</p></li>
-        <li><div class="m">M6<span class="s">planned</span></div><h3>Client and web UI</h3><p><code>sync</code>, <code>mount</code>, MCP server, self-service UI.</p></li>
-        <li><div class="m">M7<span class="s">planned</span></div><h3>Distribution</h3><p>Releases, images, Helm, Homebrew, PyPI, docs site.</p></li>
-      </ol>
-    </div>
-  </section>
-</main>
+    <section class="wrap section tools-section" id="roadmap" aria-labelledby="tools-title">
+      <div class="section-intro">
+        <h2 id="tools-title">Try an upload.<br>Verify the result.</h2>
+        <p>Start with the tested storage-only workflow. The broader Hugging Face toolchain is the next step, as the Hub and Git layers arrive.</p>
+      </div>
+      <div class="tools-grid">
+        <div>
+          <h3>What works today</h3>
+          <p>The first milestone, M1, is complete. You can serve, upload and download files with <code>openxet</code>, or use Hugging Face’s <code>hf_xet</code> client, version 1.7.0 or newer.</p>
+          <a href="/docs/quickstart-storage-only.html">Follow the tested quickstart <span aria-hidden="true">→</span></a>
+          <p class="next-task">It uploads a test file, downloads it and checks that the contents match. Uploading the same file again then shows reuse in the actual result.</p>
+          <div class="planned-note"><strong>Next: Hub and Git compatibility.</strong><p><code>hf upload</code>, <code>huggingface_hub</code>, Git and LFS workflows are planned. Hosted accounts and MCP are also still ahead.</p><a href="/docs/superpowers/specs/2026-10-23-openxet-design.html">Read the product plan</a></div>
+        </div>
+        <div class="agent-workflow">
+          <h3>Hand the same task to an agent</h3>
+          <p>Use readable terminal output when you’re working by hand. Add <code>--json</code> when a script or agent needs a stable result.</p>
+          <div class="code-example">
+            <p>Shell · after the quickstart setup</p>
+            <pre aria-label="Upload command with JSON output" tabindex="0"><code>openxet upload model.bin --json</code></pre>
+          </div>
+          <p class="code-context">With the server running and your endpoint and token set, this returns a versioned JSON result with file hashes and uploaded bytes. Errors include a code and a hint for what to do next.</p>
+          <p class="code-context">Share the <a href="/docs/quickstart-storage-only.md">quickstart as Markdown</a> with the goal: upload the test file, download it and verify the contents. Keep credentials out of the handoff; authorize access separately.</p>
+          <div class="reference-links"><a href="/docs/reference/cli.html">CLI reference</a><a href="/docs/reference/exit-codes.html">Errors and exit codes</a><a href="/llms.txt">More agent references</a></div>
+        </div>
+      </div>
+    </section>
 
-<footer>
-  <div class="wrap">
-    <p>openxet is Apache-2.0 open source. It is an independent project, not affiliated with or endorsed by Hugging Face.</p>
-    <ul>
-      <li><a href="/docs/">Docs</a></li>
-      <li><a href="https://github.com/stubbi/openxet">GitHub</a></li>
-      <li><a href="https://github.com/stubbi/openxet/blob/main/CONTRIBUTING.md">Contributing</a></li>
-      <li><a href="https://github.com/stubbi/openxet/blob/main/GOVERNANCE.md">Governance</a></li>
-      <li><a href="https://github.com/stubbi/openxet/blob/main/SECURITY.md">Security</a></li>
-      <li><a href="/llms.txt">llms.txt</a></li>
-    </ul>
-  </div>
-</footer>
+    <section class="evidence-section" id="review" aria-labelledby="evidence-title">
+      <div class="wrap section">
+        <div class="section-intro">
+          <h2 id="evidence-title">Check it against<br>your requirements.</h2>
+          <p>openxet is at the storage-only stage, with no packaged release yet. Review what exists today before deciding whether it fits your work.</p>
+        </div>
+        <div class="evidence-list">
+          <article><h3>Data and operation</h3><p>See where the current server stores data, how it starts and stops, and how to handle stale client caches.</p><a href="/docs/reference/config.html">Review server configuration <span aria-hidden="true">→</span></a></article>
+          <article><h3>Access and verification</h3><p>Review scoped credentials, signed transfer URLs and the tests that enforce the implemented security boundaries.</p><a href="/docs/reference/security-tests.html">Inspect the security tests <span aria-hidden="true">→</span></a></article>
+          <article><h3>Measured performance</h3><p>Read the workload and machine behind each benchmark, with commands to reproduce the results.</p><a href="/docs/reference/benchmarks.html">Read the benchmarks <span aria-hidden="true">→</span></a></article>
+        </div>
+        <p class="section-note">The Rust server and client are <a href="https://github.com/stubbi/openxet">Apache 2.0 source</a>. Follow <a href="/docs/changelog.html">what has changed</a>, or <a href="/about/">meet the maintainer and report a problem</a>.</p>
+      </div>
+    </section>
+
+    <section class="wrap section questions-section" aria-labelledby="questions-title">
+      <div class="questions-heading"><h2 id="questions-title">A few practical<br>questions.</h2><p>Looking for a technical detail?<br><a href="/docs/">Start with the documentation.</a></p></div>
+      <div class="questions">
+        <details><summary>Is this only for AI models?</summary><div><p>No. openxet stores large files. Models and datasets are common examples, but build artifacts and other versioned files fit too. The benefit depends on how much content your uploads share.</p></div></details>
+        <details><summary>How much will I save?</summary><div><p>That depends on the files. If many chunks already exist in storage, less new data needs uploading. If everything is new, all those chunks need uploading. Compression, file formats and local caches also affect the result.</p><p>The diagram above explains reuse; it is not a benchmark or a prediction of your bill.</p></div></details>
+        <details><summary>Is openxet part of Hugging Face?</summary><div><p>No. openxet is an independent open-source project implementing the Xet protocol developed by Hugging Face. It is not affiliated with or endorsed by Hugging Face.</p></div></details>
+        <details><summary>Can I use it today?</summary><div><p>You can build the storage-only server and client from source and follow the <a href="/docs/quickstart-storage-only.html">tested quickstart</a>. There is no packaged release yet. The Hub and Git layers and hosted service are planned.</p></div></details>
+        <details><summary>What will the hosted service cost?</summary><div><p>Pricing, limits and hosting locations will be published before launch. <a href="/waitlist/">Join the waitlist</a> if you’d like an email when hosted openxet is ready to try. Joining does not create an account or require payment.</p></div></details>
+      </div>
+    </section>
+
+    <section class="wrap final-section" aria-labelledby="final-title">
+      <div class="final-invitation">
+        <div><p class="category">Hosted service coming soon</p><h2 id="final-title">Hear when hosting<br>is ready.</h2><p>We’ll email you when hosted openxet is ready to try.</p></div>
+        <div class="final-actions"><a class="button button-primary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a><a href="/docs/quickstart-storage-only.html">Prefer to run it yourself? Try the quickstart.</a></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <div><a class="brand" href="/" aria-label="openxet home"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>openxet</a><p>Open-source storage for large files.<br>Apache 2.0 · Independent of Hugging Face.</p></div>
+      <nav class="footer-links" aria-label="Footer navigation"><a href="/docs/">Documentation</a><a href="https://github.com/stubbi/openxet">GitHub</a><a href="/about/">About &amp; contribute</a><a href="https://github.com/stubbi/openxet/security/policy">Report a security issue</a><a href="/privacy/">Privacy</a><a href="/llms.txt">llms.txt</a></nav>
+    </div>
+  </footer>
 </body>
 </html>

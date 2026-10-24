@@ -328,6 +328,8 @@ RSS cover the whole server process tree. Wall time includes the client's
 time includes client-side `index-pack` and the host contention described
 above. The CPU and RSS columns are the comparison.
 
+<!-- table-caption: HTTP prototype: git and gix on tf10k -->
+
 | Operation | git: client ms | git: server CPU ms | git: peak RSS MB (server / child) | gix: client ms | gix: server CPU ms | gix: peak RSS MB |
 |---|---|---|---|---|---|---|
 | Clone, cold node (hydrates 80 MB first) | 3,687 | 271 | 176 / 85 | 60,250 | 3,368 | 180 |
@@ -340,6 +342,8 @@ above. The CPU and RSS columns are the comparison.
 The H1+ hybrid on `tf10k` (git for `fetch` and receive-pack; capabilities
 and `ls-refs` in-process; 3 runs, medians, same conditions):
 
+<!-- table-caption: HTTP prototype: H1+ hybrid on tf10k -->
+
 | Operation | client ms | server CPU ms | peak RSS MB (server / child) |
 |---|---|---|---|
 | Clone, cold node (hydrates 80 MB in 13 packs: 0.6–1.3 s) | 8,485 | 307 | 173 / 79 |
@@ -351,6 +355,8 @@ and `ls-refs` in-process; 3 runs, medians, same conditions):
 
 `lfs`, the LFS-pointer repo (3 runs, medians):
 
+<!-- table-caption: HTTP prototype: git and gix on lfs -->
+
 | Operation | git: client ms | git: server CPU ms | gix: client ms | gix: server CPU ms |
 |---|---|---|---|---|
 | Clone, cold node | 264 | 77 | 347 | 79 |
@@ -361,6 +367,8 @@ and `ls-refs` in-process; 3 runs, medians, same conditions):
 | Push whole history to empty repo | 238 | 114 | 120 | 53 |
 
 The H1+ hybrid on `lfs` (3 runs, medians):
+
+<!-- table-caption: HTTP prototype: H1+ hybrid on lfs -->
 
 | Operation | client ms | server CPU ms |
 |---|---|---|

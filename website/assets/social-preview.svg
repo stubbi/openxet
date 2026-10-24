@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">openxet — Large files. Lighter uploads.</title>
+  <desc id="description">Open-source storage. An illustrative file has seven reused parts and one new part; only the new part appears in the upload tray. Hosted service coming soon.</desc>
+  <!-- Fonts: Manrope 650/750, IBM Plex Sans 400/500, IBM Plex Mono 400.
+       Render with the official fonts and Fontconfig setup in assets/README.md. -->
+  <style>
+    .display { font-family: Manrope, sans-serif; font-weight: 650; }
+    .wordmark { font-weight: 750; }
+    .body { font-family: 'IBM Plex Sans', sans-serif; }
+    .part { font-family: 'IBM Plex Mono', monospace; font-size: 19px; text-anchor: middle; }
+    .stored { fill: #e8edff; stroke: #304bce; stroke-width: 1.5; }
+    .new { fill: #f5cf6b; stroke: #142238; stroke-width: 2; stroke-dasharray: 4 3; }
+  </style>
+  <rect width="1200" height="630" fill="#f5f7fb"/>
+  <g transform="translate(64 54) scale(1.7)">
+    <rect x="2" y="2" width="9" height="9" rx="1.5" fill="#304bce"/>
+    <rect x="13" y="2" width="9" height="9" rx="1.5" fill="#304bce" opacity=".55"/>
+    <rect x="2" y="13" width="9" height="9" rx="1.5" fill="#304bce" opacity=".55"/>
+    <rect x="13" y="13" width="9" height="9" rx="1.5" fill="#f5cf6b"/>
+  </g>
+  <text x="117" y="87" class="display wordmark" font-size="36" letter-spacing="-1.4" fill="#142238">openxet</text>
+  <text x="64" y="165" class="body" font-size="23" fill="#526079">Open-source storage</text>
+  <g class="display" font-size="70" letter-spacing="-3">
+    <text x="60" y="263" fill="#142238">Large files.</text>
+    <text x="60" y="344" fill="#304bce">Lighter uploads.</text>
+  </g>
+  <text x="64" y="406" class="body" font-size="25" fill="#526079">Keep the file. Send what’s new.</text>
+  <text x="64" y="566" class="body" font-size="22" font-weight="500" fill="#142238">openxet.com</text>
+
+  <rect x="680" y="132" width="456" height="390" rx="24" fill="#fff" stroke="#d3dbea" stroke-width="1.5"/>
+  <g class="body" font-size="20" font-weight="500" fill="#142238">
+    <text x="708" y="177">Already stored</text>
+    <text x="708" y="281">Your next version</text>
+    <text x="708" y="401">New data to upload</text>
+  </g>
+  <g transform="translate(708 195)">
+    <g class="stored"><rect width="44" height="44" rx="5"/><rect x="51" width="44" height="44" rx="5"/><rect x="102" width="44" height="44" rx="5"/><rect x="153" width="44" height="44" rx="5"/><rect x="204" width="44" height="44" rx="5"/><rect x="255" width="44" height="44" rx="5"/><rect x="306" width="44" height="44" rx="5"/><rect x="357" width="44" height="44" rx="5"/></g>
+    <g class="part" fill="#304bce"><text x="22" y="29">A</text><text x="73" y="29">B</text><text x="124" y="29">C</text><text x="175" y="29">D</text><text x="226" y="29">E</text><text x="277" y="29">F</text><text x="328" y="29">G</text><text x="379" y="29">H</text></g>
+  </g>
+  <g transform="translate(708 299)">
+    <g class="stored"><rect width="44" height="44" rx="5"/><rect x="51" width="44" height="44" rx="5"/><rect x="153" width="44" height="44" rx="5"/><rect x="204" width="44" height="44" rx="5"/><rect x="255" width="44" height="44" rx="5"/><rect x="306" width="44" height="44" rx="5"/><rect x="357" width="44" height="44" rx="5"/></g>
+    <rect class="new" x="102" width="44" height="44" rx="5"/>
+    <g class="part" fill="#304bce"><text x="22" y="29">A</text><text x="73" y="29">B</text><text x="175" y="29">D</text><text x="226" y="29">E</text><text x="277" y="29">F</text><text x="328" y="29">G</text><text x="379" y="29">H</text></g>
+    <text class="part" x="124" y="29" fill="#142238">I+</text>
+  </g>
+  <path d="M708 367H1108" fill="none" stroke="#d3dbea"/>
+  <rect class="new" x="708" y="418" width="44" height="44" rx="5"/>
+  <text class="part" x="730" y="447" fill="#142238">I+</text>
+  <text x="768" y="447" class="body" font-size="21" fill="#142238">Only the new part.</text>
+  <text x="708" y="495" class="body" font-size="16" fill="#526079">Illustrative example</text>
+  <text x="680" y="566" class="body" font-size="21" fill="#526079">Hosted service coming soon</text>
+</svg>

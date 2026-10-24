@@ -20,6 +20,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  waitlist:
+    name: hosted waitlist
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.7.0"
+          package-manager-cache: false
+      # Uses only Node built-ins and the checked-in SQLite migrations.
+      - run: npm test --prefix hosted/waitlist
+
   rust:
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
@@ -243,7 +259,7 @@ jobs:
         with:
           lycheeVersion: v0.24.2
           args: >-
-            --offline --include-fragments --no-progress
+            --offline --include-fragments --index-files index.html,. --no-progress
             --root-dir ${{ github.workspace }}/target/site/public
             --exclude-path docs/SUMMARY.md
             target/site/public docs
