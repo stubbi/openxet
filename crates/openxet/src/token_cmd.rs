@@ -10,7 +10,7 @@ use openxet_auth::{AuthError, Authenticator, Mode, StaticToken, TokenSigner, gen
 use serde::Serialize;
 
 use crate::duration;
-use crate::error::CliError;
+use crate::error::{CliError, ExitCode};
 use crate::output::{HumanDisplay, Output};
 use crate::secret;
 
@@ -204,7 +204,8 @@ fn keygen(key: &Path, output: Output) -> Result<(), CliError> {
             "exists",
             format!("{} already exists", public.display()),
             "Nothing was overwritten. Remove the key pair first, or pass another `--key`.",
-        ));
+        )
+        .with_exit(ExitCode::USAGE));
     }
     let pair = generate_keypair().map_err(|err| auth_error(&err))?;
     // The public key first: a failure then never leaves a lone private key.

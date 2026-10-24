@@ -7,7 +7,7 @@ can rely on them.
 | ---- | --------- | -------------------------------------------------------------------- |
 | 0    | `SUCCESS` | The command did what was asked.                                      |
 | 1    | `FAILURE` | The command was valid but failed. The message on stderr says why.    |
-| 2    | `USAGE`   | Unknown command, missing argument or invalid option. Nothing was run. |
+| 2    | `USAGE`   | Unknown command, missing argument or invalid option, or a refusal to overwrite a file. Nothing was run or written. |
 | 130  | `INTERRUPTED` | `upload` or `download` was stopped by `SIGINT` (Ctrl-C) or `SIGTERM`. A partial download was removed. |
 
 Every failure is reported on stderr. With `--json`, it is a single JSON
@@ -29,7 +29,7 @@ object with a stable `code` and a `hint` naming the next action:
 | `storage` | 1 | `serve` couldn't open the bucket in the data directory. |
 | `insecure_permissions` | 1 | A secret file (`dev-token`, `transfer.key`, a signing key) can be read by other users. The hint names the `chmod`. |
 | `invalid_key` | 1 | A key or token file doesn't hold what it should. |
-| `exists` | 1 | `token keygen` would overwrite a file. Nothing was written. |
+| `exists` | 2 | `token keygen` would overwrite a file. Nothing was written. |
 | `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |
 | `invalid_ttl` | 1 | `token mint --ttl` is outside `1m` to `30d`. |
 | `invalid_claims` | 1 | `token mint` or `token generate` was given an empty or invalid `--scope` or `--subject`. |

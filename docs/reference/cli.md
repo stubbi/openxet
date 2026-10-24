@@ -81,7 +81,7 @@ its public key to `FILE.pub` (SPKI PEM), and prints the public key, its
 `$XDG_CONFIG_HOME/openxet/token.key`, or `~/.config/openxet/token.key`, never
 the working directory, where a key would be one `git add` from a commit.
 It never overwrites a file: if either exists, it fails with error code
-`exists` and writes nothing. The public key is written first, so a failure
+`exists` (exit 2) and writes nothing. The public key is written first, so a failure
 never leaves a private key without its public half.
 
 ```json

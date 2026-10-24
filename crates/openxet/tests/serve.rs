@@ -728,7 +728,7 @@ async fn token_mint_verifies() {
     let out = run(openxet()
         .args(["token", "keygen", "--json", "--key"])
         .arg(&key));
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(2));
     assert_eq!(json_stderr(&out)["code"], "exists");
 
     let mint = |mode: &str, ttl: &str| {
