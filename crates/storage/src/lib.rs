@@ -13,6 +13,7 @@ mod local;
 use std::fmt;
 
 use bytes::Bytes;
+use futures_core::stream::BoxStream;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 
 pub use error::StorageError;
@@ -33,6 +34,28 @@ impl fmt::Display for Key {
             Key::Xorb(h) => write!(f, "xorbs/default/{}", hash_to_hex(h)),
             Key::Shard(h) => write!(f, "shards/{}", hash_to_hex(h)),
         }
+    }
+}
+
+/// The size of the blocks [`Bucket::get_range_stream`] yields: 1 MiB. A
+/// streamed read holds about one block at a time (ruling M1-R27).
+pub const STREAM_BLOCK_BYTES: usize = 1024 * 1024;
+
+/// A range being read block by block ([`Bucket::get_range_stream`]).
+pub struct RangeStream {
+    /// The whole object's size, as found when the read started.
+    pub size: u64,
+    /// The range's bytes, in order, in blocks of at most
+    /// [`STREAM_BLOCK_BYTES`]. A failure partway ends the stream with the
+    /// error.
+    pub blocks: BoxStream<'static, Result<Bytes, StorageError>>,
+}
+
+impl fmt::Debug for RangeStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RangeStream")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
     }
 }
 
@@ -69,6 +92,25 @@ pub trait Bucket: Send + Sync + 'static {
         start: u64,
         end_inclusive: u64,
     ) -> Result<Bytes, StorageError>;
+
+    /// Reads bytes `start..=end_inclusive` of the object as a stream of
+    /// blocks of at most [`STREAM_BLOCK_BYTES`], so a reader holds one block
+    /// at a time, never the range (ruling M1-R27). [`Bucket::get_range`]
+    /// stays for small reads.
+    ///
+    /// The key and the range are checked before this returns, so a caller
+    /// learns of a bad range before it sends anything.
+    ///
+    /// # Errors
+    ///
+    /// As [`Bucket::get_range`], before the stream starts; a read failing
+    /// partway ends the stream with [`StorageError::Io`].
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        start: u64,
+        end_inclusive: u64,
+    ) -> Result<RangeStream, StorageError>;
 
     /// The size of the object, or `None` if it does not exist.
     ///

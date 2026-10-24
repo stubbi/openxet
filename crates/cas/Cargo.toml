@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 axum = "0.8.9"
+futures-core = "0.3.34"
 getrandom = "0.4.3"
 http-body-util = { version = "0.1.5", features = ["channel"] }
 openxet-auth = { path = "../auth", version = "0.0.0" }
@@ -27,6 +28,7 @@ uuid = { version = "1.29.0", features = ["v7"] }
 [dev-dependencies]
 async-trait = "0.1.92"
 openxet-protocol = { path = "../protocol", version = "0.0.0", features = ["test-support"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.5", default-features = false }
 sqlx = { version = "0.9", default-features = false, features = ["migrate"] }
 tempfile = "3"

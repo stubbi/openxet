@@ -1,7 +1,7 @@
 use std::error::Error as StdError;
 
 use axum::Json;
-use axum::http::header::{CONNECTION, WWW_AUTHENTICATE};
+use axum::http::header::{CONNECTION, CONTENT_RANGE, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{AuthError, ForbiddenReason};
@@ -66,6 +66,63 @@ pub enum CasError {
     /// `400 bad_range`.
     #[error("a signed transfer URL must be fetched with the `Range` header it was signed for")]
     BadRange,
+
+    /// A signed transfer URL was fetched without its signed query
+    /// (`range`, `exp` and `sig`), or with one that doesn't parse.
+    /// `400 invalid_transfer_url`.
+    #[error("the transfer URL is not a signed URL from a reconstruction")]
+    InvalidTransferUrl,
+
+    /// No file with the path's hash is registered to the caller's scope.
+    /// `404 not_found`. Another scope's file reads exactly as one never
+    /// stored (design §5.4, ruling M1-R16), so the answer names nothing from
+    /// the request.
+    #[error("the file is not stored on this server for this credential's scope")]
+    FileNotFound,
+
+    /// A reconstruction's `Range` starts at or past the end of the file,
+    /// or a transfer range runs past the stored xorb.
+    /// `416 range_not_satisfiable` with `Content-Range: bytes */{size}`,
+    /// which `hf_xet` reads, on a reconstruction, as the end of the file
+    /// (S10 §1).
+    #[error("the requested range lies past the end of the content, which is {size} bytes")]
+    RangeNotSatisfiable {
+        /// The file's size, or the stored xorb's.
+        size: u64,
+    },
+
+    /// A reconstruction's `Range` header is not one range of the `bytes`
+    /// unit. `400 invalid_range`.
+    #[error(
+        "the Range header is not a single byte range (bytes=start-end, bytes=start- or bytes=-length)"
+    )]
+    InvalidRange,
+
+    /// A batch reconstruction names more files than it may.
+    /// `400 batch_too_large`.
+    #[error("the batch names {count} files; at most {limit} are answered per request")]
+    BatchTooLarge {
+        /// The distinct files named.
+        count: usize,
+        /// [`crate::MAX_BATCH_FILES`].
+        limit: usize,
+    },
+
+    /// The files of a batch reconstruction hold more terms than one batch
+    /// may plan. `400 batch_too_large`.
+    #[error("the batch's files hold {terms} terms; at most {limit} are answered per request")]
+    BatchTooManyTerms {
+        /// The terms of the files answered.
+        terms: usize,
+        /// [`crate::MAX_BATCH_TERMS`].
+        limit: usize,
+    },
+
+    /// A batch reconstruction body is not a JSON list of
+    /// `{"prefix":"default","hash":…}` keys. `400 invalid_batch`. The body is
+    /// never echoed.
+    #[error("the batch body is not a JSON list of {{\"prefix\": \"default\", \"hash\": …}} keys")]
+    InvalidBatch,
 
     /// A shard's file references a xorb that isn't visible to the caller:
     /// missing, or under `PerScope` another scope's, which reads the same
@@ -350,6 +407,48 @@ impl CasError {
                 "bad_range",
                 "Send `Range: bytes={start}-{end}` equal to the URL's `range` query parameter.",
             ),
+            Self::InvalidTransferUrl => (
+                StatusCode::BAD_REQUEST,
+                "invalid_transfer_url",
+                "Use a data URL exactly as a reconstruction (`GET /v2/reconstructions/{file}`) \
+                 returned it, with its query.",
+            ),
+            Self::FileNotFound => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Check the file hash, and use a token for the scope the file was uploaded to: \
+                 files are visible only in their own scope.",
+            ),
+            Self::RangeNotSatisfiable { .. } => (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "range_not_satisfiable",
+                "Nothing to fix when reading to the end: the range starts past the last byte. \
+                 Ask for a range that starts below the size in `Content-Range`.",
+            ),
+            Self::InvalidRange => (
+                StatusCode::BAD_REQUEST,
+                "invalid_range",
+                "Send one range, `Range: bytes={start}-{end}` with an inclusive end, or omit \
+                 the header for the whole file (https://huggingface.co/docs/xet/api).",
+            ),
+            Self::BatchTooLarge { .. } => (
+                StatusCode::BAD_REQUEST,
+                "batch_too_large",
+                "Split the files into batches of at most 1000.",
+            ),
+            Self::BatchTooManyTerms { .. } => (
+                StatusCode::BAD_REQUEST,
+                "batch_too_large",
+                "Split the batch into fewer files per request, or reconstruct the largest files \
+                 one at a time with `GET /v2/reconstructions/{file}`.",
+            ),
+            Self::InvalidBatch => (
+                StatusCode::BAD_REQUEST,
+                "invalid_batch",
+                "Send a JSON list such as `[{\"prefix\": \"default\", \"hash\": \"<64 hex>\"}]`, \
+                 or use `GET /v1/reconstructions?file_id=<hash>&file_id=<hash>` \
+                 (https://huggingface.co/docs/xet/api#6-batch-file-reconstruction).",
+            ),
             Self::UnknownXorb { .. } => {
                 (StatusCode::BAD_REQUEST, "unknown_xorb", UNKNOWN_XORB_HINT)
             }
@@ -500,6 +599,14 @@ impl IntoResponse for CasError {
             .into_response();
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
+        }
+        if let Self::RangeNotSatisfiable { size } = self {
+            // RFC 9110 §15.5.17: a `416` names the current length.
+            response.headers_mut().insert(
+                CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes */{size}"))
+                    .unwrap_or_else(|_| unreachable!("digits are a valid header value")),
+            );
         }
         response
     }

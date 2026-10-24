@@ -27,12 +27,13 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 use axum::body::Bytes;
+use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
 use openxet_cas::{AppState, CasConfig, Clock, SystemClock, router};
 use openxet_index::{ChunkTable, FileRecord, Index, IndexError, NewFile, SqliteIndex, Visibility};
 use openxet_protocol::MerkleHash;
 use openxet_protocol::VerifyLimits;
-use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
+use openxet_storage::{Bucket, Key, LocalBucket, RangeStream, StorageError};
 use reqwest::Method;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -129,6 +130,44 @@ pub const ROUTES: &[Route] = &[
         authorized: 404,
         authorized_code: Some("not_found"),
     },
+    Route {
+        method: Method::GET,
+        path: RECONSTRUCTION_V2_PATH,
+        access: Access::Read,
+        // No file is registered to the caller's scope.
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
+    Route {
+        method: Method::GET,
+        path: RECONSTRUCTION_V1_PATH,
+        access: Access::Read,
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
+    Route {
+        method: Method::GET,
+        path: BATCH_GET_PATH,
+        access: Access::Read,
+        // Files the caller can't read are left out of the answer.
+        authorized: 200,
+        authorized_code: None,
+    },
+    Route {
+        method: Method::POST,
+        path: BATCH_POST_PATH,
+        access: Access::Read,
+        // An empty body is not a JSON list of keys.
+        authorized: 400,
+        authorized_code: Some("invalid_batch"),
+    },
+    Route {
+        method: Method::HEAD,
+        path: FILE_PATH,
+        access: Access::Read,
+        authorized: 404,
+        authorized_code: Some("not_found"),
+    },
 ];
 
 impl Route {
@@ -167,6 +206,31 @@ pub const DEDUP_MERKLEDB_PATH: &str =
 /// A dedup path under a prefix neither clients nor the spec use.
 pub const OTHER_PREFIX_DEDUP_PATH: &str =
     "/v1/chunks/other/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// `GET /v2/reconstructions/{file}` for a file no test registers (S10 §1).
+pub const RECONSTRUCTION_V2_PATH: &str =
+    "/v2/reconstructions/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// `GET /v1/reconstructions/{file}` for a file no test registers (S10 §1).
+pub const RECONSTRUCTION_V1_PATH: &str =
+    "/v1/reconstructions/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The batch reconstruction as `xet-client` sends it, for a file no test
+/// registers (S10 §1 "Batch reconstruction").
+pub const BATCH_GET_PATH: &str =
+    "/v1/reconstructions?file_id=0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The batch reconstruction as the spec writes it, with a JSON body.
+pub const BATCH_POST_PATH: &str = "/v1/reconstructions";
+
+/// `HEAD /v1/files/{file}` for a file no test registers (S10 §5).
+pub const FILE_PATH: &str =
+    "/v1/files/0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The signed transfer route for a xorb no test stores, without a query.
+/// It reads no `Authorization` header, so it is not in [`ROUTES`].
+pub const TRANSFER_PATH: &str =
+    "/v1/transfer/xorbs/0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Paths no route serves, each of which must answer `404` with the error
 /// body. Some are deliberate: stock clients treat `404` as "not here" and
@@ -265,6 +329,8 @@ pub struct TestServer {
     pub read_token: String,
     /// A static write token for [`SCOPE_B`].
     pub other_scope_token: String,
+    /// A static read token for [`SCOPE_B`].
+    pub other_scope_read_token: String,
     /// Signs CAS tokens (`EdDSA` JWTs) the server accepts.
     pub signer: TokenSigner,
     /// The clock the server checks credentials against.
@@ -326,6 +392,7 @@ impl TestServer {
         let write_token = new_token();
         let read_token = new_token();
         let other_scope_token = new_token();
+        let other_scope_read_token = new_token();
         let keys = generate_keypair().unwrap();
         let signer = TokenSigner::from_pem(keys.private_pem()).unwrap();
         let auth = Authenticator::new(
@@ -333,6 +400,7 @@ impl TestServer {
                 static_token(&write_token, SCOPE_A, Mode::Write),
                 static_token(&read_token, SCOPE_A, Mode::Read),
                 static_token(&other_scope_token, SCOPE_B, Mode::Write),
+                static_token(&other_scope_read_token, SCOPE_B, Mode::Read),
             ],
             vec![signer.public_key()],
             Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
@@ -406,6 +474,7 @@ impl TestServer {
             write_token,
             read_token,
             other_scope_token,
+            other_scope_read_token,
             signer,
             clock,
             http: reqwest::Client::new(),
@@ -662,6 +731,171 @@ impl Index for SlowIndex {
     }
 }
 
+/// An index that answers `chunk_tables` with nothing, as an index that
+/// lost rows would, for tests of the integrity checks on reads. Everything
+/// else is the wrapped index's.
+pub struct TablelessIndex {
+    /// The index answering every other call.
+    pub inner: Arc<dyn Index>,
+}
+
+impl TablelessIndex {
+    /// A [`WrapIndex`] whose `chunk_tables` finds no table.
+    pub fn wrap() -> WrapIndex {
+        Box::new(|inner| Arc::new(Self { inner }))
+    }
+}
+
+#[async_trait::async_trait]
+impl Index for TablelessIndex {
+    async fn put_xorb(
+        &self,
+        xorb: &MerkleHash,
+        size: u64,
+        table: &ChunkTable,
+        eligible: &[MerkleHash],
+        scope: &str,
+    ) -> Result<bool, IndexError> {
+        self.inner
+            .put_xorb(xorb, size, table, eligible, scope)
+            .await
+    }
+
+    async fn xorb_size(
+        &self,
+        xorb: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<u64>, IndexError> {
+        self.inner.xorb_size(xorb, scope, vis).await
+    }
+
+    async fn chunk_tables(
+        &self,
+        _: &[MerkleHash],
+        _: &str,
+        _: Visibility,
+    ) -> Result<HashMap<MerkleHash, ChunkTable>, IndexError> {
+        Ok(HashMap::new())
+    }
+
+    async fn register_shard(
+        &self,
+        shard: &MerkleHash,
+        files: &[NewFile],
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<bool, IndexError> {
+        self.inner.register_shard(shard, files, scope, vis).await
+    }
+
+    async fn file(&self, file: &MerkleHash, scope: &str) -> Result<Option<FileRecord>, IndexError> {
+        self.inner.file(file, scope).await
+    }
+
+    async fn dedup_xorb(
+        &self,
+        chunk: &MerkleHash,
+        scope: &str,
+        vis: Visibility,
+    ) -> Result<Option<MerkleHash>, IndexError> {
+        self.inner.dedup_xorb(chunk, scope, vis).await
+    }
+}
+
+/// A bucket that records how it is read: how many whole-range reads
+/// (`get_range`) it served, and the largest block any range stream yielded.
+/// Everything else is the wrapped bucket's.
+pub struct CountingBucket {
+    inner: Arc<dyn Bucket>,
+    whole_reads: Arc<AtomicU64>,
+    largest_block: Arc<AtomicU64>,
+}
+
+impl CountingBucket {
+    /// Wraps `inner`.
+    pub fn new(inner: Arc<dyn Bucket>) -> Self {
+        Self {
+            inner,
+            whole_reads: Arc::default(),
+            largest_block: Arc::default(),
+        }
+    }
+
+    /// The `get_range` calls served.
+    pub fn whole_reads(&self) -> u64 {
+        self.whole_reads.load(Ordering::SeqCst)
+    }
+
+    /// The largest block a range stream yielded, in bytes.
+    pub fn largest_block(&self) -> usize {
+        usize::try_from(self.largest_block.load(Ordering::SeqCst)).unwrap()
+    }
+}
+
+#[async_trait::async_trait]
+impl Bucket for CountingBucket {
+    async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.inner.put(key, bytes).await
+    }
+
+    async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
+        self.whole_reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.get_range(key, start, end).await
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        start: u64,
+        end: u64,
+    ) -> Result<RangeStream, StorageError> {
+        let RangeStream { size, mut blocks } = self.inner.get_range_stream(key, start, end).await?;
+        let largest = Arc::clone(&self.largest_block);
+        let stream = futures_core_stream(move |cx| {
+            let next = blocks.as_mut().poll_next(cx);
+            if let std::task::Poll::Ready(Some(Ok(block))) = &next {
+                largest.fetch_max(block.len() as u64, Ordering::SeqCst);
+            }
+            next
+        });
+        Ok(RangeStream {
+            size,
+            blocks: stream,
+        })
+    }
+
+    async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
+        self.inner.size(key).await
+    }
+}
+
+/// A stream whose `poll_next` is `poll`.
+fn futures_core_stream<F>(poll: F) -> BoxStream<'static, Result<Bytes, StorageError>>
+where
+    F: FnMut(&mut std::task::Context<'_>) -> std::task::Poll<Option<Result<Bytes, StorageError>>>
+        + Send
+        + 'static,
+{
+    struct PollFn<F>(F);
+    impl<F> Unpin for PollFn<F> {}
+    impl<F> futures_core::Stream for PollFn<F>
+    where
+        F: FnMut(
+            &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<Bytes, StorageError>>>,
+    {
+        type Item = Result<Bytes, StorageError>;
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            (self.0)(cx)
+        }
+    }
+    Box::pin(PollFn(poll))
+}
+
 /// A bucket whose every write fails as a full disk would, and which holds
 /// nothing.
 #[derive(Debug, Default)]
@@ -678,6 +912,15 @@ impl Bucket for FailingBucket {
     }
 
     async fn get_range(&self, key: &Key, _: u64, _: u64) -> Result<Bytes, StorageError> {
+        Err(StorageError::NotFound { key: *key })
+    }
+
+    async fn get_range_stream(
+        &self,
+        key: &Key,
+        _: u64,
+        _: u64,
+    ) -> Result<RangeStream, StorageError> {
         Err(StorageError::NotFound { key: *key })
     }
 

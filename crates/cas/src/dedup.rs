@@ -24,15 +24,15 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{FromRequestParts, State};
-use axum::http::HeaderValue;
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use openxet_protocol::{MerkleHash, dedup_shard, hash_to_hex};
 
 use crate::blocking::blocking;
-use crate::{AppState, CasError, ReadAccess, error, path};
+use crate::cache::private;
+use crate::{AppState, CasError, ReadAccess, path};
 
 /// The prefixes served: `default`, which `hf_xet` sends, and
 /// `default-merkledb`, which the spec names (S10 §2).
@@ -45,14 +45,7 @@ const KEY_LIFETIME: u64 = 7 * 24 * 60 * 60;
 
 /// `GET /v1/chunks/{prefix}/{hash}` (S10 §2).
 pub(crate) fn routes() -> Router<AppState> {
-    // The method router's own fallback, so that the layer covers the `405`
-    // too; axum still adds the `Allow` header.
-    Router::new().route(
-        "/v1/chunks/{prefix}/{hash}",
-        get(query)
-            .fallback(error::method_not_allowed)
-            .layer(axum::middleware::map_response(no_store)),
-    )
+    Router::new().route("/v1/chunks/{prefix}/{hash}", private(get(query)))
 }
 
 /// The raw chunk hash named by the path ([`path::prefixed_hash`]).
@@ -127,13 +120,6 @@ fn fresh_key() -> Result<MerkleHash, CasError> {
             return Ok(MerkleHash::from(key));
         }
     }
-}
-
-async fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 #[cfg(test)]
