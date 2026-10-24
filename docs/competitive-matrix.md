@@ -79,6 +79,26 @@ The protocol core is the strongest of the projects evaluated: HF's own
 crates, real reference tests, lean storage, crash safety and speed. It is a
 bare CAS, not a Hub, and is about one `hf_xet` release behind.
 
+**Security, disclosed with the maintainer's agreement.** We reported these
+privately on 2026-10-23. The maintainer reports all of them fixed on `main`
+at `ccc3591` (merged 2026-10-23) and agreed to public mention.
+At `fc8cd642` we found:
+- With auth on and the filesystem backend, `GET /v1/xorbs/default/{hash}`
+  served a xorb without a credential [observed].
+- Any valid OIDC token mapped to write access on all data, so one user
+  could read another user's files [observed].
+- Any writer could run `POST /v1/gc` with a zero grace period [observed].
+
+The maintainer's fix:
+- Xorb reads need a signed, range-bound, expiring URL or an admin token.
+- OIDC roles map to read, write and admin scopes, and a file is readable
+  only by its owners and admins.
+- GC is admin-only with a minimum 1-hour grace period.
+- Shard registration now requires verification entries.
+
+Our re-test of `ccc3591` is pending; this note changes to observed once it
+runs.
+
 ### kebyn/xet-server: observed against stock clients
 
 Tested `e9c4624f` (2026-10-10) in a Linux container (`rust:1.94.1-bookworm`),
