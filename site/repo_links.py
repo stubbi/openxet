@@ -16,6 +16,12 @@ are expanded here, before mdBook's `links` preprocessor, so the included
 file's links resolve against the included file, and a link to that file
 leads to the page that includes it.
 
+Every directive that makes mdBook read a file (`include`, `rustdoc_include`,
+`playground`, with or without an anchor, in code blocks too) must name a
+file inside the repository: an absolute path, a path that climbs out of it,
+or a symlink that leads out of it fails the build, so a docs change can't
+publish files from the machine that builds the site.
+
 Protocol: https://rust-lang.github.io/mdBook/for_developers/preprocessors.html
 """
 
@@ -30,6 +36,9 @@ DOCS = "docs"
 GITHUB = "https://github.com/stubbi/openxet"
 
 INCLUDE = re.compile(r"^\{\{#include ([^}:\s]+)\}\}\s*$")
+# mdBook's own `links` preprocessor syntax:
+# https://rust-lang.github.io/mdBook/format/mdbook.html#including-files
+READS_FILE = re.compile(r"\{\{\s*#(?:include|rustdoc_include|playground)\s+([^}\s:]+)")
 FENCE = re.compile(r"^\s*(```|~~~)")
 INLINE_CODE = re.compile(r"(`+)(?:.+?)\1")
 INLINE_LINK = re.compile(r"(\]\()(<[^>]*>|[^)\s]+)")
@@ -48,6 +57,12 @@ def chapters(items):
 
 def resolve(link: str, written_in: str) -> str:
     return posixpath.normpath(posixpath.join(posixpath.dirname(written_in), link))
+
+
+def inside_repo(source: str) -> bool:
+    if posixpath.isabs(source) or source == ".." or source.startswith("../"):
+        return False
+    return (REPO / source).resolve().is_relative_to(REPO.resolve())
 
 
 def included(content: str, written_in: str) -> list[str]:
@@ -81,7 +96,22 @@ class Rewriter:
             new = f"{GITHUB}/{kind}/main/{resolved}"
         return new + mark + query + hash_ + fragment
 
+    def outside_repo(self, content: str, written_in: str) -> bool:
+        """Records an error for each directive that reads outside the repository."""
+        escaping = False
+        for directive in READS_FILE.finditer(content):
+            source = resolve(directive.group(1), written_in)
+            if not inside_repo(source):
+                self.errors.append(
+                    f"{written_in}: `{directive.group(0)}}}}}` reads `{source}`, outside the "
+                    "repository; the site may only include files from the repository"
+                )
+                escaping = True
+        return escaping
+
     def rewrite(self, content: str, written_in: str, page: str) -> str:
+        if self.outside_repo(content, written_in):
+            return content
         out, fence = [], None
         for line in content.split("\n"):
             opened = FENCE.match(line)

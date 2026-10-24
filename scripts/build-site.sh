@@ -20,6 +20,8 @@ if [ "$have" != "$want" ]; then
 fi
 
 python3 -I "$root/scripts/check-docs-nav.py"
+# The link preprocessor must refuse includes from outside the repository.
+python3 -I "$root/site/test_repo_links.py" -q
 
 rm -rf "$out"
 log="$(mktemp)"
