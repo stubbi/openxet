@@ -472,7 +472,7 @@ struct Catalog {
     groups: Vec<Vec<usize>>,
     fetches: Vec<Fetch>,
     /// The signed URL of each of `fetches`.
-    urls: Vec<Url>,
+    urls: Vec<String>,
     seen: HashSet<(MerkleHash, (u32, u32))>,
 }
 
@@ -501,17 +501,19 @@ impl Catalog {
         &self.xorbs[self.index[xorb]].1
     }
 
-    /// Signs one URL per descriptor, for exactly its byte range (ADR 0002).
+    /// Signs one URL per descriptor, for exactly its byte range (ADR 0002),
+    /// one xorb's descriptors at a time so each xorb's part of the MAC is
+    /// computed once.
     fn sign(&mut self, signer: &Signer) -> Result<(), CasError> {
-        self.urls = self
-            .fetches
-            .iter()
-            .map(|f| {
-                signer
-                    .urls
-                    .sign_xorb_range(&signer.base, &f.xorb, f.bytes.0, f.bytes.1, signer.now)
-            })
-            .collect::<Result<_, _>>()?;
+        let urls = signer.urls.transfer_urls(&signer.base, signer.now);
+        self.urls = vec![String::new(); self.fetches.len()];
+        for ((xorb, _), group) in self.xorbs.iter().zip(&self.groups) {
+            let xorb = urls.xorb(xorb);
+            for &i in group {
+                let (start, end) = self.fetches[i].bytes;
+                xorb.push_signed(start, end, &mut self.urls[i])?;
+            }
+        }
         Ok(())
     }
 }

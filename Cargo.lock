@@ -1780,6 +1780,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac",
+ "itoa",
  "openxet-protocol",
  "serde",
  "serde_json",
