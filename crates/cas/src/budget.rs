@@ -48,6 +48,15 @@ impl MemoryBudget {
     /// files, while staying well inside the memory of a small server.
     pub const DEFAULT_BYTES: u64 = 1 << 30;
 
+    /// The smallest budget a server may be configured with: room for three
+    /// of the largest uploads and a few answers for 100k-term files. Below
+    /// about 600 MB, a batch reconstruction of [`crate::MAX_BATCH_TERMS`]
+    /// terms is refused as over the whole budget.
+    pub const MIN_BYTES: u64 = 256 << 20;
+
+    /// The largest budget a server may be configured with.
+    pub const MAX_BYTES: u64 = 1 << 40;
+
     /// How long a reservation waits for bytes to come free before the
     /// request is refused with `503 memory_busy`: long enough to ride out a
     /// burst of uploads, short against a client's 300 s read timeout.

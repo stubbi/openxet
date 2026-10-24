@@ -15,12 +15,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openxet_auth::{AuthError, Authenticator, Mode, PublicKey, StaticToken, UrlSigner};
-use openxet_cas::{BodyDeadline, CasConfig};
+use openxet_cas::{BodyDeadline, CasConfig, MemoryBudget};
 use openxet_index::Visibility;
 use serde::Serialize;
 use url::Url;
 
-use crate::{duration, secret};
+use crate::{duration, secret, size};
 
 /// Where a setting's value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +127,8 @@ pub struct Config {
     pub log_level: tracing::Level,
     pub header_read_timeout: Duration,
     pub body_deadline: BodyDeadline,
+    /// `server.memory_budget`, in bytes.
+    pub memory_budget: u64,
     pub shutdown_grace: Duration,
     pub visibility: Visibility,
     pub url_lifetime: Duration,
@@ -150,7 +152,7 @@ impl Config {
             heartbeat_interval: self.heartbeat_interval,
             body_deadline: self.body_deadline,
             send_deadline: openxet_cas::SendDeadline::DEFAULT,
-            memory_budget: openxet_cas::MemoryBudget::DEFAULT_BYTES,
+            memory_budget: self.memory_budget,
         }
     }
 }
@@ -190,6 +192,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("header_read_timeout", Kind::Str),
             ("body_read_timeout", Kind::Str),
             ("body_min_rate", Kind::Int),
+            ("memory_budget", Kind::Str),
             ("shutdown_grace", Kind::Str),
         ],
     ),
@@ -480,6 +483,24 @@ impl Checker<'_> {
         }
     }
 
+    /// A byte size within `min..=max`.
+    fn size(&mut self, key: &str, default: u64, (min, max): (u64, u64), hint: &str) -> Option<u64> {
+        let shown = size::format(default);
+        let rule = format!(
+            "must be {}, from {} to {} inclusive",
+            size::FORM,
+            size::format(min),
+            size::format(max)
+        );
+        self.parsed(
+            key,
+            (default, &shown),
+            |text| size::parse(text).filter(|n| (min..=max).contains(n)),
+            &rule,
+            hint,
+        )
+    }
+
     /// A duration within `min..=max`.
     fn duration(
         &mut self,
@@ -628,6 +649,14 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "4096 (4 KiB/s) keeps uploads over slow links working; a higher rate frees stalled \
          connections sooner.",
     );
+    let memory_budget = c.size(
+        "server.memory_budget",
+        MemoryBudget::DEFAULT_BYTES,
+        (MemoryBudget::MIN_BYTES, MemoryBudget::MAX_BYTES),
+        "Upload bodies and reconstruction answers reserve from it; when it is full, requests \
+         wait up to 5s, then get 503 memory_busy, which clients retry. 1GiB is the default; \
+         leave room for the rest of the process.",
+    );
     let shutdown_grace = c.duration(
         "server.shutdown_grace",
         Duration::from_secs(30),
@@ -722,6 +751,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         log_level: log_level?,
         header_read_timeout: header_read_timeout?,
         body_deadline: BodyDeadline::new(body_read_timeout?, body_min_rate?)?,
+        memory_budget: memory_budget?,
         shutdown_grace: shutdown_grace?,
         visibility: visibility?,
         url_lifetime: url_lifetime?,
@@ -1153,6 +1183,32 @@ mod tests {
             ]
         );
         assert!(loaded.config.is_none());
+    }
+
+    #[test]
+    fn the_memory_budget_is_a_size_within_its_bounds() {
+        let config = load_toml("", &[]).config.unwrap();
+        assert_eq!(config.memory_budget, 1 << 30);
+        assert_eq!(
+            config.cas(Url::parse("http://x").unwrap()).memory_budget,
+            1 << 30
+        );
+
+        let config = load_toml("[server]\nmemory_budget = \"3GiB\"\n", &[])
+            .config
+            .unwrap();
+        assert_eq!(config.memory_budget, 3 << 30);
+        let config = load_toml("", &[("OPENXET_SERVER__MEMORY_BUDGET", "512MiB")])
+            .config
+            .unwrap();
+        assert_eq!(config.memory_budget, 512 << 20);
+
+        for bad in ["255MiB", "2TiB", "1GB", "1073741824", "0MiB"] {
+            let loaded = load_toml(&format!("[server]\nmemory_budget = \"{bad}\"\n"), &[]);
+            assert_eq!(problem_keys(&loaded), ["server.memory_budget"], "{bad}");
+        }
+        let loaded = load_toml("[server]\nmemory_budget = 1073741824\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["server.memory_budget"]);
     }
 
     #[test]

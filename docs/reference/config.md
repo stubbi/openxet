@@ -44,7 +44,8 @@ Only variables with `__` are configuration: `OPENXET_ENDPOINT` and
 the file or the environment is a problem, not ignored.
 
 Durations are a whole number and one unit: `s`, `m`, `h` or `d`, such as
-`30s`, `60m`, `24h` or `30d`.
+`30s`, `60m`, `24h` or `30d`. Sizes are a whole number and one binary
+unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 
 ## Keys
 
@@ -60,11 +61,43 @@ Durations are a whole number and one unit: `s`, `m`, `h` or `d`, such as
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
 | `body_read_timeout` | `300s` | `1s` to `1h` | The longest gap allowed between two parts of a request body. It matches `hf_xet`'s own 300 s read timeout. |
 | `body_min_rate` | `4096` | `1` to `1048576` | The least average rate of a request body, in bytes per second, after a first `body_read_timeout`: a body of `n` bytes may take `body_read_timeout + n / body_min_rate`. The default lets a 64 MiB xorb take up to 4.6 hours over a very slow link. |
+| `memory_budget` | `1GiB` | `256MiB` to `1TiB` | The most memory request data may hold at once: upload bodies being buffered and reconstruction answers waiting to be sent. See [Memory](#memory). |
 | `shutdown_grace` | `30s` | `1s` to `10m` | On `SIGTERM` or `SIGINT`, how long in-flight requests get to finish. |
 
 A body that breaks `body_read_timeout` or `body_min_rate` is refused with
 `408 body_timeout`, and the connection is closed. This also bounds how long
 a refused upload's body is read and discarded before the refusal is sent.
+
+### Memory
+
+The server bounds the memory that requests hold, however many clients
+connect, upload slowly or never read their answers (ruling M1-R40).
+Before it buffers anything, a request reserves its bytes from
+`memory_budget`:
+
+- An upload (`POST /v1/xorbs/…`, `/v1/shards`, `/v2/shards`) reserves its
+  `Content-Length`, or the route's limit (64.5 MiB for a xorb, 64 MiB for
+  a shard) if it declares none, until the request ends. A `/v2/shards`
+  upload whose client has left keeps its share until its work ends.
+- A reconstruction (`/v1` and `/v2/reconstructions`, and the batch)
+  reserves about 600 bytes per term before it is built, then keeps the
+  answer's size (42 MB for 100,000 terms) until the answer has been sent.
+  An answer not sent within 30 s plus 1 s per MiB is cut off, and its
+  share freed.
+
+A request that can't reserve its bytes within 5 s is refused with
+`503 memory_busy` and `Retry-After: 1`; stock clients retry it. An upload
+refused so is not read, and its connection is closed. A request that
+needs more than the whole budget is refused at once, with the same code.
+The largest batch reconstruction (1,000,000 terms) reserves about
+600 MB, a little more with a long `public_url`, so a budget below that
+refuses it.
+
+Size the budget to leave room for the rest of the process: the index's
+cache, the CPU-bound work each permit runs (about 150 MB per dedup answer
+being built) and the operating system. Every refusal is logged at warn
+as `request refused` with code `memory_busy`; frequent ones mean the
+budget, or the server, is too small for its load.
 
 `public_url` must be the origin root, with no path, query, fragment or user
 info. Clients append `/v1/...` to it and resolve `/v1/telemetry` against
@@ -268,7 +301,7 @@ least one answer at a time). A query that waits 1 s for its turn answers
 sends those chunks. An answer not sent within its deadline (30 s plus 1 s
 per MiB) is cut off and its turn freed. At `log_level = "debug"` both are
 logged, the first as `request refused` with code `dedup_busy`, the second
-as `a dedup answer missed its send deadline`. Frequent `dedup_busy`
+as `an answer missed its send deadline`. Frequent `dedup_busy`
 means the server needs more CPUs.
 
 ## Stale client caches

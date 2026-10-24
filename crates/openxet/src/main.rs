@@ -10,6 +10,7 @@ mod output;
 mod preflight;
 mod secret;
 mod serve;
+mod size;
 mod token_cmd;
 mod transfer_cmd;
 
