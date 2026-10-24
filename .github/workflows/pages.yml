@@ -1,11 +1,19 @@
 name: pages
 
-# Publishes website/ to GitHub Pages at https://openxet.com (website/CNAME).
+# Publishes https://openxet.com (website/CNAME) to GitHub Pages: the landing
+# page from website/ and the docs site from docs/, built by
+# scripts/build-site.sh (see docs/README.md).
 on:
   push:
     branches: [main]
     paths:
       - "website/**"
+      - "docs/**"
+      - "CHANGELOG.md"
+      - "site/**"
+      - "scripts/build-site.sh"
+      - "scripts/check-docs-nav.py"
+      - "scripts/generate-site-index.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -24,10 +32,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: mdbook@0.5.4
+      - run: scripts/build-site.sh
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: website
+          path: target/site/public
 
   deploy:
     needs: build
