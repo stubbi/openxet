@@ -21,8 +21,9 @@ too much for criterion's statistics to fail a build on.
   other builds during every run here (load average 4 to 27 on 8 cores), so
   local numbers are noisy, tails most of all. Where a number moved only
   because of load, the text says so.
-- **CI:** GitHub's `ubuntu-latest` (4 vCPU) and `macos-latest` (3 vCPU
-  Apple M1 VM) runners, release profile, from the `rust` job's log.
+- **CI:** GitHub's `ubuntu-latest` (4 vCPU, an AMD EPYC 7763 or 9V45)
+  and `macos-latest` (3 vCPU Apple M1 VM) runners, release profile, from
+  the `rust` job's log.
 
 ## Reconstruction latency gate
 
@@ -45,38 +46,47 @@ runner only, as the other release-build gate does.
 
 p50 / p99 in ms:
 
-| Shape | Start (local) | Before threads (CI Linux) | All writers (CI Linux) | All writers (CI macOS) | Now, M1-R34 cap (local) | Now, M1-R34 cap (CI Linux) |
-|---|---|---|---|---|---|---|
-| unmerged full | 246 / 679 | 66.2 / 73.6 | 24.8 / 28.2 | 57.5 / 90.3 | 28.1 / 33.9 | **30.6 / 39.2** |
-| unmerged range | 74 / 486 | 25.3 / 59.8 | 14.7 / 23.8 | 31.1 / 70.3 | 15.2 / 43.1 | **15.2 / 29.1** |
-| merged full | 50 / 93 | 19.7 / 25.9 | 13.2 / 15.7 | 23.7 / 32.8 | 15.8 / 22.3 | **14.2 / 18.4** |
-| merged range | 14 / 42 | 7.7 / 18.7 | 5.2 / 12.6 | 10.1 / 23.0 | 6.8 / 14.1 | **5.7 / 12.4** |
+| Shape | Start (local) | Before threads (CI Linux) | All writers (CI Linux) | All writers (CI macOS) | Half the free permits (CI Linux, slow runner) | Now (local) | Now (CI Linux, 10 runs) |
+|---|---|---|---|---|---|---|---|
+| unmerged full | 246 / 679 | 66.2 / 73.6 | 24.8 / 28.2 | 57.5 / 90.3 | 43.7 / 53.1 | 17.4 / 20.4 | **14.4–26.8 / 16.4–29.6** |
+| unmerged range | 74 / 486 | 25.3 / 59.8 | 14.7 / 23.8 | 31.1 / 70.3 | 21.5 / 40.3 | 7.6 / 15.4 | **5.4–9.2 / 12.3–22.6** |
+| merged full | 50 / 93 | 19.7 / 25.9 | 13.2 / 15.7 | 23.7 / 32.8 | 19.3 / 26.2 | 6.5 / 8.6 | **4.0–7.8 / 4.3–8.8** |
+| merged range | 14 / 42 | 7.7 / 18.7 | 5.2 / 12.6 | 10.1 / 23.0 | 7.9 / 19.6 | 4.2 / 7.0 | **2.6–4.4 / 3.9–7.0** |
 
-"Start" is the gate against the code before this work. "Before threads"
-is CI with every change below but the writer threads, so one writer.
-"All writers" let an answer take every free `validate` permit; "Now"
-takes at most half of them (ruling M1-R34), which on CI's 4-vCPU runner
-means 2 writers instead of 4.
+- "Start" is the gate against the code before this work.
+- "Before threads" is CI with every change up to the writer threads, so
+  one writer.
+- "All writers" let an answer take every free `validate` permit.
+- "Half the free permits" is the first form of ruling M1-R34, 2 writers on
+  CI's 4-vCPU runner, on the slower of its two machine types, where it
+  failed the gate in 2 of 4 runs.
+- "Now" is the code at the end of this work: M1-R34 as amended (3 writers
+  on 4 vCPUs), each term's stored bytes recorded at registration, and the
+  sequential path trimmed. Locally at load average 12.
 
-**With the cap, the Linux runner's margin depends on the machine it
-lands on.** The "Now" column is the fastest of three runs of the same
-code. The other two, on runners slower across every shape, failed the
-unmerged full shape: 43.7 / 53.1 ms and 42.9 / 52.0 ms p50 / p99 (merged
-full 19.3 / 26.2 and 19.8 / 25.3 ms). Estimated from the one-writer
-p50 (66.2 ms, "Before threads") and these two-writer ones (about 43 ms),
-the request's sequential part (record, layouts, plan, catalog) takes
-about 20 ms there and the part the writers share about 46 ms, so 2
-writers leave no p99 margin where 4 left about 20 ms. Taking that
-margin back is part of
-<https://github.com/stubbi/openxet/issues/43>.
+**The ten CI runs.** Ten parallel jobs of the gate on `ubuntu-latest`
+(4 vCPUs), all passing, p50 / p99 in ms for the unmerged full shape:
 
-The shared local host passes or fails it with its neighbours' load: at load
-average 10 to 22, runs of the same code had unmerged p99s from 34 ms to
-97 ms while the p50s stayed within a millisecond. The macOS runner, a
-3-vCPU VM, missed the p99 for the unmerged shape even with every writer,
-with p50s within it. The gate keeps the one threshold and runs where CI's
-timings are stable; the macOS runner's numbers are recorded here, not
-gated.
+| Run | CPU | unmerged full | unmerged range | merged full | merged range |
+|---|---|---|---|---|---|
+| 1 | EPYC 7763 | 26.2 / 29.6 | 9.0 / 21.8 | 7.5 / 8.2 | 4.2 / 6.8 |
+| 2 | EPYC 7763 | 26.1 / 28.2 | 9.0 / 22.0 | 7.4 / 8.8 | 4.2 / 6.8 |
+| 3 | EPYC 7763 | 26.5 / 29.5 | 9.2 / 22.6 | 7.7 / 8.8 | 4.3 / 6.9 |
+| 4 | EPYC 7763 | 26.0 / 28.2 | 9.0 / 21.8 | 7.3 / 7.9 | 4.1 / 6.6 |
+| 5 | EPYC 7763 | 26.8 / 29.2 | 9.2 / 22.5 | 7.8 / 8.2 | 4.4 / 7.0 |
+| 6 | EPYC 9V45 | 14.4 / 28.0 | 5.4 / 12.5 | 4.0 / 4.3 | 2.6 / 3.9 |
+| 7 | EPYC 7763 | 25.2 / 28.0 | 8.8 / 21.3 | 7.1 / 7.5 | 4.0 / 6.3 |
+| 8 | EPYC 7763 | 25.8 / 28.0 | 8.9 / 21.5 | 7.5 / 7.8 | 4.2 / 6.8 |
+| 9 | EPYC 9V45 | 14.5 / 16.4 | 5.4 / 12.3 | 4.2 / 5.1 | 2.6 / 4.1 |
+| 10 | EPYC 7763 | 25.8 / 28.1 | 9.0 / 21.8 | 7.4 / 7.8 | 4.1 / 6.7 |
+
+The runner came as two machine types. The EPYC 7763 is the slower one,
+and 8 of the 10 jobs ran on it; it passes with about 20 ms of p99 margin.
+The earlier failing runs didn't log their CPU, but were slower on every
+shape in the same way. The macOS runner, a 3-vCPU VM, missed the p99 for the
+unmerged shape even with every writer, with p50s within it. Its numbers
+are recorded here, not gated. The CI step prints the runner's CPU model
+before the gate, so a log tells the two machine types apart.
 
 **Run it on a quiet machine.** With 200 samples, the p99 is the third
 slowest request, so three scheduler stalls fail it. On a busy host the
@@ -87,19 +97,19 @@ p50s stay steady while the p99 fails: that is load, not a regression.
 The gate proves that one reconstruction at a time, on an otherwise idle
 node, against an index of 1,000 xorbs, answers the worst-case 100k-term
 file within 50 ms at p99. On that idle node the answer is written by
-several threads: each past the first runs under a `validate` permit that
-is free at that moment, at most half of the free ones (ruling M1-R34), so
-CI's 4-vCPU Linux runner writes on 2 threads and the 8-core M3 on 4.
+several threads, each past the first under a `validate` permit free at
+that moment: at most half, rounded down, of the permits free counting the
+request's own (ruling M1-R34), so 3 threads on CI's 4-vCPU runner and 5 on
+the 8-core M3.
 
 It doesn't prove design §5.8's target: p99 < 50 ms **at 1,000 requests/s
 per node, against an index of 10⁷ files and 10⁷ xorbs**, which §16 assigns
 to the release rig. Under load the free permits run out and an answer is
-written on one thread. Single-threaded, the unmerged 100k-term full
-answer took 66.2 ms p50 and 73.6 ms p99 on CI Linux ("Before threads"
-above) and 39.9 ms p50 locally, so the worst-case shape likely misses
-50 ms under load on a 4-vCPU-class node. Measuring §5.8 under load on the
-release rig, and the single-thread headroom it may need, is tracked in
-<https://github.com/stubbi/openxet/issues/43>.
+written on one thread. Single-threaded, the unmerged 100k-term full answer
+took 66.2 ms p50 and 73.6 ms p99 on CI Linux before the sequential path
+was trimmed ("Before threads" above), and takes 31.0 ms p50 and 39.0 ms
+p99 locally now. Measuring §5.8 under load on the release rig is tracked
+in <https://github.com/stubbi/openxet/issues/43>.
 
 ### What each change bought
 
@@ -114,23 +124,37 @@ answer.
 | foldhash for the per-request maps | plan 3.9 → 2.6 ms, window 1.1 → 0.4 ms, answer 29 → 24 ms; gate p50, unmerged full: 58.7 → 39.9 ms |
 | Batch reconstruction looks files up in one query per 500 (`Index::files`) | 1,000 files: 17.99 ms → 1.62 ms |
 | Write a large answer on several threads, each past the first under a free `validate` permit | gate p50 / p99 on CI Linux, unmerged full: 66.2 / 73.6 → 24.8 / 28.2 ms |
+| Cap the writers at half the free permits, counting the request's own (M1-R34 as amended) | 3 writers on CI's 4 vCPUs (2 under the first form) |
+| Record each term's stored bytes at registration (`Index::file_with_bytes`, migration 0004), so only the terms trimmed to a range need layouts | layouts 5.6 → 0.02 ms; gate p50 / p99, unmerged full: 29.4 / 83.9 → 21.3 / 35.7 ms, merged full 15.6 / 27.3 → 8.5 / 24.0 ms |
+| List a xorb's descriptors without a set while they arrive in increasing order | catalog 3.01 → 2.38 ms |
+| Size decoded term lists up front | record decode 1.60 → 0.68 ms |
+| Size the plan's and catalog's descriptor lists up front | plan 1.75 → 1.09 ms, catalog 2.42 → 1.77 ms; gate p50 / p99, unmerged full: 18.9 / 25.0 → 17.4 / 20.4 ms |
 
-Tried and dropped: reading the layouts of 1,000 xorbs in four concurrent
-queries took 5.1 ms against 6.4 ms for one, not worth the code.
+Tried and dropped:
+- Reading the layouts of 1,000 xorbs in concurrent queries: 6.4 ms
+  against 5.1 ms, and 125-xorb queries ran no faster side by side, so the
+  reads serialise inside SQLite.
+- Larger SQLite pages for the layout read: 16 KiB and 64 KiB pages made
+  it slower (8.5 and 10.9 ms against 5.3 ms).
+- Fewer string pushes and MAC updates per signed URL: no measurable gain
+  writing into one buffer.
 
-What the layouts cost: `xorb_layouts` repeats 8 of the 40 bytes per chunk
-that `xorbs.chunk_table` holds, 20% more chunk-table index. At design
-§5.8's sizing of 1 PB of unique data (about 1.6×10¹⁰ chunks) that is about
-128 GB more index, for planning that reads a fifth of the bytes. Its rows
-reference `xorbs` with a foreign key, so garbage collection must delete a
-xorb's layout row before its `xorbs` row. (Migration 0003 itself is left
-unedited: sqlx checksums applied migrations, comments included.)
+What the layouts and term bytes cost:
+- `xorb_layouts` repeats 8 of the 40 bytes per chunk that
+  `xorbs.chunk_table` holds, 20% more chunk-table index. At design §5.8's
+  sizing of 1 PB of unique data (about 1.6×10¹⁰ chunks) that is about
+  128 GB more index. Its rows reference `xorbs` with a foreign key, so
+  garbage collection must delete a xorb's layout row before its `xorbs`
+  row. (Migration 0003 itself is left unedited: sqlx checksums applied
+  migrations, comments included.)
+- `file_scopes.term_bytes` adds 8 bytes per term, 800 kB for a 100k-term
+  file, and registration reads the layouts of the xorbs a shard names.
+  Shard commit throughput at 32 permits stayed at 212 to 225 shards/s.
 
-Where the unmerged full answer's time went before the writer threads,
-locally: file record 2.5 ms, window 0.4 ms, layouts 5.8 ms, plan 2.6 ms,
-then 24 ms for the catalog, signing and writing, the part the threads now
-share.
-
+Where the unmerged full answer's time goes now, locally (load 12, 3
+writers, medians of 201): file record 2.6 ms (1.8 ms SQLite read, 0.7 ms
+decode), window 0.1 ms, layouts 0.01 ms, plan 1.1 ms, catalog 1.8 ms, the
+writers 7.5 ms, then handing the 42 MB body over.
 ## Criterion: reconstruction
 
 `crates/cas/benches/reconstruction.rs`. One full-file

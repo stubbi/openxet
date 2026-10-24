@@ -64,9 +64,12 @@ jobs:
       # in a release build as production runs, on the Linux runner servers
       # resemble (the 3-vCPU macOS VM's timings are recorded in
       # docs/reference/benchmarks.md). It prints each shape's p50 and p99,
-      # so the log tracks the margin.
+      # so the log tracks the margin, after the CPU model, since the runner
+      # comes as machine types of different speed.
       - if: matrix.os == 'ubuntu-latest'
-        run: cargo nextest run --locked --release -p openxet-cas -E 'binary(latency_gate)' --no-capture
+        run: |
+          grep -m1 'model name' /proc/cpuinfo
+          cargo nextest run --locked --release -p openxet-cas -E 'binary(latency_gate)' --no-capture
       - run: cargo doc --locked --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
