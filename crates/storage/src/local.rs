@@ -79,12 +79,14 @@ pub struct LocalBucket {
 }
 
 impl LocalBucket {
-    /// Opens (creating if needed) the bucket at `root` and deletes temp files
-    /// older than one hour left behind by crashed writes.
+    /// Opens (creating if needed) the bucket at `root`, deletes temp files
+    /// older than one hour left behind by crashed writes, and checks that the
+    /// filesystem makes hard links, which [`Bucket::create`] needs.
     ///
     /// # Errors
     ///
-    /// [`StorageError::Io`] if the directories cannot be created or listed.
+    /// [`StorageError::Io`] if the directories cannot be created or listed,
+    /// and [`StorageError::NoHardLinks`] if the filesystem lacks hard links.
     pub fn open(root: &Path) -> Result<Self, StorageError> {
         Self::open_with(root, Arc::new(RealFs))
     }
@@ -112,6 +114,7 @@ impl LocalBucket {
             fsync_dir(fs.as_ref(), dir)?;
         }
         sweep_stale_temp(&tmp)?;
+        probe_hard_links(fs.as_ref(), root, &tmp)?;
         Ok(Self {
             root: root.to_path_buf(),
             fs,
@@ -153,6 +156,23 @@ impl LocalBucket {
     fn path(&self, key: &Key) -> PathBuf {
         self.place(key).path
     }
+}
+
+/// Checks that the filesystem under `root` makes hard links, which
+/// [`Bucket::create`] publishes records with, so a bucket that couldn't
+/// write them fails to open rather than failing every shard upload.
+fn probe_hard_links(fs: &dyn Durability, root: &Path, tmp: &Path) -> Result<(), StorageError> {
+    let probe = tmp.join(format!("{}.link-probe", uuid::Uuid::new_v4().simple()));
+    let link = probe.with_extension("link-probe-link");
+    create_private_file(&probe).map_err(io("create temp file", &probe))?;
+    let linked = fs.hard_link(&probe, &link);
+    // Best effort: a leftover is swept by the next `open`.
+    let _ = fs::remove_file(&link);
+    let _ = fs::remove_file(&probe);
+    linked.map_err(|source| StorageError::NoHardLinks {
+        path: root.to_path_buf(),
+        source,
+    })
 }
 
 /// Creates the new file `path`, mode `0600` on unix.
@@ -700,6 +720,37 @@ mod tests {
                 .push(Event::SyncDir(dir.to_path_buf()));
             RealFs.sync_dir(dir)
         }
+    }
+
+    /// A filesystem without hard links, as exFAT or some CIFS mounts are.
+    #[derive(Debug)]
+    struct NoLinks;
+
+    impl Durability for NoLinks {
+        fn sync_file(&self, file: &File) -> std::io::Result<()> {
+            RealFs.sync_file(file)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            RealFs.rename(from, to)
+        }
+        fn hard_link(&self, _: &Path, _: &Path) -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+        }
+        fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+            RealFs.sync_dir(dir)
+        }
+    }
+
+    /// Records need hard links (`Bucket::create`), so a bucket on a
+    /// filesystem without them refuses to open, saying so, instead of
+    /// failing every shard upload later (F-A review m-4).
+    #[test]
+    fn open_refuses_a_filesystem_without_hard_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = LocalBucket::open_with(dir.path(), Arc::new(NoLinks)).unwrap_err();
+        assert!(matches!(err, StorageError::NoHardLinks { .. }), "{err:?}");
+        assert!(err.to_string().contains("hard links"), "{err}");
+        assert!(files_in(&dir.path().join(TMP_DIR)).is_empty());
     }
 
     fn recording_bucket(root: &Path) -> (LocalBucket, Arc<Recorder>) {

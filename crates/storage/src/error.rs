@@ -21,6 +21,20 @@ pub enum StorageError {
         source: std::io::Error,
     },
 
+    /// The bucket's filesystem can't make hard links, which writing records
+    /// needs ([`crate::Bucket::create`]).
+    #[error(
+        "the filesystem holding the bucket at {} does not support hard links ({source}), which openxet needs to write its registration records; put the data directory on a filesystem that does, such as ext4, XFS, Btrfs, ZFS, APFS or NTFS (not FAT or exFAT, and not a network mount without hard links)",
+        .path.display()
+    )]
+    NoHardLinks {
+        /// The bucket's root.
+        path: PathBuf,
+        /// Why the probe link failed.
+        #[source]
+        source: std::io::Error,
+    },
+
     /// The object does not exist.
     #[error(
         "object {key} not found in the bucket; if it should exist, the bucket may be incomplete or the index stale (rebuild the index from the bucket)"

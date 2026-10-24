@@ -55,7 +55,7 @@ unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | --- | ------- | ------ | ------- |
 | `bind` | `127.0.0.1:8080` | an IP address and port | Where to listen. `0.0.0.0:8080` or `[::]:8080` listens on every interface and then needs `public_url`. `hf_xet`'s default CAS endpoint is `http://localhost:8080`. |
 | `public_url` | `http://` and the bound address | absolute `http` or `https` URL of an origin root | The URL clients reach the server at. Every transfer URL is built from it. |
-| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key` and, in dev mode, `dev-token`. |
+| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
 | `log_format` | `text` | `text` or `json` | Log lines on stderr. |
 | `log_level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | openxet's own log level. Other libraries log warnings and errors only. `debug` logs one line per request. |
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
