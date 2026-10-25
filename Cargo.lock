@@ -1964,6 +1964,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "openxet-git"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "openxet-index",
+ "openxet-storage",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "openxet-http"
 version = "0.0.0"
 dependencies = [
