@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
-  <title id="title">OpenXet — Git for large files. Only the changes upload.</title>
+  <title id="title">OpenXet: Git for large files. Only the changes upload.</title>
   <desc id="description">Open-source Xet storage for repositories and buckets. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an OpenXet server. Run it yourself or on openxet.com.</desc>
   <!-- Fonts: Manrope 650/750, IBM Plex Sans 400/500, IBM Plex Mono 400.
        Render with the official fonts and Fontconfig setup in assets/README.md. -->
