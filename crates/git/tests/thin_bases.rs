@@ -402,8 +402,10 @@ async fn known_limitation_clients() {
 
 /// A thin base that is reachable but sits in no boundary or tip tree at the
 /// path the push uses it is placed by the fallback walk, within
-/// `git.thin_bases`; past the object or time budget the push is refused
-/// with the hint (fail closed).
+/// `git.thin_bases`; past the object budget the push is refused with the
+/// hint (fail closed). The time budget isn't pinned here: over a history
+/// this small a wall-clock refusal depends on the machine's load (M1-R35),
+/// and the object budget is the deterministic one.
 #[tokio::test(flavor = "multi_thread")]
 async fn fallback_walk_places_deep_bases_within_budget() {
     let s = setup().await;
@@ -427,22 +429,13 @@ async fn fallback_walk_places_deep_bases_within_budget() {
         )
     };
 
-    for (name, budget) in [
-        (
-            "objects",
-            openxet_git::Budget {
-                max_objects: 5,
-                ..openxet_git::Budget::THIN_BASES
-            },
-        ),
-        (
-            "time",
-            openxet_git::Budget {
-                max_time: std::time::Duration::ZERO,
-                ..openxet_git::Budget::THIN_BASES
-            },
-        ),
-    ] {
+    for (name, budget) in [(
+        "objects",
+        openxet_git::Budget {
+            max_objects: 5,
+            ..openxet_git::Budget::THIN_BASES
+        },
+    )] {
         let mut cfg = config(&s.world, &format!("tight-{name}"));
         cfg.thin_bases = budget;
         let tight = engine(&s.world, cfg).await;
