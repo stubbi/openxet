@@ -61,6 +61,7 @@ hyper-util = { version = "0.1.21", features = ["tokio"] }
 # openxet-git with `fault-injection` and `test-hook`; a release or plain
 # `cargo build` doesn't.
 openxet-git = { path = ".", features = ["fault-injection", "test-hook"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "time"] }
 

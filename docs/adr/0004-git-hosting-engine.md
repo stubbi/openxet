@@ -16,6 +16,12 @@
   fences stale updates by the old value and accepts non-fast-forward
   updates, since a forced push can't be told apart on the wire, and
   `main` can't be deleted (branch protection is a later feature)
+- Amended: 2026-10-25, in M2 Task 9 (found while building repack, the
+  sweep and reindex): item 5's repack outputs keep their oldest input's
+  `created_at`; a pack row records when it was committed, which dates a
+  multi-pack-index generation's retirement; the sweep keeps files another
+  row still names; item 4's reindex commits cruft packs and logs the refs
+  it rolls back; item 3's ref log retention is pruned by the sweep
 
 ## Context
 
@@ -477,6 +483,12 @@ results below are **observed**.
        any object reachable from a rebuilt ref is `committed`. Objects
        duplicated across committed packs are harmless, and the next full
        repack folds them.
+     - A cruft pack (one with a `.mtimes`) is `committed` too: its objects
+       were unreachable at the last full repack and keep their cruft
+       lifecycle, which only a committed pack has.
+     - A ref rolled back to an earlier value, or left out, gets a
+       `ref_log` row from `openxet reindex` that records the change, so
+       the log and the refs agree.
      - Every other pack becomes **`recovered`**, never `pending`. It may
        hold commits pushed after the last ref-log entry that reached the
        bucket, and GC must never take those.
@@ -583,6 +595,12 @@ results below are **observed**.
      and `full_repack_gen` when it takes the working-copy snapshot.
    - **mtimes.** Right before each repack, the leaseholder re-pins every
      input pack's mtime from the database `created_at`.
+     - A repack's outputs take the oldest input's `created_at`, so an
+       object keeps its age through any number of repacks. Otherwise a
+       geometric repack would restart the cruft clock of every unreachable
+       object it rolls up, and a discard (item 4) would not be immediate.
+       Objects that became unreachable recently are held by the keep refs,
+       not by their mtime.
      - Why: hard links share an inode, and git may freshen a pack's mtime
        while serving. Re-pinning makes the leaseholder's view
        deterministic.
@@ -657,6 +675,22 @@ results below are **observed**.
        transaction, and GC deletes a generation once a newer one is
        committed and the grace period has passed. Otherwise every repack
        would leak its side files into the bucket.
+       - A generation stops being current when a newer one is committed,
+         or when no committed pack carries it any more (after a full
+         repack). The first is dated by the pack row's `committed_at`,
+         which every transition to `committed` stamps on the database
+         clock, the second by the carriers' `superseded_at`.
+       - A generation number is above every generation the repository's
+         rows record and above `epoch << 24`, so two leaseholders of
+         different epochs never upload the same generation's files.
+     - **Shared names.** A pack's name is its checksum, so two rows can
+       name the same files: a pushed pack sent again after a repack
+       replaced the first, or a repack that rewrites a pack unchanged
+       (which publishes nothing). GC deletes a row's files only once no
+       other row names them.
+     - The `ref_log` rows of item 3 older than twice the grace period are
+       pruned by the same sweep, and only those the bucket ref log already
+       holds.
    - **Orphan reclaim.**
      - Lost pushes' objects are reclaimed with their pack. They were
        never exposed, and no ref reaches them.

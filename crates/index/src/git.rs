@@ -71,6 +71,43 @@ pub struct Pack {
     pub midx_gen: Option<u64>,
 }
 
+/// A pack row with the times the pack sweep reads (ADR 0004 item 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackRecord {
+    /// The row.
+    pub pack: Pack,
+    /// When a commit transaction or a repack publish committed it, Unix
+    /// seconds on the database clock; `None` if none did.
+    pub committed_at: Option<u64>,
+    /// When a repack superseded it, Unix seconds on the database clock.
+    pub superseded_at: Option<u64>,
+}
+
+/// What `reindex` writes for one repository in place of its Git rows (ADR
+/// 0004 item 4).
+#[derive(Debug, Clone, Copy)]
+pub struct Reindexed<'a> {
+    /// The rebuilt refs, each name once.
+    pub refs: &'a [(String, Oid)],
+    /// The bucket ref log's rows, in increasing `seq`, kept with their
+    /// sequence numbers: the bucket's records name them, so new rows must
+    /// number after them.
+    pub ref_log: &'a [RefLogRow],
+    /// Ref log rows for what reindex itself changed, such as a ref rolled
+    /// back to a value whose closure is complete; numbered after every
+    /// other row.
+    pub corrections: &'a [RefUpdate],
+    /// Who made the corrections, for their rows.
+    pub actor: &'a str,
+    /// The request id of the corrections.
+    pub request: &'a str,
+    /// Every pack in the bucket, each [`PackState::Committed`] or
+    /// [`PackState::Recovered`].
+    pub packs: &'a [Pack],
+    /// What could not be placed (ruling R24).
+    pub unplaced: &'a [Unplaced],
+}
+
 /// What one request sees of a repository, read in one database snapshot
 /// (ADR 0004 item 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,4 +401,86 @@ pub trait GitStore: Send + Sync + 'static {
     ///
     /// [`IndexError::Database`].
     async fn clear_unplaced(&self, repo: RepoId, covered: &[Oid]) -> Result<u64, IndexError>;
+
+    /// Every pack row of the repository, whatever its state, ordered by
+    /// creation then id: what the pack sweep and `reindex` read.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn packs(&self, repo: RepoId) -> Result<Vec<PackRecord>, IndexError>;
+
+    /// Deletes pack row `id` if it is in `state`, and reports whether it
+    /// was: the pack sweep's last step, once the pack's files are gone.
+    /// Only `Superseded`, `Lost` and `Expired` rows are ever deleted (ADR
+    /// 0004 item 5).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::InvalidInput`] for any other state, and
+    /// [`IndexError::Database`].
+    async fn delete_pack(&self, id: PackId, state: PackState) -> Result<bool, IndexError>;
+
+    /// The repository's highest `ref_log` sequence number, 0 if it has
+    /// none: a repack's high-water mark (ADR 0004 item 5).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn ref_log_head(&self, repo: RepoId) -> Result<u64, IndexError>;
+
+    /// Deletes the repository's `ref_log` rows committed before `before`
+    /// (Unix seconds) with a sequence number of at most `through_seq`, and
+    /// returns how many. The caller keeps the retention of ADR 0004 item 3
+    /// and passes the highest row the bucket ref log already holds.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`].
+    async fn prune_ref_log(
+        &self,
+        repo: RepoId,
+        before: u64,
+        through_seq: u64,
+    ) -> Result<u64, IndexError>;
+
+    /// The commit transaction of a `reindex` restore (ADR 0004 item 4):
+    /// [`GitStore::commit`]'s checks and ref log rows, with no writer pack,
+    /// plus every pack of `recovered` going `Recovered` to `Committed`, and
+    /// the repository's commit, tag and edge entries whose object is in
+    /// `covered`, and the pack entries of `recovered`, deleted. Otherwise
+    /// nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// [`CommitError::Fenced`] also when a pack of `recovered` isn't
+    /// recovered any more, and the errors of [`GitStore::commit`];
+    /// [`CommitError::Database`] carries [`IndexError::InvalidInput`] if
+    /// `tx.pack` is set.
+    async fn restore(
+        &self,
+        tx: CommitTx<'_>,
+        recovered: &[PackId],
+        covered: &[Oid],
+    ) -> Result<(), CommitError>;
+
+    /// Deletes every unplaced entry of the repository, as `reindex discard`
+    /// does once its recovered packs are `Lost`, and returns how many.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`].
+    async fn discard_unplaced(&self, repo: RepoId) -> Result<u64, IndexError>;
+
+    /// Replaces the repository's refs, `ref_log` rows, pack rows and
+    /// unplaced entries with `r` in one transaction, and increases its
+    /// full-repack generation, which fences any writer whose snapshot
+    /// predates it (ADR 0004 item 4).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::UnknownRepo`], [`IndexError::InvalidInput`] for a pack
+    /// in another state or a ref log sequence number another repository
+    /// holds, and [`IndexError::Database`]. Nothing changes on error.
+    async fn reindex(&self, repo: RepoId, r: Reindexed<'_>) -> Result<(), IndexError>;
 }

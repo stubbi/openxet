@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openxet_index::{
-    CommitError, CommitTx, GitStore, IndexError, Oid, Pack, PackId, PackState, RefUpdate,
-    RepackPublish, Repo, RepoId, Repos, SqliteIndex, Unplaced, UnplacedKind,
+    CommitError, CommitTx, GitStore, IndexError, Oid, Pack, PackId, PackState, RefLogRow,
+    RefUpdate, Reindexed, RepackPublish, Repo, RepoId, Repos, SqliteIndex, Unplaced, UnplacedKind,
 };
 use tempfile::TempDir;
 use tokio::sync::Barrier;
@@ -764,4 +764,269 @@ async fn concurrent_commits_one_winner() {
     }
     let snap = ok(nodes[1].snapshot(repo).await);
     assert_eq!(snap.packs.len(), usize::from(ROUNDS));
+}
+
+/// The pack sweep's reads and deletes (ADR 0004 item 5): every row with its
+/// commit and supersede times, and deletes guarded by state.
+#[tokio::test]
+async fn packs_list_every_state_and_delete_is_guarded() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "a").await;
+    let first = push(&index, repo, None, 1).await;
+    let lost = pending(repo, "lost");
+    ok(index.insert_pack(&lost).await);
+    assert!(ok(index
+        .mark_pack(lost.id, PackState::Pending, PackState::Lost)
+        .await));
+    let out = pending(repo, "out");
+    ok(index.insert_pack(&out).await);
+    let lease = ok(index
+        .acquire_lease(repo, "node", Duration::from_mins(1))
+        .await)
+    .unwrap_or_else(|| panic!("the lease is free"));
+    ok(index
+        .publish_repack(RepackPublish {
+            repo,
+            holder: "node",
+            epoch: lease.epoch,
+            outputs: &[out.id],
+            inputs: &[first.id],
+            ref_log_high_water: None,
+        })
+        .await);
+
+    let rows = ok(index.packs(repo).await);
+    let by_name = |name: &str| {
+        rows.iter()
+            .find(|r| r.pack.name == name)
+            .unwrap_or_else(|| panic!("{name} is listed"))
+            .clone()
+    };
+    let (first_row, lost_row, out_row) = (by_name("pack-1"), by_name("lost"), by_name("out"));
+    assert_eq!(first_row.pack.state, PackState::Superseded);
+    assert!(first_row.committed_at.is_some() && first_row.superseded_at.is_some());
+    assert_eq!(lost_row.pack.state, PackState::Lost);
+    assert_eq!(
+        (lost_row.committed_at, lost_row.superseded_at),
+        (None, None)
+    );
+    assert_eq!(out_row.pack.state, PackState::Committed);
+    assert!(out_row.committed_at.is_some() && out_row.superseded_at.is_none());
+
+    assert!(matches!(
+        index.delete_pack(out.id, PackState::Committed).await,
+        Err(IndexError::InvalidInput(_))
+    ));
+    assert!(!ok(index.delete_pack(out.id, PackState::Superseded).await));
+    assert!(!ok(index.delete_pack(lost.id, PackState::Superseded).await));
+    assert!(ok(index.delete_pack(lost.id, PackState::Lost).await));
+    assert!(ok(index.delete_pack(first.id, PackState::Superseded).await));
+    let left: Vec<String> = ok(index.packs(repo).await)
+        .into_iter()
+        .map(|r| r.pack.name)
+        .collect();
+    assert_eq!(left, vec!["out".to_owned()]);
+}
+
+/// The ref log's head and pruning (ADR 0004 item 3): only rows older than
+/// the cut-off and already in the bucket go.
+#[tokio::test]
+async fn ref_log_head_and_prune() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "a").await;
+    assert_eq!(ok(index.ref_log_head(repo).await), 0);
+    push(&index, repo, None, 1).await;
+    push(&index, repo, Some(1), 2).await;
+    push(&index, repo, Some(2), 3).await;
+    let rows = ok(index.ref_log_since(repo, 0).await);
+    assert_eq!(ok(index.ref_log_head(repo).await), rows[2].seq);
+
+    let future = rows[2].at + 10;
+    assert_eq!(
+        ok(index.prune_ref_log(repo, rows[0].at, rows[2].seq).await),
+        0
+    );
+    assert_eq!(ok(index.prune_ref_log(repo, future, rows[1].seq).await), 2);
+    let left = ok(index.ref_log_since(repo, 0).await);
+    assert_eq!(left, rows[2..].to_vec());
+    assert_eq!(ok(index.ref_log_head(repo).await), rows[2].seq);
+}
+
+fn recovered(repo: RepoId, name: &str) -> Pack {
+    Pack {
+        state: PackState::Recovered,
+        ..pending(repo, name)
+    }
+}
+
+/// `reindex` replaces a repository's Git rows in one transaction and bumps
+/// its generation; a restore commits recovered packs and clears what its
+/// ref covers; discard clears the rest (ADR 0004 item 4).
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn reindex_restore_and_discard() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "a").await;
+    let other = new_repo(&index, "b").await;
+    push(&index, repo, None, 1).await;
+    push(&index, other, None, 7).await;
+    let old_rows = ok(index.ref_log_since(repo, 0).await);
+    let before = ok(index.snapshot(repo).await);
+
+    let committed = Pack {
+        state: PackState::Committed,
+        ..pending(repo, "kept")
+    };
+    let (rec_a, rec_b) = (recovered(repo, "rec-a"), recovered(repo, "rec-b"));
+    let log = vec![RefLogRow {
+        seq: old_rows[0].seq,
+        repo,
+        name: "refs/heads/main".to_owned(),
+        old: None,
+        new: Some(oid(2)),
+        actor: "alice".to_owned(),
+        request: "r1".to_owned(),
+        at: 1_761_400_000,
+    }];
+    let unplaced = [
+        Unplaced {
+            repo,
+            kind: UnplacedKind::Commit(oid(5)),
+            pack: rec_a.id,
+            found_at: 1,
+        },
+        Unplaced {
+            repo,
+            kind: UnplacedKind::Pack,
+            pack: rec_a.id,
+            found_at: 1,
+        },
+        Unplaced {
+            repo,
+            kind: UnplacedKind::Pack,
+            pack: rec_b.id,
+            found_at: 1,
+        },
+        Unplaced {
+            repo,
+            kind: UnplacedKind::Edge(oid(6)),
+            pack: committed.id,
+            found_at: 1,
+        },
+    ];
+    let corrections = [update("refs/heads/main", Some(2), Some(1))];
+    let reindexed = Reindexed {
+        refs: &[("refs/heads/main".to_owned(), oid(1))],
+        ref_log: &log,
+        corrections: &corrections,
+        actor: "openxet reindex",
+        request: "reindex",
+        packs: &[committed.clone(), rec_a.clone(), rec_b.clone()],
+        unplaced: &unplaced,
+    };
+    let bad = Reindexed {
+        packs: &[pending(repo, "p")],
+        ..reindexed
+    };
+    assert!(matches!(
+        index.reindex(repo, bad).await,
+        Err(IndexError::InvalidInput(_))
+    ));
+    let other_rows = ok(index.ref_log_since(other, 0).await);
+    let clash = vec![RefLogRow {
+        seq: other_rows[0].seq,
+        ..log[0].clone()
+    }];
+    assert!(matches!(
+        index
+            .reindex(
+                repo,
+                Reindexed {
+                    ref_log: &clash,
+                    ..reindexed
+                }
+            )
+            .await,
+        Err(IndexError::InvalidInput(_))
+    ));
+    assert_eq!(ok(index.snapshot(repo).await), before, "nothing changed");
+
+    ok(index.reindex(repo, reindexed).await);
+    let snap = ok(index.snapshot(repo).await);
+    assert_eq!(snap.refs, vec![("refs/heads/main".to_owned(), oid(1))]);
+    assert_eq!(snap.packs, vec![committed.clone()]);
+    assert_eq!(snap.full_repack_gen, before.full_repack_gen + 1);
+    let rows = ok(index.ref_log_since(repo, 0).await);
+    assert_eq!(rows[0], log[0]);
+    assert_eq!(rows.len(), 2);
+    assert!(rows[1].seq > other_rows[0].seq, "corrections number last");
+    assert_eq!((rows[1].old, rows[1].new), (Some(oid(2)), Some(oid(1))));
+    assert_eq!(rows[1].actor, "openxet reindex");
+    assert_eq!(ok(index.unplaced(repo).await).len(), 4);
+    let states: Vec<PackState> = ok(index.packs(repo).await)
+        .into_iter()
+        .map(|r| r.pack.state)
+        .collect();
+    assert_eq!(states.len(), 3);
+    assert_eq!(
+        ok(index.snapshot(other).await).refs.len(),
+        1,
+        "other repo untouched"
+    );
+
+    // Restore: a stale generation or a pack no longer recovered fences it.
+    let create = [update("refs/heads/restored", None, Some(5))];
+    let generation = snap.full_repack_gen;
+    let stale = index
+        .restore(
+            tx(repo, &create, None, generation - 1),
+            &[rec_a.id],
+            &[oid(5)],
+        )
+        .await;
+    assert!(matches!(stale, Err(CommitError::Fenced)), "{stale:?}");
+    let not_recovered = index
+        .restore(tx(repo, &create, None, generation), &[committed.id], &[])
+        .await;
+    assert!(
+        matches!(not_recovered, Err(CommitError::Fenced)),
+        "{not_recovered:?}"
+    );
+    let with_pack = index
+        .restore(tx(repo, &create, Some(rec_a.id), generation), &[], &[])
+        .await;
+    assert!(matches!(
+        with_pack,
+        Err(CommitError::Database(IndexError::InvalidInput(_)))
+    ));
+    assert_eq!(ok(index.snapshot(repo).await).refs.len(), 1);
+
+    ok(index
+        .restore(tx(repo, &create, None, generation), &[rec_a.id], &[oid(5)])
+        .await);
+    let snap = ok(index.snapshot(repo).await);
+    assert!(
+        snap.refs
+            .contains(&("refs/heads/restored".to_owned(), oid(5)))
+    );
+    assert!(snap.packs.iter().any(|p| p.id == rec_a.id));
+    let left: Vec<UnplacedKind> = ok(index.unplaced(repo).await)
+        .into_iter()
+        .map(|u| u.kind)
+        .collect();
+    assert_eq!(left, vec![UnplacedKind::Pack, UnplacedKind::Edge(oid(6))]);
+    let last = ok(index.ref_log_since(repo, 0).await);
+    assert_eq!(
+        last.last().map(|r| r.name.as_str()),
+        Some("refs/heads/restored")
+    );
+
+    assert!(ok(index
+        .mark_pack(rec_b.id, PackState::Recovered, PackState::Lost)
+        .await));
+    assert_eq!(ok(index.discard_unplaced(repo).await), 2);
+    assert!(ok(index.unplaced(repo).await).is_empty());
 }

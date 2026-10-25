@@ -2858,6 +2858,7 @@ dependencies = [
  "openxet-git",
  "openxet-index",
  "openxet-storage",
+ "proptest",
  "sqlx",
  "subtle",
  "tempfile",

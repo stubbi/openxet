@@ -12,8 +12,8 @@ use sqlx::{Sqlite, Transaction};
 
 use super::{HASHES_PER_QUERY, SqliteIndex, to_i64, to_u64, with_placeholders};
 use crate::{
-    CommitError, CommitTx, GitStore, IndexError, Lease, Oid, Pack, PackId, PackState, RefLogRow,
-    RefUpdate, RepackPublish, RepoId, Snapshot, Unplaced, UnplacedKind,
+    CommitError, CommitTx, GitStore, IndexError, Lease, Oid, Pack, PackId, PackRecord, PackState,
+    RefLogRow, RefUpdate, Reindexed, RepackPublish, RepoId, Snapshot, Unplaced, UnplacedKind,
 };
 
 /// The database clock in Unix milliseconds, which leases are compared on
@@ -128,13 +128,16 @@ async fn transition(
     to: PackState,
 ) -> Result<bool, IndexError> {
     let superseded = to == PackState::Superseded;
+    let committed = to == PackState::Committed;
     let moved = sqlx::query(
         "UPDATE packs SET state = ?, \
-         superseded_at = CASE WHEN ? THEN unixepoch() ELSE superseded_at END \
+         superseded_at = CASE WHEN ? THEN unixepoch() ELSE superseded_at END, \
+         committed_at = CASE WHEN ? THEN unixepoch() ELSE committed_at END \
          WHERE id = ? AND repo = ? AND state = ?",
     )
     .bind(to.as_str())
     .bind(superseded)
+    .bind(committed)
     .bind(&id.0[..])
     .bind(&repo.0[..])
     .bind(from.as_str())
@@ -142,6 +145,85 @@ async fn transition(
     .await?
     .rows_affected();
     Ok(moved == 1)
+}
+
+/// The checks and writes of a commit transaction (ADR 0004 item 3) inside
+/// `db`, which the caller commits: the generation, every ref
+/// compare-and-swap, the writer's pack, and one `ref_log` row per command.
+async fn commit_in(db: &mut Transaction<'_, Sqlite>, tx: CommitTx<'_>) -> Result<(), CommitError> {
+    check_updates(tx.updates)?;
+    let expected = to_i64(tx.full_repack_gen, "full-repack generation")?;
+    let generation: Option<i64> =
+        sqlx::query_scalar("SELECT full_repack_gen FROM repos WHERE id = ?")
+            .bind(&tx.repo.0[..])
+            .fetch_optional(&mut **db)
+            .await?;
+    match generation {
+        None => return Err(IndexError::UnknownRepo { repo: tx.repo }.into()),
+        Some(g) if g != expected => return Err(CommitError::Fenced),
+        Some(_) => {}
+    }
+    for u in tx.updates {
+        if !apply(db, tx.repo, u).await? {
+            return Err(CommitError::RefMismatch(u.name.clone()));
+        }
+    }
+    if let Some(pack) = tx.pack
+        && !transition(db, tx.repo, pack, PackState::Pending, PackState::Committed).await?
+    {
+        return Err(CommitError::PackNotPending);
+    }
+    insert_ref_log(db, tx.repo, tx.updates, tx.actor, tx.request).await?;
+    Ok(())
+}
+
+/// One `ref_log` row per command, stamped with the database clock.
+async fn insert_ref_log(
+    db: &mut Transaction<'_, Sqlite>,
+    repo: RepoId,
+    updates: &[RefUpdate],
+    actor: &str,
+    request: &str,
+) -> Result<(), IndexError> {
+    for u in updates {
+        sqlx::query(
+            "INSERT INTO ref_log (repo, ref, old, new, actor, request, at) \
+             VALUES (?, ?, ?, ?, ?, ?, unixepoch())",
+        )
+        .bind(&repo.0[..])
+        .bind(&u.name)
+        .bind(u.old.map(|o| o.0.to_vec()))
+        .bind(u.new.map(|o| o.0.to_vec()))
+        .bind(actor)
+        .bind(request)
+        .execute(&mut **db)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Deletes the repository's commit, tag and edge entries whose object is in
+/// `covered`, returning how many.
+async fn delete_covered(
+    db: &mut Transaction<'_, Sqlite>,
+    repo: RepoId,
+    covered: &[Oid],
+) -> Result<u64, IndexError> {
+    let mut cleared = 0;
+    for batch in covered.chunks(HASHES_PER_QUERY) {
+        let mut query = sqlx::query(with_placeholders(
+            "DELETE FROM reindex_unplaced WHERE repo = ? AND oid IN (",
+            "?",
+            batch.len(),
+            ")",
+        ))
+        .bind(&repo.0[..]);
+        for oid in batch {
+            query = query.bind(oid.0.to_vec());
+        }
+        cleared += query.execute(&mut **db).await?.rows_affected();
+    }
+    Ok(cleared)
 }
 
 #[async_trait::async_trait]
@@ -226,51 +308,8 @@ impl GitStore for SqliteIndex {
     }
 
     async fn commit(&self, tx: CommitTx<'_>) -> Result<(), CommitError> {
-        check_updates(tx.updates)?;
-        let expected = to_i64(tx.full_repack_gen, "full-repack generation")?;
-        let repo = &tx.repo.0[..];
         let mut db = self.begin_write().await?;
-        let generation: Option<i64> =
-            sqlx::query_scalar("SELECT full_repack_gen FROM repos WHERE id = ?")
-                .bind(repo)
-                .fetch_optional(&mut *db)
-                .await?;
-        match generation {
-            None => return Err(IndexError::UnknownRepo { repo: tx.repo }.into()),
-            Some(g) if g != expected => return Err(CommitError::Fenced),
-            Some(_) => {}
-        }
-        for u in tx.updates {
-            if !apply(&mut db, tx.repo, u).await? {
-                return Err(CommitError::RefMismatch(u.name.clone()));
-            }
-        }
-        if let Some(pack) = tx.pack
-            && !transition(
-                &mut db,
-                tx.repo,
-                pack,
-                PackState::Pending,
-                PackState::Committed,
-            )
-            .await?
-        {
-            return Err(CommitError::PackNotPending);
-        }
-        for u in tx.updates {
-            sqlx::query(
-                "INSERT INTO ref_log (repo, ref, old, new, actor, request, at) \
-                 VALUES (?, ?, ?, ?, ?, ?, unixepoch())",
-            )
-            .bind(repo)
-            .bind(&u.name)
-            .bind(u.old.map(|o| o.0.to_vec()))
-            .bind(u.new.map(|o| o.0.to_vec()))
-            .bind(tx.actor)
-            .bind(tx.request)
-            .execute(&mut *db)
-            .await?;
-        }
+        commit_in(&mut db, tx).await?;
         db.commit().await?;
         Ok(())
     }
@@ -481,21 +520,220 @@ impl GitStore for SqliteIndex {
 
     async fn clear_unplaced(&self, repo: RepoId, covered: &[Oid]) -> Result<u64, IndexError> {
         let mut tx = self.begin_write().await?;
-        let mut cleared = 0;
-        for batch in covered.chunks(HASHES_PER_QUERY) {
-            let mut query = sqlx::query(with_placeholders(
-                "DELETE FROM reindex_unplaced WHERE repo = ? AND oid IN (",
-                "?",
-                batch.len(),
-                ")",
-            ))
-            .bind(&repo.0[..]);
-            for oid in batch {
-                query = query.bind(oid.0.to_vec());
-            }
-            cleared += query.execute(&mut *tx).await?.rows_affected();
-        }
+        let cleared = delete_covered(&mut tx, repo, covered).await?;
         tx.commit().await?;
         Ok(cleared)
+    }
+
+    async fn packs(&self, repo: RepoId) -> Result<Vec<PackRecord>, IndexError> {
+        sqlx::query(
+            "SELECT id, repo, name, state, created_at, bytes, midx_gen, committed_at, \
+             superseded_at FROM packs WHERE repo = ? ORDER BY created_at, id",
+        )
+        .bind(&repo.0[..])
+        .fetch_all(&self.reader)
+        .await?
+        .iter()
+        .map(|row| {
+            let time = |i: usize, what: &str| -> Result<Option<u64>, IndexError> {
+                row.try_get::<Option<i64>, _>(i)?
+                    .map(|t| to_u64(t, what))
+                    .transpose()
+            };
+            Ok(PackRecord {
+                pack: pack_from(row)?,
+                committed_at: time(7, "pack commit time")?,
+                superseded_at: time(8, "pack supersede time")?,
+            })
+        })
+        .collect()
+    }
+
+    async fn delete_pack(&self, id: PackId, state: PackState) -> Result<bool, IndexError> {
+        use PackState::{Expired, Lost, Superseded};
+        if !matches!(state, Superseded | Lost | Expired) {
+            return Err(IndexError::InvalidInput(format!(
+                "pack {id} is {}; only superseded, lost and expired pack rows are deleted",
+                state.as_str()
+            )));
+        }
+        let deleted = sqlx::query("DELETE FROM packs WHERE id = ? AND state = ?")
+            .bind(&id.0[..])
+            .bind(state.as_str())
+            .execute(&self.writer)
+            .await?
+            .rows_affected();
+        Ok(deleted == 1)
+    }
+
+    async fn ref_log_head(&self, repo: RepoId) -> Result<u64, IndexError> {
+        let head: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM ref_log WHERE repo = ?")
+                .bind(&repo.0[..])
+                .fetch_one(&self.reader)
+                .await?;
+        to_u64(head, "ref log sequence number")
+    }
+
+    async fn prune_ref_log(
+        &self,
+        repo: RepoId,
+        before: u64,
+        through_seq: u64,
+    ) -> Result<u64, IndexError> {
+        Ok(
+            sqlx::query("DELETE FROM ref_log WHERE repo = ? AND at < ? AND seq <= ?")
+                .bind(&repo.0[..])
+                .bind(to_i64(before, "ref log time")?)
+                .bind(to_i64(through_seq, "ref log sequence number")?)
+                .execute(&self.writer)
+                .await?
+                .rows_affected(),
+        )
+    }
+
+    async fn restore(
+        &self,
+        tx: CommitTx<'_>,
+        recovered: &[PackId],
+        covered: &[Oid],
+    ) -> Result<(), CommitError> {
+        if tx.pack.is_some() {
+            return Err(IndexError::InvalidInput(
+                "a restore publishes no pack of its own; it commits recovered packs".to_owned(),
+            )
+            .into());
+        }
+        let mut db = self.begin_write().await?;
+        commit_in(&mut db, tx).await?;
+        for &pack in recovered {
+            let moved = transition(
+                &mut db,
+                tx.repo,
+                pack,
+                PackState::Recovered,
+                PackState::Committed,
+            )
+            .await?;
+            if !moved {
+                return Err(CommitError::Fenced);
+            }
+            sqlx::query(
+                "DELETE FROM reindex_unplaced WHERE repo = ? AND kind = 'pack' AND pack = ?",
+            )
+            .bind(&tx.repo.0[..])
+            .bind(&pack.0[..])
+            .execute(&mut *db)
+            .await?;
+        }
+        delete_covered(&mut db, tx.repo, covered).await?;
+        db.commit().await?;
+        Ok(())
+    }
+
+    async fn discard_unplaced(&self, repo: RepoId) -> Result<u64, IndexError> {
+        Ok(sqlx::query("DELETE FROM reindex_unplaced WHERE repo = ?")
+            .bind(&repo.0[..])
+            .execute(&self.writer)
+            .await?
+            .rows_affected())
+    }
+
+    async fn reindex(&self, repo: RepoId, r: Reindexed<'_>) -> Result<(), IndexError> {
+        if let Some(p) = r.packs.iter().find(|p| {
+            !matches!(p.state, PackState::Committed | PackState::Recovered) || p.repo != repo
+        }) {
+            return Err(IndexError::InvalidInput(format!(
+                "reindex writes pack {} as {} of repository {}; it writes only committed and \
+                 recovered packs of {repo}",
+                p.id,
+                p.state.as_str(),
+                p.repo
+            )));
+        }
+        let id = &repo.0[..];
+        let mut tx = self.begin_write().await?;
+        require_repo(&mut tx, repo).await?;
+        for table in [
+            "DELETE FROM refs WHERE repo = ?",
+            "DELETE FROM ref_log WHERE repo = ?",
+            "DELETE FROM packs WHERE repo = ?",
+            "DELETE FROM reindex_unplaced WHERE repo = ?",
+        ] {
+            sqlx::query(table).bind(id).execute(&mut *tx).await?;
+        }
+        for (name, oid) in r.refs {
+            sqlx::query("INSERT INTO refs (repo, name, oid) VALUES (?, ?, ?)")
+                .bind(id)
+                .bind(name)
+                .bind(oid.0.to_vec())
+                .execute(&mut *tx)
+                .await?;
+        }
+        for row in r.ref_log {
+            let inserted = sqlx::query(
+                "INSERT INTO ref_log (seq, repo, ref, old, new, actor, request, at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (seq) DO NOTHING",
+            )
+            .bind(to_i64(row.seq, "ref log sequence number")?)
+            .bind(id)
+            .bind(&row.name)
+            .bind(row.old.map(|o| o.0.to_vec()))
+            .bind(row.new.map(|o| o.0.to_vec()))
+            .bind(&row.actor)
+            .bind(&row.request)
+            .bind(to_i64(row.at, "ref log time")?)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if inserted == 0 {
+                return Err(IndexError::InvalidInput(format!(
+                    "ref log row {} of repository {repo} is numbered like a row of another \
+                     repository; reindex every repository of a lost database before any of them \
+                     takes writes",
+                    row.seq
+                )));
+            }
+        }
+        insert_ref_log(&mut tx, repo, r.corrections, r.actor, r.request).await?;
+        for p in r.packs {
+            sqlx::query(
+                "INSERT INTO packs (id, repo, name, state, created_at, bytes, midx_gen) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&p.id.0[..])
+            .bind(id)
+            .bind(&p.name)
+            .bind(p.state.as_str())
+            .bind(to_i64(p.created_at, "pack creation time")?)
+            .bind(to_i64(p.bytes, "pack size")?)
+            .bind(
+                p.midx_gen
+                    .map(|g| to_i64(g, "multi-pack-index generation"))
+                    .transpose()?,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        for u in r.unplaced {
+            let (kind, oid) = u.kind.parts();
+            sqlx::query(
+                "INSERT INTO reindex_unplaced (repo, kind, oid, pack, found_at) \
+                 VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            )
+            .bind(id)
+            .bind(kind)
+            .bind(oid.map(|o| o.0.to_vec()))
+            .bind(&u.pack.0[..])
+            .bind(to_i64(u.found_at, "unplaced entry time")?)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sqlx::query("UPDATE repos SET full_repack_gen = full_repack_gen + 1 WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 }

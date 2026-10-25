@@ -47,6 +47,9 @@
 //! - packs and multi-pack indexes with [`Bucket::put_stream`], once;
 //! - a [`RepoMeta`] with [`Bucket::put_replace`], the one object the
 //!   bucket ever overwrites, whole and atomically.
+//!
+//! Only packs and multi-pack indexes are ever deleted, by the pack sweep
+//! with [`Bucket::delete`] (ADR 0004 item 5).
 
 #![forbid(unsafe_code)]
 
@@ -670,4 +673,17 @@ pub trait Bucket: Send + Sync + 'static {
     /// ([`KeyKind::is_per_repo`]), and [`StorageError::Io`] if listing
     /// fails.
     async fn list_under(&self, repo: RepoIdHex, kind: KeyKind) -> Result<Vec<Key>, StorageError>;
+
+    /// Deletes the object under `key`, a [`Key::Pack`] or [`Key::Midx`]
+    /// only, and returns whether it existed: the pack sweep's one way to
+    /// remove a Git pack's files once garbage collection has decided they
+    /// may go (non-negotiable 3, ADR 0004 item 5). On `Ok` the removal is
+    /// durable.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::InvalidKey`] for any other kind of key: nothing else
+    /// is ever deleted outside the garbage collection of later milestones.
+    /// [`StorageError::Io`] if the removal fails.
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError>;
 }

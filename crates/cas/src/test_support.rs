@@ -309,6 +309,10 @@ impl Bucket for BlockingBucket {
     ) -> Result<Vec<Key>, StorageError> {
         self.inner.list_under(repo, kind).await
     }
+
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
 }
 
 /// Polls `done` every 5 ms for up to 30 s.
