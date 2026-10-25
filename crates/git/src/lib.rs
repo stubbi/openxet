@@ -16,9 +16,13 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod interpose;
+mod pkt;
 mod process;
+mod reach;
 mod snapshot;
 mod store;
+mod upload;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,9 +31,15 @@ use openxet_index::{HubIndex, IndexError, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
 pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
+pub use pkt::{
+    Fetch, LsRefs, MAX_PKT_LEN, Pkt, PktError, V2Command, err_pkt, find_flush, parse_v0_wants,
+    parse_v2_command, read_pkt,
+};
 pub use process::{MIN_GIT_VERSION, PINNED_CONFIG, git_command, protocol_version};
+pub use reach::{Reachability, Refused};
 pub use snapshot::SnapshotRepo;
 pub use store::Eviction;
+pub use upload::{ResponseStream, Service};
 
 use process::ProcessEnv;
 use snapshot::Layout;
@@ -131,6 +141,20 @@ pub enum GitError {
     /// The bucket failed.
     #[error(transparent)]
     Storage(#[from] StorageError),
+    /// A request was refused before git ran, retryably: the reachability
+    /// check is over a concurrency limit (ADR 0004 item 2). Smart HTTP
+    /// answers 429; SSH writes [`Refused::pkt`].
+    #[error(transparent)]
+    Refused(Refused),
+    /// The request body couldn't be read.
+    #[error("reading the request body failed: {0}; the client may have disconnected, so retry")]
+    Body(#[source] std::io::Error),
+    /// The snapshot's objects couldn't be read.
+    #[error(
+        "reading the objects of a Git snapshot failed: {0}; a cached pack may be damaged: stop \
+         openxet, empty git.cache_dir and start it again (packs are hydrated from the bucket)"
+    )]
+    Objects(String),
     /// The index holds a Git record openxet would never write.
     #[error(
         "the index holds an invalid Git record ({0}); the bucket is unaffected. Please report \
@@ -170,6 +194,7 @@ pub struct Engine {
     cache: NodeCache,
     process: Arc<ProcessEnv>,
     v2_advertisement: Vec<u8>,
+    reach: Reachability,
 }
 
 impl std::fmt::Debug for Engine {
@@ -205,6 +230,7 @@ impl Engine {
         process::check_version(&git, &bootstrap).await?;
         let exec_dir = process::exec_path(&git, &bootstrap).await?;
         let process = Arc::new(ProcessEnv::new(&exec_dir, &cache.hooks(), &cache.home())?);
+        let reach = Reachability::new(config.reachability);
         let mut engine = Self {
             index,
             bucket,
@@ -213,6 +239,7 @@ impl Engine {
             cache,
             process,
             v2_advertisement: Vec::new(),
+            reach,
         };
         engine.v2_advertisement = engine.capture_v2_advertisement().await?;
         Ok(engine)
@@ -298,6 +325,7 @@ impl Engine {
             }
         }
         Ok(SnapshotRepo {
+            repo,
             dir,
             refs,
             packs: snap.packs,
@@ -352,7 +380,10 @@ impl Engine {
             packs: Vec::new(),
             midx: None,
         };
+        // An empty repository of no repository: the all-zero id is never
+        // generated (ids are UUIDv7) and never checked for reachability.
         let empty = SnapshotRepo {
+            repo: RepoId([0; 16]),
             dir: blocking(move || snapshot::build(&layout)).await?,
             refs: Vec::new(),
             packs: Vec::new(),

@@ -22,6 +22,7 @@ http = "1.5.0"
 libfuzzer-sys = "=0.4.13"
 openxet-auth = { path = "../crates/auth", version = "0.0.0" }
 openxet-cas = { path = "../crates/cas", version = "0.0.0", features = ["fuzzing"] }
+openxet-git = { path = "../crates/git", version = "0.0.0" }
 openxet-protocol = { path = "../crates/protocol", version = "0.0.0" }
 openxet-uri = { path = "../crates/uri", version = "0.0.0" }
 url = "2.5.8"
@@ -78,6 +79,13 @@ bench = false
 [[bin]]
 name = "xet_uri"
 path = "fuzz_targets/xet_uri.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pkt_line"
+path = "fuzz_targets/pkt_line.rs"
 test = false
 doc = false
 bench = false
