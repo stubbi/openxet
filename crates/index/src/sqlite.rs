@@ -425,6 +425,15 @@ async fn insert_owners(
 
 #[async_trait::async_trait]
 impl Index for SqliteIndex {
+    async fn probe(&self) -> Result<(), IndexError> {
+        // A real table, so a missing or unreadable database file fails
+        // here; `SELECT 1` would answer without touching it.
+        sqlx::query("SELECT 1 FROM xorbs LIMIT 1")
+            .fetch_optional(&self.reader)
+            .await?;
+        Ok(())
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,

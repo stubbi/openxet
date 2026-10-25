@@ -7,6 +7,7 @@
 mod common;
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use std::time::{Duration, Instant};
 
@@ -14,8 +15,8 @@ use axum::body::Body;
 use axum::http::Request;
 use common::xorb::HF_XET_XORB;
 use common::{
-    Access, FILE_CHUNK_HASHES_PATH, PROBE_BODIES, ROUTES, Reply, Route, SCOPE_A, TRANSFER_PATH,
-    TestServer, UNAUTHENTICATED, UNSERVED, XORB_GRANT_PATH, bearer, config,
+    Access, FILE_CHUNK_HASHES_PATH, FailingBucket, PROBE_BODIES, ROUTES, Reply, Route, SCOPE_A,
+    TRANSFER_PATH, TestServer, UNAUTHENTICATED, UNSERVED, XORB_GRANT_PATH, bearer, config,
 };
 use openxet_auth::Mode;
 use openxet_cas::{BodyDeadline, CasConfig, TELEMETRY_BODY_LIMIT, starting_router};
@@ -470,6 +471,33 @@ async fn a_starting_server_is_live_but_not_ready() {
         assert_eq!(json["schema"], "openxet.error.v1");
         assert_eq!(json["code"], "not_ready");
     }
+}
+
+#[tokio::test]
+async fn a_ready_server_probes_its_index_and_bucket() {
+    let server = TestServer::start_default().await;
+    let reply = Reply::of(server.request(Method::GET, "/readyz")).await;
+    assert_eq!(
+        (reply.status.as_u16(), reply.body.as_str()),
+        (200, PROBE_BODIES[1])
+    );
+}
+
+#[tokio::test]
+async fn a_bucket_that_cannot_take_writes_is_not_ready() {
+    // Issue #49: a full disk reads as not ready, naming the component and
+    // not the cause, which is logged.
+    let server = TestServer::start_with(config(Visibility::Global), Arc::new(FailingBucket)).await;
+    for _ in 0..2 {
+        let reply = Reply::of(server.request(Method::GET, "/readyz")).await;
+        reply.assert_error(503, "unavailable");
+        let message = reply.json()["message"].as_str().unwrap().to_owned();
+        assert!(message.contains("storage"), "{message}");
+        assert!(!message.contains("failing-bucket"), "{message}");
+        assert!(!message.contains("no space"), "{message}");
+    }
+    let reply = Reply::of(server.request(Method::GET, "/healthz")).await;
+    assert_eq!(reply.status.as_u16(), 200);
 }
 
 #[tokio::test]

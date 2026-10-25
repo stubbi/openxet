@@ -686,4 +686,14 @@ pub trait Bucket: Send + Sync + 'static {
     /// is ever deleted outside the garbage collection of later milestones.
     /// [`StorageError::Io`] if the removal fails.
     async fn delete(&self, key: &Key) -> Result<bool, StorageError>;
+
+    /// Writes a few bytes to a temporary object outside every key and
+    /// removes it, so a bucket that can't take writes (a full disk, a lost
+    /// mount, revoked permissions) is found by `GET /readyz` (issue #49)
+    /// rather than by the next upload. Nothing a key names is touched.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::Io`] if the write or the removal fails.
+    async fn probe(&self) -> Result<(), StorageError>;
 }

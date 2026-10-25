@@ -91,6 +91,15 @@ async fn put(index: &dyn Index, label: &str, n: u32, tenant: &str) -> (MerkleHas
 }
 
 #[tokio::test]
+async fn probe_answers_on_an_open_index() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    ok(index.probe().await);
+    put(&index, "probed", 2, A).await;
+    ok(index.probe().await);
+}
+
+#[tokio::test]
 async fn put_xorb_is_idempotent() {
     let dir = ok(TempDir::new());
     let index = open(&dir).await;

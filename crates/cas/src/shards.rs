@@ -579,6 +579,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Bucket for SlowBucket {
+        async fn probe(&self) -> Result<(), StorageError> {
+            self.inner.probe().await
+        }
+
         async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
             let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.most.fetch_max(now, Ordering::SeqCst);

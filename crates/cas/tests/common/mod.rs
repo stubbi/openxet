@@ -725,6 +725,10 @@ impl SlowIndex {
 
 #[async_trait::async_trait]
 impl Index for SlowIndex {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,
@@ -841,6 +845,10 @@ impl TablelessIndex {
 
 #[async_trait::async_trait]
 impl Index for TablelessIndex {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,
@@ -972,6 +980,10 @@ impl CountingBucket {
 
 #[async_trait::async_trait]
 impl Bucket for CountingBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        self.inner.probe().await
+    }
+
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         self.inner.put(key, bytes).await
     }
@@ -1085,6 +1097,14 @@ pub struct FailingBucket;
 
 #[async_trait::async_trait]
 impl Bucket for FailingBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        Err(StorageError::Io {
+            op: "write probe file",
+            path: PathBuf::from("/failing-bucket"),
+            source: std::io::Error::other("no space left on device"),
+        })
+    }
+
     async fn put(&self, _: &Key, _: Bytes) -> Result<(), StorageError> {
         Err(StorageError::Io {
             op: "write temp file",

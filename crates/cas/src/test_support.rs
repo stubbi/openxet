@@ -87,6 +87,10 @@ impl PermitProbe {
 
 #[async_trait::async_trait]
 impl Index for PermitProbe {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,
@@ -240,6 +244,10 @@ impl BlockingBucket {
 
 #[async_trait::async_trait]
 impl Bucket for BlockingBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        self.inner.probe().await
+    }
+
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         self.started.fetch_add(1, Ordering::SeqCst);
         let (delay, finished) = (self.delay, Arc::clone(&self.finished));

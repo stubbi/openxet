@@ -248,6 +248,15 @@ pub trait Index: Send + Sync + 'static {
         tenant: &str,
         vis: Visibility,
     ) -> Result<Option<Vec<MerkleHash>>, IndexError>;
+
+    /// Answers once the database serves a read of the schema's tables:
+    /// what `GET /readyz` checks (issue #49), so a node whose index broke
+    /// leaves the load balancer's rotation.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] if the read fails.
+    async fn probe(&self) -> Result<(), IndexError>;
 }
 
 /// Everything the Hub layer reads and writes, as one trait object
