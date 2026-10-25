@@ -190,6 +190,17 @@ goes into `docs/SUMMARY.md`, the docs site's navigation.
   cleverness.
 - Performance claims come with a benchmark. Speed regressions fail CI.
 
+## Brand
+
+The brand is **OpenXet** wherever text names the project, product or
+service: prose, headings, titles, link and alt text, help prose. Lowercase
+`openxet` is an identifier only: the `openxet` command and binary, crate
+and package names, `OPENXET_*` variables, paths, schema ids
+(`openxet.error.v1`), the domain `openxet.com` and every URL. Put a command
+or identifier in a code span, and never start a sentence with a bare
+command ("The `openxet serve` command ..."). `scripts/check-brand.py`
+enforces this; a justified exception goes in `scripts/check-brand.allow`.
+
 ## Commits
 
 Use Conventional Commits with a component scope, so `git log` reads per work
@@ -242,6 +253,8 @@ cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-captur
 OPENXET_LATENCY_GATE=measure OPENXET_LATENCY_GATE_BUILD=$(git rev-parse HEAD) cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # the same, printing the JSON lines without asserting (CI, on a pull request: base, then head)
 python3 -I scripts/check-latency-gate.py --base base.json --head head.json --head-build <commit> # a PR's gate run against its base's, ruling M2-R17 (CI gate on a pull request)
 python3 -I scripts/test_check_latency_gate.py              # the comparison script's tests (CI gate)
+python3 -I scripts/check-brand.py                          # the brand is written OpenXet in prose, outside code and identifiers (CI gate)
+python3 -I scripts/test_check_brand.py                     # the brand check's tests (CI gate)
 cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo bench -p openxet-cas --bench commit_throughput      # durable shard and index commits per second on local disk
