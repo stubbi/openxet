@@ -6,7 +6,8 @@
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -170,13 +171,11 @@ fn link_midx(
     objects: &Path,
 ) -> Result<(), GitError> {
     let index = midx_file(dir, generation, MidxExt::MultiPackIndex);
-    let bytes = match fs::read(&index) {
-        Ok(bytes) => bytes,
+    let midx = match read_midx(&index) {
+        Ok(Some(midx)) => midx,
+        Ok(None) => return Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(io_err("read", &index)(e)),
-    };
-    let Some(midx) = parse_midx(&bytes) else {
-        return Ok(());
     };
     let set: HashSet<&str> = packs.iter().map(PackName::as_str).collect();
     if !midx.packs.iter().all(|p| set.contains(p.as_str())) {
@@ -207,36 +206,85 @@ struct Midx {
 
 const MIDX_SIGNATURE: &[u8; 4] = b"MIDX";
 const PNAM: &[u8; 4] = b"PNAM";
-const SHA1_LEN: usize = 20;
+const SHA1_BYTES: usize = 20;
+const SHA1_LEN: u64 = SHA1_BYTES as u64;
+const HEADER_LEN: usize = 12;
+const CHUNK_ENTRY_LEN: usize = 12;
 
 /// Reads the pack names and checksum of a SHA-1 `multi-pack-index` (git
-/// `Documentation/gitformat-pack.txt`, "multi-pack-index files"): a 12-byte
-/// header (signature, version 1, hash version 1, chunk count, base count,
-/// pack count), the chunk table, and the `PNAM` chunk of NUL-terminated
-/// `.idx` names. `None` for anything else; the file comes from openxet's own
+/// `Documentation/gitformat-pack.txt`, "multi-pack-index files"): only the
+/// 12-byte header (signature, version 1, hash version 1, chunk count, base
+/// count, pack count), the chunk table, the `PNAM` chunk of NUL-terminated
+/// `.idx` names, and the trailing checksum, never the object tables.
+/// `Ok(None)` for anything malformed; the file comes from openxet's own
 /// repack, so a bad one only means serving without it.
-fn parse_midx(bytes: &[u8]) -> Option<Midx> {
-    let header = bytes.get(..12)?;
+fn read_midx(path: &Path) -> std::io::Result<Option<Midx>> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut header = [0u8; HEADER_LEN];
+    if len < HEADER_LEN as u64 + SHA1_LEN {
+        return Ok(None);
+    }
+    file.read_exact(&mut header)?;
+    let Some((chunks, pack_count)) = parse_header(&header) else {
+        return Ok(None);
+    };
+    let mut table = vec![0u8; (chunks + 1) * CHUNK_ENTRY_LEN];
+    if (HEADER_LEN + table.len()) as u64 > len {
+        return Ok(None);
+    }
+    file.read_exact(&mut table)?;
+    let Some((start, end)) = pnam_range(&table, chunks) else {
+        return Ok(None);
+    };
+    if start > end || end > len - SHA1_LEN {
+        return Ok(None);
+    }
+    let Ok(pnam_len) = usize::try_from(end - start) else {
+        return Ok(None);
+    };
+    let mut names = vec![0u8; pnam_len];
+    file.seek(SeekFrom::Start(start))?;
+    file.read_exact(&mut names)?;
+    let mut sum = [0u8; SHA1_BYTES];
+    file.seek(SeekFrom::Start(len - SHA1_LEN))?;
+    file.read_exact(&mut sum)?;
+    let Some(packs) = parse_names(&names, pack_count) else {
+        return Ok(None);
+    };
+    let checksum = sum.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    Ok(Some(Midx { packs, checksum }))
+}
+
+/// The chunk and pack counts of a SHA-1 MIDX header without base files.
+fn parse_header(header: &[u8; HEADER_LEN]) -> Option<(usize, usize)> {
     if &header[..4] != MIDX_SIGNATURE || header[4] != 1 || header[5] != 1 || header[7] != 0 {
         return None;
     }
-    let chunks = usize::from(header[6]);
-    let pack_count = usize::try_from(u32::from_be_bytes(header[8..12].try_into().ok()?)).ok()?;
-    let entry = |i: usize| -> Option<(&[u8], usize)> {
-        let at = 12 + i * 12;
-        let e = bytes.get(at..at + 12)?;
-        let offset = usize::try_from(u64::from_be_bytes(e[4..].try_into().ok()?)).ok()?;
-        Some((&e[..4], offset))
+    let packs = u32::from_be_bytes([header[8], header[9], header[10], header[11]]);
+    Some((usize::from(header[6]), usize::try_from(packs).ok()?))
+}
+
+/// The `PNAM` chunk's byte range, from the table of `chunks` entries plus
+/// the terminating one: each entry is a 4-byte id and an 8-byte offset, and
+/// a chunk ends where the next begins.
+fn pnam_range(table: &[u8], chunks: usize) -> Option<(u64, u64)> {
+    let entry = |i: usize| -> Option<(&[u8], u64)> {
+        let e = table.get(i * CHUNK_ENTRY_LEN..(i + 1) * CHUNK_ENTRY_LEN)?;
+        Some((&e[..4], u64::from_be_bytes(e[4..].try_into().ok()?)))
     };
-    let mut names = None;
-    for i in 0..chunks {
+    (0..chunks).find_map(|i| {
         let (id, start) = entry(i)?;
-        if id == PNAM {
-            let (_, end) = entry(i + 1)?;
-            names = Some(bytes.get(start..end)?);
-        }
-    }
-    let packs: Vec<String> = names?
+        (id == PNAM).then(|| entry(i + 1).map(|(_, end)| (start, end)))?
+    })
+}
+
+/// `count` NUL-terminated `.idx` names, as pack names without extension.
+fn parse_names(chunk: &[u8], count: usize) -> Option<Vec<String>> {
+    let packs: Vec<String> = chunk
         .split(|b| *b == 0)
         .filter(|n| !n.is_empty())
         .map(|n| {
@@ -244,20 +292,12 @@ fn parse_midx(bytes: &[u8]) -> Option<Midx> {
             Some(n.strip_suffix(".idx").unwrap_or(n).to_owned())
         })
         .collect::<Option<_>>()?;
-    if packs.len() != pack_count {
-        return None;
-    }
-    let sum = bytes.get(bytes.len().checked_sub(SHA1_LEN)?..)?;
-    let checksum = sum.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    });
-    Some(Midx { packs, checksum })
+    (packs.len() == count).then_some(packs)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{check_ref_name, parse_midx, quote};
+    use super::{check_ref_name, parse_header, parse_names, pnam_range, quote, read_midx};
 
     #[test]
     fn ref_names_cannot_add_lines() {
@@ -282,10 +322,24 @@ mod tests {
 
     #[test]
     fn malformed_midx_is_ignored() {
-        assert!(parse_midx(b"").is_none());
-        assert!(parse_midx(b"MIDX\x01\x01\x01\x00\x00\x00\x00\x01").is_none());
-        let mut huge = b"MIDX\x01\x01\x01\x00\x00\x00\x00\x01PNAM".to_vec();
-        huge.extend_from_slice(&u64::MAX.to_be_bytes());
-        assert!(parse_midx(&huge).is_none());
+        let dir = tempfile::TempDir::new().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("midx");
+        for bytes in [
+            &b""[..],
+            b"MIDX\x01\x01\x01\x00\x00\x00\x00\x01",
+            &[b'M'; 64],
+        ] {
+            std::fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+            assert!(matches!(read_midx(&path), Ok(None)), "{bytes:?}");
+        }
+        assert!(parse_header(b"MIDX\x02\x01\x01\x00\x00\x00\x00\x01").is_none());
+        let mut table = b"PNAM".to_vec();
+        table.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(pnam_range(&table, 1).is_none(), "no terminating entry");
+        assert!(parse_names(b"pack-a.idx\0pack-b.idx\0\0\0", 3).is_none());
+        assert_eq!(
+            parse_names(b"pack-a.idx\0pack-b.idx\0\0\0", 2),
+            Some(vec!["pack-a".to_owned(), "pack-b".to_owned()])
+        );
     }
 }

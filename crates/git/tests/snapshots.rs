@@ -285,7 +285,7 @@ async fn snapshot_dir_same_filesystem() {
     assert_eq!(ok(fs::metadata(&cached)).nlink(), 1);
     drop(engine);
 
-    // A snapshot root where the probe link fails stops start-up with the
+    // A snapshot root where the probe link fails stops start-up with an
     // actionable error (ADR 0004 item 4).
     let blocked = World::new().await;
     let snapshots = blocked.cache_dir().join("snapshots");
@@ -304,12 +304,12 @@ async fn snapshot_dir_same_filesystem() {
         .await
         .err()
         .unwrap_or_else(|| panic!("start succeeded with an unlinkable snapshot root"));
-        assert!(matches!(err, GitError::CacheFilesystem { .. }), "{err:?}");
+        // A permission failure gets the permission hint, not the
+        // filesystem-type one.
+        assert!(matches!(err, GitError::Io { .. }), "{err:?}");
         let msg = err.to_string();
-        assert!(
-            msg.contains("hard link") && msg.contains("git.cache_dir"),
-            "{msg}"
-        );
+        assert!(msg.contains("writable") && msg.contains("probe"), "{msg}");
+        assert!(!msg.contains("ext4"), "{msg}");
     }
     ok(fs::set_permissions(
         &snapshots,
@@ -351,6 +351,8 @@ async fn stale_snapshots_swept() {
     let repo = world.repo("org", "model").await;
 
     let engine = world.engine().await;
+    let lock = ok(fs::metadata(world.cache_dir().join("lock")));
+    assert_eq!(lock.permissions().mode() & 0o777, 0o600);
     assert_eq!(
         ok(fs::read_dir(&snapshots)).count(),
         0,
@@ -542,11 +544,10 @@ async fn eviction_counts_links() {
     // no eviction could free now, stays.
     let report = ok(engine.evict(size(&a)).await);
     assert_eq!(report.freed_bytes, size(&b));
-    assert_eq!(report.held_bytes, 0);
+    assert_eq!(report.deficit_bytes, 0);
     assert!(
-        !cache_files(&world, free_repo)
-            .join(format!("{}.pack", b.name))
-            .exists()
+        !cache_files(&world, free_repo).exists(),
+        "emptied directories go too"
     );
     assert!(
         cache_files(&world, held_repo)
@@ -554,23 +555,75 @@ async fn eviction_counts_links() {
             .exists()
     );
 
-    // Over budget with only a held pack left: its cache entry goes, but its
-    // space isn't counted as freed while a snapshot links it.
+    // Over budget with only a held pack left: it stays, since removing it
+    // would free nothing while its request runs, and the shortfall is
+    // reported.
     let report = ok(engine.evict(0).await);
     assert_eq!(report.freed_bytes, 0);
-    assert_eq!(report.held_bytes, size(&a));
+    assert_eq!(report.deficit_bytes, size(&a));
     assert!(
-        !cache_files(&world, held_repo)
+        cache_files(&world, held_repo)
             .join(format!("{}.pack", a.name))
             .exists()
     );
-    let linked = held
-        .dir
-        .path()
-        .join("objects/pack")
-        .join(format!("{}.pack", a.name));
-    assert_eq!(ok(fs::read(linked)), ok(fs::read(a.path(PackExt::Pack))));
-    git(held.dir.path(), &["rev-list", "--count", "HEAD"]);
+
+    // Once its request ends, it can go.
+    drop(held);
+    let report = ok(engine.evict(0).await);
+    assert_eq!((report.freed_bytes, report.deficit_bytes), (size(&a), 0));
+}
+
+#[tokio::test]
+async fn eviction_spares_held_packs_when_unlinked_ones_suffice() {
+    let world = World::new().await;
+    let fx = fixture("tf10k", 60);
+    let src = fixture_repo(&fx);
+    let out = world.dir.path().join("packs");
+    let ranges = [
+        ("main~40", "main~40"),
+        ("main~20\n^main~40", "main~20"),
+        ("main\n^main~20", "main"),
+    ];
+    let mut repos = Vec::new();
+    let mut packs = Vec::new();
+    for (i, (revs, tip)) in ranges.iter().enumerate() {
+        let pack = pack_objects(&src, revs, &out);
+        let repo = world.repo("org", &format!("r{i}")).await;
+        // The unlinked pack is the newest, so age alone would pick a held
+        // one first.
+        let created_at = 100 + u64::try_from(i).unwrap_or(0);
+        world
+            .commit(
+                repo,
+                &pack,
+                created_at,
+                &[set("refs/heads/main", None, rev(&src, tip))],
+            )
+            .await;
+        repos.push(repo);
+        packs.push(pack);
+    }
+    let engine = world.engine().await;
+    let first = ok(engine.snapshot(repos[0]).await);
+    let second = ok(engine.snapshot(repos[1]).await);
+    drop(ok(engine.snapshot(repos[2]).await));
+
+    let report = ok(engine
+        .evict(pack_size(&packs[0]) + pack_size(&packs[1]))
+        .await);
+    assert_eq!(
+        (report.freed_bytes, report.deficit_bytes),
+        (pack_size(&packs[2]), 0)
+    );
+    for (repo, pack) in repos.iter().zip(&packs).take(2) {
+        assert!(
+            cache_files(&world, *repo)
+                .join(format!("{}.pack", pack.name))
+                .exists()
+        );
+    }
+    assert!(!cache_files(&world, repos[2]).exists());
+    drop((first, second));
 }
 
 /// The multi-pack index a geometric repack would write over `packs`, with
@@ -700,7 +753,7 @@ async fn midx_linked_only_when_covered() {
 }
 
 #[tokio::test]
-async fn hydration_over_budget_evicts_but_spares_its_own_packs() {
+async fn hydration_over_budget_evicts_unlinked_packs_only() {
     let world = World::new().await;
     let fx = fixture("tf10k", 40);
     let src = fixture_repo(&fx);
@@ -726,28 +779,82 @@ async fn hydration_over_budget_evicts_but_spares_its_own_packs() {
         )
         .await;
     let mut config = world.config();
-    // Room for one pack: hydrating the second must evict the first.
+    // Room for one pack.
     config.cache_max_bytes = pack_size(&a).max(pack_size(&b));
     let engine = ok(Engine::start(world.index.clone(), world.bucket.clone(), config).await);
+    let cached = |repo, pack: &PackFiles| {
+        cache_files(&world, repo)
+            .join(format!("{}.pack", pack.name))
+            .exists()
+    };
 
+    // While the first request runs, hydrating the second evicts nothing:
+    // both packs are linked, and the cache stays over budget until one ends.
     let first = ok(engine.snapshot(older).await);
-    assert!(
-        cache_files(&world, older)
-            .join(format!("{}.pack", a.name))
-            .exists()
-    );
     let second = ok(engine.snapshot(newer).await);
-    assert!(
-        cache_files(&world, newer)
-            .join(format!("{}.pack", b.name))
-            .exists(),
-        "a request never evicts the pack it just hydrated"
-    );
-    assert!(
-        !cache_files(&world, older)
-            .join(format!("{}.pack", a.name))
-            .exists()
-    );
+    assert!(cached(older, &a) && cached(newer, &b));
     git(first.dir.path(), &["rev-list", "--count", "HEAD"]);
-    drop(second);
+    drop((first, second));
+
+    // With nothing linked, the next hydration evicts the older pack, never
+    // the one it just linked.
+    ok(fs::remove_dir_all(cache_files(&world, newer)));
+    let again = ok(engine.snapshot(newer).await);
+    assert!(
+        cached(newer, &b),
+        "a request never evicts the pack it just linked"
+    );
+    assert!(!cached(older, &a));
+    drop(again);
+}
+
+#[tokio::test]
+async fn cache_dir_must_be_utf8() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let world = World::new().await;
+    let mut config = world.config();
+    config.cache_dir = world
+        .dir
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"cache-\xff"));
+    let err = Engine::start(world.index.clone(), world.bucket.clone(), config)
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("start accepted a non-UTF-8 cache dir"));
+    assert!(matches!(err, GitError::CacheDirNotUtf8 { .. }), "{err:?}");
+    assert!(err.to_string().contains("UTF-8"));
+}
+
+#[tokio::test]
+async fn lfs_fixture_serves_pointers() {
+    let world = World::new().await;
+    let fx = fixture("lfs", 40);
+    let src = fixture_repo(&fx);
+    let pack = pack_objects(&src, "main", &world.dir.path().join("packs"));
+    let repo = world.repo("org", "weights").await;
+    world
+        .commit(
+            repo,
+            &pack,
+            100,
+            &[set("refs/heads/main", None, rev(&src, "main"))],
+        )
+        .await;
+    let engine = world.engine().await;
+
+    let snap = ok(engine.snapshot(repo).await);
+    let dir = snap.dir.path();
+    assert_eq!(git(dir, &["rev-list", "--count", "HEAD"]).trim(), "40");
+    assert!(git(dir, &["show", "HEAD:.gitattributes"]).contains("filter=lfs"));
+    let pointer = git(dir, &["show", "HEAD:weights/shard-7.safetensors"]);
+    assert!(
+        pointer.starts_with("version https://git-lfs.github.com/spec/v1\noid sha256:"),
+        "{pointer}"
+    );
+    let files = git(dir, &["ls-tree", "-r", "--name-only", "HEAD"]);
+    assert_eq!(
+        files.lines().count(),
+        201,
+        "200 pointers and .gitattributes"
+    );
 }

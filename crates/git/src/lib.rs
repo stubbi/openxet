@@ -8,6 +8,10 @@
 //! git runs as a separate program with a sanitised environment (ADR 0004
 //! items 7 and 8); `git` 2.37 or newer must be on `PATH`. Unix only, like
 //! the hard links and file descriptors it relies on.
+//!
+//! A [`SnapshotRepo`] deletes its directory when dropped, so it must outlive
+//! every git child running in it: keep it alive until the child has exited
+//! and its output is read.
 
 #![forbid(unsafe_code)]
 
@@ -19,7 +23,7 @@ mod store;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use openxet_index::{HubIndex, IndexError, RepoId};
+use openxet_index::{HubIndex, IndexError, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
 pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
@@ -86,6 +90,16 @@ pub enum GitError {
         snapshots: PathBuf,
         /// What the check found.
         reason: String,
+    },
+    /// The cache path isn't UTF-8; it is written into every snapshot's
+    /// config and git's `PATH`.
+    #[error(
+        "git.cache_dir {} is not valid UTF-8; choose a path made of UTF-8 characters",
+        .path.display()
+    )]
+    CacheDirNotUtf8 {
+        /// The path.
+        path: PathBuf,
     },
     /// Another process holds the cache.
     #[error(
@@ -253,9 +267,68 @@ impl Engine {
         refs.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         let midx_gen = snap.packs.iter().filter_map(|p| p.midx_gen).max();
 
+        // Download without the lock, then check again under it: eviction
+        // may have removed a pack in between, and the second pass hydrates
+        // it again (a stat per pack otherwise).
+        let mut downloaded = self.hydrate(repo, &snap.packs, &names, midx_gen).await?;
         let shared = self.cache.read().await;
+        downloaded += self.hydrate(repo, &snap.packs, &names, midx_gen).await?;
+        let layout = Layout {
+            snapshots: self.cache.snapshots(),
+            hooks: self.cache.hooks(),
+            refs: refs.clone(),
+            pack_dir: self.cache.repo_dir(repo),
+            packs: names,
+            midx: midx_gen.map(|g| (self.cache.midx_dir(repo), g)),
+        };
+        let dir = blocking(move || snapshot::build(&layout)).await?;
+        drop(shared);
+
+        // The snapshot is good whatever eviction does; its own packs are
+        // linked now, so eviction can't take them.
+        if downloaded > 0 {
+            match self.evict(self.config.cache_max_bytes).await {
+                Ok(e) if e.deficit_bytes > 0 => tracing::warn!(
+                    deficit_bytes = e.deficit_bytes,
+                    "the Git cache is over git.cache_max_bytes with packs that requests in flight \
+                     hold; it shrinks as they finish. Raise git.cache_max_bytes if this persists"
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "evicting from the Git cache failed"),
+            }
+        }
+        Ok(SnapshotRepo {
+            dir,
+            refs,
+            packs: snap.packs,
+            full_repack_gen: snap.full_repack_gen,
+            process: Arc::clone(&self.process),
+        })
+    }
+
+    /// Evicts cached packs no snapshot links until the cache holds at most
+    /// `max_bytes` (ADR 0004 item 4), and reports what linked packs keep it
+    /// over. [`Engine::snapshot`] does this with `cache_max_bytes` after
+    /// hydrating.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::Io`].
+    pub async fn evict(&self, max_bytes: u64) -> Result<Eviction, GitError> {
+        self.cache.evict(max_bytes).await
+    }
+
+    /// Hydrates `packs` (named `names`) and MIDX generation `midx_gen` of
+    /// `repo`, returning the bytes downloaded.
+    async fn hydrate(
+        &self,
+        repo: RepoId,
+        packs: &[Pack],
+        names: &[PackName],
+        midx_gen: Option<u64>,
+    ) -> Result<u64, GitError> {
         let mut downloaded = 0;
-        for (pack, name) in snap.packs.iter().zip(&names) {
+        for (pack, name) in packs.iter().zip(names) {
             downloaded += self
                 .cache
                 .hydrate_pack(self.bucket.as_ref(), repo, name, pack.created_at)
@@ -267,43 +340,7 @@ impl Engine {
                 .hydrate_midx(self.bucket.as_ref(), repo, generation)
                 .await?;
         }
-        let layout = Layout {
-            snapshots: self.cache.snapshots(),
-            hooks: self.cache.hooks(),
-            refs: refs.clone(),
-            pack_dir: self.cache.repo_dir(repo),
-            packs: names,
-            midx: midx_gen.map(|g| (self.cache.midx_dir(repo), g)),
-        };
-        let layout = Arc::new(layout);
-        let building = Arc::clone(&layout);
-        let dir = blocking(move || snapshot::build(&building)).await?;
-        drop(shared);
-
-        if downloaded > 0 {
-            self.cache
-                .evict(self.config.cache_max_bytes, Some(&layout))
-                .await?;
-        }
-        Ok(SnapshotRepo {
-            dir,
-            refs,
-            packs: snap.packs,
-            full_repack_gen: snap.full_repack_gen,
-            process: Arc::clone(&self.process),
-        })
-    }
-
-    /// Evicts cached packs until the cache holds at most `max_bytes` (ADR
-    /// 0004 item 4). [`Engine::snapshot`] does this with `cache_max_bytes`
-    /// after hydrating, sparing the packs it just linked; requests in flight
-    /// keep their links.
-    ///
-    /// # Errors
-    ///
-    /// [`GitError::Io`].
-    pub async fn evict(&self, max_bytes: u64) -> Result<Eviction, GitError> {
-        self.cache.evict(max_bytes, None).await
+        Ok(downloaded)
     }
 
     async fn capture_v2_advertisement(&self) -> Result<Vec<u8>, GitError> {

@@ -37,10 +37,6 @@ pub const PINNED_CONFIG: &[(&str, &str)] = &[
     ("receive.autogc", "false"),
 ];
 
-/// The system directories on every git child's `PATH`, after the git exec
-/// dir and openxet's hook dir (ADR 0004 item 7).
-const FIXED_PATH: [&str; 2] = ["/usr/bin", "/bin"];
-
 /// What every git child's environment is built from.
 #[derive(Debug)]
 pub(crate) struct ProcessEnv {
@@ -50,20 +46,21 @@ pub(crate) struct ProcessEnv {
 
 impl ProcessEnv {
     /// The environment for asking git about itself, before its exec dir is
-    /// known.
+    /// known: an empty `PATH`, as git is run by its absolute path.
     pub(crate) fn bootstrap(home: &Path) -> Result<Self, GitError> {
         Self::with_dirs(&[], home)
     }
 
-    /// The environment of every git child: `PATH` is the exec dir, the hook
-    /// dir and [`FIXED_PATH`].
+    /// The environment of every git child: `PATH` is exactly the exec dir
+    /// and the hook dir (ADR 0004 item 7). git starts its helpers from the
+    /// exec dir and shell commands with `/bin/sh` by absolute path, so it
+    /// needs no system directory there.
     pub(crate) fn new(exec_dir: &Path, hooks: &Path, home: &Path) -> Result<Self, GitError> {
         Self::with_dirs(&[exec_dir, hooks], home)
     }
 
     fn with_dirs(dirs: &[&Path], home: &Path) -> Result<Self, GitError> {
-        let entries = dirs.iter().copied().chain(FIXED_PATH.iter().map(Path::new));
-        let path = std::env::join_paths(entries).map_err(|_| {
+        let path = std::env::join_paths(dirs).map_err(|_| {
             let bad = dirs
                 .iter()
                 .find(|d| d.as_os_str().as_encoded_bytes().contains(&b':'))
@@ -97,8 +94,8 @@ impl ProcessEnv {
 }
 
 /// A `git` command for `snapshot`, run in its directory with the sanitised
-/// environment of ADR 0004 item 7: `PATH` (the git exec dir, openxet's hook
-/// dir, `/usr/bin`, `/bin`), `HOME` (an empty directory of the cache),
+/// environment of ADR 0004 item 7: `PATH` (the git exec dir and openxet's
+/// hook dir), `HOME` (an empty directory of the cache),
 /// `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, and
 /// `GIT_PROTOCOL=version={protocol}` only for protocol 0, 1 or 2. Nothing
 /// of openxet's own environment reaches git. The caller adds the arguments,

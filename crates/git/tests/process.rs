@@ -157,11 +157,8 @@ async fn child_git_env_sanitised() {
     assert_eq!(ok(fs::read_dir(home)).count(), 0, "HOME is empty");
     let exec_path = common::git(Path::new("/"), &["--exec-path"]);
     let path: Vec<&str> = env["PATH"].split(':').collect();
-    assert_eq!(path[0], exec_path.trim());
-    assert!(
-        path.contains(&cache.join("hooks").to_string_lossy().as_ref()),
-        "{path:?}"
-    );
+    let hooks = cache.join("hooks");
+    assert_eq!(path, [exec_path.trim(), hooks.to_string_lossy().as_ref()]);
 
     // Nothing but a validated version reaches GIT_PROTOCOL.
     for protocol in [None, Some(3), Some(255)] {
