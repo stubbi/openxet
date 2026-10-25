@@ -18,7 +18,10 @@ use axum::body::Body;
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
-use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
+use openxet_auth::{
+    Action, Authenticator, CasGrant, Glob, Mode, Rule, RulesAuthorizer, StaticToken, UrlSigner,
+    UserProfile,
+};
 use openxet_cas::{AppState, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
 use openxet_http::compose;
@@ -153,10 +156,16 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
     ));
 
     let (state, dev_token) = open(&config, public_url.clone()).await?;
+    let authorizer = authorizer(&config);
     let body_deadline = state.cfg.body_deadline;
     let _ = app.set(compose(vec![openxet_cas::mounted(state)], body_deadline));
     let endpoint = public_url.as_str().trim_end_matches('/').to_owned();
-    tracing::info!(%endpoint, dev_mode = dev_token.is_some(), "ready");
+    tracing::info!(
+        %endpoint,
+        dev_mode = dev_token.is_some(),
+        rules = authorizer.rules().len(),
+        "ready"
+    );
     if !*stop.borrow() {
         announce(
             output,
@@ -372,15 +381,12 @@ async fn open(
         (Arc::clone(auth), None)
     } else {
         let token = secret::dev_token(&dir.join("dev-token"))?;
-        let dev = StaticToken {
-            sha256: StaticToken::digest(&token),
-            scope: DEV_SCOPE.to_owned(),
-            mode: Mode::Write,
-            subject: DEV_SUBJECT.to_owned(),
-            tenant: None,
-        };
-        let auth = Authenticator::new(vec![dev], vec![], config.max_token_lifetime)
-            .map_err(|err| CliError::new("config", err.to_string(), "Fix [auth]."))?;
+        let auth = Authenticator::new(
+            vec![dev_static_token(&token)],
+            vec![],
+            config.max_token_lifetime,
+        )
+        .map_err(|err| CliError::new("config", err.to_string(), "Fix [auth]."))?;
         (Arc::new(auth), Some(token))
     };
     let state = AppState::new(
@@ -391,6 +397,43 @@ async fn open(
         config.cas(public_url),
     );
     Ok((state, dev_token))
+}
+
+/// The dev token's entry: a write token for [`DEV_SCOPE`], as in M1, and a
+/// user credential for subject `dev`, whom [`dev_rule`] lets do everything
+/// (ruling M2-R3).
+fn dev_static_token(token: &str) -> StaticToken {
+    StaticToken {
+        sha256: StaticToken::digest(token),
+        subject: DEV_SUBJECT.to_owned(),
+        cas: Some(CasGrant {
+            scope: DEV_SCOPE.to_owned(),
+            mode: Mode::Write,
+            tenant: None,
+        }),
+        user: Some(UserProfile::default()),
+    }
+}
+
+/// Dev mode's one rule (ruling M2-R3): `subjects = ["dev"], repos = ["*"],
+/// actions = ["read", "write", "create"]`.
+fn dev_rule() -> Rule {
+    Rule {
+        subjects: vec![DEV_SUBJECT.to_owned()],
+        claims: std::collections::BTreeMap::new(),
+        repos: vec![Glob::new("*").unwrap_or_else(|_| unreachable!("`*` is a valid glob"))],
+        actions: vec![Action::Read, Action::Write, Action::Create],
+    }
+}
+
+/// The authorizer for user credentials: `[[auth.rules]]`, or in dev mode
+/// (no `[auth]`) [`dev_rule`].
+fn authorizer(config: &Config) -> RulesAuthorizer {
+    if config.auth.is_some() {
+        RulesAuthorizer::new(config.rules.clone())
+    } else {
+        RulesAuthorizer::new(vec![dev_rule()])
+    }
 }
 
 const INDEX_FILE: &str = "index.sqlite";
@@ -519,5 +562,88 @@ fn announce(output: Output, config: &Config, endpoint: &str, dev_token: Option<&
     };
     if let Err(err) = output.emit(&ready).and_then(|()| io::stdout().flush()) {
         tracing::warn!(error = %err, "could not print the ready line on stdout");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use openxet_auth::{Authorizer as _, Credential, Target};
+
+    use super::*;
+
+    /// The dev token keeps M1's write scope `default` and is also the user
+    /// `dev`, whom dev mode's rule lets read, write and create everywhere
+    /// (ruling M2-R3).
+    #[tokio::test]
+    async fn dev_token_is_both() {
+        let token = "oxt_dev_unit";
+        let auth = Authenticator::new(
+            vec![dev_static_token(token)],
+            vec![],
+            Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+        )
+        .unwrap();
+        let Credential::Both(principal, user) = auth.authenticate(token, 0).unwrap() else {
+            panic!("the dev token must be both credentials");
+        };
+        assert_eq!(
+            (
+                principal.scope.as_str(),
+                principal.mode,
+                principal.subject.as_str()
+            ),
+            (DEV_SCOPE, Mode::Write, DEV_SUBJECT)
+        );
+        assert_eq!((user.subject.as_str(), user.name.as_str()), ("dev", "dev"));
+
+        let config = crate::config::load(None, Vec::new(), &crate::config::Overrides::default())
+            .config
+            .unwrap();
+        let authz = authorizer(&config);
+        assert_eq!(authz.rules(), [dev_rule()]);
+        for (action, target) in [
+            (
+                Action::Read,
+                Target {
+                    namespace: "any",
+                    name: Some("repo"),
+                },
+            ),
+            (
+                Action::Write,
+                Target {
+                    namespace: "any",
+                    name: Some("repo"),
+                },
+            ),
+            (
+                Action::Create,
+                Target {
+                    namespace: "any",
+                    name: None,
+                },
+            ),
+        ] {
+            assert!(
+                authz.allows(&user, action, target).await.unwrap(),
+                "{action:?}"
+            );
+        }
+        let stranger = openxet_auth::UserPrincipal::anonymous();
+        assert!(
+            !authz
+                .allows(
+                    &stranger,
+                    Action::Read,
+                    Target {
+                        namespace: "a",
+                        name: Some("b")
+                    }
+                )
+                .await
+                .unwrap()
+        );
     }
 }

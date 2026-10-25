@@ -725,16 +725,19 @@ mod tests {
         // that leaves, and so does the body it holds, so its share of the
         // memory budget goes back only when the work ends.
         use axum::http::header::AUTHORIZATION;
-        use openxet_auth::{Mode, StaticToken};
+        use openxet_auth::{CasGrant, Mode, StaticToken};
         use tower::ServiceExt as _;
 
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest("oxt_unit_write"),
-            scope: "s".to_owned(),
-            mode: Mode::Write,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Write,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.validate = Arc::new(Semaphore::new(1));
@@ -775,16 +778,19 @@ mod tests {
         // client leaves, but its shard's put can't be cancelled; the commit
         // permit and the body's budget share stay taken until it ends.
         use axum::http::header::AUTHORIZATION;
-        use openxet_auth::{Mode, StaticToken};
+        use openxet_auth::{CasGrant, Mode, StaticToken};
         use tower::ServiceExt as _;
 
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest("oxt_unit_write"),
-            scope: "s".to_owned(),
-            mode: Mode::Write,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Write,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.commit = Arc::new(Semaphore::new(2));

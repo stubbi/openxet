@@ -286,7 +286,7 @@ mod tests {
     use axum::body::{Body, HttpBody as _, to_bytes};
     use axum::http::header::{AUTHORIZATION, CONNECTION};
     use http_body_util::{BodyExt as _, Full};
-    use openxet_auth::{Mode, StaticToken};
+    use openxet_auth::{CasGrant, Mode, StaticToken};
     use tower::ServiceExt as _;
 
     use super::*;
@@ -304,10 +304,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(WRITE),
-            scope: "s".to_owned(),
-            mode: Mode::Write,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Write,
+                tenant: None,
+            }),
+            user: None,
         };
         let app = router(test_support::state(dir.path(), vec![token]).await);
         let body = Full::new(Bytes::from(vec![
@@ -340,10 +343,13 @@ mod tests {
     fn write_token() -> StaticToken {
         StaticToken {
             sha256: StaticToken::digest(WRITE),
-            scope: "s".to_owned(),
-            mode: Mode::Write,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Write,
+                tenant: None,
+            }),
+            user: None,
         }
     }
 

@@ -31,7 +31,9 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use futures_core::stream::BoxStream;
-use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
+use openxet_auth::{
+    Authenticator, CasGrant, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair,
+};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, mounted};
 use openxet_http::compose;
 use openxet_index::{
@@ -624,10 +626,13 @@ fn new_token() -> String {
 fn static_token(token: &str, scope: &str, mode: Mode) -> StaticToken {
     StaticToken {
         sha256: StaticToken::digest(token),
-        scope: scope.to_owned(),
-        mode,
         subject: format!("test-{scope}-{mode:?}"),
-        tenant: None,
+        cas: Some(CasGrant {
+            scope: scope.to_owned(),
+            mode,
+            tenant: None,
+        }),
+        user: None,
     }
 }
 

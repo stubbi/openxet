@@ -1,13 +1,14 @@
 [package]
 name = "openxet-auth"
 version = "0.0.0"
-description = "openxet's authentication: static tokens, EdDSA CAS tokens and range-bound signed URLs"
+description = "openxet's authentication and authorization: static tokens, EdDSA CAS tokens, signed URLs and capabilities, and the rules authorizer"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait = "0.1.92"
 base64 = "0.23.1"
 # Only for its `zeroize` feature, which ed25519-dalek doesn't enable: it
 # wipes `KeypairBytes` on drop and the PKCS#8 encoder's copy of the seed.
@@ -28,6 +29,7 @@ zeroize = "1.9.1"
 [dev-dependencies]
 curve25519-dalek = "5.0.0"
 serde_urlencoded = "0.7.1"
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

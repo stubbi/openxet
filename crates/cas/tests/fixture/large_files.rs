@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::header::{AUTHORIZATION, RANGE};
-use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
+use openxet_auth::{Authenticator, CasGrant, Mode, StaticToken, UrlSigner};
 use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, mounted};
 use openxet_http::compose;
 use openxet_index::{
@@ -149,10 +149,13 @@ fn shaped(shape: Shape, terms: u32) -> FileRecord {
 fn state(dir: &Path, index: SqliteIndex) -> AppState {
     let token = StaticToken {
         sha256: StaticToken::digest(READ),
-        scope: SCOPE.to_owned(),
-        mode: Mode::Read,
         subject: "large-files".to_owned(),
-        tenant: None,
+        cas: Some(CasGrant {
+            scope: SCOPE.to_owned(),
+            mode: Mode::Read,
+            tenant: None,
+        }),
+        user: None,
     };
     AppState::new(
         Arc::new(index),

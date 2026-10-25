@@ -226,7 +226,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::header::AUTHORIZATION;
     use axum::http::{Request, StatusCode};
-    use openxet_auth::{Mode, StaticToken};
+    use openxet_auth::{CasGrant, Mode, StaticToken};
     use openxet_index::ChunkTable;
     use openxet_protocol::{chunk_hash, is_dedup_eligible, xorb_with_footer};
     use tokio::sync::Semaphore;
@@ -259,10 +259,13 @@ mod tests {
     fn token(secret: &str, mode: Mode) -> StaticToken {
         StaticToken {
             sha256: StaticToken::digest(secret),
-            scope: "s".to_owned(),
-            mode,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode,
+                tenant: None,
+            }),
+            user: None,
         }
     }
 

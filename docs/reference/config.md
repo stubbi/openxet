@@ -159,10 +159,12 @@ configure at least one credential.
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
 | `static_tokens` | none | an array of tables | Long-lived tokens, by hash. See [Static tokens](#static-tokens). |
+| `rules` | none | an array of tables | What user credentials may do per repository. See [Rules](#rules). |
 | `jwt_public_keys` | none | an array of strings | Ed25519 public keys trusted to sign CAS tokens: a file path, or the PEM itself. See [CAS tokens](#cas-tokens). |
 | `max_token_lifetime` | `24h` | `1m` to `30d` | A CAS token whose `exp` lies further ahead than this is refused. |
 
-Every request needs a credential: there are no anonymous reads. The two
+Every request needs a credential: there are no anonymous reads unless a
+[rule](#rules) for `anonymous` grants them on a repository. The other
 exceptions are the probes, `GET /healthz` and `GET /readyz`, which answer
 a fixed body that says nothing about stored data.
 
@@ -172,7 +174,9 @@ Without a configuration file, or with one that has no `[auth]` section,
 `openxet serve` creates in `data_dir`, on first start:
 
 - `index.sqlite` and `bucket/`, the data (see [Keys and tokens on disk](#keys-and-tokens-on-disk) for modes)
-- `dev-token` (mode `0600`): one static write token for scope `default`
+- `dev-token` (mode `0600`): one static write token for scope `default`,
+  which is also the user `dev`; dev mode's one [rule](#rules) lets `dev`
+  read, write and create every repository
 - `transfer.key` (mode `0600`)
 
 It reuses all of them on every later start, so data, the token and transfer
@@ -244,26 +248,96 @@ scanners find a token committed by accident; this repository's own scan
 ## Static tokens
 
 A static token is configured by the SHA-256 of its UTF-8 bytes, never by
-the token itself:
+the token itself. It is a CAS credential, a user credential, or both
+(ADR 0012):
 
 ```toml
 [[auth.static_tokens]]
 sha256 = "<64 lowercase hex characters>"
-scope = "ci"
-mode = "write"      # or "read"
 subject = "ci-bot"  # who the token acts for
+scope = "ci"        # a CAS credential for this scope
+mode = "write"      # or "read"; required with scope
 tenant = "ci"       # optional; `scope:` and the scope when left out
+
+[[auth.static_tokens]]
+sha256 = "<64 lowercase hex characters>"
+subject = "alice"                      # no scope: a user credential
+name = "Alice Martin"                  # optional; whoami's name, the subject when left out
+email = "alice@example.com"            # optional; the author of her Hub commits
+claims = { orgs = ["acme"], groups = ["ml-team"] }  # optional; string lists that rules match
 ```
 
+- **CAS credential:** a token with `scope` may use the CAS routes within
+  that scope, as `mode` allows: `write` may upload; `read` may download
+  and query. `tenant` names the [tenant](#tenants) the scope belongs to.
+- **User credential:** a token without `scope` acts for its subject on
+  the Hub API, Git and LFS routes, where [rules](#rules) decide what it
+  may do per repository. It gets CAS access per repository from the Hub's
+  token routes, as `huggingface_hub` and `git-xet` do; presented to a CAS
+  route itself it answers `403 insufficient_scope`. `mode` and `tenant`
+  are then refused, since there is no scope for them to apply to.
+- **Both:** a token with `scope` and any of `name`, `email` or `claims` is
+  both credentials, for the same subject. The dev token is one.
+
 `openxet token generate --scope ci --mode write --subject ci-bot` prints a
-new token and this entry. Give each token its own `subject`, so the audit
+new CAS token and its entry; for a user token, leave out `scope` and `mode`
+from that entry. Give each token its own `subject`, so the audit
 log tells them apart. A presented token is hashed and compared against
 every configured hash in constant time. `scope` and `subject` must not be
 empty or contain control characters, and `scope` is at most 1024 bytes.
-`tenant` names the [tenant](#tenants) the scope belongs to. It follows the
-same rules as `scope` and may not start with `scope:`; without it the
-tenant is `scope:` and the scope.
-`write` may upload; `read` may download and query.
+A scope may not start with `repo:`, a prefix reserved for repositories;
+pick another scope. The subject of a user credential may not be
+`anonymous`, which names requests without a credential. `name`, `email`,
+claim names and claim values may not contain control characters.
+`tenant` follows the same rules as `scope` and may not start with
+`scope:`; without it the tenant is `scope:` and the scope.
+
+## Rules
+
+Rules decide what a user credential may do on the Hub API, Git and LFS
+routes: `read` a repository, `write` it (commit, push, change refs and
+labels; `write` includes `read`), or `create` repositories in a namespace.
+CAS routes don't consult them: a CAS credential's scope and mode decide
+there.
+
+```toml
+[[auth.rules]]
+subjects = ["alice"]            # these subjects
+claims = { groups = ["ml-team"] }  # or anyone holding one of these values under that claim
+repos = ["acme/*"]              # these repositories
+actions = ["read", "write", "create"]
+
+[[auth.rules]]
+subjects = ["anonymous"]        # everyone, with or without a credential
+repos = ["acme/public-model"]
+actions = ["read"]
+```
+
+- A request is allowed when any rule applies to the caller, covers the
+  repository and lists the action; with no such rule it is denied. Rules
+  only grant: their order doesn't matter and there is no deny rule.
+- A rule applies to a caller whose subject is in `subjects`, or who holds,
+  under any claim name in `claims`, any of the values listed for it. It
+  needs at least one subject or claim value. Subjects match exactly; `*`
+  is not a wildcard there.
+- `repos` are patterns: `*` alone covers every repository, and
+  `{namespace}/{name}` with `*` inside a part matches any characters
+  except `/`, so `acme/*` covers every repository in `acme`, `acme/llama-*`
+  the ones whose names start with `llama-`, and `a*/x` the repository `x`
+  in every namespace starting with `a`. `**` is refused. Matching ignores
+  ASCII case, as repository names do.
+- `create` on `acme/*` (or `*`) allows creating repositories in the
+  namespace `acme`. Creation is decided per namespace, before the name is
+  looked at, so a pattern such as `acme/llama-*` never grants it.
+- `anonymous` is the subject of a request without a credential. A rule
+  naming it applies to everyone, so a repository it makes readable is
+  readable with any credential too. No rule names it unless you add one.
+- A repository the caller may not read answers exactly as one that
+  doesn't exist.
+
+Without `[auth]`, in [dev mode](#dev-mode), the one rule is
+`subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`.
+With `[auth]` and no rules, user credentials may do nothing.
 
 ## CAS tokens
 
@@ -439,4 +513,14 @@ sha256 = "<from openxet token generate>"
 scope = "ci"
 mode = "write"
 subject = "ci-bot"
+
+[[auth.static_tokens]]
+sha256 = "<from openxet token generate>"
+subject = "alice"
+claims = { groups = ["ml-team"] }
+
+[[auth.rules]]
+claims = { groups = ["ml-team"] }
+repos = ["acme/*"]
+actions = ["read", "write", "create"]
 ```
