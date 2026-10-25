@@ -19,6 +19,7 @@ use openxet_auth::{
     StaticToken, UrlSigner, UserProfile,
 };
 use openxet_cas::{BodyDeadline, CasConfig, MemoryBudget};
+use openxet_git::{Budget, GitConfig};
 use openxet_hub::HubConfig;
 use openxet_index::Visibility;
 use serde::Serialize;
@@ -160,6 +161,9 @@ pub struct Config {
     pub max_commit_bytes: u64,
     pub token_ttl: Duration,
     pub page_size: usize,
+    /// `[git]` and `hub.commit_wait`: the Git engine's settings, its cache
+    /// under `data_dir` by default (ruling M2-R16).
+    pub git: GitConfig,
 }
 
 impl Config {
@@ -263,6 +267,21 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("max_commit_bytes", Kind::Str),
             ("token_ttl", Kind::Str),
             ("page_size", Kind::Int),
+            ("commit_wait", Kind::Str),
+        ],
+    ),
+    (
+        "git",
+        &[
+            ("cache_dir", Kind::Str),
+            ("cache_max_bytes", Kind::Str),
+            ("max_plain_blob_bytes", Kind::Str),
+            ("reachability.max_commits", Kind::Int),
+            ("reachability.max_ms", Kind::Int),
+            ("reachability.max_concurrent_per_repo", Kind::Int),
+            ("reachability.max_concurrent_per_principal", Kind::Int),
+            ("thin_bases.max_objects", Kind::Int),
+            ("thin_bases.max_ms", Kind::Int),
         ],
     ),
 ];
@@ -368,9 +387,13 @@ impl Raw {
         let hint = match key.split_once('.') {
             Some((section, _)) => match keys_of(section) {
                 Some(keys) => format!("The keys of [{section}] are: {keys}. {DOCS}"),
-                None => format!("The sections are [server], [cas], [auth] and [hub]. {DOCS}"),
+                None => {
+                    format!("The sections are [server], [cas], [auth], [hub] and [git]. {DOCS}")
+                }
             },
-            None => format!("Put keys in a [server], [cas], [auth] or [hub] section. {DOCS}"),
+            None => {
+                format!("Put keys in a [server], [cas], [auth], [hub] or [git] section. {DOCS}")
+            }
         };
         self.problem(key, None, source, "is not a configuration key", hint);
     }
@@ -422,12 +445,26 @@ impl Raw {
             }
             for (name, value) in keys {
                 let key = format!("{section}.{name}");
-                if kind_of(&key).is_some() {
-                    self.values.insert(key, (value, source.clone()));
-                } else {
-                    self.unknown(&key, &source);
+                match value {
+                    // A subsection such as `[git.reachability]`: its keys
+                    // are `git.reachability.max_commits` and so on.
+                    toml::Value::Table(inner) if kind_of(&key).is_none() => {
+                        for (name, value) in inner {
+                            self.insert(format!("{key}.{name}"), value, &source);
+                        }
+                    }
+                    value => self.insert(key, value, &source),
                 }
             }
+        }
+    }
+
+    /// Records `key`'s `value`, or `key` as unknown.
+    fn insert(&mut self, key: String, value: toml::Value, source: &Source) {
+        if kind_of(&key).is_some() {
+            self.values.insert(key, (value, source.clone()));
+        } else {
+            self.unknown(&key, source);
         }
     }
 
@@ -443,7 +480,13 @@ impl Raw {
             let Some((section, key)) = name[ENV_PREFIX.len()..].split_once("__") else {
                 continue;
             };
-            let key = format!("{}.{}", section.to_lowercase(), key.to_lowercase());
+            // `__` also separates a subsection's key:
+            // `OPENXET_GIT__REACHABILITY__MAX_MS` is `git.reachability.max_ms`.
+            let key = format!(
+                "{}.{}",
+                section.to_lowercase(),
+                key.to_lowercase().replace("__", ".")
+            );
             let Some(kind) = kind_of(&key) else {
                 self.unknown(&key, &source);
                 continue;
@@ -853,6 +896,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         (None, Some(Vec::new()))
     };
     let hub = hub(c, max_token_lifetime)?;
+    let git = git(c, data_dir.as_deref());
 
     Some(Config {
         bind: bind?,
@@ -880,6 +924,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         max_commit_bytes: hub.max_commit_bytes,
         token_ttl: hub.token_ttl,
         page_size: hub.page_size,
+        git: git?,
     })
 }
 
@@ -987,6 +1032,147 @@ fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub>
         token_ttl: token_ttl?,
         page_size: usize::try_from(page_size?).ok()?,
     })
+}
+
+/// `[git]` and `hub.commit_wait`, every key checked; `None` if any has a
+/// problem (ruling M2-R16, ADR 0004 items 2 and 3). The cache defaults to
+/// `{data_dir}/git-cache`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one block per key, in documentation order, reads best whole"
+)]
+fn git(c: &mut Checker<'_>, data_dir: Option<&Path>) -> Option<GitConfig> {
+    const KEY: &str = "git.cache_dir";
+    let cache_dir = match c.raw.string(KEY) {
+        Some((text, source)) if !text.is_empty() => {
+            c.set(KEY, &text, &source);
+            Some(PathBuf::from(text))
+        }
+        Some((_, source)) => {
+            c.raw.problem(
+                KEY,
+                Some(String::new()),
+                &source,
+                "must be a directory path",
+                "Leave it out to keep the Git cache in the data directory.",
+            );
+            None
+        }
+        None if c.raw.values.contains_key(KEY) => None,
+        None => data_dir.map(|dir| {
+            let path = dir.join("git-cache");
+            c.set(KEY, path.display().to_string(), &Source::Default);
+            path
+        }),
+    };
+    let cache_max_bytes = c.size(
+        "git.cache_max_bytes",
+        openxet_git::DEFAULT_CACHE_MAX_BYTES,
+        (1 << 30, 1 << 50),
+        "The node's Git pack cache is evicted down to this size; packs are hydrated from the \
+         bucket again on demand. 20GiB is the default.",
+    );
+    let max_plain_blob_bytes = if c.raw.values.contains_key("git.max_plain_blob_bytes") {
+        c.size(
+            "git.max_plain_blob_bytes",
+            0,
+            (1 << 10, 1 << 40),
+            "A pushed blob larger than this that is not an LFS pointer is refused, naming `git \
+             lfs track`; leave it out to accept any size and only report large ones.",
+        )
+        .map(Some)
+    } else {
+        c.set("git.max_plain_blob_bytes", "unset", &Source::Default);
+        Some(None)
+    };
+    let reach = Budget::REACHABILITY;
+    let thin = Budget::THIN_BASES;
+    let max_commits = budget_int(
+        c,
+        "git.reachability.max_commits",
+        reach.max_objects,
+        "The most commits one request's reachability check (R22) may walk; a request needing \
+         more is refused, retryably. 200000 is the default.",
+    );
+    let reach_ms = budget_int(
+        c,
+        "git.reachability.max_ms",
+        millis(reach.max_time),
+        "The most milliseconds one request's reachability check may take. 2000 is the default.",
+    );
+    let per_repo = budget_int(
+        c,
+        "git.reachability.max_concurrent_per_repo",
+        count(reach.max_concurrent_per_repo),
+        "The most reachability checks that may run at once in one repository; more are refused \
+         as retryable. 2 is the default.",
+    );
+    let per_principal = budget_int(
+        c,
+        "git.reachability.max_concurrent_per_principal",
+        count(reach.max_concurrent_per_principal),
+        "The most reachability checks one caller may run at once. 4 is the default.",
+    );
+    let thin_objects = budget_int(
+        c,
+        "git.thin_bases.max_objects",
+        thin.max_objects,
+        "The most objects a push's thin-base check may visit. 2000000 is the default.",
+    );
+    let thin_ms = budget_int(
+        c,
+        "git.thin_bases.max_ms",
+        millis(thin.max_time),
+        "The most milliseconds a push's thin-base check may take. 2000 is the default.",
+    );
+    let commit_wait = c.duration(
+        "hub.commit_wait",
+        openxet_git::DEFAULT_HUB_COMMIT_WAIT,
+        (SECOND, Duration::from_mins(10)),
+        "How long a Hub commit waits for the commits to its branch already running on this \
+         node before it is refused as retryable. 30s is the default.",
+    );
+    let mut git = GitConfig::new(cache_dir?);
+    git.cache_max_bytes = cache_max_bytes?;
+    git.max_plain_blob_bytes = max_plain_blob_bytes?;
+    git.reachability = Budget {
+        max_objects: max_commits?,
+        max_time: Duration::from_millis(reach_ms?),
+        max_concurrent_per_repo: Some(usize::try_from(per_repo?).ok()?),
+        max_concurrent_per_principal: Some(usize::try_from(per_principal?).ok()?),
+    };
+    git.thin_bases = Budget {
+        max_objects: thin_objects?,
+        max_time: Duration::from_millis(thin_ms?),
+        ..thin
+    };
+    git.hub_commit_wait = commit_wait?;
+    Some(git)
+}
+
+/// A default concurrency limit as a budget value; ADR 0004's defaults set
+/// both.
+fn count(limit: Option<usize>) -> u64 {
+    limit.map_or(u64::MAX, |n| u64::try_from(n).unwrap_or(u64::MAX))
+}
+
+/// `d` in whole milliseconds.
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// A positive whole-number budget at `key`, `default` if unset.
+fn budget_int(c: &mut Checker<'_>, key: &str, default: u64, hint: &str) -> Option<u64> {
+    let default = u32::try_from(default).unwrap_or(u32::MAX);
+    int(
+        c,
+        key,
+        default,
+        1..=u32::MAX,
+        "must be a whole number from 1",
+        hint,
+    )
+    .map(u64::from)
 }
 
 /// An optional origin URL at `key`, checked as `server.public_url` is:
