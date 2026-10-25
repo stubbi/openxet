@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenXet — Git for large files, open-source Xet storage</title>
+  <title>OpenXet: Git for large files, open-source Xet storage</title>
   <meta name="description" content="Git for large files: only the changes upload. OpenXet is open-source Xet storage for repositories and buckets, where git push and hf upload send only new chunks. Run it yourself or on openxet.com.">
   <link rel="canonical" href="https://openxet.com/">
   <meta name="color-scheme" content="light dark">
@@ -16,7 +16,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="OpenXet">
   <meta property="og:url" content="https://openxet.com/">
-  <meta property="og:title" content="OpenXet — Git for large files. Only the changes upload.">
+  <meta property="og:title" content="OpenXet. Git for large files. Only the changes upload.">
   <meta property="og:description" content="Open-source Xet storage for repositories and buckets. git push and hf upload send only the chunks your server doesn’t have. Run it yourself or on openxet.com.">
   <meta property="og:image" content="https://openxet.com/og.png">
   <meta property="og:image:width" content="1200">
@@ -84,12 +84,12 @@
       <span class="anchor-alias" id="compatibility" aria-hidden="true"></span>
       <div class="row-copy">
         <p class="pill">Repositories</p>
-        <h2 id="repos-title">Your Git workflow, your storage.</h2>
-        <p>Host Git and Hugging Face repositories on OpenXet, or keep your code on GitHub, GitLab or Gitea and its large files here. Hugging Face’s own tools work unchanged; OpenXet is independent of Hugging Face.</p>
+        <h2 id="repos-title">Git and Hugging Face repositories on your server.</h2>
+        <p>Host repositories on OpenXet, or keep the code on GitHub, GitLab or Gitea and put the large files here. Hugging Face’s own tools work without changes. OpenXet is an independent project, not part of Hugging Face.</p>
         <ul class="checks">
           <li><code>git clone</code>, <code>git push</code> and <code>git-xet</code> against OpenXet or your existing Git host</li>
           <li><code>hf upload</code>, <code>hf download</code> and <code>huggingface_hub</code>, pointed at your server</li>
-          <li>Generic labels: <code>model</code> and <code>dataset</code> are just labels, and you add your own</li>
+          <li><code>model</code> and <code>dataset</code> are labels like any other, and you can add your own</li>
         </ul>
       </div>
       <div class="row-visual">
@@ -112,11 +112,11 @@
       <span class="anchor-alias" id="dedup" aria-hidden="true"></span>
       <div class="row-copy">
         <p class="pill">Xet</p>
-        <h2 id="how-title">An edit costs the edit, not the file.</h2>
+        <h2 id="how-title">A 1&nbsp;MiB edit uploads about 1&nbsp;MiB.</h2>
         <p>Xet cuts each file into chunks of about 64&nbsp;KiB, at boundaries set by the content. Before an upload, the client asks your server which chunks it already has and sends only the rest.</p>
         <ul class="checks">
           <li>Boundaries follow the content, so an edit only disturbs the chunks around it</li>
-          <li>Chunks match against every file on the server, not just the last version</li>
+          <li>Chunks match against every file on the server, older versions included</li>
           <li>Downloads put the chunks back together into the whole file, byte for byte</li>
         </ul>
       </div>
@@ -153,12 +153,11 @@
     <section class="row hue-green" id="use-cases" aria-labelledby="use-title">
       <div class="row-copy">
         <p class="pill">Use cases</p>
-        <h2 id="use-title">What your files actually share.</h2>
-        <p>Deduplication pays where versions share content, and only there. These are measured pairs of real files, models, data, source and archives alike: how much of each new version was new.</p>
+        <h2 id="use-title">How much real files share between versions.</h2>
+        <p>Deduplication only helps when one version repeats content from the last. We measured pairs of real files (a log, a table, a source release and a model checkpoint) and counted how much of each new version was new.</p>
         <ul class="checks">
           <li>Appended logs and growing tables reuse most of the last version</li>
-          <li>A source tree’s next release still shares a good part of its archive</li>
-          <li>Compressed, encrypted or fully retrained files share almost nothing, and we say so</li>
+          <li>Compressed, encrypted or fully retrained files share almost nothing</li>
         </ul>
       </div>
       <div class="row-visual">
@@ -179,11 +178,10 @@
       <div class="row-copy">
         <p class="pill">Buckets</p>
         <h2 id="buckets-title">Buckets for what isn’t versioned.</h2>
-        <p>Checkpoints, logs and agent outputs change too often for commits. Put them in a bucket: mutable keys, the same deduplication, and no Git history to carry.</p>
+        <p>Checkpoints, logs and agent outputs change too often to commit. A bucket stores them under keys you can overwrite, with the same deduplication and no Git history.</p>
         <ul class="checks">
-          <li>Mutable keys, last writer wins, with optional object versioning</li>
-          <li>The same chunk-level deduplication as repositories</li>
-          <li>Labels like <code>checkpoint</code> and <code>eval-logs</code> on buckets and repositories alike</li>
+          <li>The last write to a key wins; object versioning is optional</li>
+          <li>Buckets take labels such as <code>checkpoint</code> and <code>eval-logs</code>, as repositories do</li>
         </ul>
       </div>
       <div class="row-visual">
@@ -209,12 +207,12 @@
     <section class="row hue-slate" id="self-hosting" aria-labelledby="infra-title">
       <div class="row-copy">
         <p class="pill">Self-hosting</p>
-        <h2 id="infra-title">Your cloud, your identity.</h2>
-        <p>One binary on the storage and sign-in you already run. Nodes keep no state, so you scale by adding them, and your object-store bucket stays the source of truth.</p>
+        <h2 id="infra-title">Runs on the storage and sign-in you already have.</h2>
+        <p>OpenXet is one binary. Nodes keep no state, so you scale by adding more of them, and the object store holds every byte; the index can be rebuilt from it.</p>
         <ul class="checks">
-          <li>S3, GCS, Azure, MinIO or local disk, with Postgres or SQLite as a rebuildable index</li>
+          <li>S3, GCS, Azure, MinIO or local disk, with Postgres or SQLite for the index</li>
           <li>Sign-in through your OIDC provider or webhook; OpenXet never owns users</li>
-          <li>Audit log, data residency and full export: leave whenever you like</li>
+          <li>An audit log, data residency and a full export, so you can leave at any time</li>
         </ul>
       </div>
       <div class="row-visual">
@@ -232,10 +230,10 @@
       <span class="anchor-alias" id="integrate" aria-hidden="true"></span>
       <div class="row-copy">
         <p class="pill">Platforms</p>
-        <h2 id="platforms-title">Storage inside your product.</h2>
-        <p>Embed OpenXet under your own names, permissions and interface. Your users never see it; your product decides who may read and write.</p>
+        <h2 id="platforms-title">Embed it in your own product.</h2>
+        <p>Platforms run OpenXet behind their own names and interface. Your users talk to your product, and your product decides who may read and write.</p>
         <ul class="checks">
-          <li>Your permissions, enforced through the authorizer webhook</li>
+          <li>OpenXet asks your authorizer webhook before each read or write</li>
           <li>Scoped, signed tokens per user, repository or bucket</li>
           <li>Per-tenant metering for your own billing</li>
         </ul>
@@ -254,12 +252,12 @@
       <span class="anchor-alias" id="roadmap" aria-hidden="true"></span>
       <div class="row-copy">
         <p class="pill">Agents</p>
-        <h2 id="agents-title">Your agent can drive it too.</h2>
-        <p>Every command speaks JSON, every error names the next step, and an MCP server exposes the same operations. Agents act with tokens narrower than yours.</p>
+        <h2 id="agents-title">Scripts and agents use the same commands.</h2>
+        <p>Add <code>--json</code> to any command for one object with a versioned schema. Errors carry a code and a hint, and <code>openxet mcp</code> serves the same operations to MCP clients.</p>
         <ul class="checks">
-          <li><code>openxet mcp</code>, and <code>--json</code> with versioned schemas on every command</li>
+          <li>Stable exit codes, documented per error code</li>
           <li>Delegated tokens narrower than yours; approval gates for destructive actions</li>
-          <li>Every action audited as agent on behalf of a person</li>
+          <li>The audit log records an agent’s actions under the person it acts for</li>
         </ul>
       </div>
       <div class="row-visual">
@@ -281,12 +279,12 @@
     <section class="security-band" id="security" aria-labelledby="security-title">
       <span class="anchor-alias" id="review" aria-hidden="true"></span>
       <div class="security-head">
-        <h2 id="security-title">Security you can check, test by test.</h2>
-        <p>Each requirement has a named test that runs in CI. No telemetry unless the operator opts in.</p>
+        <h2 id="security-title">Each security requirement has a named test.</h2>
+        <p>The tests run in CI on every change. There is no telemetry unless the operator turns it on.</p>
       </div>
       <ul class="security-cells">
         <li><h3>Verified before stored</h3><p>Uploads are checked against stored chunks before any file is registered.</p><a class="test-chip" href="/docs/reference/security-tests.html">shard_with_<wbr>missing_<wbr>xorb_<wbr>rejected</a></li>
-        <li><h3>Dedup without leaks</h3><p>Answers are HMAC-keyed, never raw hashes; tenants can be isolated.</p><a class="test-chip" href="/docs/reference/security-tests.html">dedup_<wbr>response_<wbr>hmac_<wbr>keyed</a></li>
+        <li><h3>Keyed dedup answers</h3><p>Answers are HMAC-keyed, never raw hashes; tenants can be isolated.</p><a class="test-chip" href="/docs/reference/security-tests.html">dedup_<wbr>response_<wbr>hmac_<wbr>keyed</a></li>
         <li><h3>No anonymous reads</h3><p>Every transfer URL is signed for one byte range and one scope.</p><a class="test-chip" href="/docs/reference/security-tests.html">signed_<wbr>url_<wbr>bound_<wbr>to_<wbr>range</a></li>
         <li><h3>Writes survive a crash</h3><p>An acknowledged upload is still there after the server is killed.</p><a class="test-chip" href="/docs/reference/security-tests.html">acked_<wbr>write_<wbr>survives_<wbr>sigkill</a></li>
       </ul>
@@ -295,12 +293,12 @@
     <section class="get-started" id="get-started" aria-labelledby="final-title">
       <div class="get-started-head">
         <h2 id="final-title">Get started with OpenXet</h2>
-        <p>Run it yourself, use it on openxet.com, or build it into your product.</p>
+        <p>Three ways to start.</p>
       </div>
       <ul class="start-tiles">
         <li><a href="/docs/quickstart-storage-only.html"><span class="tile-icon" aria-hidden="true">›_</span><strong>Run it yourself</strong><span>Build from source, upload with <code>hf_xet</code>, download and compare. 1 min 43 s, measured.</span><em>Quickstart →</em></a></li>
         <li><a href="/waitlist/"><span class="tile-icon" aria-hidden="true">☁</span><strong>OpenXet Cloud</strong><span>The released open-source build, run for you on openxet.com.</span><em>Start on openxet.com ↗</em></a></li>
-        <li><a href="/docs/reference/config.html#cas-tokens"><span class="tile-icon" aria-hidden="true">⧉</span><strong>Build it into your platform</strong><span>Your names and permissions: sign scoped tokens for your users and call the storage API.</span><em>Platform tokens →</em></a></li>
+        <li><a href="/docs/reference/config.html#cas-tokens"><span class="tile-icon" aria-hidden="true">⧉</span><strong>Build it into your platform</strong><span>Sign scoped tokens for your users and call the storage API. Names and permissions stay yours.</span><em>Platform tokens →</em></a></li>
       </ul>
     </section>
   </main>

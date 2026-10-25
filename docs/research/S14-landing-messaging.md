@@ -41,7 +41,7 @@ Chromium with the page's fonts.
 | **Git for large files. Only the changes upload.** | 2 lines | 3 lines | **Picked.** The analogy says what it is; the second half is the contrast with Git LFS, which answers “why not LFS?” before it's asked |
 | Git for large files and datasets. Only the changes upload. | 2 lines | 4 lines | Fails the 2-line test at 375 px and tilts the page back to ML. “Datasets” moved to the subhead |
 | Git for big files and datasets. Only the changes upload. | 2 lines | 4 lines | Same |
-| Git for large files and big datasets. (no second line) | – | – | Pure analogy: reads as a Git LFS host, the confusion the contrast avoids |
+| Git for large files and big datasets. (no second line) | not measured | not measured | Pure analogy: reads as a Git LFS host, the confusion the contrast avoids |
 
 Pill: **OpenXet · open source · Apache 2.0** (the brand is in the first
 screen; HF keeps its name in the H1, a new name can't do that job).
@@ -92,7 +92,7 @@ frame about 1.2:1, borders about 1.4:1 against panels).
 
 1. Proof strip off the first screen: now its bottom edge.
 2. Four numbers: one fixture (above).
-3. Rows centred, so pills floated 81–125 px below hairlines: both cells
+3. Rows centred, so pills floated 81 to 125 px below hairlines: both cells
    share one top padding; every pill sits 56 px below its hairline at 1440 px.
 4. Dark panels invisible, inverted elevation: new panel and card tokens.
 5. and 6. Hero terminal and the python line: removed.
@@ -331,7 +331,7 @@ Observations describe the pages, not their conversion.
 | [supabase.com](https://supabase.com) | "Build in a weekend / Scale to millions" / "Start your project with a Postgres database…" | Products → logos → dashboard → … → **"Open source from day one… never locked in"** | Stars in nav; logos early | "Start your project"; self-host as a lock-in guarantee near the end | Product tiles | Anchor on what people know ("Postgres"); open source as the no-lock-in promise |
 | [neon.com](https://neon.com) | "The backend for apps and agents, built to scale on Lakebase Postgres." | Primitives → coding agents → scale → architecture → pricing | Corporate backing; live counters | "Get started"; closing CTA is a copyable `npx neon init` | Client-rendered | A command as the CTA; a Markdown homepage for agents |
 | [turso.tech](https://turso.tech) | "Millions of Databases. One Architecture." / "Built on SQLite…" | Logos → problem → properties → code → stories → **OSS "Install locally" beside "Try Cloud free"** | Logos under hero; numbered stories | Equal cards near the end | None verifiable | Problem → properties → code → proof → choice is the infrastructure narrative |
-| [posthog.com](https://posthog.com) | "Your product's context layer" | Setup (terminal `npx`) → labelled "Illustrative demo" → agents → pricing → why | "500,000+ teams" in hero | "Get started – free"; no self-host text found | Scripted demo, labelled illustrative | Honest labels and voice build affinity |
+| [posthog.com](https://posthog.com) | "Your product's context layer" | Setup (terminal `npx`) → labelled "Illustrative demo" → agents → pricing → why | "500,000+ teams" in hero | a "Get started" button marked free; no self-host text found | Scripted demo, labelled illustrative | Honest labels and voice build affinity |
 | [zed.dev](https://zed.dev) | "Your last next editor" / "Zed is a minimal code editor crafted for speed and collaboration with humans and AI." | Mockups → named quotes → features → AI → founders' letter | Famous developer quotes under hero | "Download now" **beside "Clone source"** | Product UI | The source CTA as a peer of the product CTA |
 | [uv](https://docs.astral.sh/uv/) | "uv" / "An extremely fast Python package and project manager, written in Rust." | **Benchmark chart with method** → highlights ("replace pip…") → install → "the pip interface: drop-in" | Benchmark first, captioned with its workload | The install command | Benchmark chart | A measured claim with its method, first; then the commands you already know |
 | [ollama.com](https://ollama.com) | "Ollama is the most popular way to build with open models." / "…locally or in the cloud." | Logos → three usage stats | Stars in nav; usage numbers | "Get started" | None | Local vs cloud as one phrase; a superlative needs numbers we don't have |
@@ -375,9 +375,9 @@ What each assumes and doubts as they scroll, and where the page answers:
 
 | Depth | Question in the visitor's head | Section that answers | Evidence it uses |
 |---|---|---|---|
-| 0–3 s | What is this? | Hero category, H1 | "Open-source Xet storage server"; "Upload only what changed. Keep it where you choose." |
-| 3–10 s | Is it for me? Does it work with my HF tools? | Hero lead and visual | Names `hf_xet` "unmodified"; the visual shows that client talking to *your* server |
-| 10–20 s | Is the saving real, or a marketing diagram? | Hero visual caption | 1,141,116 bytes measured, method linked, bars to scale, download byte-identical |
+| 0 to 3 s | What is this? | Hero category, H1 | "Open-source Xet storage server"; "Upload only what changed. Keep it where you choose." |
+| 3 to 10 s | Is it for me? Does it work with my HF tools? | Hero lead and visual | Names `hf_xet` "unmodified"; the visual shows that client talking to *your* server |
+| 10 to 20 s | Is the saving real, or a marketing diagram? | Hero visual caption | 1,141,116 bytes measured, method linked, bars to scale, download byte-identical |
 | First scroll | Which tools exactly, today versus later? | Compatibility | Available / Planned per tool, in text; CI runs the real client |
 | | Why would the second upload be small? (newcomers) | How it works | Three steps plus the interactive eight-part example; savings vary |
 | | Is it trustworthy, maintained, fast? | Numbers you can rerun | Four measured figures, each linked to machine, versions and command; security tests, SIGKILL test, source |
@@ -455,7 +455,7 @@ and the single elevated object.
 
 ### Alignment fixes in iteration 1
 
-From screenshots of the previous page at 375–1920 px:
+From screenshots of the previous page at 375 to 1920 px:
 
 - Section intros split into a heading column and a paragraph column at
   50%, while the grids below split at thirds; nothing shared an edge.
