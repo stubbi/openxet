@@ -199,6 +199,24 @@ fn probe_hard_links(fs: &dyn Durability, root: &Path, tmp: &Path) -> Result<(), 
     })
 }
 
+/// Writes and removes a probe file in `tmp` ([`Bucket::probe`]). Not
+/// fsynced: a write the filesystem refuses (`ENOSPC`, `EROFS`, `EACCES`)
+/// fails at `write`, and syncing on every readiness check would cost the
+/// disk more than the check is worth.
+fn probe_write(tmp: &Path) -> Result<(), StorageError> {
+    let probe = tmp.join(format!("{}.ready-probe", uuid::Uuid::new_v4().simple()));
+    let written = create_private_file(&probe)
+        .and_then(|mut file| file.write_all(b"ready"))
+        .map_err(io("write probe file", &probe));
+    match fs::remove_file(&probe) {
+        Ok(()) => written,
+        // The create failed, so there is nothing to remove.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => written,
+        // A leftover is swept by the next `open`.
+        Err(e) => written.and(Err(io("remove probe file", &probe)(e))),
+    }
+}
+
 /// Creates the new file `path`, mode `0600` on unix.
 fn create_private_file(path: &Path) -> std::io::Result<File> {
     let mut options = fs::OpenOptions::new();
@@ -871,6 +889,11 @@ async fn blocking<T: Send + 'static>(
 
 #[async_trait::async_trait]
 impl Bucket for LocalBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        let tmp = self.root.join(TMP_DIR);
+        blocking(move || probe_write(&tmp)).await
+    }
+
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         key.check_write(WriteMode::Put)?;
         let (root, key, place) = (self.root.clone(), key.clone(), self.place(key));
@@ -1565,5 +1588,46 @@ mod tests {
             }
         }
         assert_eq!(objects, 1);
+    }
+
+    #[tokio::test]
+    async fn probe_writes_and_removes_only_a_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("bucket");
+        let bucket = LocalBucket::open(&root).unwrap();
+        bucket.probe().await.unwrap();
+        bucket.probe().await.unwrap();
+        assert_eq!(fs::read_dir(root.join(TMP_DIR)).unwrap().count(), 0);
+        for kind in [KeyKind::Xorb, KeyKind::Shard] {
+            assert!(bucket.list(kind).await.unwrap().is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_fails_when_the_bucket_cannot_take_writes() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("bucket");
+        let bucket = LocalBucket::open(&root).unwrap();
+        let tmp = root.join(TMP_DIR);
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o500)).unwrap();
+        // Root ignores directory modes; the refusal can't be staged then.
+        let writable = create_private_file(&tmp.join("root-check")).is_ok();
+        let probed = bucket.probe().await;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o700)).unwrap();
+        if writable {
+            return;
+        }
+        assert!(
+            matches!(
+                probed,
+                Err(StorageError::Io {
+                    op: "write probe file",
+                    ..
+                })
+            ),
+            "{probed:?}"
+        );
     }
 }

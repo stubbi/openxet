@@ -582,6 +582,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Index for CountingIndex {
+        async fn probe(&self) -> Result<(), IndexError> {
+            self.inner.probe().await
+        }
+
         async fn put_xorb(
             &self,
             xorb: &MerkleHash,

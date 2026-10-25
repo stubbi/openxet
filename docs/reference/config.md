@@ -540,6 +540,13 @@ again.
   everything else, `GET /readyz` included, answers `503 not_ready` with
   `Retry-After: 1`. Then `GET /readyz` answers `200`, and the ready line or
   banner is printed.
+- **Readiness:** from then on `GET /readyz` answers `200` only while the
+  index answers a read and the bucket takes a write, and `503 unavailable`
+  naming `index` or `storage` otherwise; the cause is logged at error
+  level ([routes](routes.md#get-healthz-get-readyz)). Point the load
+  balancer's or orchestrator's readiness check at it, and the liveness
+  check at `GET /healthz`, so a node with a full disk leaves the rotation
+  without being restarted.
 - **Shutdown:** on `SIGTERM` or `SIGINT` the server stops accepting
   connections, lets in-flight requests finish within `shutdown_grace`, and
   exits 0. A second signal exits at once with code 1. Every acknowledged

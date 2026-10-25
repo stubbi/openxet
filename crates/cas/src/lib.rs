@@ -135,6 +135,8 @@ pub struct AppState {
     pub budget: MemoryBudget,
     /// The time credentials are checked against.
     pub clock: Arc<dyn Clock>,
+    /// The last `/readyz` probe, reused for a second.
+    pub(crate) readiness: health::Readiness,
 }
 
 /// Commit permits per available CPU (ruling M1-R24).
@@ -172,6 +174,7 @@ impl AppState {
             dedup: Arc::new(Semaphore::new(dedup_permits(permits))),
             budget,
             clock: Arc::new(SystemClock),
+            readiness: health::Readiness::default(),
         }
     }
 
@@ -186,8 +189,10 @@ impl AppState {
 /// The CAS's routes, without state, fallback or middleware: those come
 /// from [`openxet_http::compose`], once for the whole server.
 ///
-/// - `GET /healthz` and `GET /readyz` answer `200` without a credential;
-///   see [`starting_router`] for the answers before the server is ready.
+/// - `GET /healthz` answers `200` without a credential, and `GET /readyz`
+///   too while the index answers a read and the bucket takes a write
+///   (`503 unavailable` naming the one that failed otherwise); see
+///   [`starting_router`] for the answers before the server is ready.
 /// - Every answer of a route that depends on the caller's credential is
 ///   `Cache-Control: no-store` ([`openxet_http::Handlers::private`]).
 #[must_use]

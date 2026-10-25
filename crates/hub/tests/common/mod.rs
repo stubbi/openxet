@@ -62,6 +62,10 @@ impl HookBucket {
 
 #[async_trait::async_trait]
 impl Bucket for HookBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        self.inner.probe().await
+    }
+
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         self.inner.put(key, bytes).await
     }
