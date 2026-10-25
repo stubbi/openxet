@@ -260,15 +260,15 @@ in the task that owns it.
   exposes.
 - **M2-R13. Purge.** `openxet purge <file-hash>` (needs the server
   config) writes `purges/{hash}` to the bucket, then deletes the file's
-  rows from every scope and its dedup candidates, writes an `audit_log`
-  row, and prints what it removed; `reindex` (M4) skips purged hashes.
+  rows from every scope, never dedup rows (those belong to the xorbs,
+  whose bytes leave through GC), writes an `audit_log` row, and prints what it removed; `reindex` (M4) skips purged hashes.
   It takes `--dry-run`, `--yes` and `--json` (`openxet.purge.v1`).
 - **M2-R14. The URI grammar, in brief** (the full specification is Task
   16's document): `xet://{host}[:{port}]/[{kind}/]{namespace}/{name}[@{revision}][/{path}]`,
   where `{kind}` is absent for a repository (whatever its labels),
   `datasets`, `spaces` or `kernels` for a typed view and `buckets` for a
-  bucket (resolved from M5 on); `@{revision}` is a ref or OID, with
-  `%40` for a literal `@` in a name; the path is percent-encoded UTF-8
+  bucket (resolved from M5 on); `@{revision}` is a ref or OID (names
+  can't contain `@` under M2-R2, so nothing needs escaping); the path is percent-encoded UTF-8
   under RFC 3986; there is no userinfo. Legacy forms without a host
   (`xet://user/repo/branch/path`, pyxet) and forms naming `xethub.com`
   are rejected with an error that says how to write the address; nothing
@@ -1093,7 +1093,7 @@ pub struct Endpoints { .. }                          // credential selection by 
   fsspec registration facts; record that IANA registration has not
   happened.
 - [ ] **Step 2: Write the failing tests:** golden vectors (at least 40:
-  every kind, revisions with `/`, `@` in names via `%40`, UTF-8 paths,
+  every kind, revisions with `/`, a `@` in a name rejected, UTF-8 paths,
   IPv6, ports, each malformed class), `round_trip` and
   `canonical_is_idempotent` proptests, `legacy_matrix` (every row of the
   audit's matrix), `endpoints_isolate_credentials` (two fixtures with the
