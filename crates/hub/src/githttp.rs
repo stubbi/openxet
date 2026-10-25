@@ -11,13 +11,21 @@
 //! is the token, as git's credential helpers send it (ADR 0005 item 2). A
 //! repository the caller may not read answers exactly as one that doesn't
 //! exist, on every path (ruling M2-R6). The first push to a missing
-//! repository creates it when the caller may create in its namespace.
+//! repository creates it when the caller may create in its namespace: its
+//! advertisement shows an empty repository and changes nothing, and its
+//! `POST` creates the repository. Errors are `text/plain`, which git shows
+//! its user as `remote:` lines.
+//!
+//! The `POST`s take only git's own request types, as `git http-backend`
+//! does (`check_content_type`, `http-backend.c`, git v2.39.5): a browser
+//! can't send those without a CORS preflight, so a web page can't push or
+//! fetch with credentials the browser cached for this origin.
 
 use std::io::{self, Write as _};
 
 use axum::body::{Body, Bytes};
 use axum::extract::{MatchedPath, RawPathParams, RawQuery, State};
-use axum::http::header::{CONTENT_ENCODING, CONTENT_TYPE, WWW_AUTHENTICATE};
+use axum::http::header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use flate2::write::GzDecoder;
@@ -61,8 +69,13 @@ pub(crate) fn routes() -> Routes {
 }
 
 /// How much compressed input is inflated at a time: deflate expands at
-/// most about 1,032 times, so one step yields at most about 4 MiB.
+/// most [`MAX_INFLATE_RATIO`] times, so one step yields at most about 4 MiB.
 const INFLATE_STEP: usize = 4 << 10;
+
+/// The most deflate expands: one 258-byte match per two bits, 1,032 to 1
+/// (RFC 1951 §3.2.5). A gzip body inflating past this many times the bytes
+/// read so far is not deflate, and is refused.
+const MAX_INFLATE_RATIO: u64 = 1032;
 
 /// The label a repository created by a push through the unprefixed URL
 /// carries, as the Hub's default view does (ruling M2-R11).
@@ -103,50 +116,53 @@ impl Target {
             .map(|access| access.repo)
     }
 
-    /// The repository for pushing: readable and writable by `who`. With
-    /// `create`, a missing repository is created first when `who` may
-    /// create in its namespace and then read and write it (ruling M2-R11);
-    /// one that exists but that `who` may not read answers as missing all
-    /// the same.
-    async fn writable(
+    /// The repository for pushing: readable and writable by `who`.
+    async fn writable(&self, state: &HubState, who: &UserPrincipal) -> Result<Repo, HubError> {
+        let repo = self.readable(state, who.clone()).await?;
+        authz::require_as(state, who, Action::Write, &repo, "push to").await?;
+        Ok(repo)
+    }
+
+    /// The repository a push goes to: `Some` if it exists and `who` may
+    /// push to it, `None` if it is missing and `who` may create it (ruling
+    /// M2-R11). One that exists but that `who` may not read answers as
+    /// missing all the same, and so does a missing one `who` may not
+    /// create.
+    async fn push_target(
         &self,
         state: &HubState,
         who: &UserPrincipal,
-        create: bool,
-    ) -> Result<Repo, HubError> {
-        let refused = match self.readable(state, who.clone()).await {
-            Ok(repo) => return self.pushable(state, who, repo).await,
-            Err(e @ (HubError::UnknownRepo | HubError::MissingCredential)) if create => e,
-            Err(e) => return Err(e),
-        };
-        if !self.may_create(state, who).await?
-            || state
-                .index
-                .repo_by_name(&self.namespace, &self.name)
-                .await?
-                .is_some()
-        {
-            return Err(refused);
+    ) -> Result<Option<Repo>, HubError> {
+        match self.writable(state, who).await {
+            Ok(repo) => Ok(Some(repo)),
+            Err(e @ (HubError::UnknownRepo | HubError::MissingCredential)) => {
+                if self.may_create(state, who).await?
+                    && state
+                        .index
+                        .repo_by_name(&self.namespace, &self.name)
+                        .await?
+                        .is_none()
+                {
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+            Err(e) => Err(e),
         }
+    }
+
+    /// Creates the missing repository a push goes to, without the initial
+    /// commit (its refs are the push's own) and with the view's label or
+    /// `model`, and returns it once `who` may push to it.
+    async fn create(&self, state: &HubState, who: &UserPrincipal) -> Result<Repo, HubError> {
         let label = self.view.label().unwrap_or(DEFAULT_LABEL);
         match repos::create_repo_for_push(state, who, &self.namespace, &self.name, label).await {
             // Another request created it meanwhile: push to that one.
             Ok(_) | Err(HubError::NameTaken { .. }) => {}
             Err(e) => return Err(e),
         }
-        let repo = self.readable(state, who.clone()).await?;
-        self.pushable(state, who, repo).await
-    }
-
-    /// `repo`, if `who` may push to it.
-    async fn pushable(
-        &self,
-        state: &HubState,
-        who: &UserPrincipal,
-        repo: Repo,
-    ) -> Result<Repo, HubError> {
-        authz::require_as(state, who, Action::Write, &repo, "push to").await?;
-        Ok(repo)
+        self.writable(state, who).await
     }
 
     /// Whether `who` may create this repository and then read and push to
@@ -164,7 +180,8 @@ impl Target {
 /// advertisement, after the `# service=` preamble smart HTTP adds for
 /// protocols 0 and 1. A request without one of the two services is the
 /// dumb protocol's, answered `404` once the caller may read the
-/// repository.
+/// repository. It never changes anything: a push to a missing repository
+/// its caller may create is shown an empty one.
 async fn info_refs(
     State(state): State<HubState>,
     path: MatchedPath,
@@ -177,18 +194,21 @@ async fn info_refs(
         let who = who(&state, &headers)?;
         let target = target(&path, params, &who)?;
         let repo = match service {
-            Some(Service::ReceivePack) => target.writable(&state, &who, true).await?,
-            _ => target.readable(&state, who).await?,
+            Some(Service::ReceivePack) => target.push_target(&state, &who).await?,
+            _ => Some(target.readable(&state, who).await?),
         };
         let Some(service) = service else {
             return Err(HubError::DumbHttp);
         };
         let protocol = protocol(&headers);
-        let advertisement = state
-            .engine
-            .advertise(repo.id, protocol, service)
-            .await
-            .map_err(git_error)?;
+        let advertisement = match repo {
+            Some(repo) => state
+                .engine
+                .advertise(repo.id, protocol, service)
+                .await
+                .map_err(git_error)?,
+            None => Bytes::copy_from_slice(state.engine.empty_receive_advertisement()),
+        };
         let mut body = Vec::with_capacity(advertisement.len() + 64);
         // git serves receive-pack over protocol 0 whatever is asked, and
         // `git http-backend` writes the preamble for everything but a v2
@@ -217,6 +237,7 @@ async fn upload_pack(
         let target = target(&path, params, &who)?;
         let subject = who.subject.clone();
         let repo = target.readable(&state, who).await?;
+        require_request_type(&headers, Service::UploadPack)?;
         let body = request_body(&headers, body)?;
         let out = state
             .engine
@@ -233,7 +254,9 @@ async fn upload_pack(
 }
 
 /// `POST …/git-receive-pack`: one push, whose refs move only through the
-/// fenced commit transaction (ADR 0004 item 3).
+/// fenced commit transaction (ADR 0004 item 3). The first push to a missing
+/// repository its caller may create creates it, once the request is git's
+/// and within `git.max_push_bytes`.
 async fn receive_pack(
     State(state): State<HubState>,
     path: MatchedPath,
@@ -244,7 +267,16 @@ async fn receive_pack(
     let answer = async {
         let who = who(&state, &headers)?;
         let target = target(&path, params, &who)?;
-        let repo = target.writable(&state, &who, false).await?;
+        let repo = target.push_target(&state, &who).await?;
+        require_request_type(&headers, Service::ReceivePack)?;
+        let limit = state.engine.max_push_bytes();
+        if content_length(&headers).is_some_and(|len| len > limit) {
+            return Err(HubError::PushTooLarge { limit });
+        }
+        let repo = match repo {
+            Some(repo) => repo,
+            None => target.create(&state, &who).await?,
+        };
         let body = request_body(&headers, body)?;
         let out = state
             .engine
@@ -258,6 +290,35 @@ async fn receive_pack(
         ))
     };
     answer.await.unwrap_or_else(git_refusal)
+}
+
+/// The request's `Content-Length`, if it sent one. git sends one for a
+/// request that fits its post buffer, and streams a larger one chunked,
+/// which git itself bounds (`receive.maxInputSize`).
+fn content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+}
+
+/// Refuses a `POST` whose `Content-Type` isn't git's request type for
+/// `service`, parameters aside.
+fn require_request_type(headers: &HeaderMap, service: Service) -> Result<(), HubError> {
+    let expected = match service {
+        Service::UploadPack => "application/x-git-upload-pack-request",
+        Service::ReceivePack => "application/x-git-receive-pack-request",
+    };
+    let sent = headers
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim);
+    if sent.is_some_and(|t| t.eq_ignore_ascii_case(expected)) {
+        Ok(())
+    } else {
+        Err(HubError::WrongContentType { expected })
+    }
 }
 
 /// The caller, by `Bearer` or by HTTP Basic with the token as the password.
@@ -324,20 +385,30 @@ fn request_body(headers: &HeaderMap, body: Body) -> Result<BodyStream, HubError>
 
 /// `body` inflated from gzip as it arrives, [`INFLATE_STEP`] bytes of input
 /// at a time, so a small body can't inflate into memory all at once. A
-/// truncated or corrupt body ends the stream with an error, which the
-/// engine treats as a failed request body.
+/// truncated or corrupt body, or one inflating past [`MAX_INFLATE_RATIO`]
+/// times what was read, ends the stream with an error, which the engine
+/// treats as a failed request body.
 fn gunzip(body: BodyStream) -> BodyStream {
+    inflate(body, MAX_INFLATE_RATIO)
+}
+
+/// [`gunzip`], refusing past `max_ratio` times the bytes read.
+fn inflate(body: BodyStream, max_ratio: u64) -> BodyStream {
     struct Inflating {
         body: BodyStream,
         input: Bytes,
         decoder: Option<GzDecoder<Vec<u8>>>,
+        read: u64,
+        inflated: u64,
     }
     let start = Inflating {
         body,
         input: Bytes::new(),
         decoder: Some(GzDecoder::new(Vec::new())),
+        read: 0,
+        inflated: 0,
     };
-    futures_util::stream::unfold(start, |mut s| async move {
+    futures_util::stream::unfold(start, move |mut s| async move {
         loop {
             let decoder = s.decoder.as_mut()?;
             if !s.input.is_empty() {
@@ -347,6 +418,18 @@ fn gunzip(body: BodyStream) -> BodyStream {
                     return Some((Err(e), s));
                 }
                 let out = std::mem::take(decoder.get_mut());
+                s.read += step.len() as u64;
+                s.inflated += out.len() as u64;
+                if s.inflated > s.read.saturating_mul(max_ratio) {
+                    s.decoder = None;
+                    return Some((
+                        Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "the gzip body inflates further than deflate can encode",
+                        )),
+                        s,
+                    ));
+                }
                 if !out.is_empty() {
                     return Some((Ok(Bytes::from(out)), s));
                 }
@@ -409,11 +492,11 @@ fn git_error(e: GitError) -> HubError {
     }
 }
 
-/// `e`'s answer, with a `Basic` challenge before the `Bearer` one on a
+/// `e`'s answer as `text/plain`, with a `Basic` challenge before the `Bearer` one on a
 /// `401`: git asks its credential helpers for a user name and password
 /// only when the server offers `Basic`.
 fn git_refusal(e: HubError) -> Response {
-    let mut response = e.into_response();
+    let mut response = e.into_git_response();
     if response.status() == StatusCode::UNAUTHORIZED {
         let headers = response.headers_mut();
         let bearer: Vec<HeaderValue> = headers.get_all(WWW_AUTHENTICATE).iter().cloned().collect();
@@ -426,4 +509,43 @@ fn git_refusal(e: HubError) -> Response {
         }
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use std::io::Write as _;
+
+    use futures_util::StreamExt as _;
+
+    use super::*;
+
+    fn gzipped(data: &[u8]) -> BodyStream {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        gz.write_all(data).unwrap();
+        let bytes = Bytes::from(gz.finish().unwrap());
+        futures_util::stream::iter([Ok(bytes)]).boxed()
+    }
+
+    /// A body inflating to many steps' worth arrives in pieces of at most
+    /// one step's output, never whole.
+    #[tokio::test]
+    async fn inflation_is_bounded_per_step() {
+        let data = vec![0u8; INFLATE_STEP * 1032 * 4];
+        let pieces: Vec<Bytes> = gunzip(gzipped(&data)).map(Result::unwrap).collect().await;
+        assert!(pieces.len() > 1, "{} piece", pieces.len());
+        let step = INFLATE_STEP * usize::try_from(MAX_INFLATE_RATIO).unwrap();
+        assert!(pieces.iter().all(|p| p.len() <= step));
+        assert_eq!(pieces.concat(), data);
+    }
+
+    /// A body inflating past the ratio bound ends with an error.
+    #[tokio::test]
+    async fn inflation_past_the_ratio_is_refused() {
+        let data = vec![0u8; 1 << 20];
+        let results: Vec<io::Result<Bytes>> = inflate(gzipped(&data), 10).collect().await;
+        let error = results.last().unwrap().as_ref().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
 }

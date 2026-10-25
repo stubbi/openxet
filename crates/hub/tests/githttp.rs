@@ -27,7 +27,12 @@ use serde_json::json;
 use support::{ALICE, BOB, CAROL, file, header, hub};
 use tempfile::TempDir;
 
-const UNKNOWN_BODY: &str = r#"{"error":"Repository not found","schema":"openxet.error.v1","code":"repo_not_found","message":"Repository not found","hint":"Check the repository id and the token's access: a repository the token may not read answers exactly like one that doesn't exist."}"#;
+/// The unknown-repository answer of the Git routes, byte for byte: ruling
+/// M2-R6's message and hint as `text/plain`, which git shows as `remote:`.
+const UNKNOWN_BODY: &str = "Repository not found\nCheck the repository id and the token's \
+     access: a repository the token may not read answers exactly like one that doesn't exist.\n";
+
+const RECEIVE_REQUEST: (&str, &str) = ("content-type", "application/x-git-receive-pack-request");
 
 /// The `Authorization` of HTTP Basic with `token` as the password, as git
 /// sends it.
@@ -39,17 +44,18 @@ fn basic(token: &str) -> String {
     )
 }
 
-/// `method path` with `authorization` and `headers`, and `body`.
+/// `method path` with the `Authorization` value `credential`, `headers`
+/// and `body`.
 async fn send(
     hub: &TestHub,
     method: Method,
     path: &str,
-    authorization: Option<String>,
+    credential: Option<String>,
     headers: &[(&str, &str)],
     body: impl Into<Body>,
 ) -> Reply {
     let mut request = Request::builder().method(method).uri(path);
-    if let Some(value) = authorization {
+    if let Some(value) = credential {
         request = request.header(AUTHORIZATION, value);
     }
     for (name, value) in headers {
@@ -58,8 +64,8 @@ async fn send(
     hub.send(request.body(body.into()).unwrap()).await
 }
 
-async fn get(hub: &TestHub, path: &str, authorization: Option<String>) -> Reply {
-    send(hub, Method::GET, path, authorization, &[], Body::empty()).await
+async fn get(hub: &TestHub, path: &str, credential: Option<String>) -> Reply {
+    send(hub, Method::GET, path, credential, &[], Body::empty()).await
 }
 
 fn assert_unknown(reply: &Reply, what: &str) {
@@ -70,6 +76,11 @@ fn assert_unknown(reply: &Reply, what: &str) {
         reply.text()
     );
     assert_eq!(reply.text(), UNKNOWN_BODY, "{what}");
+    assert_eq!(
+        reply.header("content-type"),
+        Some("text/plain; charset=utf-8"),
+        "{what}"
+    );
     assert_eq!(reply.header("x-error-code"), Some("RepoNotFound"), "{what}");
 }
 
@@ -232,12 +243,15 @@ async fn upload_pack_needs_read_and_hides_private() {
             )
             .await;
             assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
-            assert_eq!(wrong.json()["code"], "invalid_credential");
+            assert_eq!(
+                wrong.header("x-error-message"),
+                Some("Invalid credentials in Authorization header")
+            );
         }
     }
 
     // A reader, over protocol 0 and 2, through every address of the
-    // repository: Bearer and Basic alike.
+    // repository, with either scheme.
     for path in [
         "/alice/m",
         "/alice/m.git",
@@ -305,6 +319,14 @@ async fn upload_pack_needs_read_and_hides_private() {
         std::fs::read(dir.path().join("bob/README.md")).unwrap(),
         b"# hello\n"
     );
+    // A reader's push is refused, and git shows the server's reason.
+    let bob = dir.path().join("bob");
+    let (ok, _, err) = git(&bob, &["push", "origin", "HEAD:refs/heads/bob"], &[]).await;
+    assert!(!ok);
+    assert!(
+        err.contains("remote: You don't have the rights to push to alice/m"),
+        "{err}"
+    );
     let (ok, _, err) = git(
         dir.path(),
         &[
@@ -329,10 +351,17 @@ async fn upload_pack_needs_read_and_hides_private() {
 }
 
 /// `receive_pack_needs_write`: a reader may not push (`403`, before git
-/// runs), a caller who may not read gets the unknown-repository answer,
-/// and the first push to a missing repository creates it, with the view's
-/// label, only for a caller who may create, read and write there.
+/// runs), a caller who may not read gets the unknown-repository answer, a
+/// push over `git.max_push_bytes` is `413` before it is read, and the
+/// first push to a missing repository creates it, with the view's label,
+/// only for a caller who may create, read and write there: its
+/// advertisement shows an empty repository and creates nothing, its `POST`
+/// creates it.
 #[tokio::test(flavor = "multi_thread")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "every refusal of a push, then the creating push"
+)]
 async fn receive_pack_needs_write() {
     let hub = seeded().await;
     for (method, route) in [
@@ -344,7 +373,7 @@ async fn receive_pack_needs_write() {
             method.clone(),
             &format!("/alice/m.git/{route}"),
             Some(basic(BOB)),
-            &[],
+            &[RECEIVE_REQUEST],
             Body::empty(),
         )
         .await;
@@ -353,26 +382,59 @@ async fn receive_pack_needs_write() {
             reader.header("x-error-message"),
             Some("You don't have the rights to push to alice/m")
         );
+        assert!(
+            reader
+                .text()
+                .starts_with("You don't have the rights to push to alice/m\n"),
+            "{}",
+            reader.text()
+        );
         let stranger = send(
             &hub,
             method.clone(),
             &format!("/alice/m.git/{route}"),
             Some(basic(CAROL)),
-            &[],
+            &[RECEIVE_REQUEST],
             Body::empty(),
         )
         .await;
         assert_unknown(&stranger, route);
     }
 
-    // Bob may not create in `alice`: no repository appears.
-    let refused = get(
+    // A push larger than `git.max_push_bytes` is refused before it is read.
+    let large = send(
         &hub,
-        "/alice/new/info/refs?service=git-receive-pack",
-        Some(basic(BOB)),
+        Method::POST,
+        "/alice/m/git-receive-pack",
+        Some(basic(ALICE)),
+        &[RECEIVE_REQUEST, ("content-length", "20000000000")],
+        Body::empty(),
     )
     .await;
-    assert_unknown(&refused, "push to a missing repository without create");
+    assert_eq!(
+        large.status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "{}",
+        large.text()
+    );
+    assert!(large.text().contains("git lfs track"), "{}", large.text());
+
+    // Bob may not create in `alice`: no repository appears.
+    for (method, route) in [
+        (Method::GET, "info/refs?service=git-receive-pack"),
+        (Method::POST, "git-receive-pack"),
+    ] {
+        let refused = send(
+            &hub,
+            method,
+            &format!("/alice/new/{route}"),
+            Some(basic(BOB)),
+            &[RECEIVE_REQUEST],
+            Body::empty(),
+        )
+        .await;
+        assert_unknown(&refused, "push to a missing repository without create");
+    }
     let info = hub
         .call(Method::GET, "/api/models/alice/new", Some(ALICE), None)
         .await;
@@ -386,18 +448,26 @@ async fn receive_pack_needs_write() {
     .await;
     assert_unknown(&fetch, "fetch of a missing repository");
 
-    // Carol may create in `carol`: the push's advertisement creates an
-    // empty repository, with the label of the view pushed to.
+    // Carol may create in `carol`: the advertisement shows an empty
+    // repository and creates nothing (neither does `HEAD`); the `POST`
+    // creates it with the label of the view pushed to.
     for (path, label) in [
         ("/carol/new.git", "model"),
         ("/datasets/carol/data", "dataset"),
     ] {
-        let ad = get(
+        let name = path.trim_end_matches(".git").rsplit('/').next().unwrap();
+        let advertisement = format!("{path}/info/refs?service=git-receive-pack");
+        let head = send(
             &hub,
-            &format!("{path}/info/refs?service=git-receive-pack"),
+            Method::HEAD,
+            &advertisement,
             Some(basic(CAROL)),
+            &[],
+            Body::empty(),
         )
         .await;
+        assert_eq!(head.status, StatusCode::OK);
+        let ad = get(&hub, &advertisement, Some(basic(CAROL))).await;
         assert_eq!(ad.status, StatusCode::OK, "{path}: {}", ad.text());
         assert_eq!(
             ad.header("content-type"),
@@ -409,31 +479,173 @@ async fn receive_pack_needs_write() {
             "{}",
             ad.text()
         );
-        assert!(
-            ad.text().contains("capabilities^{}"),
-            "no refs: {}",
-            ad.text()
+        assert_eq!(
+            &ad.body[ad.body.len() - hub.state.engine.empty_receive_advertisement().len()..],
+            hub.state.engine.empty_receive_advertisement()
         );
-        let name = path.trim_end_matches(".git").rsplit('/').next().unwrap();
-        let labels = hub
-            .call(
-                Method::GET,
-                &format!("/api/openxet/v1/repos/carol/{name}/labels"),
-                Some(CAROL),
-                None,
-            )
-            .await;
-        assert_eq!(labels.status, StatusCode::OK, "{}", labels.text());
-        assert_eq!(labels.json()["labels"], json!([label]), "{}", labels.text());
-        // A second advertisement finds it.
-        let again = get(
+        assert_eq!(
+            labels_of(&hub, name).await.status,
+            StatusCode::NOT_FOUND,
+            "the GET created {path}"
+        );
+
+        let pushed = send(
             &hub,
-            &format!("{path}/info/refs?service=git-receive-pack"),
+            Method::POST,
+            &format!("{path}/git-receive-pack"),
             Some(basic(CAROL)),
+            &[RECEIVE_REQUEST],
+            Body::empty(),
         )
         .await;
-        assert_eq!(again.status, StatusCode::OK);
+        assert_eq!(pushed.status, StatusCode::OK, "{}", pushed.text());
+        assert_eq!(
+            pushed.header("content-type"),
+            Some("application/x-git-receive-pack-result")
+        );
+        assert_eq!(pushed.header("cache-control"), Some("no-store"));
+        let labels = labels_of(&hub, name).await;
+        assert_eq!(labels.status, StatusCode::OK, "{}", labels.text());
+        assert_eq!(labels.json()["labels"], json!([label]), "{}", labels.text());
+        let again = get(&hub, &advertisement, Some(basic(CAROL))).await;
+        assert_eq!(
+            again.body, ad.body,
+            "an empty repository advertises the same"
+        );
     }
+}
+
+async fn refs_of(hub: &TestHub) -> axum::body::Bytes {
+    hub.call(Method::GET, "/api/models/alice/m/refs", Some(ALICE), None)
+        .await
+        .body
+}
+
+async fn labels_of(hub: &TestHub, name: &str) -> Reply {
+    hub.call(
+        Method::GET,
+        &format!("/api/openxet/v1/repos/carol/{name}/labels"),
+        Some(CAROL),
+        None,
+    )
+    .await
+}
+
+/// A repository a push created but whose push failed has no refs: the Hub
+/// routes answer it as a repository without revisions, never with a `500`.
+#[tokio::test(flavor = "multi_thread")]
+async fn hub_routes_answer_a_repository_without_refs() {
+    let hub = seeded().await;
+    let created = send(
+        &hub,
+        Method::POST,
+        "/carol/bare/git-receive-pack",
+        Some(basic(CAROL)),
+        &[RECEIVE_REQUEST],
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::OK, "{}", created.text());
+    for path in [
+        "/api/models/carol/bare",
+        "/api/models/carol/bare/revision/main",
+        "/api/models/carol/bare/refs",
+        "/api/models/carol/bare/tree/main",
+        "/api/models/carol/bare/commits/main",
+        "/api/models/carol/bare/xet-read-token/main",
+        "/api/models/carol/bare/xet-write-token/main",
+    ] {
+        let reply = hub.call(Method::GET, path, Some(CAROL), None).await;
+        assert!(
+            !reply.status.is_server_error(),
+            "{path}: {} {}",
+            reply.status,
+            reply.text()
+        );
+        if path.ends_with("tree/main") || path.ends_with("commits/main") {
+            assert_eq!(
+                reply.header("x-error-code"),
+                Some("RevisionNotFound"),
+                "{path}"
+            );
+        }
+    }
+    let paths_info = hub
+        .call(
+            Method::POST,
+            "/api/models/carol/bare/paths-info/main",
+            Some(CAROL),
+            Some(&json!({"paths": ["a"]})),
+        )
+        .await;
+    assert!(
+        !paths_info.status.is_server_error(),
+        "{}",
+        paths_info.text()
+    );
+}
+
+/// `git_posts_need_git_request_types` (design §5.9 req 2): a `POST` to a
+/// Git route without git's own request `Content-Type` is `415` before its
+/// body is read, as `git http-backend` answers. A browser can't send those
+/// types cross-site without a CORS preflight, so a web page can't push with
+/// credentials the browser cached for this origin: no ref moves and no
+/// repository is created.
+#[tokio::test(flavor = "multi_thread")]
+async fn git_posts_need_git_request_types() {
+    let hub = seeded().await;
+    // Cross-site: a writer's credential on a body of another type moves
+    // nothing and creates nothing.
+    let before = refs_of(&hub).await;
+    let zero = "0".repeat(40);
+    let forged = format!(
+        "{zero} {} refs/heads/forged\0report-status\n",
+        "a".repeat(40)
+    );
+    let forged = format!("{:04x}{forged}0000", forged.len() + 4);
+    for (path, content_type) in [
+        ("/alice/m/git-receive-pack", "text/plain"),
+        (
+            "/alice/m/git-receive-pack",
+            "application/x-www-form-urlencoded",
+        ),
+        ("/alice/m/git-upload-pack", "text/plain"),
+        ("/carol/forged/git-receive-pack", "text/plain"),
+        (
+            "/carol/forged/git-receive-pack",
+            "application/x-git-upload-pack-request",
+        ),
+    ] {
+        let token = if path.starts_with("/carol") {
+            CAROL
+        } else {
+            ALICE
+        };
+        let reply = send(
+            &hub,
+            Method::POST,
+            path,
+            Some(basic(token)),
+            &[("content-type", content_type)],
+            forged.clone(),
+        )
+        .await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{path} {content_type}: {}",
+            reply.text()
+        );
+    }
+    assert_eq!(refs_of(&hub).await, before, "no ref moved");
+    let forged_repo = hub
+        .call(Method::GET, "/api/models/carol/forged", Some(CAROL), None)
+        .await;
+    assert_eq!(
+        forged_repo.status,
+        StatusCode::NOT_FOUND,
+        "nothing was created"
+    );
 }
 
 /// `dumb_protocol_not_served`: the paths a dumb client reads answer `404`,
@@ -449,7 +661,11 @@ async fn dumb_protocol_not_served() {
         )
         .await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND, "{query}");
-        assert_eq!(reply.json()["code"], "dumb_http_not_served", "{query}");
+        assert!(
+            reply.text().contains("smart HTTP only"),
+            "{query}: {}",
+            reply.text()
+        );
     }
     for path in [
         "/alice/m.git/HEAD",
@@ -518,6 +734,7 @@ async fn gzip_request_bodies_are_inflated() {
         inflated.header("content-type"),
         Some("application/x-git-upload-pack-result")
     );
+    assert_eq!(inflated.header("cache-control"), Some("no-store"));
     assert_eq!(inflated.body, plain.body);
 
     let corrupt = send(
@@ -529,9 +746,16 @@ async fn gzip_request_bodies_are_inflated() {
         gzipped[..gzipped.len() / 2].to_vec(),
     )
     .await;
-    assert_ne!(corrupt.body, plain.body);
+    assert_eq!(
+        corrupt.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        corrupt.text()
+    );
     assert!(
-        !corrupt.text().contains("refs/heads/main"),
+        corrupt
+            .text()
+            .starts_with("the request body could not be read\n"),
         "{}",
         corrupt.text()
     );
@@ -545,7 +769,11 @@ async fn gzip_request_bodies_are_inflated() {
     )
     .await;
     assert_eq!(brotli.status, StatusCode::BAD_REQUEST);
-    assert_eq!(brotli.json()["code"], "bad_request");
+    assert!(
+        brotli.text().contains("Content-Encoding"),
+        "{}",
+        brotli.text()
+    );
 }
 
 /// `cold_node_serves_from_bucket`: a second node over the same index and
@@ -607,4 +835,84 @@ async fn cold_node_serves_from_bucket() {
     );
     assert!(warm.contains("refs/heads/main"), "{warm}");
     assert_eq!(warm, cold);
+}
+
+/// The ids of `alice/m`'s commit that no ref reaches any more: committed
+/// on a branch that is then deleted, so its pack stays committed.
+async fn unreachable_commit(hub: &TestHub) -> String {
+    let reply = hub
+        .call(
+            Method::POST,
+            "/api/models/alice/m/branch/side",
+            Some(ALICE),
+            Some(&json!({})),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let reply = hub
+        .commit(
+            ALICE,
+            "/api/models/alice/m",
+            "side",
+            &[header("hidden"), file("hidden.txt", b"hidden\n")],
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    let oid = reply.json()["commitOid"].as_str().unwrap().to_owned();
+    let reply = hub
+        .call(
+            Method::DELETE,
+            "/api/models/alice/m/branch/side",
+            Some(ALICE),
+            None,
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    oid
+}
+
+/// `pkt` as a pkt-line.
+fn pkt(line: &str) -> String {
+    format!("{:04x}{line}", line.len() + 4)
+}
+
+/// The HTTP route goes through R22 (ADR 0004 item 2): a fetch asking for a
+/// commit no ref reaches gets git's `not our ref` error over protocol 2
+/// and 0, and no pack.
+#[tokio::test(flavor = "multi_thread")]
+async fn upload_pack_route_checks_reachability() {
+    let hub = seeded().await;
+    let hidden = unreachable_commit(&hub).await;
+    let v2 = format!(
+        "{}0001{}{}0000",
+        pkt("command=fetch\n"),
+        pkt(&format!("want {hidden}\n")),
+        pkt("done\n")
+    );
+    let v0 = format!(
+        "{}0000{}",
+        pkt(&format!("want {hidden} ofs-delta\n")),
+        pkt("done\n")
+    );
+    for (protocol, body) in [("version=2", v2), ("version=0", v0)] {
+        let reply = send(
+            &hub,
+            Method::POST,
+            "/alice/m/git-upload-pack",
+            Some(basic(ALICE)),
+            &[
+                ("git-protocol", protocol),
+                ("content-type", "application/x-git-upload-pack-request"),
+            ],
+            body,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{protocol}");
+        let text = reply.text();
+        assert!(
+            text.contains("ERR") && text.contains("not our ref") && text.contains(&hidden),
+            "{protocol}: {text}"
+        );
+        assert!(!text.contains("PACK"), "{protocol}: no pack is sent");
+    }
 }

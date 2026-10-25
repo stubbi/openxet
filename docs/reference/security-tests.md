@@ -57,6 +57,7 @@ its clients sent (`assert_no_credential_in_log`).
 | 2 | `create_collision_authorized_first` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `upload_pack_needs_read_and_hides_private` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
 | 2 | `receive_pack_needs_write` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
+| 2 | `git_posts_need_git_request_types` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
 | 2 | `credential_scoped_to_repo`, bucket routes | pending | M5 |
 | 2 | `bucket_create_authorized_per_namespace` | pending | M5 |
 | 2 | `bucket_add_file_hash_must_be_readable` | pending | M5 |
@@ -146,8 +147,14 @@ Notes on what some tests cover:
   call every Git smart HTTP route, unprefixed, with `.git` and under a
   typed prefix, with `Bearer` and Basic credentials that can't read the
   repository, and compare each answer with an unknown repository's; a
-  reader may fetch but not push, and a push creates a missing repository
-  only for a caller who may create, read and write it.
+  reader may fetch but not push, and a push creates a missing repository,
+  by its `POST` and never by its advertisement, only for a caller who may
+  create, read and write it.
+- `git_posts_need_git_request_types` sends a writer's credential with a
+  forged push whose `Content-Type` a browser may send cross-site
+  (`text/plain`, a form type, the other service's type) and expects `415`,
+  no ref moved and no repository created, as `git http-backend` refuses
+  them.
 
 ## Supporting tests
 
