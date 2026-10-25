@@ -98,6 +98,22 @@ class SiteOutput(unittest.TestCase):
         self.assertIn('<p>Use <code>--json</code>.</p>', html)
         self.assertEqual(len(doc.tags("errors")), 0)
 
+    def test_llms_txt_lists_project_pages_under_optional(self):
+        # llms.txt convention: "## Optional" holds links an agent may skip.
+        (self.root / "docs/SUMMARY.md").write_text(
+            "# Summary\n\n[openxet docs](README.md)\n\n# User\n\n- [Commands](reference/cli.md)\n\n"
+            "# Project\n\n- [Design](design.md)\n",
+            encoding="utf-8",
+        )
+        self.write("docs/design.html", DOC_HTML)
+        self.write("docs/design.md", "# Design\n\nHow the system is built.\n")
+        self.generated("docs/index.html")
+        llms = (self.public / "llms.txt").read_text(encoding="utf-8")
+        self.assertNotIn("## Project", llms)
+        optional = llms.split("## Optional", 1)[1]
+        self.assertIn("- [Design](https://openxet.com/docs/design.md): How the system is built.", optional)
+        self.assertNotIn("Design](", llms.split("## Optional", 1)[0])
+
     def test_sitemap_includes_marketing_canonicals_but_not_noindex_or_duplicate_index_urls(self):
         doc = self.generated("docs/index.html")
         self.assertEqual(doc.tags("link", rel="canonical"), [{"rel": "canonical", "href": "https://openxet.com/docs/"}])

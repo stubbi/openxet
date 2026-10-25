@@ -31,7 +31,9 @@ It defines the shared language, visual tokens, component states and human/agent
 experience. Reuse these choices. An intentional change to the language or visual
 identity updates `design.md` in the same PR, with a reason and visual evidence.
 Keep capability claims consistent with the current release; the hosted waitlist
-is not an active hosted storage service.
+is not an active hosted storage service. Exception (owner's ruling, 2026-10-25):
+the landing page describes the full planned product as launched, still with no
+invented numbers or output, and its calls to action land on what works today.
 
 ## Who we build for
 
