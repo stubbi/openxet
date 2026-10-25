@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
-  <title id="title">openxet — Upload only what changed. Keep it where you choose.</title>
-  <desc id="description">The open-source Xet storage server. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.14 MB to an openxet server. Self-host today; hosted service coming soon.</desc>
+  <title id="title">openxet — Large-file storage that uploads only what changed.</title>
+  <desc id="description">The open-source Xet storage server. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an openxet server. Self-host today; hosted service coming soon.</desc>
   <!-- Fonts: Manrope 650/750, IBM Plex Sans 400/500, IBM Plex Mono 400.
        Render with the official fonts and Fontconfig setup in assets/README.md. -->
   <style>
@@ -20,12 +20,12 @@
     <rect x="13" y="13" width="9" height="9" rx="1.5" fill="#f5cf6b"/>
   </g>
   <text x="117" y="87" class="display wordmark" font-size="36" letter-spacing="-1.4" fill="#142238">openxet</text>
-  <text x="64" y="165" class="body" font-size="23" fill="#526079">Open-source Xet storage server</text>
-  <g class="display" font-size="58" letter-spacing="-2.4">
-    <text x="60" y="250" fill="#142238">Upload only</text>
-    <text x="60" y="314" fill="#142238">what changed.</text>
-    <text x="60" y="390" fill="#304bce">Keep it where</text>
-    <text x="60" y="454" fill="#304bce">you choose.</text>
+  <text x="64" y="165" class="body" font-size="23" fill="#526079">Open-source Xet storage · Apache 2.0</text>
+  <g class="display" font-size="54" letter-spacing="-2.2">
+    <text x="60" y="262" fill="#142238">Large-file storage</text>
+    <text x="60" y="328" fill="#142238">that uploads</text>
+    <text x="60" y="394" fill="#304bce">only what</text>
+    <text x="60" y="460" fill="#304bce">changed.</text>
   </g>
   <text x="64" y="566" class="body" font-size="22" font-weight="500" fill="#142238">openxet.com</text>
 
@@ -51,7 +51,7 @@
     <text x="1104" y="258">100 MiB</text>
     <text x="1104" y="438">100 MiB</text>
   </g>
-  <text x="1104" y="350" class="display" font-size="30" text-anchor="end" fill="#142238">1.14 MB</text>
+  <text x="1104" y="350" class="display" font-size="30" text-anchor="end" fill="#142238">1.09 MiB</text>
   <rect x="672" y="272" width="432" height="28" rx="5" class="stored"/>
   <rect x="886" y="272" width="5" height="28" class="new"/>
   <rect x="672" y="362" width="432" height="28" rx="5" class="empty"/>
