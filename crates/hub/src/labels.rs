@@ -9,11 +9,12 @@ use axum::Json;
 use axum::extract::{RawPathParams, State};
 use axum::http::Method;
 use openxet_auth::Action;
-use openxet_index::{AuditEntry, Repo};
+use openxet_index::{AuditEntry, IndexError, Repo};
 use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess};
-use crate::repos::{full_name, meta_of};
+use crate::names::full_name;
+use crate::repos::meta_of;
 use crate::routes::{Routes, on};
 use crate::{HubError, HubState};
 
@@ -123,12 +124,16 @@ async fn change(
     )
     .await?;
     check_label(label)?;
-    // One metadata write at a time on this node, so the record the bucket
-    // keeps and the index row agree; the row is read again under the lock.
-    let _guard = state.meta.lock().await;
+    // The labels this request read are the compare-and-swap's expected
+    // list (ruling M2-R12). Checked against the row before the bucket is
+    // written, so a request that is already stale writes nothing.
+    let expected = access.repo.labels;
     let Some(mut repo) = state.index.repo_by_id(access.repo.id).await? else {
         return Err(HubError::UnknownRepo);
     };
+    if repo.labels != expected {
+        return Err(labels_changed(&repo));
+    }
     let present = repo.labels.iter().any(|l| l == label);
     let action = match change {
         Change::Add if present => return Ok(Json(answer(&repo))),
@@ -148,12 +153,29 @@ async fn change(
             "label.remove"
         }
     };
-    let meta = meta_of(&repo)?;
+    let meta = meta_of(&repo, None)?;
     state
         .bucket
         .put_replace(meta.key(), meta.to_bytes())
         .await?;
-    state.index.set_labels(repo.id, &repo.labels).await?;
+    match state
+        .index
+        .set_labels(repo.id, &expected, &repo.labels)
+        .await
+    {
+        Ok(()) => {}
+        Err(IndexError::LabelsChanged { .. }) => {
+            restore(state, &repo).await?;
+            return Err(labels_changed(&repo));
+        }
+        Err(IndexError::UnknownRepo { .. }) => {
+            restore(state, &repo).await?;
+            return Err(HubError::UnknownRepo);
+        }
+        // The bucket is ahead of the index: the change answers 503, and a
+        // retry reads the row again and rewrites both, so they converge.
+        Err(e) => return Err(e.into()),
+    }
     state
         .index
         .audit(&AuditEntry {
@@ -164,6 +186,27 @@ async fn change(
         })
         .await?;
     Ok(Json(answer(&repo)))
+}
+
+fn labels_changed(repo: &Repo) -> HubError {
+    HubError::LabelsChanged {
+        repo: full_name(repo),
+    }
+}
+
+/// Puts back the record a lost compare-and-swap overwrote: the row as the
+/// index now has it, or a tombstone if the repository was deleted
+/// meanwhile, so the bucket never keeps a change the index refused.
+async fn restore(state: &HubState, attempted: &Repo) -> Result<(), HubError> {
+    let meta = match state.index.repo_by_id(attempted.id).await? {
+        Some(current) => meta_of(&current, None)?,
+        None => meta_of(attempted, Some(state.clock.now()))?,
+    };
+    state
+        .bucket
+        .put_replace(meta.key(), meta.to_bytes())
+        .await?;
+    Ok(())
 }
 
 fn answer(repo: &Repo) -> Value {

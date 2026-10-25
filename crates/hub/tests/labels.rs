@@ -2,17 +2,16 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::path::Path;
+mod common;
+
 use std::sync::{Arc, Mutex};
 
-use axum::body::Bytes;
 use axum::http::{Method, StatusCode};
-use openxet_auth::Action;
+use common::{HookAuthz, HookBucket};
+use openxet_auth::{Action, RulesAuthorizer};
 use openxet_hub::test_support::{ALL, TestHub, rule, user_token};
 use openxet_index::{Repos, SqliteIndex};
-use openxet_storage::{
-    BodyStream, Bucket, Key, KeyKind, LocalBucket, RangeStream, RepoIdHex, RepoMeta, StorageError,
-};
+use openxet_storage::{Bucket, RepoMeta};
 use serde_json::{Value, json};
 
 const ALICE: &str = "oxt_test_alice";
@@ -126,117 +125,68 @@ async fn label_rules_enforced() {
     );
 }
 
-/// A bucket that records, at each metadata write, the labels the index
-/// row held at that moment.
-struct Recording {
-    inner: LocalBucket,
-    index: Mutex<Option<Arc<SqliteIndex>>>,
-    seen: Mutex<Vec<(Vec<String>, Vec<String>)>>,
+/// A second handle on the Hub's index database, to change or read rows
+/// while a request runs, as another node would.
+async fn observer(hub: &TestHub) -> Arc<SqliteIndex> {
+    Arc::new(SqliteIndex::open(&hub.index_path()).await.unwrap())
 }
 
-#[async_trait::async_trait]
-impl Bucket for Recording {
-    async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
-        self.inner.put(key, bytes).await
-    }
-    async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
-        self.inner.create(key, bytes).await
-    }
-    async fn list(&self, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
-        self.inner.list(kind).await
-    }
-    async fn get_range(&self, key: &Key, start: u64, end: u64) -> Result<Bytes, StorageError> {
-        self.inner.get_range(key, start, end).await
-    }
-    async fn get_range_stream(
-        &self,
-        key: &Key,
-        start: u64,
-        end: u64,
-    ) -> Result<RangeStream, StorageError> {
-        self.inner.get_range_stream(key, start, end).await
-    }
-    async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
-        self.inner.size(key).await
-    }
-    async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
-        let meta = RepoMeta::from_bytes(&key, &bytes).unwrap();
-        let index = self.index.lock().unwrap().clone();
-        if let Some(index) = index {
-            let row = index
-                .repo_by_name(&meta.namespace, &meta.name)
-                .await
-                .unwrap()
-                .map(|r| r.labels)
-                .unwrap_or_default();
-            self.seen.lock().unwrap().push((meta.labels.clone(), row));
-        }
-        self.inner.put_replace(key, bytes).await
-    }
-    async fn put_stream(&self, key: Key, body: BodyStream, len: u64) -> Result<(), StorageError> {
-        self.inner.put_stream(key, body, len).await
-    }
-    async fn get_to_file(&self, key: Key, path: &Path) -> Result<u64, StorageError> {
-        self.inner.get_to_file(key, path).await
-    }
-    async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
-        self.inner.last_modified(key).await
-    }
-    async fn list_under(&self, repo: RepoIdHex, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
-        self.inner.list_under(repo, kind).await
-    }
+async fn hooked() -> (TestHub, Arc<HookBucket>, Arc<HookAuthz>) {
+    let dir = tempfile::tempdir().unwrap();
+    let bucket = HookBucket::open(&dir.path().join("bucket"));
+    let authz = HookAuthz::new(RulesAuthorizer::new(vec![rule(
+        &["alice"],
+        &["alice/*"],
+        ALL,
+    )]));
+    let hub = TestHub::start_custom(
+        dir,
+        Arc::clone(&bucket) as Arc<dyn Bucket>,
+        vec![user_token(ALICE, "alice", &[])],
+        Arc::clone(&authz) as Arc<dyn openxet_auth::Authorizer>,
+    )
+    .await;
+    hub.create(ALICE, "alice", "m", None).await;
+    (hub, bucket, authz)
+}
+
+fn strings(labels: &[&str]) -> Vec<String> {
+    labels.iter().map(|&l| l.to_owned()).collect()
 }
 
 #[tokio::test]
 async fn label_change_reaches_bucket_before_index_and_writes_audit() {
-    let dir = tempfile::tempdir().unwrap();
-    let bucket = Arc::new(Recording {
-        inner: LocalBucket::open(&dir.path().join("bucket")).unwrap(),
-        index: Mutex::new(None),
-        seen: Mutex::new(Vec::new()),
-    });
-    let hub = TestHub::start_with(
-        dir,
-        Arc::clone(&bucket) as Arc<dyn Bucket>,
-        vec![user_token(ALICE, "alice", &[])],
-        vec![rule(&["alice"], &["alice/*"], ALL)],
-    )
-    .await;
-    hub.create(ALICE, "alice", "m", None).await;
-    // A second handle on the same database, to read the row mid-write.
-    let observer = Arc::new(SqliteIndex::open(&hub.index_path()).await.unwrap());
-    *bucket.index.lock().unwrap() = Some(observer);
+    let (hub, bucket, _) = hooked().await;
+    let index = observer(&hub).await;
+    // At each metadata write, the labels the index row holds at that moment.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (hook_index, hook_seen) = (Arc::clone(&index), Arc::clone(&seen));
+    bucket.set_hook(Arc::new(move |meta: RepoMeta| {
+        let (index, seen) = (Arc::clone(&hook_index), Arc::clone(&hook_seen));
+        Box::pin(async move {
+            let row = index
+                .repo_by_name(&meta.namespace, &meta.name)
+                .await
+                .unwrap()
+                .unwrap();
+            seen.lock().unwrap().push((meta.labels, row.labels));
+        })
+    }));
 
     labels(&hub, Method::PUT, &format!("{LABELS}/dataset"), ALICE).await;
     labels(&hub, Method::DELETE, &format!("{LABELS}/model"), ALICE).await;
     // Each record reached the bucket while the index still held the old
     // labels: bucket first, then index (design §5.3, ruling M2-R12).
     assert_eq!(
-        *bucket.seen.lock().unwrap(),
+        *seen.lock().unwrap(),
         [
-            (
-                vec!["model".to_owned(), "dataset".to_owned()],
-                vec!["model".to_owned()]
-            ),
-            (
-                vec!["dataset".to_owned()],
-                vec!["model".to_owned(), "dataset".to_owned()]
-            ),
+            (strings(&["model", "dataset"]), strings(&["model"])),
+            (strings(&["dataset"]), strings(&["model", "dataset"])),
         ]
     );
     // The bucket's record is what the index now says.
-    let repo = SqliteIndex::open(&hub.index_path())
-        .await
-        .unwrap()
-        .repo_by_name("alice", "m")
-        .await
-        .unwrap()
-        .unwrap();
-    let key = Key::RepoMeta {
-        repo: RepoIdHex::parse(&repo.id.to_string()).unwrap(),
-    };
-    let stored = RepoMeta::from_bytes(&key, &bucket.get(&key).await.unwrap().unwrap()).unwrap();
-    assert_eq!(stored.labels, repo.labels);
+    let repo = index.repo_by_name("alice", "m").await.unwrap().unwrap();
+    assert_eq!(bucket.meta(&repo.id.to_string()).await.labels, repo.labels);
 
     let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", hub.index_path().display()))
         .await
@@ -265,4 +215,71 @@ async fn label_change_reaches_bucket_before_index_and_writes_audit() {
         ]
     );
     assert!(rows.iter().all(|(_, _, id, _)| id[..] == repo.id.0[..]));
+}
+
+/// A change whose labels went stale after the request read them, before
+/// it wrote anything, answers `409` and writes nothing to the bucket
+/// (ruling M2-R12).
+#[tokio::test]
+async fn stale_label_list_is_409_and_writes_nothing() {
+    let (hub, bucket, authz) = hooked().await;
+    let index = observer(&hub).await;
+    let id = index.repo_by_name("alice", "m").await.unwrap().unwrap().id;
+    // Another writer adds `dataset` between the read and the write check.
+    authz.set_hook(Arc::new(move || {
+        let index = Arc::clone(&index);
+        Box::pin(async move {
+            let _ = index
+                .set_labels(id, &strings(&["model"]), &strings(&["model", "dataset"]))
+                .await;
+        })
+    }));
+    let writes = bucket.replaced().len();
+    let reply = hub
+        .call(Method::PUT, &format!("{LABELS}/space"), Some(ALICE), None)
+        .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    let json = reply.json();
+    assert_eq!(json["code"], "labels_changed");
+    assert_eq!(
+        json["hint"],
+        "Labels changed concurrently; re-read and retry."
+    );
+    assert_eq!(bucket.replaced().len(), writes, "the bucket was written");
+    // A retry reads the new list and succeeds.
+    let (status, body) = labels(&hub, Method::PUT, &format!("{LABELS}/space"), ALICE).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["labels"], json!(["model", "dataset", "space"]));
+}
+
+/// A change that loses the index's compare-and-swap after its bucket write
+/// answers `409`, and the bucket keeps the index's labels, not the refused
+/// change.
+#[tokio::test]
+async fn lost_label_swap_is_409_and_the_bucket_matches_the_index() {
+    let (hub, bucket, _) = hooked().await;
+    let index = observer(&hub).await;
+    let id = index.repo_by_name("alice", "m").await.unwrap().unwrap().id;
+    // The concurrent change lands right after this request's bucket write.
+    let fired = Arc::new(Mutex::new(false));
+    bucket.set_hook(Arc::new(move |meta: RepoMeta| {
+        let (index, fired) = (Arc::clone(&index), Arc::clone(&fired));
+        Box::pin(async move {
+            if meta.labels.contains(&"space".to_owned()) && !*fired.lock().unwrap() {
+                *fired.lock().unwrap() = true;
+                index
+                    .set_labels(id, &strings(&["model"]), &strings(&["model", "dataset"]))
+                    .await
+                    .unwrap();
+            }
+        })
+    }));
+    let reply = hub
+        .call(Method::PUT, &format!("{LABELS}/space"), Some(ALICE), None)
+        .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert_eq!(reply.json()["code"], "labels_changed");
+    let stored = bucket.meta(&id.to_string()).await;
+    assert_eq!(stored.labels, strings(&["model", "dataset"]));
+    assert_eq!(stored.deleted_at, None);
 }

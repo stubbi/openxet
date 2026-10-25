@@ -14,6 +14,7 @@ use openxet_auth::AuthzError;
 use openxet_http::{ErrorBody, HubErrorBody};
 use openxet_index::IndexError;
 use openxet_storage::StorageError;
+use serde::Serialize;
 
 /// The message of the unknown-repository answer, in the body's `error` and
 /// `message` and in `X-Error-Message` (ruling M2-R6).
@@ -112,6 +113,13 @@ pub enum HubError {
         /// The requested view's URL of the requested name.
         url: String,
     },
+    /// The repository's labels changed since the request read them
+    /// (ruling M2-R12): nothing was changed. `409`.
+    #[error("the labels of {repo} changed concurrently")]
+    LabelsChanged {
+        /// The repository, `{namespace}/{name}` as stored, or its id.
+        repo: String,
+    },
     /// A label breaks a rule of ADR 0010 item 3. `400`.
     #[error("{message}")]
     InvalidLabel {
@@ -200,6 +208,11 @@ impl HubError {
             ),
             Self::InvalidName { hint, .. } => (StatusCode::BAD_REQUEST, "invalid_name", hint),
             Self::NameTaken { .. } => (StatusCode::CONFLICT, "name_taken", NAME_HINT),
+            Self::LabelsChanged { .. } => (
+                StatusCode::CONFLICT,
+                "labels_changed",
+                "Labels changed concurrently; re-read and retry.",
+            ),
             Self::InvalidLabel { hint, .. } => (StatusCode::BAD_REQUEST, "invalid_label", hint),
             Self::BadRequest { hint, .. } => (StatusCode::BAD_REQUEST, "bad_request", hint),
             Self::BodyTooLarge { .. } => (
@@ -298,17 +311,32 @@ impl IntoResponse for HubError {
     }
 }
 
-/// `body` with huggingface.co's `url` field added, as its `409` carries it
-/// (S3 fixtures `05`, `06`).
+/// A Hub error body with huggingface.co's optional `url` field, which its
+/// `409` carries (S3 fixtures `05`, `06`).
+#[derive(Serialize)]
+struct WithUrl<'a> {
+    #[serde(flatten)]
+    body: &'a HubErrorBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<&'a str>,
+}
+
+/// `body` with `url` added. Should serializing fail, which strings and
+/// integers never make it, the answer keeps its status, headers and body
+/// without `url`.
 fn with_url(body: HubErrorBody, url: &str) -> Response {
-    let Ok(serde_json::Value::Object(mut json)) = serde_json::to_value(&body) else {
-        unreachable!("a HubErrorBody serializes to a JSON object")
-    };
-    json.insert("url".to_owned(), url.into());
-    let (parts, _) = body.into_response().into_parts();
-    let bytes = serde_json::to_vec(&json)
-        .unwrap_or_else(|_| unreachable!("a JSON object always serializes"));
-    Response::from_parts(parts, Body::from(bytes))
+    let bytes = serde_json::to_vec(&WithUrl {
+        body: &body,
+        url: Some(url),
+    });
+    let response = body.into_response();
+    match bytes {
+        Ok(bytes) => {
+            let (parts, _) = response.into_parts();
+            Response::from_parts(parts, Body::from(bytes))
+        }
+        Err(_) => response,
+    }
 }
 
 impl From<IndexError> for HubError {
@@ -319,6 +347,9 @@ impl From<IndexError> for HubError {
             }
             // Deleted while the request ran: it no longer exists.
             IndexError::UnknownRepo { .. } => Self::UnknownRepo,
+            IndexError::LabelsChanged { repo } => Self::LabelsChanged {
+                repo: repo.to_string(),
+            },
             _ => Self::Internal(Box::new(e)),
         }
     }

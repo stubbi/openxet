@@ -41,6 +41,7 @@ fn meta(name: &str, labels: &[&str]) -> RepoMeta {
         private: true,
         labels: labels.iter().map(|l| (*l).to_owned()).collect(),
         created_at: 1_761_400_000,
+        deleted_at: None,
     }
 }
 
@@ -207,6 +208,30 @@ async fn put_replace_refuses_every_other_kind() {
         );
         assert_eq!(bucket.size(&key).await.unwrap(), None, "{key}");
     }
+}
+
+/// A deletion tombstones the record: `deleted_at` round-trips, and a live
+/// record leaves it out, so records written before it existed read as live.
+#[test]
+fn repo_meta_tombstone_round_trips_and_is_absent_while_live() {
+    let live = meta("model", &["model"]);
+    let key = live.key();
+    let bytes = live.to_bytes();
+    assert!(!std::str::from_utf8(&bytes).unwrap().contains("deleted_at"));
+    let old = br#"{"v":1,"id":"0192f3a4b5c67d8e9fa0b1c2d3e4f5a6","namespace":"org","name":"model","private":true,"labels":["model"],"created_at":1761400000}"#;
+    assert_eq!(RepoMeta::from_bytes(&key, old).unwrap(), live);
+
+    let deleted = RepoMeta {
+        deleted_at: Some(1_761_500_000),
+        ..live
+    };
+    let bytes = deleted.to_bytes();
+    assert!(
+        std::str::from_utf8(&bytes)
+            .unwrap()
+            .ends_with(r#","deleted_at":1761500000}"#)
+    );
+    assert_eq!(RepoMeta::from_bytes(&key, &bytes).unwrap(), deleted);
 }
 
 #[test]

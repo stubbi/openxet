@@ -4,11 +4,19 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
+use std::sync::{Arc, Mutex};
+
 use axum::http::{Method, StatusCode};
+use common::HookBucket;
 use openxet_auth::Action;
+use openxet_auth::RulesAuthorizer;
 use openxet_hub::test_support::{
     ALL, PUBLIC_URL, TestHub, assert_read_keys, fixture, fixture_json, rule, user_token,
 };
+use openxet_index::{Repo, RepoId, Repos, SqliteIndex};
+use openxet_storage::{Bucket, RepoMeta};
 use serde_json::{Value, json};
 
 const ALICE: &str = "oxt_test_alice";
@@ -383,4 +391,182 @@ async fn create_needs_a_well_formed_body() {
         reply.json()["error"],
         "You don't have the rights to delete org/m"
     );
+}
+
+async fn hooked(rules: Vec<openxet_auth::Rule>) -> (TestHub, Arc<HookBucket>) {
+    let dir = tempfile::tempdir().unwrap();
+    let bucket = HookBucket::open(&dir.path().join("bucket"));
+    let hub = TestHub::start_custom(
+        dir,
+        Arc::clone(&bucket) as Arc<dyn Bucket>,
+        vec![
+            user_token(ALICE, "alice", &[]),
+            user_token(ADMIN, "admin", &[]),
+        ],
+        Arc::new(RulesAuthorizer::new(rules)),
+    )
+    .await;
+    (hub, bucket)
+}
+
+/// A delete tombstones the bucket's record before the index row goes, so
+/// a reindex from the bucket never brings the repository back.
+#[tokio::test]
+async fn delete_tombstones_the_bucket_record_first() {
+    let (hub, bucket) = hooked(vec![rule(&["alice"], &["alice/*"], ALL)]).await;
+    hub.create(ALICE, "alice", "m", None).await;
+    let index = Arc::new(SqliteIndex::open(&hub.index_path()).await.unwrap());
+    let id = index.repo_by_name("alice", "m").await.unwrap().unwrap().id;
+    let row_at_tombstone = Arc::new(Mutex::new(None));
+    let (hook_index, seen) = (Arc::clone(&index), Arc::clone(&row_at_tombstone));
+    bucket.set_hook(Arc::new(move |meta: RepoMeta| {
+        let (index, seen) = (Arc::clone(&hook_index), Arc::clone(&seen));
+        Box::pin(async move {
+            if meta.deleted_at.is_some() {
+                let row = index
+                    .repo_by_name(&meta.namespace, &meta.name)
+                    .await
+                    .unwrap();
+                *seen.lock().unwrap() = Some(row.is_some());
+            }
+        })
+    }));
+    let reply = hub
+        .call(
+            Method::DELETE,
+            "/api/repos/delete",
+            Some(ALICE),
+            Some(&json!({"name": "m", "organization": "alice"})),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(*row_at_tombstone.lock().unwrap(), Some(true));
+    let stored = bucket.meta(&id.to_string()).await;
+    assert!(stored.deleted_at.is_some(), "{stored:?}");
+    assert_eq!(stored.labels, ["model"]);
+    assert!(index.repo_by_id(id).await.unwrap().is_none());
+}
+
+/// A create whose name another node takes between its check and its index
+/// write answers `409` and tombstones the record it wrote.
+#[tokio::test]
+async fn create_that_loses_the_name_race_tombstones_its_record() {
+    let (hub, bucket) = hooked(vec![rule(&["alice"], &["alice/*"], ALL)]).await;
+    let index = Arc::new(SqliteIndex::open(&hub.index_path()).await.unwrap());
+    let fired = Arc::new(Mutex::new(false));
+    let hook_index = Arc::clone(&index);
+    bucket.set_hook(Arc::new(move |meta: RepoMeta| {
+        let (index, fired) = (Arc::clone(&hook_index), Arc::clone(&fired));
+        Box::pin(async move {
+            if meta.deleted_at.is_none() && !std::mem::replace(&mut *fired.lock().unwrap(), true) {
+                index
+                    .create_repo(&Repo {
+                        id: RepoId::generate(),
+                        namespace: "alice".to_owned(),
+                        name: "RACE".to_owned(),
+                        private: false,
+                        labels: vec!["dataset".to_owned()],
+                        created_at: 1,
+                        full_repack_gen: 0,
+                    })
+                    .await
+                    .unwrap();
+            }
+        })
+    }));
+    let reply = create(
+        &hub,
+        ALICE,
+        &json!({"name": "race", "organization": "alice"}),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.text());
+    assert_eq!(reply.json()["url"], format!("{PUBLIC_URL}/alice/race"));
+    let written = bucket.replaced();
+    assert_eq!(written.len(), 2, "{written:?}");
+    assert_eq!(written[0].id, written[1].id);
+    assert!(written[0].deleted_at.is_none());
+    let stored = bucket.meta(&written[0].id.to_string()).await;
+    assert!(stored.deleted_at.is_some(), "{stored:?}");
+    // The winner is the one the index has.
+    let winner = index.repo_by_name("alice", "race").await.unwrap().unwrap();
+    assert_eq!(winner.labels, ["dataset"]);
+}
+
+/// Deleting frees the name for anyone who may create in the namespace, so
+/// it needs `create` there besides `write` on the repository.
+#[tokio::test]
+async fn delete_needs_create_in_the_namespace() {
+    let hub = TestHub::start(
+        vec![
+            user_token(ALICE, "alice", &[]),
+            user_token(ADMIN, "admin", &[]),
+        ],
+        vec![
+            rule(&["alice"], &["org/m"], &[Action::Read, Action::Write]),
+            rule(&["admin"], &["*"], ALL),
+        ],
+    )
+    .await;
+    hub.create(ADMIN, "org", "m", None).await;
+    let body = json!({"name": "m", "organization": "org"});
+    let reply = hub
+        .call(
+            Method::DELETE,
+            "/api/repos/delete",
+            Some(ALICE),
+            Some(&body),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        reply.json()["error"],
+        "You don't have the rights to delete org/m"
+    );
+    let reply = hub
+        .call(
+            Method::DELETE,
+            "/api/repos/delete",
+            Some(ADMIN),
+            Some(&body),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+}
+
+/// Endpoints openxet doesn't implement answer `501` naming themselves, and
+/// authenticate like every Hub route.
+#[tokio::test]
+async fn unimplemented_routes_name_the_endpoint_and_authenticate() {
+    let hub = hub().await;
+    for path in [
+        "/api/collections",
+        "/api/agent-harnesses",
+        "/api/users/alice/likes",
+    ] {
+        let reply = hub.call(Method::GET, path, Some(ALICE), None).await;
+        assert_eq!(reply.status, StatusCode::NOT_IMPLEMENTED, "{path}");
+        assert!(
+            reply.json()["error"]
+                .as_str()
+                .unwrap()
+                .contains("is not implemented by this openxet server"),
+            "{path}"
+        );
+        let invalid = hub
+            .call(Method::GET, path, Some("oxt_test_unknown"), None)
+            .await;
+        assert_eq!(invalid.status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+}
+
+/// Create and delete take a few short strings: a large body is refused
+/// before it is parsed.
+#[tokio::test]
+async fn control_bodies_are_small() {
+    let hub = hub().await;
+    let body = json!({"name": "m", "organization": "alice", "padding": "x".repeat(16 << 10)});
+    let reply = create(&hub, ALICE, &body).await;
+    assert_eq!(reply.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(reply.json()["code"], "payload_too_large");
 }

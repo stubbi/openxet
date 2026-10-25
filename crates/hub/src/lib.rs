@@ -43,7 +43,9 @@ macro_rules! typed_paths {
 mod authz;
 mod error;
 mod labels;
+mod listing;
 mod misc;
+mod names;
 mod repos;
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -53,7 +55,8 @@ mod whoami;
 pub use authz::{RepoAccess, Who, require};
 pub use error::{HubError, REPO_NOT_FOUND};
 pub use labels::{MAX_LABEL_BYTES, MAX_LABELS, check_label};
-pub use repos::{RESERVED_NAMESPACES, check_name, create_repo};
+pub use names::{RESERVED_NAMESPACES, check_name};
+pub use repos::create_repo;
 pub use views::View;
 
 /// The Hub's configuration (`[hub]`, `docs/reference/config.md`).
@@ -107,9 +110,6 @@ pub struct HubState {
     /// The time credentials are checked against and records are stamped
     /// with.
     pub clock: Arc<dyn Clock>,
-    /// Serializes this node's repository metadata writes, so the record
-    /// the bucket keeps and the index row agree.
-    meta: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl HubState {
@@ -129,7 +129,6 @@ impl HubState {
             authz,
             cfg,
             clock: Arc::new(SystemClock),
-            meta: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -159,6 +158,7 @@ pub fn routes() -> routes::Routes {
     routes::Routes::new()
         .merge(whoami::routes())
         .merge(repos::routes())
+        .merge(listing::routes())
         .merge(labels::routes())
         .merge(misc::routes())
 }
@@ -177,38 +177,36 @@ pub fn endpoints() -> Vec<Endpoint> {
     routes().into_endpoints()
 }
 
-/// The largest JSON body a Hub route reads: 16 MiB, room for a
-/// `validate-yaml` of a model card as large as a regular file may be
-/// (`hub.lfs_threshold` is at most 10 MiB).
-const JSON_BODY_LIMIT: usize = 16 << 20;
+/// The largest body of a control request, `repos/create` or
+/// `repos/delete`: a few short strings (`hf_api.py` lines 4638, 4768).
+pub(crate) const CONTROL_BODY_LIMIT: usize = 8 << 10;
 
 /// Reads `body` as JSON of type `T`.
 ///
 /// # Errors
 ///
 /// [`HubError::BodyTimeout`] for a body that fell behind its deadline,
-/// [`HubError::BodyTooLarge`] past [`JSON_BODY_LIMIT`], and
+/// [`HubError::BodyTooLarge`] past `limit` bytes, and
 /// [`HubError::BadRequest`] for one that isn't the JSON the route takes.
-pub(crate) async fn json_body<T: DeserializeOwned>(body: Body) -> Result<T, HubError> {
-    let bytes = axum::body::to_bytes(body, JSON_BODY_LIMIT)
-        .await
-        .map_err(|err| {
-            if openxet_http::timed_out(&err).is_some() {
-                HubError::BodyTimeout
-            } else if std::error::Error::source(&err)
-                .is_some_and(<dyn std::error::Error>::is::<http_body_util::LengthLimitError>)
-            {
-                HubError::BodyTooLarge {
-                    limit: JSON_BODY_LIMIT,
-                }
-            } else {
-                HubError::BadRequest {
-                    message: "the request body could not be read".to_owned(),
-                    hint: "Resend the request with a body exactly as long as its \
+pub(crate) async fn json_body<T: DeserializeOwned>(
+    body: Body,
+    limit: usize,
+) -> Result<T, HubError> {
+    let bytes = axum::body::to_bytes(body, limit).await.map_err(|err| {
+        if openxet_http::timed_out(&err).is_some() {
+            HubError::BodyTimeout
+        } else if std::error::Error::source(&err)
+            .is_some_and(<dyn std::error::Error>::is::<http_body_util::LengthLimitError>)
+        {
+            HubError::BodyTooLarge { limit }
+        } else {
+            HubError::BadRequest {
+                message: "the request body could not be read".to_owned(),
+                hint: "Resend the request with a body exactly as long as its \
                            `Content-Length`.",
-                }
             }
-        })?;
+        }
+    })?;
     serde_json::from_slice(&bytes).map_err(|err| {
         // serde's other messages quote the offending value, which could be
         // anything the client sent; a missing field names only the field.

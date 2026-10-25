@@ -189,3 +189,50 @@ async fn unprefixed_git_address_serves_any_label() {
     assert_eq!(View::Kernel.url_prefix(), "kernels/");
     assert_eq!(cfg.public_url.as_str(), format!("{PUBLIC_URL}/"));
 }
+
+/// A page scans at most ten rows per entry it may list: a caller who reads
+/// few of many repositories gets short, even empty, pages, each linking
+/// the next, and still sees every repository it may read.
+#[tokio::test]
+async fn sparse_listings_scan_a_bounded_window_per_page() {
+    let hub = TestHub::start(
+        vec![
+            user_token(ALICE, "alice", &[]),
+            user_token("oxt_test_reader", "reader", &[]),
+        ],
+        vec![
+            rule(&["alice"], &["*"], ALL),
+            rule(&["reader"], &["z/*"], &[openxet_auth::Action::Read]),
+        ],
+    )
+    .await;
+    for i in 0..25 {
+        hub.create(ALICE, "a", &format!("r{i:02}"), None).await;
+    }
+    hub.create(ALICE, "z", "last", None).await;
+    let mut next = "/api/models?limit=1".to_owned();
+    let mut pages = Vec::new();
+    loop {
+        let page = hub
+            .call(Method::GET, &next, Some("oxt_test_reader"), None)
+            .await;
+        assert_eq!(page.status, StatusCode::OK);
+        pages.push(
+            ids(&page.json())
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        let Some(link) = page.header("link") else {
+            break;
+        };
+        next = link
+            .strip_prefix(&format!("<{PUBLIC_URL}"))
+            .and_then(|l| l.strip_suffix(">; rel=\"next\""))
+            .unwrap()
+            .to_owned();
+    }
+    assert!(pages[0].is_empty(), "{pages:?}");
+    assert_eq!(pages.concat(), ["z/last"]);
+    assert!(pages.len() >= 3, "{pages:?}");
+}

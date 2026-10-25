@@ -11,7 +11,7 @@ use axum::http::request::Parts;
 use openxet_auth::{ANONYMOUS, Action, Credential, Target, UserPrincipal};
 use openxet_index::Repo;
 
-use crate::{HubError, HubState, View, repos};
+use crate::{HubError, HubState, View, names};
 
 /// The user a request acts for: the user credential of its `Authorization:
 /// Bearer` header, or [`UserPrincipal::anonymous`] without one, whom only
@@ -106,7 +106,7 @@ impl RepoAccess {
         // Authorized before the lookup, by name: a glob ignores ASCII case
         // as names do (ADR 0012 item 7), so the stored spelling decides the
         // same, and an unauthorized caller costs no index read.
-        if repos::check_name(namespace, name).is_err()
+        if names::check_name(namespace, name).is_err()
             || !allowed(state, &who, Action::Read, namespace, Some(name)).await?
         {
             return Err(denied(&who));
@@ -118,7 +118,7 @@ impl RepoAccess {
             .ok_or(HubError::UnknownRepo)?;
         if !view.admits(&repo) {
             return Err(HubError::WrongView {
-                repo: repos::full_name(&repo),
+                repo: names::full_name(&repo),
                 label: view.label().unwrap_or_default(),
             });
         }
@@ -200,7 +200,7 @@ pub(crate) async fn require_as(
     }
     Err(HubError::Forbidden {
         verb,
-        repo: repos::full_name(repo),
+        repo: names::full_name(repo),
     })
 }
 

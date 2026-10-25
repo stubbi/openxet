@@ -13,6 +13,10 @@ use crate::authz::{self, RepoAccess, Who};
 use crate::routes::{Routes, on};
 use crate::{HubError, json_body};
 
+/// The largest `validate-yaml` body: room for a model card as large as a
+/// regular file may be (`hub.lfs_threshold` is at most 10 MiB), JSON-escaped.
+const VALIDATE_YAML_BODY_LIMIT: usize = 16 << 20;
+
 /// The miscellaneous routes.
 pub(crate) fn routes() -> Routes {
     let mut routes = Routes::new()
@@ -24,30 +28,31 @@ pub(crate) fn routes() -> Routes {
         // ignores any failure (`utils/_detect_agent.py` lines 197–204).
         .route(
             "/api/agent-harnesses",
-            on(Method::GET, || refuse("agent-harnesses")),
+            on(Method::GET, |_: Who| refuse("agent-harnesses")),
         )
         .route(
             "/api/collections",
-            on(Method::GET, || refuse("collections")).on(Method::POST, || refuse("collections")),
+            on(Method::GET, |_: Who| refuse("collections"))
+                .on(Method::POST, |_: Who| refuse("collections")),
         )
         .route(
             "/api/collections/{*rest}",
-            on(Method::GET, || refuse("collections"))
-                .on(Method::POST, || refuse("collections"))
-                .on(Method::PATCH, || refuse("collections"))
-                .on(Method::DELETE, || refuse("collections")),
+            on(Method::GET, |_: Who| refuse("collections"))
+                .on(Method::POST, |_: Who| refuse("collections"))
+                .on(Method::PATCH, |_: Who| refuse("collections"))
+                .on(Method::DELETE, |_: Who| refuse("collections")),
         )
         .route(
             "/api/users/{user}/likes",
-            on(Method::GET, || refuse("likes")),
+            on(Method::GET, |_: Who| refuse("likes")),
         )
         .route(
             "/api/models-tags-by-type",
-            on(Method::GET, || refuse("model card tags")),
+            on(Method::GET, |_: Who| refuse("model card tags")),
         )
         .route(
             "/api/datasets-tags-by-type",
-            on(Method::GET, || refuse("dataset card tags")),
+            on(Method::GET, |_: Who| refuse("dataset card tags")),
         );
     // On a repository, the `501` comes after the repository is resolved, so
     // these routes answer a repository the caller may not read exactly as
@@ -106,6 +111,6 @@ async fn validate_yaml(Who(who): Who, body: Body) -> Result<Json<Value>, HubErro
     if authz::is_anonymous(&who) {
         return Err(HubError::MissingCredential);
     }
-    let _: ValidateYaml = json_body(body).await?;
+    let _: ValidateYaml = json_body(body, VALIDATE_YAML_BODY_LIMIT).await?;
     Ok(Json(json!({ "errors": [], "warnings": [] })))
 }

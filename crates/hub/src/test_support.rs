@@ -13,7 +13,9 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
-use openxet_auth::{Action, Authenticator, Glob, Rule, RulesAuthorizer, StaticToken, UserProfile};
+use openxet_auth::{
+    Action, Authenticator, Authorizer, Glob, Rule, RulesAuthorizer, StaticToken, UserProfile,
+};
 use openxet_http::BodyDeadline;
 use openxet_index::SqliteIndex;
 use openxet_storage::{Bucket, LocalBucket};
@@ -175,6 +177,16 @@ impl TestHub {
         tokens: Vec<StaticToken>,
         rules: Vec<Rule>,
     ) -> Self {
+        Self::start_custom(dir, bucket, tokens, Arc::new(RulesAuthorizer::new(rules))).await
+    }
+
+    /// [`TestHub::start_with`] deciding with `authz` instead of rules.
+    pub async fn start_custom(
+        dir: TempDir,
+        bucket: Arc<dyn Bucket>,
+        tokens: Vec<StaticToken>,
+        authz: Arc<dyn Authorizer>,
+    ) -> Self {
         let index = SqliteIndex::open(&dir.path().join("index.sqlite"))
             .await
             .unwrap();
@@ -185,7 +197,7 @@ impl TestHub {
             Arc::new(index),
             bucket,
             Arc::new(auth),
-            Arc::new(RulesAuthorizer::new(rules)),
+            authz,
             HubConfig {
                 public_url: public_url.clone(),
                 cas_url: public_url,
