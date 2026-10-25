@@ -17,7 +17,8 @@
 //!
 //! `openxet-git-test-hook list-fds` prints the descriptors it holds, one
 //! `<fd> <kind>` line each, after a `hook <read>,<write>` line when
-//! `OPENXET_HOOK_FD` is set, for the channel-privacy test, and
+//! `OPENXET_HOOK_FD` is set, for the channel-privacy test (from the listing
+//! of `/dev/fd`, retrying a stat that fails), and
 //! `openxet-git-test-hook exchange` sends one request with the token from
 //! its environment and prints the reply lines, or `error …`.
 
@@ -135,13 +136,34 @@ fn exchange() {
     }
 }
 
+/// How often `list-fds` stats a listed descriptor before leaving it out.
+const STAT_ATTEMPTS: u32 = 50;
+
 fn list_fds() {
     let mut out = io::stdout().lock();
     if let Ok(fds) = std::env::var(openxet_git::hook::HOOK_FD_ENV) {
         let _ = writeln!(out, "hook {fds}");
     }
-    for fd in 0..1024 {
-        let Ok(meta) = std::fs::metadata(format!("/dev/fd/{fd}")) else {
+    // The open descriptors are read from the listing, then each is
+    // stat'ed: on macOS a stat of `/dev/fd/<n>` for an open pipe now and
+    // then fails with `EBADF` for a moment, the answer a closed descriptor
+    // gets, so a listed one is retried. The listing's own descriptor, closed
+    // by then, never answers and is left out.
+    let mut listed: Vec<u32> = std::fs::read_dir("/dev/fd")
+        .map(|dir| {
+            dir.filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    listed.sort_unstable();
+    for fd in listed {
+        let stat = |attempt| {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            std::fs::metadata(format!("/dev/fd/{fd}")).ok()
+        };
+        let Some(meta) = (0..STAT_ATTEMPTS).find_map(stat) else {
             continue;
         };
         let t = meta.file_type();
