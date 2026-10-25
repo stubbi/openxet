@@ -104,6 +104,22 @@ oid=0123456789abcdef0123456789abcdef01234567
   > corpus/pkt_line/v2-object-info
 printf '0003fff1zzzz' > corpus/pkt_line/bad-length
 
+# Hub commit bodies as huggingface_hub sends them (S3 fixtures 09-…-14 and
+# 10-…-02): byte 0 the regular-file limit, byte 1 the operation limit, then
+# the NDJSON, Python's separators included.
+mkdir -p corpus/commit_ndjson
+python3 -I - ../compat/fixtures/hub corpus/commit_ndjson <<'PY'
+import json
+import pathlib
+import sys
+
+fixtures = pathlib.Path(sys.argv[1])
+for name in ("09-upload-folder--14-POST-models-commit.json",
+             "10-create-commit-delete--02-POST-models-commit.json"):
+    body = json.loads((fixtures / name).read_text(encoding="utf-8"))["request"]["body"]["text"]
+    (pathlib.Path(sys.argv[2]) / name).write_bytes(b"\xff\x10" + body.encode())
+PY
+
 # A receive-pack request and a hook request are written here: pkt-lines of
 # commands, then a pack header (receive_request, byte 0 the chunk size), and
 # the hook's token, pack and command lines (hook_request, with the token

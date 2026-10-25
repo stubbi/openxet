@@ -1,7 +1,8 @@
 //! openxet's Hub API: the routes `huggingface_hub` and the `hf` CLI call
-//! for repositories (design §6). [`routes`] are served at the root of the
-//! server's origin beside the CAS; `openxet serve` mounts them
-//! ([`mounted`]) with [`openxet_http::compose`].
+//! for repositories, their uploads, commits, refs and listings (design
+//! §6). [`routes`] are served at the root of the server's origin beside
+//! the CAS; `openxet serve` mounts them ([`mounted`]) with
+//! [`openxet_http::compose`].
 //!
 //! The wire shapes are huggingface.co's, recorded by spike S3
 //! (`docs/research/S3-hub-api-shapes.md`, `compat/fixtures/hub/`).
@@ -16,8 +17,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Body;
-use openxet_auth::{Authenticator, Authorizer};
+use axum::body::{Body, Bytes};
+use openxet_auth::{Authenticator, Authorizer, TokenSigner};
+use openxet_git::Engine;
 #[cfg(feature = "test-support")]
 pub use openxet_http::Endpoint;
 use openxet_http::{Clock, Mounted, SystemClock};
@@ -41,14 +43,21 @@ macro_rules! typed_paths {
 }
 
 mod authz;
+mod commit;
 mod error;
+mod info;
 mod labels;
 mod listing;
 mod misc;
 mod names;
+mod ndjson;
+mod preupload;
+mod refs;
 mod repos;
 #[cfg(feature = "test-support")]
 pub mod test_support;
+mod tokens;
+mod tree;
 mod views;
 mod whoami;
 
@@ -56,6 +65,8 @@ pub use authz::{RepoAccess, Who, require};
 pub use error::{HubError, REPO_NOT_FOUND};
 pub use labels::{MAX_LABEL_BYTES, MAX_LABELS, check_label};
 pub use names::{RESERVED_NAMESPACES, check_name};
+pub use ndjson::{CommitRequest, Limits, MAX_COMMIT_OPS, parse_commit_ndjson};
+pub use preupload::DEFAULT_GITATTRIBUTES;
 pub use repos::create_repo;
 pub use views::View;
 
@@ -110,6 +121,12 @@ pub struct HubState {
     /// The time credentials are checked against and records are stamped
     /// with.
     pub clock: Arc<dyn Clock>,
+    /// Reads and writes repositories' Git objects and refs, on request
+    /// snapshots, through the fenced commit transaction (ADR 0004 item 6).
+    pub engine: Arc<Engine>,
+    /// Signs the CAS tokens the token routes hand out: the server's own
+    /// key (`{data_dir}/cas-token.key`), which the CAS verifies.
+    pub signer: Arc<TokenSigner>,
 }
 
 impl HubState {
@@ -121,6 +138,8 @@ impl HubState {
         auth: Arc<Authenticator>,
         authz: Arc<dyn Authorizer>,
         cfg: HubConfig,
+        engine: Arc<Engine>,
+        signer: Arc<TokenSigner>,
     ) -> Self {
         Self {
             index,
@@ -129,6 +148,8 @@ impl HubState {
             authz,
             cfg,
             clock: Arc::new(SystemClock),
+            engine,
+            signer,
         }
     }
 
@@ -158,6 +179,12 @@ pub fn routes() -> routes::Routes {
     routes::Routes::new()
         .merge(whoami::routes())
         .merge(repos::routes())
+        .merge(info::routes())
+        .merge(tokens::routes())
+        .merge(preupload::routes())
+        .merge(commit::routes())
+        .merge(refs::routes())
+        .merge(tree::routes())
         .merge(listing::routes())
         .merge(labels::routes())
         .merge(misc::routes())
@@ -192,7 +219,19 @@ pub(crate) async fn json_body<T: DeserializeOwned>(
     body: Body,
     limit: usize,
 ) -> Result<T, HubError> {
-    let bytes = axum::body::to_bytes(body, limit).await.map_err(|err| {
+    let bytes = read_body(body, limit).await?;
+    parse_json(&bytes)
+}
+
+/// Reads `body` whole, up to `limit` bytes.
+///
+/// # Errors
+///
+/// [`HubError::BodyTimeout`] for a body that fell behind its deadline,
+/// [`HubError::BodyTooLarge`] past `limit` bytes, and
+/// [`HubError::BadRequest`] for one that couldn't be read.
+pub(crate) async fn read_body(body: Body, limit: usize) -> Result<Bytes, HubError> {
+    axum::body::to_bytes(body, limit).await.map_err(|err| {
         if openxet_http::timed_out(&err).is_some() {
             HubError::BodyTimeout
         } else if std::error::Error::source(&err)
@@ -206,8 +245,17 @@ pub(crate) async fn json_body<T: DeserializeOwned>(
                            `Content-Length`.",
             }
         }
-    })?;
-    serde_json::from_slice(&bytes).map_err(|err| {
+    })
+}
+
+/// `bytes` as JSON of type `T`.
+///
+/// # Errors
+///
+/// [`HubError::BadRequest`] naming where it isn't the JSON the route
+/// takes, never quoting what the client sent.
+pub(crate) fn parse_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, HubError> {
+    serde_json::from_slice(bytes).map_err(|err| {
         // serde's other messages quote the offending value, which could be
         // anything the client sent; a missing field names only the field.
         let what = err.to_string();
@@ -226,4 +274,14 @@ pub(crate) async fn json_body<T: DeserializeOwned>(
                    docs/research/S3-hub-api-shapes.md lists each.",
         }
     })
+}
+
+/// The route parameter `key`, percent-decoded, or `""` if the route has
+/// none: the extractors that run first ([`RepoAccess`]) already read the
+/// parameters, so they are UTF-8.
+pub(crate) fn param(params: &axum::extract::RawPathParams, key: &str) -> String {
+    params
+        .iter()
+        .find_map(|(k, value)| (k == key).then(|| value.to_owned()))
+        .unwrap_or_default()
 }
