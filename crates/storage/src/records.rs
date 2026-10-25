@@ -51,12 +51,20 @@ pub struct XorbOwner {
 }
 
 /// A repository's metadata, at [`Key::RepoMeta`]:
-/// `{"v":1,"id":…,"namespace":…,"name":…,"private":…,"labels":[…],"created_at":…}`.
+/// `{"v":1,"id":…,"namespace":…,"name":…,"private":…,"labels":[…],"created_at":…}`,
+/// plus `"deleted_at":…` once the repository is deleted.
 ///
 /// The one record the bucket ever replaces ([`crate::Bucket::put_replace`]):
-/// a rename or a label change rewrites it before the index records the
-/// change (ruling M2-R12), so `reindex` rebuilds every repository row from
-/// these records.
+/// a rename, a label change or a deletion rewrites it before the index
+/// records the change (ruling M2-R12), so `reindex` rebuilds every
+/// repository row from these records, and skips a deleted one rather than
+/// resurrect it. A deleted repository's data still leaves only through GC
+/// (non-negotiable 3), so the record stays, tombstoned.
+///
+/// `deleted_at` is the one optional field a version 1 record may carry, an
+/// exception to "a later format bumps `v`": it is left out until set, so
+/// every record written before it existed reads unchanged, and no release
+/// has shipped a reader that would refuse it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoMeta {
     /// The repository's immutable id (ruling M2-R2).
@@ -72,6 +80,10 @@ pub struct RepoMeta {
     pub labels: Vec<String>,
     /// When it was created, in seconds since the Unix epoch.
     pub created_at: u64,
+    /// When it was deleted, in seconds since the Unix epoch; `None` while it
+    /// exists. A create that lost its name, or whose index write failed,
+    /// tombstones its own record too.
+    pub deleted_at: Option<u64>,
 }
 
 /// Ref changes copied from the database's `ref_log` rows (ADR 0004 item 3),
@@ -153,6 +165,8 @@ struct RepoMetaV1 {
     private: bool,
     labels: Vec<String>,
     created_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deleted_at: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -283,6 +297,7 @@ impl RepoMeta {
             private: self.private,
             labels: self.labels.clone(),
             created_at: self.created_at,
+            deleted_at: self.deleted_at,
         })
     }
 
@@ -301,6 +316,7 @@ impl RepoMeta {
             private: raw.private,
             labels: raw.labels,
             created_at: raw.created_at,
+            deleted_at: raw.deleted_at,
         };
         check_key(key, &record.key())?;
         Ok(record)

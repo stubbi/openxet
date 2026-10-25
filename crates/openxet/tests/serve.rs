@@ -384,6 +384,18 @@ async fn dev_mode_prints_working_token() {
     assert_eq!(status(http().head(&file)).await, 401);
     assert_eq!(status(http().get(server.url("/healthz"))).await, 200);
     assert_eq!(status(http().get(server.url("/readyz"))).await, 200);
+    // The Hub API is served beside the CAS, and the dev token is the user
+    // `dev` there (ruling M2-R3).
+    let whoami = http()
+        .get(server.url("/api/whoami-v2"))
+        .header("authorization", bearer(&token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(whoami.status(), 200);
+    let whoami: Value = whoami.json().await.unwrap();
+    assert_eq!(whoami["name"], "dev");
+    assert_eq!(status(http().get(server.url("/api/whoami-v2"))).await, 401);
 
     for name in ["dev-token", "transfer.key", "index.sqlite"] {
         assert!(data.join(name).is_file(), "{name} is missing");
@@ -467,6 +479,14 @@ async fn dev_mode_banner_is_ready_to_paste() {
         "{banner}"
     );
     assert!(banner.contains("openxet upload model.bin"), "{banner}");
+    assert!(
+        banner.contains(&format!("  export HF_ENDPOINT={endpoint}\n")),
+        "{banner}"
+    );
+    assert!(
+        banner.contains(&format!("  hf auth login --token {token}\n")),
+        "{banner}"
+    );
 }
 
 #[tokio::test]

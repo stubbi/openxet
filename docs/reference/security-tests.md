@@ -48,13 +48,13 @@ its clients sent (`assert_no_credential_in_log`).
 | 1 | `no_unauthenticated_reads` | `crates/cas/tests/reconstruction.rs` | M1 |
 | 1 | `signed_url_bound_to_range` | `crates/auth/tests/auth.rs` | M1 |
 | 1 | `no_unauthenticated_reads` | pending (M2, `crates/hub/tests/gateway.rs`) | M2 (Hub, gateway and LFS URLs) |
-| 1 | `anonymous_reads_only_with_rule` | pending (M2, `crates/hub/tests/security.rs`) | M2 |
+| 1 | `anonymous_reads_only_with_rule` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
-| 2 | `unreadable_repo_matches_unknown_repo_on_every_route` | pending (M2, `crates/hub/tests/security.rs`) | M2 (Hub routes) |
+| 2 | `unreadable_repo_matches_unknown_repo_on_every_route` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
 | 2 | `gateway_needs_credential_scoped_to_repo` | pending (M2, `crates/hub/tests/gateway.rs`) | M2 (file gateway) |
-| 2 | `repo_create_authorized_per_namespace` | pending (M2, `crates/hub/tests/security.rs`) | M2 |
-| 2 | `wrong_type_without_read_access_matches_unknown_repo` | pending (M2, `crates/hub/tests/security.rs`) | M2 |
-| 2 | `create_collision_authorized_first` | pending (M2, `crates/hub/tests/security.rs`) | M2 |
+| 2 | `repo_create_authorized_per_namespace` | `crates/hub/tests/security.rs` | M2 |
+| 2 | `wrong_type_without_read_access_matches_unknown_repo` | `crates/hub/tests/security.rs` | M2 |
+| 2 | `create_collision_authorized_first` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `credential_scoped_to_repo`, bucket routes | pending | M5 |
 | 2 | `bucket_create_authorized_per_namespace` | pending | M5 |
 | 2 | `bucket_add_file_hash_must_be_readable` | pending | M5 |
@@ -74,7 +74,7 @@ its clients sent (`assert_no_credential_in_log`).
 | 5 | `foreign_writer_cannot_forge_shard_under_global` | `crates/cas/tests/shards.rs` | M1 |
 | 6 | `lfs_download_action_has_no_token` | pending (M2, `crates/hub/tests/lfs.rs`) | M2 |
 | 6 | `responses_never_echo_credential` | `crates/cas/tests/routes_misc.rs` | M1 |
-| 6 | `responses_never_echo_credential` | pending (M2, `crates/hub/tests/security.rs`) | M2 (Hub routes) |
+| 6 | `responses_never_echo_credential` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
 | 6 | `credentials_never_logged` | `crates/openxet/tests/serve.rs` | M1 |
 | 6 | `credentials_never_logged` | pending (M2, `crates/openxet/tests/hub_serve.rs`) | M2 (Hub, Git and LFS routes) |
 | 6 | `test_fixture_redaction` | `compat/tests/test_fixture_redaction.py` | M0 |

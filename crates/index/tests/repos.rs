@@ -201,7 +201,7 @@ async fn set_labels_replaces() {
     ok(index.create_repo(&r).await);
 
     let labels = vec!["dataset".to_owned(), "eval".to_owned()];
-    ok(index.set_labels(r.id, &labels).await);
+    ok(index.set_labels(r.id, &r.labels, &labels).await);
     let got = ok(index.repo_by_id(r.id).await).unwrap_or_else(|| panic!("repo"));
     assert_eq!(got.labels, labels);
     let as_model = ok(index
@@ -216,15 +216,42 @@ async fn set_labels_replaces() {
         .await);
     assert!(as_model.items.is_empty());
 
-    ok(index.set_labels(r.id, &[]).await);
+    ok(index.set_labels(r.id, &labels, &[]).await);
     let got = ok(index.repo_by_id(r.id).await).unwrap_or_else(|| panic!("repo"));
     assert!(got.labels.is_empty());
 
     let missing = RepoId::generate();
-    match index.set_labels(missing, &labels).await {
+    match index.set_labels(missing, &[], &labels).await {
         Err(IndexError::UnknownRepo { repo }) => assert_eq!(repo, missing),
         other => panic!("expected UnknownRepo, got {other:?}"),
     }
+}
+
+/// Two writers that read the same labels can't both change them: the
+/// second one's expected list is stale, and it changes nothing (ruling
+/// M2-R12).
+#[tokio::test]
+async fn set_labels_compares_and_swaps() {
+    let dir = ok(TempDir::new());
+    let (index, _) = open(&dir).await;
+    let r = repo("org", "thing", &["model"]);
+    ok(index.create_repo(&r).await);
+
+    let first = vec!["model".to_owned(), "dataset".to_owned()];
+    let second = vec!["model".to_owned(), "space".to_owned()];
+    ok(index.set_labels(r.id, &r.labels, &first).await);
+    match index.set_labels(r.id, &r.labels, &second).await {
+        Err(IndexError::LabelsChanged { repo }) => assert_eq!(repo, r.id),
+        other => panic!("expected LabelsChanged, got {other:?}"),
+    }
+    let got = ok(index.repo_by_id(r.id).await).unwrap_or_else(|| panic!("repo"));
+    assert_eq!(got.labels, first);
+    // Order is part of the list.
+    let reordered = vec!["dataset".to_owned(), "model".to_owned()];
+    assert!(matches!(
+        index.set_labels(r.id, &reordered, &second).await,
+        Err(IndexError::LabelsChanged { .. })
+    ));
 }
 
 /// A table of `n` chunks, each 1000 bytes uncompressed and 600 stored.

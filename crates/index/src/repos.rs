@@ -104,13 +104,23 @@ pub trait Repos: Send + Sync + 'static {
         limit: usize,
     ) -> Result<Page<Repo>, IndexError>;
 
-    /// Replaces the repository's labels with `labels`.
+    /// Replaces the repository's labels with `labels` if they are still
+    /// `expected`, compared as lists: a compare-and-swap, so two writers
+    /// that read the same labels can't both change them and one lose the
+    /// other's change, on one node or several.
     ///
     /// # Errors
     ///
-    /// [`IndexError::UnknownRepo`] if no repository has id `id`, and
-    /// [`IndexError::Database`] if the write fails.
-    async fn set_labels(&self, id: RepoId, labels: &[String]) -> Result<(), IndexError>;
+    /// [`IndexError::LabelsChanged`] if the labels are no longer
+    /// `expected`, [`IndexError::UnknownRepo`] if no repository has id
+    /// `id`, and [`IndexError::Database`] if the write fails. Nothing is
+    /// changed on error.
+    async fn set_labels(
+        &self,
+        id: RepoId,
+        expected: &[String],
+        labels: &[String],
+    ) -> Result<(), IndexError>;
 
     /// Deletes the repository's rows: the repository, its refs, lease and
     /// unplaced entries. Its packs are handed to GC, never deleted here

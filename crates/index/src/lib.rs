@@ -321,6 +321,13 @@ pub enum IndexError {
         /// The `{namespace}/{name}` asked for, as written.
         name: String,
     },
+    /// A repository's labels changed since the caller read them (ruling
+    /// M2-R12): [`Repos::set_labels`] changed nothing.
+    #[error("the labels of repository {repo} changed concurrently; read them again and retry")]
+    LabelsChanged {
+        /// The repository.
+        repo: RepoId,
+    },
     /// No repository has this id: it was never created or has been deleted.
     #[error("repository {repo} does not exist; it may have been deleted")]
     UnknownRepo {

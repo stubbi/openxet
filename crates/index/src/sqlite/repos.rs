@@ -149,15 +149,26 @@ impl Repos for SqliteIndex {
         Ok(Page { items, next })
     }
 
-    async fn set_labels(&self, id: RepoId, labels: &[String]) -> Result<(), IndexError> {
-        let updated = sqlx::query("UPDATE repos SET labels = ? WHERE id = ?")
+    async fn set_labels(
+        &self,
+        id: RepoId,
+        expected: &[String],
+        labels: &[String],
+    ) -> Result<(), IndexError> {
+        // Every write stores `labels_json` of the list, so equal lists are
+        // equal text and the comparison can run in the one statement.
+        let updated = sqlx::query("UPDATE repos SET labels = ? WHERE id = ? AND labels = ?")
             .bind(labels_json(labels))
             .bind(&id.0[..])
+            .bind(labels_json(expected))
             .execute(&self.writer)
             .await?
             .rows_affected();
         if updated == 0 {
-            return Err(IndexError::UnknownRepo { repo: id });
+            return Err(match self.repo_by_id(id).await? {
+                Some(_) => IndexError::LabelsChanged { repo: id },
+                None => IndexError::UnknownRepo { repo: id },
+            });
         }
         Ok(())
     }
