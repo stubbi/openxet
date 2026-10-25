@@ -18,6 +18,11 @@ and tests are present at that commit; it is not a fresh runtime or release
 certification. M2 is in progress. The README and AGENTS current-state
 paragraphs still describe M1 and are insufficient to assess M2 progress.
 
+The [feasibility audit](../../research/S15-agent-storage-feasibility.md)
+checks every feature family against source, platform APIs and local probes.
+Its F1 to F6 gates are prerequisites to the corresponding feature promises;
+an implementation path is not a measured performance or production claim.
+
 ## 1. Vision and the first users
 
 **OpenXet keeps work usable as it moves between agents, tools and machines.**
@@ -98,7 +103,7 @@ model memory service, compute scheduler or general distributed POSIX disk.
 | [CAS reconstruction][cas-source], [published benchmarks](../../reference/benchmarks.md) | Range reconstruction and documented protocol measurements | Mounted filesystem speed, production load results, or task speed |
 | [Client exports][client-source], [download][download-source], [session options][session-source] | Upload/download by hash and use of the upstream cache | A seekable public reader, machine-wide eviction policy, mount or workspace API |
 | [Hub route composition][hub-source], [Git HTTP][git-http-source] | Repository, upload, ref, tree and Git HTTP implementations have landed | Completion of all M2 stock-client paths |
-| [M2 plan](../plans/2026-10-25-m2-hub-git-lfs.md), Tasks 13, 14, 18–21 | Gateway, LFS, OpenAPI, compatibility, benchmarks and documentation are required M2 work | That every task is merged or its acceptance checks pass |
+| [M2 plan](../plans/2026-10-25-m2-hub-git-lfs.md), Tasks 13, 14, 18 to 21 | Gateway, LFS, OpenAPI, compatibility, benchmarks and documentation are required M2 work | That every task is merged or its acceptance checks pass |
 | [URI contract](../../reference/xet-uri.md), [parser][uri-source] | Explicit-host syntax, parser, formatter and immutable commit references exist | CLI/SDK adoption, bucket revision support or artifact-specific syntax |
 | [ADR 0012](../../adr/0012-repository-identity-and-authorization-rules.md) and [auth rules][auth-source] | Immutable repository ids and an authorizer seam are implemented | OIDC, delegated tokens, per-artifact authorization or a hosted identity service |
 
@@ -175,19 +180,29 @@ Required behavior:
 - Reuse verified content across revisions and workers where authorized.
   Access decisions remain credential-scoped and fail closed, including
   cache hits; a shared physical cache does not imply shared authority.
-- An explicit local cache capacity, accounting, pins for selected hot data,
-  coordinated eviction and recovery after an interrupted cache write.
+- An explicit capacity for the coordinator-owned cache, accounting, pins
+  for selected hot data, coordinated eviction and interrupted-write recovery.
+  Independent HF processes and unrelated workspace writes are outside that
+  hard bound; account for them separately rather than silently evicting them.
 - Documented offline behavior: selected cached content can be available
   under the adopted credential policy; an uncached read fails clearly.
   Revocation cannot recall plaintext already delivered to a local process.
 
 Start with a library and local materialization on macOS and Linux. Prototype
 a Linux FUSE read-only adapter, and evaluate macOS FSKit/macFUSE separately
-for installation, permissions and tool compatibility. Do not make macOS users
+for installation, permissions and tool compatibility. FSKit's generic URL
+resource starts at macOS 26; macFUSE's documented read-only FSKit support
+starts at 26.4. Framework availability at 15.4 is not a network-mount support
+claim. Keep an explicit tested OS/backend matrix. Do not make macOS users
 wait for a writable FUSE implementation to benefit from snapshot/restore.
 Environments without mount privileges keep the reader/HTTPS path. Windows
 keeps the existing client support commitment; mount support is advertised
 only after its own tested implementation.
+
+Start cache sharing within one trusted OS user/security domain. Untrusted
+workers need separate OS identities or isolated sandboxes and a broker-owned
+cache they cannot read directly. Per-token checks do not isolate processes
+that already share access to the same plaintext files.
 
 Parquet selection belongs to DuckDB, Polars or another format-aware reader.
 Random CSV scans, compressed streams and broad filters can still require
@@ -212,12 +227,21 @@ worktree administrative paths on restoration. Preserve supported modes and
 symlinks without following them outside the capture root; list unsupported
 metadata and refuse an advertised exact restoration if it would be lost.
 
-The first capture requires quiescent writers. The caller or runtime stops
-them and keeps the workspace quiescent through local release; OpenXet
-reports a busy workspace rather than killing processes or
-claiming a consistent live snapshot. A filesystem snapshot adapter may
-relax this later only with a documented consistency contract. Process RAM,
-open connections and running VM/container state are outside this feature.
+The first restoration contract covers a declared subset of ordinary Git
+state on a compatible OS/architecture. Test special index states, submodules,
+LFS data, in-progress Git operations and platform metadata individually;
+reject unsupported local release. Source/data portability does not imply
+that native dependencies or an execution environment migrate unchanged.
+
+The first capture requires quiescent writers. Automatic local release is
+initially limited to runtime-managed workspaces whose writers the runtime
+can exclude through completion. For an arbitrary directory, provide explicit
+capture/restore without automatic local removal. A file scan cannot prove
+the absence of external writers. OpenXet reports known busy state rather
+than killing processes or claiming a consistent live snapshot. A filesystem
+snapshot adapter may relax this later only with a documented consistency
+contract. Process RAM, open connections and running VM/container state are
+outside this feature.
 
 Capture policy distinguishes durable work, reconstructible dependencies and
 disposable scratch. Credentials and external files are not automatically
@@ -236,12 +260,16 @@ Local release is a separate, retryable operation after capture:
 5. Release the covered local files; retain the root until explicit release
    or the agreed expiry, with visible policy and dry-run output.
 
-Steps 2–3 require the durability/retention slice of M4. Existing asynchronous
+Steps 2 to 3 require the durability/retention slice of M4. Existing asynchronous
 Git ref logging, with up to 60 s rollback after index loss, is insufficient
 as the only restoration address. The root and its pin must survive reindex
 without manual recovery of an unplaced commit. Deletion from the server
 still follows GC and its existing grace. Evicting a verified local cache
 entry is distinct from deleting retained remote data.
+
+Snapshot roots and retention need explicit storage records and GC marking
+and reindex rules. An ordinary JSON manifest does not automatically pin its
+references in the current implementation.
 
 Automatic eviction of active writable workspaces is excluded initially.
 A general writable virtual filesystem is considered only if the native
@@ -249,9 +277,11 @@ directory/cache approach fails the measured workload for a specific reason.
 
 ## 8. Roadmap in dependency order
 
-These are proposed delivery slices, not replacement names for M0–M8.
+These are proposed delivery slices, not replacement names for M0 to M8.
 No calendar promises are made. Core compatibility and recovery work continue
 while workload evidence and bounded client prototypes are gathered.
+The feasibility audit's F1 to F6 prototypes establish the implementation and
+platform contracts before the corresponding slices become release promises.
 
 | Slice | Deliverable and user outcome | Dependency and relationship to current milestones | Exit evidence |
 |---|---|---|---|
@@ -274,6 +304,11 @@ or local release against a production service skips persistence, isolation,
 bounded resource use, audit requirements or restore drills. Prioritize the
 S3-compatible backend and chosen database deployment for the first remote
 pilot; keep GCS/Azure and the rest of M3 on the approved roadmap.
+
+Hard actual-egress caps require a mediated transfer path; replayable direct
+URLs alone cannot enforce them. Resolve that path and the existing
+reads-never-stop policy in a further decision before promising strict agent
+byte budgets. Basic scope/expiry delegation does not depend on that promise.
 
 Continue the broader roadmap as explicit backlog: remaining backends,
 SSH, mirror, multiple pools, regional cache, full web self-service and
@@ -346,9 +381,10 @@ from upload efficiency alone to continuity and reuse of work.
 | §10.8 client delivery is concentrated in M6 | Deliver reader/cache/manifest slices earlier; put workspace capture in the client | Change dependencies and write implementation plans per slice |
 | §5.3 allows up to 60 s Git-ref recovery lag | Keep that documented contract; require synchronous retained roots for local release | Specify durable snapshot/pin records and reindex semantics in a further ADR before P3 |
 | §5.6 minimum GC grace is 28 days | Preserve it | Any shorter retention optimization needs a separate compatibility decision |
+| §7.1 optional delegated byte caps and §12 tenant reads never stop at a budget | Distinguish issued-byte estimates from actual egress; strict caps need a mediated path and explicit policy | Decide budget and revocation semantics before implementing or advertising hard actual-egress limits; no read policy changes here |
 | §10.4 bucket keys are last-writer-wins | Keep stock bucket behavior; add a separately specified conditional publication operation only if needed | Do not silently change Hub bucket semantics or use last-writer-wins as a coordinator |
 | §2/§10.10 exclude content previews | Add bounded client format inspection; preserve web UI exclusions | Specify supported formats and resource limits, without adding a dataset browser |
-| §12 builds M0–M7 through 1.0 without feedback pauses | Add packaged workflow previews before M7 is complete; keep core development moving and review the final 1.0 cut after evidence | Explicit owner approval is needed to revise the existing all-features 1.0 commitment; this proposal does not silently remove features |
+| §12 builds M0 to M7 through 1.0 without feedback pauses | Add packaged workflow previews before M7 is complete; keep core development moving and review the final 1.0 cut after evidence | Explicit owner approval is needed to revise the existing all-features 1.0 commitment; this proposal does not silently remove features |
 
 No new public positioning is adopted here. The existing Git-based entry
 point remains useful. Once a portable-work workflow is demonstrated, its

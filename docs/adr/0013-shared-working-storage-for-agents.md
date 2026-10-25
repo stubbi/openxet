@@ -45,13 +45,19 @@ code, planned features, product hypotheses and proposed performance gates.
    Keep implementation moving while obtaining user evidence. Review the
    final 1.0 cut explicitly; no existing feature is silently removed from
    the accepted 1.0 scope.
+7. Apply the [feasibility audit](../research/S15-agent-storage-feasibility.md)
+   and its F1 to F6 gates. Keep Mac mounts version/backend-specific, scope cache
+   bounds to coordinated storage, and restrict initial automatic local
+   release to managed workspaces with writer exclusion. A future decision
+   must reconcile strict delegated egress caps with direct downloads and
+   the approved tenant read-budget policy before those caps are promised.
 
 ## Consequences
 
 - If accepted, update design §1, §1a, §7.1, §10.8 and §12, AGENTS and
   the relevant milestone plans together before following the new sequence.
   Until then, the current design remains authoritative.
-- This bends the existing M6/M7 ordering and the M0–M7 release-cut decision.
+- This bends the existing M6/M7 ordering and the M0 to M7 release-cut decision.
   It does not discard ongoing Hub/Git work, shorten the 28-day minimum GC
   grace, change bucket last-writer-wins semantics or approve the S3 frontend.
 - Workspace capture must preserve Git state and selected unfinished work,
