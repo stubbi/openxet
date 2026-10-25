@@ -23,6 +23,7 @@ libfuzzer-sys = "=0.4.13"
 openxet-auth = { path = "../crates/auth", version = "0.0.0" }
 openxet-cas = { path = "../crates/cas", version = "0.0.0", features = ["fuzzing"] }
 openxet-git = { path = "../crates/git", version = "0.0.0", features = ["fuzzing"] }
+openxet-hub = { path = "../crates/hub", version = "0.0.0" }
 openxet-protocol = { path = "../crates/protocol", version = "0.0.0" }
 openxet-uri = { path = "../crates/uri", version = "0.0.0" }
 url = "2.5.8"
@@ -100,6 +101,13 @@ bench = false
 [[bin]]
 name = "hook_request"
 path = "fuzz_targets/hook_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "commit_ndjson"
+path = "fuzz_targets/commit_ndjson.rs"
 test = false
 doc = false
 bench = false

@@ -219,6 +219,19 @@ impl Authenticator {
         })
     }
 
+    /// This authenticator, also accepting CAS tokens signed by `key`: the
+    /// server's own key, whose tokens the Hub hands out (design §5.4).
+    #[must_use]
+    pub fn with_jwt_key(&self, key: PublicKey) -> Self {
+        let mut jwt_keys = self.jwt_keys.clone();
+        jwt_keys.push(key);
+        Self {
+            static_tokens: self.static_tokens.clone(),
+            jwt_keys,
+            max_token_lifetime: self.max_token_lifetime,
+        }
+    }
+
     /// Authenticates the token from an `Authorization: Bearer` header.
     ///
     /// `now` is Unix seconds. Static tokens are tried first, then CAS

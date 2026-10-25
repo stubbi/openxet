@@ -32,7 +32,7 @@ hash.
 | Source | Form | Example |
 | ------ | ---- | ------- |
 | File | `[section]` and `key = value` | `[cas]` `url_lifetime = "45m"` |
-| Environment | `OPENXET_<SECTION>__<KEY>`, case-insensitive, `__` between section and key | `OPENXET_CAS__URL_LIFETIME=45m` |
+| Environment | `OPENXET_<SECTION>__<KEY>`, case-insensitive, `__` between section and key and between a subsection and its key | `OPENXET_CAS__URL_LIFETIME=45m`, `OPENXET_GIT__REACHABILITY__MAX_MS=3000` |
 | Flags | `--port N` replaces the port of `server.bind`; `--data-dir DIR` and `--log-format text\|json` replace their keys | `--port 0` |
 
 An environment value is taken as written for string keys. For the other
@@ -55,7 +55,7 @@ unit: `KiB`, `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | --- | ------- | ------ | ------- |
 | `bind` | `127.0.0.1:8080` | an IP address and port | Where to listen. `0.0.0.0:8080` or `[::]:8080` listens on every interface and then needs `public_url`. `hf_xet`'s default CAS endpoint is `http://localhost:8080`. |
 | `public_url` | `http://` and the bound address | absolute `http` or `https` URL of an origin root | The URL clients reach the server at. Every transfer URL is built from it. |
-| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
+| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key`, `cas-token.key`, by default the Git cache `git-cache/` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
 | `log_format` | `text` | `text` or `json` | Log lines on stderr. |
 | `log_level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | openxet's own log level. Other libraries log warnings and errors only. `debug` logs one line per request. |
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
@@ -181,11 +181,49 @@ the root of the same origin as the CAS.
 | `max_commit_bytes` | `64MiB` | `1MiB` to `1GiB`, and at least twice `lfs_threshold` | The largest commit body. A regular file travels base64-encoded inside it. |
 | `token_ttl` | `15m` | `1m` to `24h`, and at most `auth.max_token_lifetime` | How long the CAS tokens the Hub hands clients live. Clients refresh them before they expire. |
 | `page_size` | `1000` | `1` to `1000` | The most entries one listing page holds. A listing with more answers `Link: <…>; rel="next"`, which `huggingface_hub` follows. |
+| `commit_wait` | `30s` | `1s` to `10m` | How long a Hub commit waits for the commits to the same branch already running on this node. One that waits longer is refused as retryable (`503` with `Retry-After`), and `huggingface_hub` retries it. |
 
 A repository the caller may not read answers exactly as one that doesn't
 exist: `404` with `X-Error-Code: RepoNotFound`. A request without a
 credential gets `401` instead, unless a [rule](#rules) for `anonymous`
 grants the read.
+
+### `[git]`
+
+The Git engine behind the Hub's commits and reads and Git smart HTTP. It
+keeps a node-local cache of packs hydrated from the bucket, and runs
+`git` 2.37 or newer from `PATH`.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `cache_dir` | `<data_dir>/git-cache` | a directory path | The node's Git cache: hydrated packs, per-request snapshots and the `proc-receive` hook (a link to the openxet binary). It must be on a filesystem with hard links. One process holds it at a time: a second `serve` given the same directory refuses to start, naming the key, so servers that share a data directory each need their own `cache_dir`. |
+| `cache_max_bytes` | `20GiB` | `1GiB` to `1PiB` | The cache is evicted down to this size; an evicted pack is hydrated from the bucket again when a request needs it. |
+| `max_plain_blob_bytes` | unset | `1KiB` to `1TiB` | A pushed blob larger than this that is not a Git LFS pointer is refused, and the message names `git lfs track`. Unset, any size is accepted. |
+
+#### `[git.reachability]`
+
+Limits on the reachability check that a fetch asking for an object by its
+id runs, so one request can't walk a whole history. A request over a limit
+is refused as retryable.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `max_commits` | `200000` | `1` or more | The most commits one check may walk. |
+| `max_ms` | `2000` | `1` or more | The most milliseconds one check may take. |
+| `max_concurrent_per_repo` | `2` | `1` or more | The most checks running at once in one repository. |
+| `max_concurrent_per_principal` | `4` | `1` or more | The most checks one caller may run at once. |
+
+#### `[git.thin_bases]`
+
+Limits on the check a push's thin pack goes through: every base object it
+leaves out must be reachable from a ref the pusher may read. A push over a
+limit is refused as retryable. The check shares
+`[git.reachability]`'s concurrency limits.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `max_objects` | `2000000` | `1` or more | The most objects one check may visit. |
+| `max_ms` | `2000` | `1` or more | The most milliseconds one check may take. |
 
 ## Dev mode
 
@@ -196,7 +234,8 @@ Without a configuration file, or with one that has no `[auth]` section,
 - `dev-token` (mode `0600`): one static write token for scope `default`,
   which is also the user `dev`; dev mode's one [rule](#rules) lets `dev`
   read, write and create every repository
-- `transfer.key` (mode `0600`)
+- `transfer.key` and `cas-token.key` (mode `0600`)
+- `git-cache/`, the Git cache, unless `git.cache_dir` names another place
 
 It reuses all of them on every later start, so data, the token and transfer
 URLs signed before a restart keep working. It prints the endpoint, the data
@@ -256,6 +295,16 @@ already handed out.
   it to every node.
 - Remote bucket backends (M3) must require the key: with a shared bucket
   there is no shared data directory to hold a generated one.
+
+`cas-token.key` is an Ed25519 private key in PKCS#8 PEM, the format of
+`openxet token keygen`. The Hub signs the [CAS tokens](#cas-tokens) it
+hands clients (`xet-read-token` and `xet-write-token`) with it, and the
+CAS trusts its public key without it being listed in
+`auth.jwt_public_keys`. Like `transfer.key`, every node behind one
+endpoint must share it, or a token one node's Hub hands out is refused by
+another node's CAS. A missing key is generated, silently in dev mode and
+with a warning naming the file when `[auth]` is configured. Replacing it
+invalidates the tokens already handed out; clients fetch new ones.
 
 ## Token format
 
