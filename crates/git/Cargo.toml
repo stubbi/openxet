@@ -10,8 +10,10 @@ repository.workspace = true
 [features]
 # Test-only: the actor names in `publish` that stop a publish between the
 # upload and the commit transaction, or between the commit and the answer,
-# as a crashed node would (ADR 0004, `publish_then_cas_survives_faults`).
-# Never enable it in a shipped build.
+# as a crashed node would (ADR 0004, `publish_then_cas_survives_faults`),
+# and `Engine::set_fault_hook`, which runs a test's code at the points
+# where repacks and the pack sweep race other writers. Never enable it in a
+# shipped build.
 fault-injection = []
 # Fuzz-only: `RequestParser` and `hook::parse_hook_request`, the parsers of
 # untrusted push bytes, for the targets in `fuzz/`. Never enable it in a
@@ -61,6 +63,7 @@ hyper-util = { version = "0.1.21", features = ["tokio"] }
 # openxet-git with `fault-injection` and `test-hook`; a release or plain
 # `cargo build` doesn't.
 openxet-git = { path = ".", features = ["fault-injection", "test-hook"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "time"] }
 

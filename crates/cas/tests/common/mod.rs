@@ -1046,6 +1046,10 @@ impl Bucket for CountingBucket {
     ) -> Result<Vec<Key>, StorageError> {
         self.inner.list_under(repo, kind).await
     }
+
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
 }
 
 /// A stream whose `poll_next` is `poll`.
@@ -1145,5 +1149,9 @@ impl Bucket for FailingBucket {
         _: KeyKind,
     ) -> Result<Vec<Key>, StorageError> {
         Ok(Vec::new())
+    }
+
+    async fn delete(&self, _: &Key) -> Result<bool, StorageError> {
+        Ok(false)
     }
 }

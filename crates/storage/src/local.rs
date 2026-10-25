@@ -553,6 +553,19 @@ fn last_modified_blocking(path: &Path) -> Result<Option<u64>, StorageError> {
     ))
 }
 
+/// Removes `path` and makes its removal durable; `false` if it was absent.
+fn delete_blocking(durable: &dyn Durability, path: &Path) -> Result<bool, StorageError> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(io("remove", path)(e)),
+    }
+    if let Some(dir) = path.parent() {
+        fsync_dir(durable, dir)?;
+    }
+    Ok(true)
+}
+
 /// The keys of `kind` stored under `root`.
 fn list_blocking(root: &Path, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
     let (base, depth) = match kind {
@@ -993,6 +1006,18 @@ impl Bucket for LocalBucket {
     async fn list_under(&self, repo: RepoIdHex, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
         let root = self.root.clone();
         blocking(move || list_under_blocking(&root, repo, kind)).await
+    }
+
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+        if !matches!(key.kind(), KeyKind::Pack | KeyKind::Midx) {
+            return Err(StorageError::InvalidKey {
+                key: key.to_string(),
+                reason: "only a Git pack's or multi-pack index's files are deleted, by the pack sweep",
+            });
+        }
+        let path = self.path(key);
+        let durable = Arc::clone(&self.fs);
+        blocking(move || delete_blocking(durable.as_ref(), &path)).await
     }
 }
 

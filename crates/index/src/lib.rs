@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use openxet_protocol::MerkleHash;
 
 pub use git::{
-    CommitError, CommitTx, GitStore, Lease, Pack, PackState, RefLogRow, RefUpdate, RepackPublish,
-    Snapshot, Unplaced, UnplacedKind,
+    CommitError, CommitTx, GitStore, Lease, Pack, PackDeletion, PackRecord, PackState, RefLogRow,
+    RefUpdate, Reindexed, RepackPublish, Snapshot, Unplaced, UnplacedKind,
 };
 #[cfg(feature = "test-support")]
 pub use rebuild::{FileRow, RebuildError, ScopeTables, rebuild_scope_tables};
@@ -333,6 +333,16 @@ pub enum IndexError {
     UnknownRepo {
         /// The id asked for.
         repo: RepoId,
+    },
+    /// The pack sweep is deleting the files of a pack of this name (ADR 0004
+    /// item 5); a pack row of the name can be inserted once it is done.
+    #[error(
+        "garbage collection is deleting an identical pack ({name}) of this repository; retry in \
+         a few seconds"
+    )]
+    PackDeleting {
+        /// The pack's name.
+        name: String,
     },
     /// The caller passed data the index can't store, which is a bug in the
     /// caller.

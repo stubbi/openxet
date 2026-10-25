@@ -21,7 +21,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_core::Stream;
 use openxet_auth::UserPrincipal;
-use openxet_index::{CommitError, Oid, RefUpdate, RepoId};
+use openxet_index::{CommitError, IndexError, Oid, RefUpdate, RepoId};
 use openxet_storage::{BodyStream, PackExt, PackName};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::{Child, ChildStdout};
@@ -347,7 +347,11 @@ impl Receive {
                 a
             }
             Err(refused) => {
-                self.counters.record(Err(()));
+                // A push over the concurrency limits was never checked, so
+                // it is no verdict of the rule.
+                if !matches!(refused, WriterRefused::Busy) {
+                    self.counters.record(Err(()));
+                }
                 return Err(writer_refusal(&refused));
             }
         };
@@ -395,6 +399,9 @@ impl Receive {
             Err(PublishError::Commit(CommitError::PackNotPending)) => {
                 Err(Refusal::all("the push took too long to commit; push again"))
             }
+            Err(PublishError::Index(IndexError::PackDeleting { .. })) => Err(Refusal::all(
+                "garbage collection is deleting an identical pack; push again in a few seconds",
+            )),
             Err(e) => Err(internal(&e)),
         }
     }
@@ -507,7 +514,7 @@ impl Receive {
     /// hook reported must still resolve, symlinks and `..` included, inside
     /// the snapshot and name that pack (ADR 0004 item 7), as defence in
     /// depth. A pushed pack named like a committed one holds exactly the
-    /// same objects (a pack is named by its object set), as when a push
+    /// same objects (a pack is named by its checksum), as when a push
     /// whose answer was lost is sent again: then nothing new is published,
     /// and the rule treats every object as unsent, which only asks more.
     async fn new_pack(
@@ -614,7 +621,7 @@ fn human_size(bytes: u64) -> String {
 
 /// A ref name git's `check-ref-format` accepts, under `refs/`
 /// (git-check-ref-format(1), rules 1 to 10).
-fn valid_ref_name(name: &str) -> bool {
+pub(crate) fn valid_ref_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("refs/") else {
         return false;
     };

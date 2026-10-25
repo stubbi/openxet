@@ -16,6 +16,20 @@
   fences stale updates by the old value and accepts non-fast-forward
   updates, since a forced push can't be told apart on the wire, and
   `main` can't be deleted (branch protection is a later feature)
+- Amended: 2026-10-25, in M2 Task 9 (found while building repack, the
+  sweep and reindex): item 5's repack outputs keep their oldest input's
+  `created_at`; a pack row records when it was committed, which dates a
+  multi-pack-index generation's retirement; the sweep keeps files another
+  row still names; item 4's reindex commits cruft packs and logs the refs
+  it rolls back; item 3's ref log retention is pruned by the sweep
+- Amended: 2026-10-25, in M2 Task 9's review: item 5's sweep ages
+  in-flight rows by `inserted_at`, not `created_at`, holds the repack
+  lease, and deletes files only under a deletion claim in the index; the
+  leaseholder renews its lease while it works; GC refuses a grace period
+  below 28 days; item 4's ref fallback stays within the ref's current
+  lifetime, and discard is one transaction whose lost packs keep a full
+  grace period; reindex holds the repack lease, and maintenance finishes
+  stale deletion claims
 
 ## Context
 
@@ -469,14 +483,28 @@ results below are **observed**.
    - **Rebuilding (`reindex`, §5.3).** It runs with the repo's writes
      stopped. It rebuilds refs, `ref_log` rows and the pack list from the
      bucket, and starts a fresh `full_repack_gen`.
+     - It also holds the repo's repack lease (item 5) for its whole run,
+       renewing it, and checks it again right before its index
+       transaction. Stopping writes doesn't stop repacks or pack sweeps;
+       the lease does. Without it, a sweep holding a deletion claim could
+       go on deleting the files of a row reindex had just committed.
      - Refs and `ref_log` rows come from the bucket ref log. If a ref's
        closure is incomplete in the listed packs, the ref falls back to
        its newest earlier ref-log value whose closure is complete, and
-       reindex reports it.
+       reindex reports it. The fallback only considers values since the
+       ref was last created: a ref that was deleted and created again
+       never comes back at a value from before the deletion. If no value
+       of its current lifetime is complete, the ref is left out.
      - Every pack under `repos/<id>/packs/` is listed. A pack that holds
        any object reachable from a rebuilt ref is `committed`. Objects
        duplicated across committed packs are harmless, and the next full
        repack folds them.
+     - A cruft pack (one with a `.mtimes`) is `committed` too: its objects
+       were unreachable at the last full repack and keep their cruft
+       lifecycle, which only a committed pack has.
+     - A ref rolled back to an earlier value, or left out, gets a
+       `ref_log` row from `openxet reindex` that records the change, so
+       the log and the refs agree.
      - Every other pack becomes **`recovered`**, never `pending`. It may
        hold commits pushed after the last ref-log entry that reached the
        bucket, and GC must never take those.
@@ -535,8 +563,10 @@ results below are **observed**.
        `--all`, and `--dry-run` for both) ends recovery for a repo.
        - The remaining recovered packs go `recovered` → `lost` with
          `WHERE state = 'recovered'`, and GC deletes them after the
-         grace period.
-       - The repo's entries are deleted, so their keep roots go too.
+         grace period. That grace period runs from the discard: the same
+         update stamps the rows' `inserted_at`.
+       - The repo's entries are deleted, so their keep roots go too. Both
+         changes are one transaction.
          Unplaced commits and tags in committed packs return to the
          normal cruft lifecycle.
        - **Discard is immediate and irreversible for objects in
@@ -547,7 +577,9 @@ results below are **observed**.
          `lost`, keep GC's grace period. This is intended: the operator
          has reviewed the entries.
        - `--dry-run` prints the packs, objects and bytes it would
-         release, and changes nothing. It lists committed-pack objects
+         release, and changes nothing. Its object count is an upper
+         bound: a keep ref of the `ref_log` window may still hold some
+         of those objects until the window passes. It lists committed-pack objects
          under the heading "deleted at the next full repack, with no
          grace period; this cannot be undone", separately from the
          recovered packs that GC deletes after the grace period. The
@@ -572,6 +604,10 @@ results below are **observed**.
      or full, requires `epoch = $epoch AND holder = $me AND expires_at >
      now()`, on the database clock. A leaseholder that has lost its
      lease, even one paused mid-publish, therefore can't publish.
+     - The holder renews the lease every third of its TTL while it works,
+       keeping the epoch, so a full repack longer than the TTL doesn't
+       fence itself. The TTL (10 minutes) only bounds how long a holder
+       that died keeps the lease from others.
    - **Inputs.** The working copy is built from `committed` packs only.
      Pending, lost and recovered packs are never inputs.
    - **Outputs.** Repack outputs follow the pushed-pack pattern. Each row
@@ -583,6 +619,14 @@ results below are **observed**.
      and `full_repack_gen` when it takes the working-copy snapshot.
    - **mtimes.** Right before each repack, the leaseholder re-pins every
      input pack's mtime from the database `created_at`.
+     - A repack's outputs take the oldest input's `created_at`, so an
+       object keeps its age through any number of repacks. `created_at`
+       is the age of a pack's objects. It drives mtime pinning and cruft
+       expiry, and nothing else: GC ages rows by `inserted_at` (below). Otherwise a
+       geometric repack would restart the cruft clock of every unreachable
+       object it rolls up, and a discard (item 4) would not be immediate.
+       Objects that became unreachable recently are held by the keep refs,
+       not by their mtime.
      - Why: hard links share an inode, and git may freshen a pack's mtime
        while serving. Re-pinning makes the leaseholder's view
        deterministic.
@@ -644,10 +688,22 @@ results below are **observed**.
      - Superseded bucket objects are kept for the full grace period, so
        in-flight requests and `reindex` can still read them.
    - **GC** (§5.6, default grace 30 days) deletes:
-     - `superseded` packs past their grace
-     - `lost` packs past their grace
-     - `pending` packs older than the grace period, first marked
-       `expired` with `WHERE state = 'pending'` so no CAS can commit them
+     - `superseded` packs past their grace, counted from `superseded_at`
+     - `lost` and `expired` packs past their grace
+     - `pending` packs inserted more than the grace period ago, first
+       marked `expired` with `WHERE state = 'pending'` so no CAS can
+       commit them
+     - **In-flight rows are aged by `inserted_at`**, the database clock
+       when the row was inserted (or, for a discarded pack, when discard
+       made it `lost`). They are never aged by `created_at`: a repack's
+       outputs carry their oldest input's, so in an old repository they
+       would look expired the moment they are written, and a sweep during
+       the repack would delete them.
+     - **Minimum grace.** GC and full repacks refuse a grace period below
+       28 days, the 21-day client shard cache plus the 7-day dedup key
+       (ruling M1-R5), whatever the configuration says.
+     - **The sweep holds the repository's repack lease**, checked before
+       every deletion claim, so no repack publishes while it decides.
      - never a `committed` or `recovered` pack, and never a bucket object
        that no row describes
      - **Side files go with what they describe.** A pack's `.idx`, `.rev`,
@@ -657,6 +713,40 @@ results below are **observed**.
        transaction, and GC deletes a generation once a newer one is
        committed and the grace period has passed. Otherwise every repack
        would leak its side files into the bucket.
+       - A generation stops being current when a newer one is committed,
+         or when no committed pack carries it any more (after a full
+         repack). The first is dated by the pack row's `committed_at`,
+         which every transition to `committed` stamps on the database
+         clock, the second by the carriers' `superseded_at`.
+       - A generation number is above every generation the repository's
+         rows record and above `epoch << 24`, so two leaseholders of
+         different epochs never upload the same generation's files.
+     - **Shared names.** A pack's name is its checksum, so two rows can
+       name the same files: a pushed pack sent again after a repack
+       replaced the first, or a repack that rewrites a pack unchanged
+       (which publishes nothing). GC deletes a row's files only once no
+       other row names them.
+       - A row can be inserted after the sweep read the rows: a resent
+         push, a Hub retry, or a byte-identical repack output. So files
+         are deleted only under a **deletion claim**, a `pack_deletions
+         (repo, name)` row. It is inserted in a transaction that checks
+         no `pending`, `committed` or `recovered` row names the pack.
+       - While the claim exists, inserting a pack row of that name fails
+         with a retryable error. A push answers a retryable `ng` and Hub
+         writes retry.
+       - The claim is removed once the files are gone. A claim a dead
+         sweep left is finished, under the lease, by the next sweep or by
+         the server's next maintenance pass (every 10 s), whichever comes
+         first. The files are deleted only if the check still holds. A
+         claim more than an hour old is logged as a warning, since only
+         a sweep that died leaves one. `reindex` drops the
+         repository's claims, since it has just listed the bucket.
+       - So a late row either stops the claim, and the files stay, or
+         waits for the deletion and uploads the files again. A committed
+         row is never left without its files.
+     - The `ref_log` rows of item 3 older than twice the grace period are
+       pruned by the same sweep, and only those the bucket ref log already
+       holds.
    - **Orphan reclaim.**
      - Lost pushes' objects are reclaimed with their pack. They were
        never exposed, and no ref reaches them.
@@ -1051,12 +1141,35 @@ results below are **observed**.
     committed pack, and every `edge` object, is still present with its
     closure, and no recovered pack was an input. A restore after several
     full repacks yields a complete, fetchable closure.
+  - `sweep_during_repack_keeps_outputs`: in a repository older than the
+    grace period, a sweep between a repack's prepare and its publish
+    leaves the outputs `pending` with their files, and the publish
+    succeeds.
+  - `sweep_claim_races_resent_push`: a push of a pack the sweep is
+    deleting, made between the sweep's read and its claim, keeps the
+    files. Made after the claim, it is refused retryably, and its retry
+    uploads the files again. No committed row is ever left without its
+    files.
+  - `long_repack_renews_its_lease`: a repack that runs longer than its
+    lease's TTL still publishes.
+  - `reindex_excludes_repacks_and_sweeps`: reindex with a lease another
+    holder has taken over changes nothing. While reindex holds the lease,
+    no sweep or repack can get it.
+  - `maintenance_finishes_stale_claims`: a maintenance pass finishes a
+    dead sweep's claim, so a pack row of that name can be inserted again.
+    While another holder has the lease, the pass leaves the claim alone.
+  - `ref_fallback_stops_at_recreation`: a ref that was deleted and created
+    again, whose new value is gone from the bucket, is left out rather
+    than rebuilt at a value from its earlier lifetime.
+  - `discard_releases_committed_objects`: a full repack after a discard
+    drops the committed-pack objects that only the entries kept.
   - `gc_removes_pack_side_files`: after GC deletes a pack, none of its
     side files remain in the bucket, and a superseded MIDX generation is
     gone once the grace period has passed.
   - `hydrated_pack_mtime_pinned`:
     - hydrated pack files carry the row's `created_at`
-    - the leaseholder re-pins mtimes right before each repack
+    - the leaseholder re-pins mtimes right before each repack, even when
+      the cached files were freshened after its snapshot was built
     - a cruft pack's `.mtimes` is uploaded and hydrated, and so are the
       `.rev` and MIDX `.rev` files
   - `reachability_budget_enforced`:

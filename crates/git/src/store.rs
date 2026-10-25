@@ -322,7 +322,7 @@ pub(crate) fn midx_file(dir: &Path, generation: u64, ext: MidxExt) -> PathBuf {
 /// inode, and must never change a cached file in place. A file that is gone
 /// (evicted while unlocked, or a side file the pack lacks) is skipped; the
 /// check under the lock hydrates again.
-fn pin(file: &Path, mtime: SystemTime) -> Result<(), GitError> {
+pub(crate) fn pin(file: &Path, mtime: SystemTime) -> Result<(), GitError> {
     let f = match File::open(file) {
         Ok(f) => f,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),

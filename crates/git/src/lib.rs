@@ -11,6 +11,15 @@
 //! publishes the pack and moves the refs in the fenced commit transaction
 //! ([`Publisher`], ADR 0004 item 3).
 //!
+//! The rest of the pack lifecycle (ADR 0004 items 4 and 5) is library code
+//! that `openxet gc`, `openxet reindex` and the server's background task
+//! ([`run_maintenance`]) call: geometric and full repacks on one
+//! leaseholder per repository ([`repack_geometric`], [`repack_full`]), the
+//! pack sweep ([`sweep_packs`]), the bucket ref log derived from the
+//! database's ([`derive_bucket_ref_log`]), and `reindex` from the bucket
+//! with restore and discard ([`reindex_repo`], [`reindex_restore`],
+//! [`reindex_discard`]).
+//!
 //! git runs as a separate program with a sanitised environment (ADR 0004
 //! items 7 and 8); `git` 2.37 or newer must be on `PATH`. Unix only, like
 //! the hard links and file descriptors it relies on.
@@ -22,28 +31,46 @@
 #![forbid(unsafe_code)]
 
 mod config;
+#[cfg(feature = "fault-injection")]
+mod fault;
 pub mod hook;
 mod interpose;
+mod lease;
 mod ls_refs;
+mod maintain;
 mod pkt;
 mod process;
 mod publish;
 mod reach;
 mod receive;
+mod recover;
+mod reflog;
+mod reindex;
+mod repack;
 mod request;
 mod snapshot;
 mod store;
+mod sweep;
 mod thin;
 mod upload;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use openxet_index::{HubIndex, IndexError, Pack, RepoId};
+use openxet_index::{HubIndex, IndexError, Oid, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
 pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
+#[cfg(feature = "fault-injection")]
+pub use fault::{FaultHook, FaultPoint};
 pub use hook::HookServer;
+pub use lease::{DEFAULT_LEASE_TTL, acquire_lease};
+pub use maintain::{
+    GEOMETRIC_REPACK_PACKS, MAINTENANCE_INTERVAL, MaintenanceReport, maintain, run_maintenance,
+};
+pub use openxet_index::Lease;
 pub use pkt::{
     Fetch, LsRefs, MAX_PKT_LEN, Pkt, PktError, V2Command, err_pkt, find_flush, parse_v0_wants,
     parse_v2_command, read_pkt,
@@ -54,10 +81,17 @@ pub use publish::{FAULT_AFTER_COMMIT_ACTOR, FAULT_AFTER_UPLOAD_ACTOR};
 pub use publish::{PackFiles, Publication, PublishError, Publisher};
 pub use reach::{Reachability, Refused};
 pub use receive::{LARGE_BLOB_REPORT_BYTES, WriterRuleCounts};
+pub use recover::{DISCARD_COMMITTED_WARNING, DiscardReport, reindex_discard, reindex_restore};
+pub use reflog::{REF_LOG_RECORD_MAX_ENTRIES, derive_bucket_ref_log};
+pub use reindex::{REINDEX_ACTOR, ReindexReport, RolledBack, reindex_repo};
+#[cfg(feature = "fault-injection")]
+pub use repack::{Prepared, prepare_full, prepare_geometric};
+pub use repack::{RepackReport, repack_full, repack_geometric};
 #[cfg(feature = "fuzzing")]
 pub use request::{PackStats, RequestParser};
 pub use snapshot::SnapshotRepo;
 pub use store::Eviction;
+pub use sweep::{SweepReport, SweptPack, sweep_packs};
 pub use thin::{
     MISSING_OBJECTS, Proof, SentObjects, THIN_HINT, WalkLimits, WriterRefused, check_writer_rule,
     classify_sent,
@@ -67,6 +101,28 @@ pub use upload::{ResponseStream, Service};
 use process::ProcessEnv;
 use snapshot::Layout;
 use store::NodeCache;
+
+/// GC's default grace period: 30 days (design §5.6, ruling M1-R5).
+pub const DEFAULT_GRACE: Duration = Duration::from_hours(30 * 24);
+
+/// The shortest grace period GC accepts: 28 days, the 21-day client shard
+/// cache plus the 7-day dedup key (design §5.6, ruling M1-R5).
+pub const MIN_GRACE: Duration = Duration::from_hours(28 * 24);
+
+/// Refuses a grace period below [`MIN_GRACE`].
+pub(crate) fn check_grace(grace: Duration) -> Result<(), GitError> {
+    if grace < MIN_GRACE {
+        return Err(GitError::GraceTooShort { grace });
+    }
+    Ok(())
+}
+
+/// The current time in Unix seconds.
+pub(crate) fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 /// A Git engine failure. Messages say what happened and what to do next;
 /// they carry paths, ids and git's own messages, never credentials.
@@ -178,6 +234,42 @@ pub enum GitError {
          openxet, empty git.cache_dir and start it again (packs are hydrated from the bucket)"
     )]
     Objects(String),
+    /// A grace period below [`MIN_GRACE`].
+    #[error(
+        "a GC grace period of {grace:?} is too short: it must be at least 28 days (the 21-day \
+         client shard cache plus the 7-day dedup key); use the default of 30 days"
+    )]
+    GraceTooShort {
+        /// The grace period asked for.
+        grace: Duration,
+    },
+    /// A repack published nothing: its lease was lost or taken over, its
+    /// inputs changed, a full repack's ref log high-water mark was passed,
+    /// or its outputs aged out (ADR 0004 item 5). Its outputs are `lost`.
+    #[error(
+        "the repack published nothing: the repository's refs, packs or repack lease changed while \
+         it ran; its outputs are marked lost for GC. Take the lease again and rerun it"
+    )]
+    RepackFenced,
+    /// The repository's repack lease isn't held by the caller, or was lost
+    /// or taken over while the pack sweep or `reindex` held it (ADR 0004
+    /// items 4 and 5); nothing further was changed.
+    #[error(
+        "the repository's repack lease is not held, or was lost or taken over while the pack \
+         sweep or reindex ran; wait for the holder (a repack or another sweep) to finish, take \
+         the lease again and rerun, which finishes what this run started"
+    )]
+    LeaseLost,
+    /// A `reindex restore` was refused.
+    #[error("cannot restore {oid} as {refname}: {reason}")]
+    Restore {
+        /// The object asked for.
+        oid: Oid,
+        /// The ref asked for.
+        refname: String,
+        /// Why, and what to do.
+        reason: String,
+    },
     /// The index holds a Git record openxet would never write.
     #[error(
         "the index holds an invalid Git record ({0}); the bucket is unaffected. Please report \
@@ -219,6 +311,12 @@ pub struct Engine {
     v2_advertisement: Vec<u8>,
     reach: Reachability,
     counters: Arc<receive::Counters>,
+    /// Per repository, the highest `ref_log` row this engine knows the
+    /// bucket ref log holds ([`derive_bucket_ref_log`]), each behind its own
+    /// lock so one repository's derivation never waits on another's.
+    derived: std::sync::Mutex<HashMap<RepoId, Arc<tokio::sync::Mutex<Option<u64>>>>>,
+    #[cfg(feature = "fault-injection")]
+    hooks: fault::Hooks,
 }
 
 impl std::fmt::Debug for Engine {
@@ -273,6 +371,9 @@ impl Engine {
             v2_advertisement: Vec::new(),
             reach,
             counters: Arc::default(),
+            derived: std::sync::Mutex::default(),
+            #[cfg(feature = "fault-injection")]
+            hooks: fault::Hooks::default(),
         };
         engine.v2_advertisement = engine.capture_v2_advertisement().await?;
         Ok(engine)
@@ -315,8 +416,24 @@ impl Engine {
     /// write, and [`GitError::Io`].
     pub async fn snapshot(&self, repo: RepoId) -> Result<SnapshotRepo, GitError> {
         let snap = self.index.snapshot(repo).await?;
-        let names = snap
-            .packs
+        self.snapshot_of(repo, snap.refs, snap.packs, snap.full_repack_gen, true)
+            .await
+    }
+
+    /// Builds a snapshot repository of `repo` holding `refs` and exactly
+    /// `packs`, hydrated like [`Engine::snapshot`]'s, with the newest MIDX
+    /// generation among them when `with_midx`. The caller chooses the set:
+    /// requests take the committed packs of one database snapshot; a repack
+    /// takes those, `reindex` every pack in the bucket.
+    pub(crate) async fn snapshot_of(
+        &self,
+        repo: RepoId,
+        refs: Vec<(String, Oid)>,
+        packs: Vec<Pack>,
+        full_repack_gen: u64,
+        with_midx: bool,
+    ) -> Result<SnapshotRepo, GitError> {
+        let names = packs
             .iter()
             .map(|p| {
                 PackName::parse(&p.name).map_err(|_| {
@@ -328,19 +445,23 @@ impl Engine {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        for (name, _) in &snap.refs {
+        for (name, _) in &refs {
             snapshot::check_ref_name(name)?;
         }
-        let mut refs = snap.refs;
+        let mut refs = refs;
         refs.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-        let midx_gen = snap.packs.iter().filter_map(|p| p.midx_gen).max();
+        let midx_gen = packs
+            .iter()
+            .filter_map(|p| p.midx_gen)
+            .max()
+            .filter(|_| with_midx);
 
         // Download without the lock, then check again under it: eviction
         // may have removed a pack in between, and the second pass hydrates
         // it again (a stat per pack otherwise).
-        let mut downloaded = self.hydrate(repo, &snap.packs, &names, midx_gen).await?;
+        let mut downloaded = self.hydrate(repo, &packs, &names, midx_gen).await?;
         let shared = self.cache.read().await;
-        downloaded += self.hydrate(repo, &snap.packs, &names, midx_gen).await?;
+        downloaded += self.hydrate(repo, &packs, &names, midx_gen).await?;
         let layout = Layout {
             snapshots: self.cache.snapshots(),
             hooks: self.cache.hooks(),
@@ -369,8 +490,8 @@ impl Engine {
             repo,
             dir,
             refs,
-            packs: snap.packs,
-            full_repack_gen: snap.full_repack_gen,
+            packs,
+            full_repack_gen,
             process: Arc::clone(&self.process),
         })
     }

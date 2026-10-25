@@ -645,3 +645,64 @@ fn files_in(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
         .map(|e| e.unwrap().path())
         .collect()
 }
+
+/// The pack sweep's deletes (ADR 0004 item 5): a pack's and a multi-pack
+/// index's files go, reporting whether they existed; every other kind is
+/// refused and stays.
+#[tokio::test]
+async fn delete_removes_only_pack_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let bucket = LocalBucket::open(dir.path()).unwrap();
+    let midx = Key::Midx {
+        repo: repo(ID),
+        generation: 3,
+        ext: MidxExt::MultiPackIndex,
+    };
+    for key in [pack(ID, PackExt::Pack), pack(ID, PackExt::Mtimes), midx] {
+        bucket
+            .put(&key, Bytes::from_static(b"bytes"))
+            .await
+            .unwrap();
+        assert!(bucket.delete(&key).await.unwrap(), "{key} existed");
+        assert_eq!(bucket.size(&key).await.unwrap(), None, "{key} is gone");
+        assert!(!bucket.delete(&key).await.unwrap(), "{key} is absent now");
+    }
+    assert!(
+        bucket
+            .list_under(repo(ID), KeyKind::Pack)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let record = RefLogRecord {
+        repo: repo(ID),
+        seq: 1,
+        entries: vec![RefLogEntry {
+            seq: 1,
+            ref_name: "refs/heads/main".to_owned(),
+            old: None,
+            new: Some("ab".repeat(20)),
+            actor: "alice".to_owned(),
+            request: "r".to_owned(),
+            at: now(),
+        }],
+    };
+    let meta_key = Key::RepoMeta { repo: repo(ID) };
+    bucket
+        .create(&record.key(), record.to_bytes())
+        .await
+        .unwrap();
+    bucket
+        .put_replace(meta_key.clone(), meta("m", &["model"]).to_bytes())
+        .await
+        .unwrap();
+    for key in [record.key(), meta_key, Key::Xorb(h("x"))] {
+        let refused = bucket.delete(&key).await;
+        assert!(
+            matches!(refused, Err(StorageError::InvalidKey { .. })),
+            "{key}: {refused:?}"
+        );
+    }
+    assert!(bucket.size(&record.key()).await.unwrap().is_some());
+}

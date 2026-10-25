@@ -125,7 +125,7 @@ pub fn classify_sent(
 /// version 2, a 256-entry fan-out table, the sorted ids, their CRCs, their
 /// 4-byte offsets (the high bit points into the 8-byte offset table), the
 /// 8-byte offsets, and two trailing checksums.
-fn parse_idx(bytes: &[u8]) -> Option<Vec<(Oid, u64)>> {
+pub(crate) fn parse_idx(bytes: &[u8]) -> Option<Vec<(Oid, u64)>> {
     const FANOUT: usize = 8;
     let be32 = |at: usize| -> Option<u32> {
         Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?))

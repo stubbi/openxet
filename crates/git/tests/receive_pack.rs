@@ -544,3 +544,91 @@ async fn plain_blob_limit_never_refuses_lfs_pointers() {
     assert!(run.stderr.contains("plain.bin is"), "{}", run.stderr);
     assert_eq!(db_ref(&world, repo, "refs/heads/main").await, Some(tip));
 }
+
+/// A push whose answer was lost, sent again: its pack is named like the
+/// committed one (a pack is named by its checksum), so nothing new is
+/// published, and its ref update still commits.
+#[tokio::test(flavor = "multi_thread")]
+async fn resent_pack_publishes_nothing_new() {
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 10).await;
+    let node = engine(&world, config(&world, "node")).await;
+    let client = clone(&fixture_repo(&fx), "unused", &[]);
+    let w = work(&client);
+    let main = db_ref(&world, repo, "refs/heads/main").await;
+    let tip = commit(&w, "one", &[("a.txt", b"a\n")]);
+    let pack = push_support::pack_revs(&w, &format!("{tip}\n^{}", main.unwrap_or(tip)), false);
+
+    let first = raw_push(
+        &node,
+        repo,
+        "pusher",
+        &[(main, Some(tip), "refs/heads/main")],
+        Some(pack.clone()),
+    )
+    .await;
+    assert!(first.ok("refs/heads/main"), "{first:?}");
+    let rows = pack_rows(&world, repo).await;
+    assert_eq!(rows.len(), 2, "the seed and the push: {rows:?}");
+
+    let again = raw_push(
+        &node,
+        repo,
+        "pusher",
+        &[(None, Some(tip), "refs/heads/again")],
+        Some(pack),
+    )
+    .await;
+    assert!(again.ok("refs/heads/again"), "{again:?}");
+    assert_eq!(db_ref(&world, repo, "refs/heads/again").await, Some(tip));
+    assert_eq!(pack_rows(&world, repo).await, rows, "no pack row added");
+    fsck(&node, repo).await;
+}
+
+/// A push turned away by R22's concurrency limits was never checked, so
+/// the writer rule's counters don't count it as a refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn busy_push_is_not_counted_as_refused() {
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 10).await;
+    let mut cfg = config(&world, "node");
+    cfg.reachability.max_concurrent_per_repo = Some(0);
+    let node = engine(&world, cfg).await;
+    let src = fixture_repo(&fx);
+    let main = db_ref(&world, repo, "refs/heads/main").await;
+    let away = common::rev(&src, "main~1");
+    // `main~1` stays in the committed pack, but no ref reaches it once
+    // `main` is moved to `main~2` and the tag of the tip is deleted.
+    let generation = ok(world.index.snapshot(repo).await).full_repack_gen;
+    ok(world
+        .index
+        .commit(CommitTx {
+            repo,
+            updates: &[
+                common::set("refs/heads/main", main, common::rev(&src, "main~2")),
+                RefUpdate {
+                    name: "refs/tags/v1.0".to_owned(),
+                    old: Some(common::rev(&src, "refs/tags/v1.0")),
+                    new: None,
+                },
+            ],
+            pack: None,
+            full_repack_gen: generation,
+            actor: "tester",
+            request: "test",
+        })
+        .await);
+    let empty = pack_of(&src, &[]);
+    let before = node.writer_rule_counts();
+    let r = raw_push(
+        &node,
+        repo,
+        "pusher",
+        &[(None, Some(away), "refs/heads/x")],
+        Some(empty),
+    )
+    .await;
+    let reason = r.ng("refs/heads/x").unwrap_or_default();
+    assert!(reason.contains("too many pushes"), "{r:?}");
+    assert_eq!(node.writer_rule_counts(), before, "{r:?}");
+}

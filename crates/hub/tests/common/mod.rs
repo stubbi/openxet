@@ -107,6 +107,9 @@ impl Bucket for HookBucket {
     async fn list_under(&self, repo: RepoIdHex, kind: KeyKind) -> Result<Vec<Key>, StorageError> {
         self.inner.list_under(repo, kind).await
     }
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
 }
 
 /// What a [`HookAuthz`] runs on each `write` decision.

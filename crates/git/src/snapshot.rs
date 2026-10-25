@@ -137,6 +137,18 @@ fn quote(value: &str) -> String {
     out
 }
 
+/// Replaces the `packed-refs` of the snapshot repository at `dir` with
+/// `refs`, checked and sorted here: how a repack's working copy gains its
+/// keep refs (ADR 0004 item 5).
+pub(crate) fn write_refs(dir: &Path, refs: &[(String, Oid)]) -> Result<(), GitError> {
+    let mut refs = refs.to_vec();
+    for (name, _) in &refs {
+        check_ref_name(name)?;
+    }
+    refs.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    write(&dir.join("packed-refs"), &packed_refs(&refs))
+}
+
 /// `packed-refs` for `refs`, which the caller has checked and sorted by
 /// name in byte order, as git's `sorted` trait promises.
 fn packed_refs(refs: &[(String, Oid)]) -> String {

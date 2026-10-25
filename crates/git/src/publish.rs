@@ -3,7 +3,8 @@
 //! then does the fenced commit transaction move the refs and the pack to
 //! `committed`. Any failure after the row exists marks the pack `lost`; a
 //! node that dies first leaves it `pending` for GC to expire. Pushes use it
-//! now, Hub commits and repacks later.
+//! now, Hub commits later; repacks follow the same pattern with their own
+//! publish transaction (`repack`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
