@@ -361,13 +361,13 @@ colors must preserve control boundaries and the changed-part labels.
 | Component heading | Manrope | 22px / 1.25 | 650 / -0.02em |
 | Lead | IBM Plex Sans | clamp(18px, 1.6vw, 21px) / 1.55 | 400 / normal |
 | Body | IBM Plex Sans | 17px / 1.65 | 400 / normal |
-| Controls / navigation | IBM Plex Sans | 15–16px / 1.35 | 500–600 / normal |
-| Captions / metadata | IBM Plex Sans | 14px / 1.5 | 400–500 / normal |
-| Code / file data | IBM Plex Mono | 13–14px / 1.6 | 400 / normal |
+| Controls / navigation | IBM Plex Sans | 15 to 16px / 1.35 | 500 to 600 / normal |
+| Captions / metadata | IBM Plex Sans | 14px / 1.5 | 400 to 500 / normal |
+| Code / file data | IBM Plex Mono | 13 to 14px / 1.6 | 400 / normal |
 
 Use rem units in implementation, assuming a 16px browser default; never prevent
-zoom. Body text is at least 16px on mobile. Prose width is 60–68 characters;
-hero copy 42–48 characters. Headings use sentence case. Reserve uppercase for
+zoom. Body text is at least 16px on mobile. Prose width is 60 to 68 characters;
+hero copy 42 to 48 characters. Headings use sentence case. Reserve uppercase for
 short diagram labels; do not turn every section label into an eyebrow.
 
 Self-host Latin WOFF2 subsets from the official font distribution with license
@@ -429,7 +429,7 @@ rounded:
   large-panel: 24px
 ```
 
-File parts use 4–6px corners. Controls use 8px corners. Rounded pills are only
+File parts use 4 to 6px corners. Controls use 8px corners. Rounded pills are only
 for short status labels and section tags. Use a consistent 20px icon box, 1.75px stroke and
 round joins. Icons accompany meaningful text unless their accessible name is
 unambiguous. Inline SVG and CSS diagrams are preferred over decorative raster
@@ -655,6 +655,15 @@ Do not make every heading a three-word slogan or every paragraph a symmetrical
 contrast. No jokes in errors, billing, permission requests or data-loss states.
 No fabricated quotes, badges, customer logos, customer counts or testimonials.
 
+No em dashes or en dashes in any public copy: the site, docs, help text,
+errors, commit messages and PR text (owner ruling, 2026-10-25). Use a full
+stop, a comma, a colon or parentheses; write ranges with "to". Never stand a
+hyphen in for a dash. Copy must not read as machine-written: avoid stock
+words ("robust", "leverage", "unlock", "empower", "elevate", "delve", "in
+today's world"), "not just X but Y" turns, padded lists of three and the same
+sentence shape in every section. `scripts/check-copy.py` checks the dashes and
+a short phrase list in CI.
+
 Editorial review has seven passes: clarity, voice, relevance, proof,
 specificity, emotional honesty and friction. Emotional honesty means relief
 from repeated uploads and confidence in control, not manufactured fear.
@@ -781,7 +790,7 @@ need user research rather than pretending no further improvement is possible.
   section tags. Tokens, type and palette unchanged. Evidence: screenshots at
   375, 768, 1024, 1440 and 1920 px in light and dark were reviewed; attach
   them to the PR.
-- 2026-10-25, v3 iteration 3 (release candidate): owner's rulings — the
+- 2026-10-25, v3 iteration 3 (release candidate): owner's rulings: the
   brand is OpenXet; the landing page is written as launched (limits above);
   the Git analogy as opener. Hero fits the first screen with its proof strip
   and has no visual; rows reshaped to Repositories, Xet, Use cases, Buckets,
