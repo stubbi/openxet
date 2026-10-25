@@ -281,7 +281,13 @@ uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # docs/quickstart-storage-only.md runs as written (CI gate)
-OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it, plus the HF baseline against huggingface.co (nightly)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m hub          # stock huggingface_hub and hf against openxet's Hub API (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m git          # stock git over smart HTTP, one node and two (CI gate)
+eval "$(compat/gitea/seed.sh)"                             # start the LFS leg's Gitea (Docker or colima) and export its variables
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m lfs          # git-lfs 3.7.1 and git-xet 0.2.1 on PATH, repos on Gitea, LFS on openxet (CI gate)
+scripts/install-git-floor.sh ~/.cache/openxet/git-2.37.7   # build the oldest supported git once (CI: git-floor)
+OPENXET_TEST_GIT_237=~/.cache/openxet/git-2.37.7/bin/git cargo nextest run -p openxet-git # the Git role's tests against git 2.37.7 too (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it (Gitea included), plus the HF baseline against huggingface.co
 cargo nextest list --workspace --message-format json > /tmp/tests.json && python3 -I scripts/check-security-tests-map.py --nextest /tmp/tests.json # security test map vs the Rust tests that run (CI gate)
 uv run --frozen --directory compat pytest --collect-only -q > /tmp/compat-tests.txt && python3 -I scripts/check-security-tests-map.py --pytest /tmp/compat-tests.txt # the same for the compat tests (CI gate)
 scripts/build-site.sh                                      # openxet.com, landing + docs/, into target/site/public; needs mdbook 0.5.4, Python 3 and Node.js 22+ (CI: docs-site; main deploys it)
