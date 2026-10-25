@@ -4,13 +4,18 @@ that actually run.
 
 Always:
 - every test name in design §5.9 is in the map, and §5.9 links the map;
-- every M0 or M1 row names a file, and only rows for M2 or later are pending.
+- every M0 or M1 row names a file, and only rows for M2 or later are pending;
+- a file cell is a file, `pending`, or `pending (M<n>, <file>)` for a test a
+  plan has placed but not written yet, whose `M<n>` matches the row's
+  milestone. Planned files are not checked against the tests that run; the
+  task that writes the test drops the `pending`.
 
 With `--nextest FILE` (the output of
 `cargo nextest list --workspace --message-format json`): every mapped Rust
-test is listed exactly once in the workspace, in the binary built from the
-file the map names, and is not ignored. A test that was renamed, commented
-out or lost its `#[test]` attribute is not listed, so it fails here.
+test is listed exactly once in the binary built from the file the map names,
+and is not ignored. A test that was renamed, commented out or lost its
+`#[test]` attribute is not listed, so it fails here. One name may be mapped
+to several files when each file holds its own half of the requirement.
 
 With `--pytest FILE` (the output of `pytest --collect-only -q`, run in
 `compat/`): every mapped Python test, or test module, collects at least one
@@ -33,6 +38,7 @@ DESIGN = REPO / "docs/superpowers/specs/2026-10-23-openxet-design.md"
 NAME = re.compile(r"^`([a-z0-9_]+)`$")
 PATH = re.compile(r"^`([\w./-]+\.(?:rs|py))`$")
 MILESTONE = re.compile(r"^M(\d+)")
+PLANNED = re.compile(r"^pending \(M(\d+), `([\w./-]+\.(?:rs|py))`\)$")
 
 
 def rows(text: str) -> list[list[str]]:
@@ -56,8 +62,13 @@ def mapped(problems: list[str]) -> list[tuple[str, str]]:
         milestone = MILESTONE.match(row[3])
         if milestone and int(milestone.group(1)) <= 1 and not path:
             problems.append(f"{row[1]} is an {milestone.group(0)} row with no file: {row[2]!r}")
-        if row[2] == "pending" and not (milestone and int(milestone.group(1)) >= 2):
+        planned = PLANNED.match(row[2])
+        if (row[2] == "pending" or planned) and not (milestone and int(milestone.group(1)) >= 2):
             problems.append(f"{row[1]} is pending but its milestone is {row[3]!r}")
+        if planned and milestone and planned.group(1) != milestone.group(1):
+            problems.append(f"{row[1]} is planned for M{planned.group(1)} but its milestone is {row[3]!r}")
+        if not (path or planned or row[2] == "pending"):
+            problems.append(f"{row[1]} has a file cell the check can't read: {row[2]!r}")
         if name and path:
             out.append((name.group(1), path.group(1)))
     return out
@@ -93,13 +104,19 @@ def check_nextest(listing: Path, tests: list[tuple[str, str]], problems: list[st
         if not path.endswith(".rs"):
             continue
         hits = found.get(name, [])
-        if len(hits) != 1:
-            problems.append(f"{name}: nextest lists it {len(hits)} times, not once")
-            continue
-        file, ignored = hits[0]
-        if not (path == file or (file.endswith("/src") and path.startswith(file + "/"))):
-            problems.append(f"{name}: runs from {file}, but the map says {path}")
-        if ignored:
+        here = [
+            ignored
+            for file, ignored in hits
+            if path == file or (file.endswith("/src") and path.startswith(file + "/"))
+        ]
+        if not hits:
+            problems.append(f"{name}: nextest doesn't list it")
+        elif not here:
+            files = ", ".join(sorted({file for file, _ in hits}))
+            problems.append(f"{name}: runs from {files}, but the map says {path}")
+        elif len(here) != 1:
+            problems.append(f"{name}: nextest lists it {len(here)} times in {path}, not once")
+        elif here[0]:
             problems.append(f"{name}: is #[ignore]d")
 
 

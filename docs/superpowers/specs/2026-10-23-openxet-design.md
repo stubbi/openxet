@@ -546,6 +546,33 @@ Authorizers (v1):
 - **Webhook**: openxet asks the operator's backend "may subject X read/write
   repo Y?", with a short-TTL cache. This is how platforms like aqora plug in.
 
+**User credentials** *(ruling M2-R3,
+[ADR 0012](../../adr/0012-repository-identity-and-authorization-rules.md))*:
+a credential is a CAS credential (scope, tenant, mode, as in M1), a user
+credential (a subject plus claims, string lists under free names such as
+`orgs` and `groups`), or both. A static token without `scope` is a user
+credential, one with `scope` is a CAS credential, and one with a `scope`
+and user fields (`name`, `email`, `claims`) is both, as the dev token is.
+CAS routes take the CAS credential; Hub, Git and LFS routes take the user
+credential and ask the authorizer for `read` or `write` on the repository,
+or `create` on the namespace. `whoami-v2` answers `name` from the subject
+(or the static token's `name`) and `orgs` from the `orgs` claim. Until
+OIDC and openxet access tokens arrive in M3, static tokens are the user
+credential; both plug into the same seam.
+
+**Config rules** *(ruling M2-R3, ADR 0012)*: `[[auth.rules]]` entries
+match a principal by `subjects` and/or `claims` (a listed subject, or one
+listed value under a named claim), name `repos` by glob over
+`{namespace}/{name}` (`*` stays within one path segment, and `*` alone
+matches everything) and grant `actions` (`read`, `write`, `create`;
+`create` on `org/*` allows creating in namespace `org`). Rules only grant:
+a request is allowed if any rule allows it, with no order and no deny
+rule, so a server's access is audited by reading the rules that name a
+repository. The pseudo subject `anonymous` matches a request with no
+credential, so an operator can make repositories public; no rule names it
+by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions
+= ["read", "write", "create"]`.
+
 CAS tokens are short-lived EdDSA JWTs (ADR 0007), scoped to
 (scope, read|write, exp), with no revision, because Xet reads follow scope
 membership (R25) and a revision would enforce nothing. The Hub token route
@@ -568,15 +595,27 @@ with a configured key. It then stores Xet file hashes in its own database.
   against three, so the two never collide. Labels are not part of a
   scope. Scope strings are persisted
   (their SHA-256 keys every registration record, §5.3), so both kinds
-  map to an immutable scope id, which the M2 plan defines, and a rename
-  never orphans their data. In
+  map to an immutable scope id and a rename never orphans their data. In
   storage-only mode it is an opaque string the platform chooses. Files
   are read and registered per scope.
+- A repository's **scope id** *(ruling M2-R2, ADR 0012)* is a UUIDv7
+  assigned at creation, rendered as 32 lowercase hex characters; its CAS
+  scope is `repo:{id}`, and the bucket keys for its data carry the id
+  (`repos/{id}/…`). The scope prefix `repo:` is reserved for
+  repositories: a configured static token whose `scope` starts with it
+  is a configuration problem, and a CAS token a platform signs with such
+  a scope is accepted only because the platform holds the signing key.
+  Namespace and name live in the repository's metadata record, so a
+  rename rewrites one record. Namespace and name each match
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` and contain no `..`, the name
+  doesn't end in `.git`, and `{namespace}/{name}` is unique
+  case-insensitively, stored as written, across labels (ADR 0010).
 - A **tenant** is the unit of isolation for `per-tenant` dedup and
   metering. Every principal carries one. In the Hub layer it is the
-  namespace, the first path segment. In storage-only mode it is the CAS
-  token's optional `tenant` claim (ADR 0007) or a static token's
-  configured `tenant`. When none is given it is `scope:` followed by the
+  namespace, the first path segment, and the Hub and LFS token routes
+  mint CAS tokens with scope `repo:{id}` and that tenant (ADR 0012). In
+  storage-only mode it is the CAS token's optional `tenant` claim
+  (ADR 0007) or a static token's configured `tenant`. When none is given it is `scope:` followed by the
   scope, and no explicit tenant may start with `scope:` *(ruling
   M1-R43)*, so a scope named like a tenant never joins it. So the scopes
   of one tenant share dedup under `per-tenant`: an org's fine-tune dedups
@@ -869,9 +908,9 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   error's text (`utils/_http.py`, `_format`). Any other caller gets
   exactly an unknown repository's response: the same status,
   `X-Error-Code`, `X-Error-Message` (`Repository not found`) and body
-  (`{"error":"Repository not found"}`), with no other header differing
-  apart from per-request ids and dates. Any difference would reveal
-  that the repository exists (the M1-R17 pattern).
+  (the constant body of M2-R6 under **Errors** below), with no other
+  header differing apart from per-request ids and dates. Any difference
+  would reveal that the repository exists (the M1-R17 pattern).
 - Names are unique across labels, unlike huggingface.co. Creating
   `datasets/foo/bar` while `foo/bar` exists answers `409` in the shape
   `create_repo` reads (S3 fixtures `05` and `06`): `{"error", "url"}`,
@@ -931,9 +970,69 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
     against the snapshot first, and a branch or tag can only be created
     at an object the current refs already reach.
 
-**Small files:** `preupload` decides whether small "regular" files go inline
-in the commit (stored as content-addressed blobs) or through Xet. The
-threshold is the builder's call, informed by benchmarks. Answering
+- **The initial commit** *(ruling M2-R5)*. `POST /api/repos/create`
+  writes a server-generated `initial commit` on branch `main` holding
+  huggingface.co's default `.gitattributes` (the S3 capture's content),
+  authored and committed by `openxet <noreply@openxet.com>`, so
+  `commits`, `refs` and `git clone` of a new repository behave as on
+  huggingface.co.
+- **Hub commits** *(ruling M2-R7)* are real commits built from the
+  parent's tree: `file` operations become blobs, `lfsFile` operations
+  canonical LFS pointers whose sha256 must be registered to the
+  repository's scope, and `deletedFile` and `deletedFolder` remove
+  entries. The author is the subject
+  (`{subject} <{subject}@users.noreply.openxet.com>` unless the
+  credential carries an `email` claim), the committer is openxet, and
+  the message is `summary`, a blank line and `description`. A
+  `parentCommit` mismatch answers `412 precondition_failed`; `commitUrl`
+  is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`.
+- **Listings paginate deterministically** *(ruling M2-R8)*. `tree`,
+  `commits` and the repository listings answer at most 1,000 entries per
+  page, ordered by path (tree) or commit order (commits), with
+  `Link: <…?cursor=…>; rel="next"` when more follow. The cursor is the
+  last entry's key, base64url-encoded. `X-Total-Count` is set where S3
+  observed it.
+- **Downloads** *(ruling M2-R9)*. `resolve` answers a small file inline
+  from its Git blob, with `ETag: "{blob sha1}"`. A Xet file answers `302`
+  to the file gateway,
+  `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}`,
+  which serves it with the caller's credential (Bearer, or Basic with the
+  token as the password) and HTTP `Range` (all three forms, `416` past
+  the end), `ETag: "{sha256}"`, `If-Range`, `HEAD`, `Content-Disposition`
+  and `Accept-Ranges`. LFS `basic` download `href`s are the same URL
+  with no `authenticated` field, so `git-lfs` attaches the credential it
+  holds for that host.
+
+**Errors** *(ruling M2-R6)*. A Hub error carries huggingface.co's `error`
+field and openxet's structured fields:
+`{"error": <message>, "schema": "openxet.error.v1", "code", "message",
+"hint"}`, with `X-Error-Code` (huggingface.co's value, such as
+`RepoNotFound`, `RevisionNotFound` or `EntryNotFound`, where it defines
+one) and `X-Error-Message`. CAS routes keep the M1 body.
+- The unknown-repository answer is one constant: `404`,
+  `X-Error-Code: RepoNotFound`, `X-Error-Message: Repository not found`
+  and the body
+  `{"error":"Repository not found","schema":"openxet.error.v1","code":"repo_not_found","message":"Repository not found","hint":"Check the repository id and the token's access: a repository the token may not read answers exactly like one that doesn't exist."}`.
+  It answers a missing repository, a repository the caller may not
+  read, and a typed view whose label the repository lacks when the
+  caller may not read it.
+- A missing credential on a repository route is `401` with
+  `WWW-Authenticate: Bearer realm="openxet"` and `X-Error-Message:
+  Authentication required: pass an openxet access token as the Bearer
+  token (hf auth login)`. An invalid one is `401` with `X-Error-Message:
+  Invalid credentials in Authorization header`, which `huggingface_hub`
+  reports as an authentication error rather than a missing repository
+  (S3 answer 6).
+
+**Small files** *(ruling M2-R4)*: `preupload` decides whether a file goes
+inline in the commit (stored as a content-addressed blob) or through Xet.
+It answers `lfs` when the file's size is at least `hub.lfs_threshold`
+(default `1MiB`, bounds `1KiB` to `10MiB`) or its path matches an LFS
+pattern of the target revision's `.gitattributes` (for a new repository,
+the generated one of M2-R5), and `regular` otherwise. A regular file's
+decoded content is at most `hub.lfs_threshold`; a commit's NDJSON body is
+at most `hub.max_commit_bytes` (default `64MiB`) and 25,000 operations.
+The M2 benchmark may revise the default, with the number. Answering
 `"uploadMode": "lfs"` is the server's only lever; `hf_xet` then takes the
 Xet path (S3). The compatibility test for this (competitive-matrix lesson
 1) uploads a file of at least 1 GiB whose name matches no `.gitattributes`
@@ -1003,8 +1102,13 @@ Rules for this endpoint:
   - **Downloads work** the same way. Collaborators who only clone don't need
     anything extra.
   - **Uploads work** via `basic`/`multipart`, with server-side chunking
-    (§10.3), so the data is still deduplicated in storage. The response
+    (§10.3, M4), so the data is still deduplicated in storage. The response
     suggests installing `git-xet` for faster uploads.
+  - Until server-side chunking ships *(ruling M2-R10)*, an upload batch
+    that doesn't offer `xet` answers each object with an LFS object
+    error `{"code": 501, "message": "…"}` whose message names the
+    `git-xet` install command, never a `basic` `href` that would fail
+    later.
 - There is no `git-xet` download handshake to match. `git-xet` 0.2.1
   doesn't download, and huggingface.co's `basic` download actions carry no
   `X-Xet-Hash` (S7, `docs/research/S7-git-lfs-xet.md`). The handshake for
@@ -1769,7 +1873,9 @@ release of the open-source build: it runs the released build (§15).
     `/v1/telemetry` dropped, `/v1/xorb-grants/*` answering `404`.
   - Fuzz targets for the xorb and shard parsers.
   - The M1 rows of the security tests (§5.9).
-- **M2:** Hub-compat layer and Git hosting.
+- **M2:** Hub-compat layer and Git hosting
+  ([plan](../plans/2026-10-25-m2-hub-git-lfs.md); rulings M2-R1 to M2-R16
+  in §17).
   - `hf auth login`, `hf upload`, `hf download` and listing work unmodified.
   - `git clone` / `git push` over HTTPS against openxet-hosted repos, sharing
     one history with Hub API commits (§10.9).
@@ -2098,3 +2204,19 @@ decides, with superseded parts marked.
 | M1-R41 | This register lists every ruling that tracked code or docs cite. | §17 |
 | M1-R42 | Signed transfer URLs live 30 to 60 minutes (60 by default), so a leaked URL, or one issued before a purge, stops working within the hour; supersedes M1-R19's 24 h URL cap. | §5.4, §5.5, ADR 0002 |
 | M1-R43 | A credential that names no tenant is in tenant `scope:` followed by its scope, and no explicit tenant may start with `scope:`, so a scope named like a tenant never joins it. Migration 0005 and the bucket records use the same default. | §5.4, ADR 0007 |
+| M2-R1 | New crates `openxet-http` (the route builder, request ids, the error body and the middleware stack, extracted from `openxet-cas`), `openxet-hub`, `openxet-git` and `openxet-uri`; the authorizer lives in `openxet-auth`. `openxet serve` composes the CAS, Hub and Git routes into one router with one fallback, one state per crate and one middleware stack, and `clippy.toml` bans `Router::fallback` and `Router::fallback_service` outside the builder. | §5.2, §12 M2, issue #46 |
+| M2-R2 | A repository has an immutable UUIDv7 id, rendered as 32 lowercase hex characters. Its CAS scope is `repo:{id}`, its tenant is its namespace, and bucket keys for its data carry the id (`repos/{id}/…`); namespace and name live in its metadata record, so a rename rewrites one record. The scope prefix `repo:` is reserved: a configured static token with such a `scope` is a configuration problem, and a platform-signed CAS token with one is accepted only because the platform holds the signing key. Namespace and name each match `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` and contain no `..`, the name doesn't end in `.git`, and `{namespace}/{name}` is unique case-insensitively, stored as written, across labels. | §5.4, ADR 0012, ADR 0010 |
+| M2-R3 | A credential is a CAS credential (scope, tenant, mode), a user credential (subject plus claims) or both: a static token without `scope` is a user credential, one with `scope` a CAS credential, one with a `scope` and user fields both, as the dev token is. The `Authorizer` decides `read`, `write` and `create` per repository or namespace; M2's config-rules authorizer reads `[[auth.rules]]` (`subjects` and/or `claims`, `repos` globs, `actions`), and a request is allowed if any rule allows it. The pseudo subject `anonymous` matches a request with no credential and is named by no rule by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`. `whoami-v2` answers `name` from the subject (or the static token's `name`) and `orgs` from the `orgs` claim. OIDC, the webhook authorizer and openxet access tokens come in M3. | §5.4, ADR 0012 |
+| M2-R4 | `preupload` answers `lfs` when a file is at least `hub.lfs_threshold` (default `1MiB`, bounds `1KiB` to `10MiB`) or its path matches an LFS pattern of the target revision's `.gitattributes`, and `regular` otherwise. A regular file's decoded content is at most `hub.lfs_threshold`; a commit's NDJSON body is at most `hub.max_commit_bytes` (default `64MiB`) and 25,000 operations. The M2 benchmark may revise the default, with the number. | §6 |
+| M2-R5 | `POST /api/repos/create` writes a server-generated `initial commit` on `main` holding huggingface.co's default `.gitattributes` (the S3 capture), authored and committed by `openxet <noreply@openxet.com>`. | §6, S3 |
+| M2-R6 | Hub errors are `{"error", "schema": "openxet.error.v1", "code", "message", "hint"}` with `X-Error-Code` and `X-Error-Message`; CAS routes keep the M1 body. The unknown-repository answer is one constant `404` (`RepoNotFound`, `Repository not found`, body and hint fixed) for a missing repository, one the caller may not read, and a typed view the caller may not read whose label the repository lacks. A missing credential is `401` with `WWW-Authenticate: Bearer realm="openxet"` and a message naming `hf auth login`; an invalid one is `401` with `Invalid credentials in Authorization header`. | §6, ADR 0010, S3 |
+| M2-R7 | A Hub commit is a real commit built with gix from the parent's tree: `file` operations become blobs, `lfsFile` operations canonical pointers whose sha256 is registered to the repository's scope, and deletes remove entries. The author is the subject (`{subject} <{subject}@users.noreply.openxet.com>` unless an `email` claim is present), the committer openxet, the message `summary`, a blank line and `description`; a `parentCommit` mismatch is `412 precondition_failed`; `commitUrl` is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`. | §6, ADR 0004 |
+| M2-R8 | `tree`, `commits` and the repository listings answer at most 1,000 entries per page, ordered by path or commit order, with `Link: <…?cursor=…>; rel="next"` when more follow; the cursor is the last entry's key, base64url-encoded, and `X-Total-Count` is set where S3 observed it. | §6, S3 |
+| M2-R9 | Xet files resolve with `302` to `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}`, served with the caller's credential (Bearer, or Basic with the token as the password), HTTP `Range` (all three forms, `416` past the end), `ETag: "{sha256}"`, `If-Range`, `HEAD`, `Content-Disposition` and `Accept-Ranges`; LFS `basic` download `href`s are the same URL with no `authenticated` field. Small files are served inline from the Git blob with `ETag: "{blob sha1}"`. | §5.5, §6, ADR 0003 |
+| M2-R10 | Until server-side chunking (M4), an LFS upload batch that doesn't offer `xet` answers each object with an object error `{"code": 501, …}` naming the `git-xet` install command, never a `basic` `href` that fails later. | §6.1, §10.3 |
+| M2-R11 | Smart HTTP is served at `/{prefix}{ns}/{name}.git/…` and without `.git`; a gzip request body is inflated, `Git-Protocol: version=2` selects v2, and Basic (the token as the password) and Bearer are accepted. The first push to a missing repository creates it, with the `model` label, if the authorizer allows `create` in the namespace. | §10.9, ADR 0004, ADR 0005 |
+| M2-R12 | openxet's own API lives under `/api/openxet/v1/`; labels are `GET …/repos/{ns}/{name}/labels`, `PUT` and `DELETE …/labels/{label}`, and `openxet label add`, `remove` and `list`. Each change writes the repository's metadata record to the bucket, then the index, then an `audit_log` row (`actor`, `action`, `repo`, `detail`, `at`), the table M4's audit API exposes. | §10.4, ADR 0010 |
+| M2-R13 | `openxet purge <file-hash>` (with the server config) writes `purges/{hash}` to the bucket, then deletes the file's rows from every scope and its dedup candidates, writes an `audit_log` row and prints what it removed; `reindex` (M4) skips purged hashes. It takes `--dry-run`, `--yes` and `--json` (`openxet.purge.v1`). | §5.4 |
+| M2-R14 | `xet://{host}[:{port}]/[{kind}/]{namespace}/{name}[@{revision}][/{path}]`: no `{kind}` for a repository, `datasets`, `spaces` or `kernels` for a typed view, `buckets` for a bucket (resolved from M5); `%40` for a literal `@` in a name; a percent-encoded UTF-8 path (RFC 3986); no userinfo. Hostless legacy forms and forms naming `xethub.com` are rejected with an error that says how to write the address, and nothing is sent to a default server. | ADR 0009 |
+| M2-R15 | `openxet openapi` prints the OpenAPI 3.1 document generated from the route builders' `utoipa` annotations; it is checked in at `docs/reference/openapi.json`, served at `GET /openapi.json`, and CI fails when the two differ. | §7.1 |
+| M2-R16 | Git budgets take ADR 0004's defaults (`git.reachability.max_commits` 200,000, `max_ms` 2,000, `max_concurrent_per_repo` 2, `max_concurrent_per_principal` 4; `git.thin_bases.max_objects` 2,000,000, `max_ms` 2,000), and the M2 benchmarks record the measured values that replace the thin-base placeholders. The node cache is `git.cache_dir` (default `{data_dir}/git-cache`), `git.cache_max_bytes` (default `20GiB`), and `git.max_plain_blob_bytes` is unset by default. | ADR 0004 |

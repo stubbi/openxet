@@ -32,6 +32,7 @@
   - [0009: xet resource URIs](adr/0009-xet-resource-uris.md)
   - [0010: Two storage primitives](adr/0010-two-storage-primitives.md)
   - [0011: Post-quantum readiness](adr/0011-post-quantum-readiness.md)
+  - [0012: Repository identity and authorization rules](adr/0012-repository-identity-and-authorization-rules.md)
 - [Research notes]()
   - [Website design research](research/website-design-2026-10-24.md)
   - [Resource URI research](research/resource-uris-2026-10-24.md)

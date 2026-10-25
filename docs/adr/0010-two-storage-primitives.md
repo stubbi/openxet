@@ -110,8 +110,9 @@ and then that labels are generic, not a fixed set.
        reaches the user of `hf` and `huggingface_hub`.
      - Any other caller gets exactly an unknown repository's response:
        the same status, `X-Error-Code`, `X-Error-Message`
-       (`Repository not found`) and body (`{"error":"Repository not
-       found"}`), and no other header that differs, apart from
+       (`Repository not found`) and body (its `error` field is
+       `Repository not found`; design §6 gives the full constant body,
+       ruling M2-R6), and no other header that differs, apart from
        per-request ids and dates. Any difference would reveal that the
        repository exists.
    - The unprefixed resolve route and `/api/models/…` are the `model`
@@ -204,9 +205,10 @@ owner's decision. This ADR does not schedule it.
   dedup answer could take a shorter grace; that needs its own decision.
 - A repository's scope is `{namespace}/{name}` and a bucket's is
   `bucket/{namespace}/{name}`, so they can't collide (two path segments
-  against three). Labels are not part of either. Both map to the
-  immutable scope ids the M2 plan defines, so a rename never orphans
-  data.
+  against three). Labels are not part of either. Both map to an
+  immutable scope id, so a rename never orphans data: for a repository
+  that is `repo:{id}` with a UUIDv7 id (ruling M2-R2,
+  [ADR 0012](0012-repository-identity-and-authorization-rules.md)).
 - Design §5.9 requirements 2 and 7 cover buckets: credentials and
   creation are scoped per bucket, a `batch` that adds or copies a file by
   Xet hash must name a file the caller can read (else the `404` of an
