@@ -1369,19 +1369,7 @@ fn rule(c: &mut Checker<'_>, at: &str, entry: &toml::Value, source: &Source) -> 
     }
     let subjects = match table.get("subjects") {
         None => Some(Vec::new()),
-        Some(value) => {
-            let list = string_list(value);
-            if list.is_none() {
-                c.raw.problem_toml(
-                    format!("{at}.subjects"),
-                    Some(value),
-                    source,
-                    "must be a list of strings",
-                    RULES_HINT,
-                );
-            }
-            list
-        }
+        Some(value) => rule_subjects(c, &format!("{at}.subjects"), value, source),
     };
     let claims = match table.get("claims") {
         None => Some(BTreeMap::new()),
@@ -1414,6 +1402,50 @@ fn rule(c: &mut Checker<'_>, at: &str, entry: &toml::Value, source: &Source) -> 
         actions: actions?,
     };
     ok.then_some(rule)
+}
+
+/// A rule's `subjects` at `at`: each a subject a credential can carry, and
+/// never `*`, which subjects don't expand (ruling M2-R3). One problem names
+/// every bad entry by position.
+fn rule_subjects(
+    c: &mut Checker<'_>,
+    at: &str,
+    value: &toml::Value,
+    source: &Source,
+) -> Option<Vec<String>> {
+    let Some(subjects) = string_list(value) else {
+        c.raw.problem_toml(
+            at,
+            Some(value),
+            source,
+            "must be a list of strings",
+            RULES_HINT,
+        );
+        return None;
+    };
+    let mut wrong = Vec::new();
+    let mut star = false;
+    for (index, subject) in subjects.iter().enumerate() {
+        if subject == "*" {
+            star = true;
+            wrong.push(format!("entry {index} is `*`, which matches no subject"));
+        } else if let Err(reason) = openxet_auth::check_subject(subject) {
+            wrong.push(format!(
+                "entry {index}: {}",
+                reason.trim_start_matches("the subject ")
+            ));
+        }
+    }
+    if wrong.is_empty() {
+        return Some(subjects);
+    }
+    let hint = if star {
+        format!("Use `anonymous` for everyone, with or without a credential. {RULES_HINT}")
+    } else {
+        format!("Name each subject as the credential carries it. {RULES_HINT}")
+    };
+    c.raw.problem(at, None, source, wrong.join("; "), hint);
+    None
 }
 
 /// The required, non-empty list of strings `name` of the rule `at`, each
@@ -1868,7 +1900,7 @@ mod tests {
     /// tokens for them after authorizing, so a static token may not name
     /// one.
     #[test]
-    fn a_static_token_may_not_take_a_repository_scope() {
+    fn static_token_scope_with_repo_prefix_is_a_problem() {
         let loaded = load_toml(
             &format!(
                 "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"ci\"\n\
@@ -1916,6 +1948,28 @@ mod tests {
             loaded.problems[0].rule.contains("entry 1"),
             "{:?}",
             loaded.problems[0]
+        );
+
+        let loaded = load_toml(
+            &format!(
+                "{token}[[auth.rules]]\nsubjects = [\"*\"]\nrepos = [\"*\"]\nactions = [\"read\"]\n\
+                 [[auth.rules]]\nsubjects = [\"\", \"a\\nb\"]\nrepos = [\"*\"]\n\
+                 actions = [\"read\"]\n"
+            ),
+            &[],
+        );
+        assert_eq!(
+            problem_keys(&loaded),
+            ["auth.rules[0].subjects", "auth.rules[1].subjects"]
+        );
+        let (star, bad) = (&loaded.problems[0], &loaded.problems[1]);
+        assert!(
+            star.hint.contains("Use `anonymous` for everyone"),
+            "{star:?}"
+        );
+        assert!(
+            bad.rule.contains("entry 0") && bad.rule.contains("entry 1"),
+            "{bad:?}"
         );
         assert!(
             loaded

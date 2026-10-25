@@ -91,7 +91,7 @@ impl StaticToken {
     pub(crate) fn check(&self) -> Result<(), &'static str> {
         crate::check_subject(&self.subject)?;
         if let Some(grant) = &self.cas {
-            crate::check_identity(&self.subject, &grant.scope)?;
+            crate::check_scope(&grant.scope)?;
             grant
                 .tenant
                 .as_deref()

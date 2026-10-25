@@ -102,6 +102,14 @@ pub struct Glob {
 }
 
 impl Glob {
+    /// `*`, which matches every repository.
+    #[must_use]
+    pub fn any() -> Self {
+        Self {
+            pattern: "*".to_owned(),
+        }
+    }
+
     /// Parses `pattern`.
     ///
     /// # Errors
@@ -112,9 +120,7 @@ impl Glob {
     pub fn new(pattern: &str) -> Result<Self, InvalidGlob> {
         let invalid = |reason| Err(InvalidGlob { reason });
         if pattern == "*" {
-            return Ok(Self {
-                pattern: pattern.to_owned(),
-            });
+            return Ok(Self::any());
         }
         let Some((namespace, name)) = pattern.split_once('/') else {
             return invalid("must be `*` or `{namespace}/{name}`, such as `org/*`");

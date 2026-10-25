@@ -208,6 +208,7 @@ fn glob_never_crosses_the_slash() {
         assert!(Glob::new(bad).is_err(), "{bad:?} must be refused");
     }
     assert_eq!(Glob::new("org/*").unwrap().as_str(), "org/*");
+    assert_eq!(Glob::any(), Glob::new("*").unwrap());
 }
 
 #[test]

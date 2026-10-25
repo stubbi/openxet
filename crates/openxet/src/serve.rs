@@ -421,7 +421,7 @@ fn dev_rule() -> Rule {
     Rule {
         subjects: vec![DEV_SUBJECT.to_owned()],
         claims: std::collections::BTreeMap::new(),
-        repos: vec![Glob::new("*").unwrap_or_else(|_| unreachable!("`*` is a valid glob"))],
+        repos: vec![Glob::any()],
         actions: vec![Action::Read, Action::Write, Action::Create],
     }
 }

@@ -288,6 +288,11 @@ pub(crate) fn check_tenant(tenant: &str) -> Result<(), &'static str> {
 /// ([`is_disallowed`]). The scope is at most [`MAX_SCOPE_BYTES`].
 pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static str> {
     check_subject(subject)?;
+    check_scope(scope)
+}
+
+/// Checks a scope as [`check_identity`] does.
+pub(crate) fn check_scope(scope: &str) -> Result<(), &'static str> {
     if scope.trim().is_empty() {
         return Err("the scope is empty or only whitespace");
     }
@@ -300,8 +305,15 @@ pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static 
     Ok(())
 }
 
-/// Checks a subject as [`check_identity`] does.
-pub(crate) fn check_subject(subject: &str) -> Result<(), &'static str> {
+/// Checks a subject as every credential's subject is checked: something
+/// other than whitespace, and none of the characters that can forge or
+/// disguise log lines (ruling M1-R19). Configuration checks rule subjects
+/// with it, so a rule can only name a subject a credential can carry.
+///
+/// # Errors
+///
+/// What is wrong with `subject`; never the subject itself.
+pub fn check_subject(subject: &str) -> Result<(), &'static str> {
     if subject.trim().is_empty() {
         return Err("the subject is empty or only whitespace");
     }

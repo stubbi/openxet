@@ -457,7 +457,7 @@ impl CasError {
                 StatusCode::FORBIDDEN,
                 "insufficient_scope",
                 "This is a user token; get a CAS token from the Hub token route \
-                 (`GET /api/models/{namespace}/{name}/xet-read-token/{revision}`, or \
+                 (`GET /api/{repo_type}s/{namespace}/{name}/xet-read-token/{revision}`, or \
                  `xet-write-token`) and send that instead.",
             ),
             Self::UrlRefused(_) => (
