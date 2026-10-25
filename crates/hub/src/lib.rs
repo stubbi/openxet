@@ -46,6 +46,7 @@ macro_rules! typed_paths {
 mod authz;
 mod commit;
 mod error;
+mod gateway;
 mod githttp;
 mod info;
 mod labels;
@@ -56,6 +57,7 @@ mod ndjson;
 mod preupload;
 mod refs;
 mod repos;
+mod resolve;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod tokens;
@@ -187,6 +189,8 @@ pub fn routes() -> routes::Routes {
         .merge(commit::routes())
         .merge(refs::routes())
         .merge(tree::routes())
+        .merge(resolve::routes())
+        .merge(gateway::routes())
         .merge(listing::routes())
         .merge(labels::routes())
         .merge(misc::routes())

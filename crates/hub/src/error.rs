@@ -172,6 +172,21 @@ pub enum HubError {
         /// The commit the revision resolved to.
         commit: Option<Oid>,
     },
+    /// The path holds an LFS pointer whose file this repository's scope
+    /// never registered: its bytes were never uploaded here. `404` with
+    /// `X-Error-Code: EntryNotFound`, which `huggingface_hub` raises as
+    /// `EntryNotFoundError`, and `X-Repo-Commit`.
+    #[error(
+        "{path} on \"{revision}\" is an LFS pointer whose file was never uploaded to this repository"
+    )]
+    LfsObjectMissing {
+        /// The path as the client named it.
+        path: String,
+        /// The revision as the client named it.
+        revision: String,
+        /// The commit the revision resolved to.
+        commit: Oid,
+    },
     /// A commit's `parentCommit` isn't its branch's tip (ruling M2-R7).
     /// `412`.
     #[error("{0}")]
@@ -308,6 +323,12 @@ impl HubError {
                 "entry_not_found",
                 "Check the path and the revision; `list_repo_tree` lists the revision's paths.",
             ),
+            Self::LfsObjectMissing { .. } => (
+                StatusCode::NOT_FOUND,
+                "lfs_object_missing",
+                "Upload the file's content again (`hf upload`, or `git lfs push --all` with \
+                 git-xet installed); a pointer committed without its upload reads as missing.",
+            ),
             Self::ParentMismatch(_) => (
                 StatusCode::PRECONDITION_FAILED,
                 "precondition_failed",
@@ -375,7 +396,7 @@ impl HubError {
         match self {
             Self::UnknownRepo | Self::WrongView { .. } => Some("RepoNotFound"),
             Self::RevisionNotFound { .. } => Some("RevisionNotFound"),
-            Self::EntryNotFound { .. } => Some("EntryNotFound"),
+            Self::EntryNotFound { .. } | Self::LfsObjectMissing { .. } => Some("EntryNotFound"),
             _ => None,
         }
     }
@@ -461,7 +482,8 @@ impl HubError {
             Self::EntryNotFound {
                 commit: Some(commit),
                 ..
-            } => {
+            }
+            | Self::LfsObjectMissing { commit, .. } => {
                 if let Ok(value) = HeaderValue::try_from(commit.to_string()) {
                     headers.insert(X_REPO_COMMIT, value);
                 }
