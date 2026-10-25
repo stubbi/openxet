@@ -94,7 +94,6 @@ async fn info_route(
         json["lastModified"] = commit_date(&head).into();
     }
     json["siblings"] = siblings.into();
-    json["usedStorage"] = 0.into();
     Ok(Json(json))
 }
 
@@ -158,7 +157,12 @@ async fn commits_route(
         .await?;
     let more = commits.len() > limit;
     commits.truncate(limit);
-    let total = state.engine.count_commits(&snap, resolved.commit).await?;
+    // Only the first page counts: a client following `Link` already has
+    // the count, and each count walks the history once.
+    let total = match cursor {
+        None => state.engine.count_commits(&snap, resolved.commit).await?,
+        Some(_) => None,
+    };
     let json: Vec<Value> = commits
         .iter()
         .map(|c| {

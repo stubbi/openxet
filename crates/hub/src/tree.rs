@@ -8,7 +8,7 @@
 //! registered with its SHA-256; a pointer whose SHA-256 the scope doesn't
 //! know lists without one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::Json;
 use axum::body::Body;
@@ -52,7 +52,7 @@ pub(crate) fn routes() -> Routes {
 
 /// Whether a boolean query parameter is on: `true` or `1`, as
 /// `huggingface_hub` and browsers write it.
-fn on_flag(value: &str) -> bool {
+pub(crate) fn on_flag(value: &str) -> bool {
     matches!(value, "true" | "True" | "1")
 }
 
@@ -116,19 +116,28 @@ async fn paths_info_route(
     let rev = param(&params, "rev");
     let body = read_body(body, PATHS_INFO_BODY_LIMIT).await?;
     let mut paths: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut fields = 0usize;
     let mut expand = false;
     for (key, value) in url::form_urlencoded::parse(&body) {
         match &*key {
-            "paths" if !paths.iter().any(|p| *p == value) => paths.push(value.into_owned()),
+            "paths" => {
+                // Every `paths` field counts, repeats included, so the
+                // limit bounds the parsing work, not only the lookups.
+                fields += 1;
+                if fields > MAX_PATHS {
+                    return Err(HubError::BadRequest {
+                        message: format!("paths-info takes at most {MAX_PATHS} paths at a time"),
+                        hint: "Ask about the paths in batches, as get_paths_info does.",
+                    });
+                }
+                if seen.insert(value.clone().into_owned()) {
+                    paths.push(value.into_owned());
+                }
+            }
             "expand" => expand = on_flag(&value),
             _ => {}
         }
-    }
-    if paths.len() > MAX_PATHS {
-        return Err(HubError::BadRequest {
-            message: format!("paths-info takes at most {MAX_PATHS} paths at a time"),
-            hint: "Ask about the paths in batches, as get_paths_info does.",
-        });
     }
     let (snap, resolved) = at_revision(&state, &access, &rev).await?;
     // Each path is looked up in its folder's listing, read once per folder.

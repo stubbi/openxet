@@ -356,6 +356,39 @@ async fn paths_info_omits_missing() {
     assert!(plain[0].get("lastCommit").is_none(), "{plain}");
 }
 
+/// More than 1,000 `paths` fields are refused while the body is parsed,
+/// repeats of one path included, as `get_paths_info` sends at most 1,000.
+#[tokio::test]
+async fn paths_info_refuses_more_than_1000_paths() {
+    let hub = hub().await;
+    let (_router, _) = uploaded(&hub).await;
+    let post = |body: String| {
+        hub.call_raw(
+            Method::POST,
+            "/api/models/alice/m/paths-info/main",
+            Some(ALICE),
+            "application/x-www-form-urlencoded",
+            body,
+        )
+    };
+    let distinct = |n: usize| {
+        (0..n)
+            .map(|i| format!("paths=f{i}"))
+            .collect::<Vec<_>>()
+            .join("&")
+    };
+    assert_eq!(post(distinct(1000)).await.status, StatusCode::OK);
+    let over = post(distinct(1001)).await;
+    assert_eq!(over.status, StatusCode::BAD_REQUEST, "{}", over.text());
+    assert!(
+        over.text().contains("at most 1000 paths"),
+        "{}",
+        over.text()
+    );
+    let repeated = vec!["paths=README.md"; 1001].join("&");
+    assert_eq!(post(repeated).await.status, StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn commits_newest_first_with_total() {
     let hub = hub().await;
@@ -434,12 +467,13 @@ async fn repo_info_shapes() {
             "siblings[].rfilename",
             "spaces",
             "createdAt",
-            "usedStorage",
         ],
     );
+    assert!(info.get("usedStorage").is_none());
     // `snapshot_download` asserts `sha` (`_snapshot_download.py` line 280).
     assert_eq!(info["sha"], upload);
-    assert_eq!(info["tags"], json!(["model"]));
+    assert_eq!(info["tags"], json!([]));
+    assert_eq!(info["labels"], json!(["model"]));
     assert_eq!(info["author"], "alice");
     let names: Vec<&str> = info["siblings"]
         .as_array()
@@ -606,6 +640,17 @@ async fn listings_paginate_with_link_next() {
     let (paged, page_count) = follow(&hub, "commits/main?limit=1").await;
     assert_eq!(page_count, 4);
     assert_eq!(Value::Array(paged), all);
+    // Only the first page counts the history.
+    let first = get(&hub, "commits/main?limit=1").await;
+    assert_eq!(first.header("x-total-count"), Some("4"));
+    let next = first.header("link").unwrap();
+    let next = next
+        .strip_prefix(&format!("<{PUBLIC_URL}"))
+        .and_then(|l| l.strip_suffix(">; rel=\"next\""))
+        .unwrap();
+    let second = hub.call(Method::GET, next, Some(ALICE), None).await;
+    assert_eq!(second.status, StatusCode::OK);
+    assert!(second.header("x-total-count").is_none());
     // A page of everything links nothing.
     assert!(get(&hub, "commits/main").await.header("link").is_none());
     // A cursor this server didn't issue.

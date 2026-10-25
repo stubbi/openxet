@@ -791,20 +791,90 @@ async fn tag_target_is_the_annotated_tag_object() {
         .json();
     assert_eq!(with_prs["pullRequests"], json!([]));
     assert!(listed.get("pullRequests").is_none());
+    // Python's `False`, as a client may format the flag, is off.
+    let without = hub
+        .call(
+            Method::GET,
+            "/api/models/alice/m/refs?include_prs=False",
+            Some(ALICE),
+            None,
+        )
+        .await
+        .json();
+    assert!(without.get("pullRequests").is_none());
 }
 
+/// Creating a repository writes huggingface.co's `initial commit` on
+/// `main` (ruling M2-R5): by openxet, with no parent, holding only the
+/// default `.gitattributes`.
 #[tokio::test]
-async fn concurrent_hub_commits_both_land() {
+async fn create_writes_initial_commit() {
     let hub = hub().await;
     hub.create(ALICE, "alice", "m", None).await;
-    // Two `create_commit`s to one branch at once, neither naming a parent:
-    // both land, one after the other, and neither is lost (Review Focus 2).
-    let first = [header("one"), file("one.txt", b"1")];
-    let second = [header("two"), file("two.txt", b"2")];
-    let (a, b) = tokio::join!(
-        hub.commit(ALICE, "/api/models/alice/m", "main", &first),
-        hub.commit(ALICE, "/api/models/alice/m", "main", &second),
+    let id: openxet_index::RepoId = repo_id(&hub, "alice", "m").await.parse().unwrap();
+    let snap = hub.state.engine.snapshot(id).await.unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new(hub.state.engine.git())
+            .arg("--git-dir")
+            .arg(snap.dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    assert_eq!(
+        git(&["for-each-ref", "--format=%(refname)"]),
+        "refs/heads/main"
     );
+    let commit = git(&["cat-file", "-p", "refs/heads/main"]);
+    let headers: Vec<&str> = commit.lines().take_while(|l| !l.is_empty()).collect();
+    assert!(
+        !headers.iter().any(|l| l.starts_with("parent ")),
+        "{commit}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|l| l.starts_with("author openxet <noreply@openxet.com> ")),
+        "{commit}"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|l| l.starts_with("committer openxet <noreply@openxet.com> ")),
+        "{commit}"
+    );
+    assert!(commit.ends_with("\n\ninitial commit"), "{commit}");
+    assert_eq!(
+        git(&["ls-tree", "refs/heads/main"]),
+        "100644 blob a6344aac8c09253b3b630fb776ae94478aa0275b\t.gitattributes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_hub_commits_both_land() {
+    let hub = Arc::new(hub().await);
+    hub.create(ALICE, "alice", "m", None).await;
+    // Two `create_commit`s to one branch at once, on two threads, released
+    // together, neither naming a parent: both land, one after the other,
+    // and neither is lost (Review Focus 2).
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let spawn = |name: &'static str| {
+        let (hub, barrier) = (Arc::clone(&hub), Arc::clone(&barrier));
+        tokio::spawn(async move {
+            let lines = [header(name), file(&format!("{name}.txt"), name.as_bytes())];
+            barrier.wait().await;
+            hub.commit(ALICE, "/api/models/alice/m", "main", &lines)
+                .await
+        })
+    };
+    let (a, b) = (spawn("one"), spawn("two"));
+    let (a, b) = (a.await.unwrap(), b.await.unwrap());
     assert_eq!(a.status, StatusCode::OK, "{}", a.text());
     assert_eq!(b.status, StatusCode::OK, "{}", b.text());
     assert_ne!(a.json()["commitOid"], b.json()["commitOid"]);

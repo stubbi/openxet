@@ -31,8 +31,8 @@ use crate::{CONTROL_BODY_LIMIT, HubError, HubState, View, json_body, labels};
 /// create there gets the same `403` whether or not the name exists (ADR
 /// 0010 item 5). Then the name is checked (ruling M2-R2), and the
 /// repository's metadata record is written to the bucket before the index
-/// row (design §5.3), then the initial commit (ruling M2-R5) and the audit
-/// row.
+/// row (design §5.3), then the audit row and the initial commit (ruling
+/// M2-R5).
 ///
 /// # Errors
 ///
@@ -110,7 +110,8 @@ pub async fn create_repo(
             other => other.into(),
         });
     }
-    initial_commit(state, id).await?;
+    // The repository exists from here on, so its creation is audited before
+    // the initial commit, whatever that commit's outcome.
     state
         .index
         .audit(&AuditEntry {
@@ -125,6 +126,7 @@ pub async fn create_repo(
             }),
         })
         .await?;
+    initial_commit(state, id).await?;
     tracing::info!(repo = %id, "repository created");
     Ok(repo)
 }
@@ -367,7 +369,8 @@ fn typed_view(kind: Option<&str>) -> Result<View, HubError> {
 
 /// A repository as the Hub's info and listing routes answer it, for
 /// `view`: the fields huggingface.co sends that openxet knows, plus
-/// openxet's `labels`, which are also its `tags`. Datasets, spaces and
+/// openxet's `labels`; `tags` is empty and `usedStorage` left out, as
+/// openxet derives neither. Datasets, spaces and
 /// kernels leave out the model-only `modelId`, `config` and `spaces` (S3,
 /// fixtures `22`, `42`); `huggingface_hub` requires only `id` (`hf_api.py`
 /// line 894).
@@ -378,7 +381,9 @@ pub(crate) fn repo_json(view: View, repo: &Repo) -> Value {
         "id": id,
         "author": repo.namespace,
         "private": repo.private,
-        "tags": repo.labels,
+        // huggingface.co's `tags` come from model cards, which openxet
+        // doesn't parse; `labels` are openxet's own (ADR 0010).
+        "tags": [],
         "downloads": 0,
         "likes": 0,
         "gated": false,

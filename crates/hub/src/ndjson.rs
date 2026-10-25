@@ -133,9 +133,6 @@ pub fn parse_commit_ndjson(body: &[u8], limits: &Limits) -> Result<CommitRequest
         })?;
         match (parsed, &header) {
             (Line::Header(h), None) => header = Some(h),
-            (Line::Header(_), Some(_)) => {
-                return Err(bad(format!("line {number} is a second header")));
-            }
             (_, None) => {
                 return Err(bad(format!(
                     "line {number} is an operation before the header"
@@ -173,7 +170,8 @@ pub fn parse_commit_ndjson(body: &[u8], limits: &Limits) -> Result<CommitRequest
 
 fn operation(line: Line, number: usize, limits: &Limits) -> Result<Op, HubError> {
     Ok(match line {
-        Line::Header(_) => unreachable!("headers are matched before operations"),
+        // The first header is taken before any operation; this is another.
+        Line::Header(_) => return Err(bad(format!("line {number} is a second header"))),
         Line::File(file) => {
             if file.encoding != "base64" {
                 return Err(bad(format!(

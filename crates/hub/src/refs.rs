@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess};
 use crate::routes::{Routes, on};
+use crate::tree::on_flag;
 use crate::{CONTROL_BODY_LIMIT, HubError, HubState, param, parse_json, read_body};
 
 /// The ref routes of every Hub type.
@@ -98,7 +99,7 @@ async fn list(
     RawQuery(query): RawQuery,
 ) -> Result<Json<Value>, HubError> {
     let include_prs = url::form_urlencoded::parse(query.as_deref().unwrap_or("").as_bytes())
-        .any(|(key, value)| key == "include_prs" && value != "0" && value != "false");
+        .any(|(key, value)| key == "include_prs" && on_flag(&value));
     let snap = state.engine.snapshot(access.repo.id).await?;
     let (mut tags, mut branches, mut pulls) = (Vec::new(), Vec::new(), Vec::new());
     for (name, target) in &snap.refs {

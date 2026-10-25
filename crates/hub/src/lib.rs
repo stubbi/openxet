@@ -1,7 +1,8 @@
 //! openxet's Hub API: the routes `huggingface_hub` and the `hf` CLI call
-//! for repositories, their uploads, commits, refs and listings (design §6). [`routes`] are served at the root of the
-//! server's origin beside the CAS; `openxet serve` mounts them
-//! ([`mounted`]) with [`openxet_http::compose`].
+//! for repositories, their uploads, commits, refs and listings (design
+//! §6). [`routes`] are served at the root of the server's origin beside
+//! the CAS; `openxet serve` mounts them ([`mounted`]) with
+//! [`openxet_http::compose`].
 //!
 //! The wire shapes are huggingface.co's, recorded by spike S3
 //! (`docs/research/S3-hub-api-shapes.md`, `compat/fixtures/hub/`).
