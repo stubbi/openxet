@@ -457,7 +457,9 @@ impl CapabilitySigner {
     `token_with_scope_and_claims_is_both`, `dev_token_is_both`.
   - config: `rules_are_checked_field_by_field` (bad action, bad glob,
     empty matcher → one problem each with key paths like
-    `auth.rules[0].actions`), `claims_values_are_string_lists`.
+    `auth.rules[0].actions`), `claims_values_are_string_lists`,
+    `static_token_scope_with_repo_prefix_is_a_problem` (key path
+    `auth.static_tokens[n].scope`; ADR 0012).
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement.** Globs: `*` matches any run of characters
   except `/`; `**` is not supported (names have one slash). The

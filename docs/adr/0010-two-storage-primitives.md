@@ -203,12 +203,13 @@ owner's decision. This ADR does not schedule it.
   10 GB dense checkpoints holds about 7.2 TB through the default grace,
   240 times its live size. S12 asks whether xorbs never offered in a
   dedup answer could take a shorter grace; that needs its own decision.
-- A repository's scope is `{namespace}/{name}` and a bucket's is
-  `bucket/{namespace}/{name}`, so they can't collide (two path segments
-  against three). Labels are not part of either. Both map to an
-  immutable scope id, so a rename never orphans data: for a repository
-  that is `repo:{id}` with a UUIDv7 id (ruling M2-R2,
-  [ADR 0012](0012-repository-identity-and-authorization-rules.md)).
+- A repository is addressed by `{namespace}/{name}`, and its scope is
+  `repo:{id}` with an immutable UUIDv7 id (ruling M2-R2,
+  [ADR 0012](0012-repository-identity-and-authorization-rules.md)), so a
+  rename never orphans data. A bucket's scope string is M5's to define;
+  `bucket/{namespace}/{name}` is a placeholder until then. It must be
+  immutable across renames too, and can't start with the reserved
+  `repo:`, so the two never collide. Labels are not part of either.
 - Design §5.9 requirements 2 and 7 cover buckets: credentials and
   creation are scoped per bucket, a `batch` that adds or copies a file by
   Xet hash must name a file the caller can read (else the `404` of an

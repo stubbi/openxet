@@ -104,6 +104,8 @@ def check_nextest(listing: Path, tests: list[tuple[str, str]], problems: list[st
         if not path.endswith(".rs"):
             continue
         hits = found.get(name, [])
+        # Matched once per named file, not once per workspace: a plan may
+        # split one requirement's test into same-named halves in two files.
         here = [
             ignored
             for file, ignored in hits

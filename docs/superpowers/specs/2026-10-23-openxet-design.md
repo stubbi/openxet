@@ -590,21 +590,24 @@ with a configured key. It then stores Xet file hashes in its own database.
 
 **Scopes and tenants (builder-check call, ruling M1-R38):**
 - A **scope** is the unit of access. In the Hub layer a scope is a
-  repository (`{namespace}/{name}`), matching HF's repo-scoped Xet
-  tokens, or a bucket (`bucket/{namespace}/{name}`); two path segments
-  against three, so the two never collide. Labels are not part of a
-  scope. Scope strings are persisted
-  (their SHA-256 keys every registration record, §5.3), so both kinds
-  map to an immutable scope id and a rename never orphans their data. In
-  storage-only mode it is an opaque string the platform chooses. Files
-  are read and registered per scope.
+  repository, matching HF's repo-scoped Xet tokens, or a bucket. A
+  repository is addressed by `{namespace}/{name}` and its scope is
+  `repo:{id}` (ADR 0012, below). A bucket's scope string is M5's to
+  define; `bucket/{namespace}/{name}` is a placeholder until then, and
+  whatever M5 picks can't start with the reserved `repo:`, so the two
+  never collide. Labels are not part of a scope. Scope strings are
+  persisted (their SHA-256 keys every registration record, §5.3), so
+  both kinds map to an immutable scope id and a rename never orphans
+  their data. In storage-only mode it is an opaque string the platform
+  chooses. Files are read and registered per scope.
 - A repository's **scope id** *(ruling M2-R2, ADR 0012)* is a UUIDv7
   assigned at creation, rendered as 32 lowercase hex characters; its CAS
   scope is `repo:{id}`, and the bucket keys for its data carry the id
   (`repos/{id}/…`). The scope prefix `repo:` is reserved for
   repositories: a configured static token whose `scope` starts with it
   is a configuration problem, and a CAS token a platform signs with such
-  a scope is accepted only because the platform holds the signing key.
+  a scope is accepted, because the platform holding a signing key is
+  trusted with any scope.
   Namespace and name live in the repository's metadata record, so a
   rename rewrites one record. Namespace and name each match
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` and contain no `..`, the name
@@ -614,12 +617,12 @@ with a configured key. It then stores Xet file hashes in its own database.
   metering. Every principal carries one. In the Hub layer it is the
   namespace, the first path segment, and the Hub and LFS token routes
   mint CAS tokens with scope `repo:{id}` and that tenant (ADR 0012). In
-  storage-only mode it is the CAS token's optional `tenant` claim
-  (ADR 0007) or a static token's configured `tenant`. When none is given it is `scope:` followed by the
-  scope, and no explicit tenant may start with `scope:` *(ruling
-  M1-R43)*, so a scope named like a tenant never joins it. So the scopes
-  of one tenant share dedup under `per-tenant`: an org's fine-tune dedups
-  against its base model in another repo.
+  storage-only mode it is the CAS token's optional `tenant` claim (ADR
+  0007) or a static token's configured `tenant`. When none is given it
+  is `scope:` followed by the scope, and no explicit tenant may start
+  with `scope:` *(ruling M1-R43)*, so a scope named like a tenant never
+  joins it. So the scopes of one tenant share dedup under `per-tenant`:
+  an org's fine-tune dedups against its base model in another repo.
 - A commit in repo B may only reference files registered to repo B. A file
   already in repo A is registered to B by uploading it to B; dedup makes
   that nearly free, because only a shard is sent.
@@ -2205,8 +2208,8 @@ decides, with superseded parts marked.
 | M1-R42 | Signed transfer URLs live 30 to 60 minutes (60 by default), so a leaked URL, or one issued before a purge, stops working within the hour; supersedes M1-R19's 24 h URL cap. | §5.4, §5.5, ADR 0002 |
 | M1-R43 | A credential that names no tenant is in tenant `scope:` followed by its scope, and no explicit tenant may start with `scope:`, so a scope named like a tenant never joins it. Migration 0005 and the bucket records use the same default. | §5.4, ADR 0007 |
 | M2-R1 | New crates `openxet-http` (the route builder, request ids, the error body and the middleware stack, extracted from `openxet-cas`), `openxet-hub`, `openxet-git` and `openxet-uri`; the authorizer lives in `openxet-auth`. `openxet serve` composes the CAS, Hub and Git routes into one router with one fallback, one state per crate and one middleware stack, and `clippy.toml` bans `Router::fallback` and `Router::fallback_service` outside the builder. | §5.2, §12 M2, issue #46 |
-| M2-R2 | A repository has an immutable UUIDv7 id, rendered as 32 lowercase hex characters. Its CAS scope is `repo:{id}`, its tenant is its namespace, and bucket keys for its data carry the id (`repos/{id}/…`); namespace and name live in its metadata record, so a rename rewrites one record. The scope prefix `repo:` is reserved: a configured static token with such a `scope` is a configuration problem, and a platform-signed CAS token with one is accepted only because the platform holds the signing key. Namespace and name each match `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` and contain no `..`, the name doesn't end in `.git`, and `{namespace}/{name}` is unique case-insensitively, stored as written, across labels. | §5.4, ADR 0012, ADR 0010 |
-| M2-R3 | A credential is a CAS credential (scope, tenant, mode), a user credential (subject plus claims) or both: a static token without `scope` is a user credential, one with `scope` a CAS credential, one with a `scope` and user fields both, as the dev token is. The `Authorizer` decides `read`, `write` and `create` per repository or namespace; M2's config-rules authorizer reads `[[auth.rules]]` (`subjects` and/or `claims`, `repos` globs, `actions`), and a request is allowed if any rule allows it. The pseudo subject `anonymous` matches a request with no credential and is named by no rule by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`. `whoami-v2` answers `name` from the subject (or the static token's `name`) and `orgs` from the `orgs` claim. OIDC, the webhook authorizer and openxet access tokens come in M3. | §5.4, ADR 0012 |
+| M2-R2 | A repository has an immutable UUIDv7 id, rendered as 32 lowercase hex characters. Its CAS scope is `repo:{id}`, its tenant is its namespace, and bucket keys for its data carry the id (`repos/{id}/…`); namespace and name live in its metadata record, so a rename rewrites one record. The scope prefix `repo:` is reserved: a configured static token with such a `scope` is a configuration problem, and a platform-signed CAS token with one is accepted, because the platform holding a signing key is trusted with any scope. Namespace and name each match `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` and contain no `..`, the name doesn't end in `.git`, and `{namespace}/{name}` is unique case-insensitively, stored as written, across labels. | §5.4, ADR 0012, ADR 0010 |
+| M2-R3 | A credential is a CAS credential (scope, tenant, mode), a user credential (subject plus claims) or both: a static token without `scope` is a user credential, one with `scope` a CAS credential, one with a `scope` and user fields both, as the dev token is. The `Authorizer` decides `read`, `write` and `create` per repository or namespace; M2's config-rules authorizer reads `[[auth.rules]]` (`subjects` and/or `claims`, either of which matching the principal is enough; `repos` globs; `actions`, where `create` on `org/*` allows creating in namespace `org`), and a request is allowed if any rule allows it. The pseudo subject `anonymous` matches a request with no credential and is named by no rule by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`. `whoami-v2` answers `name` from the subject (or the static token's `name`) and `orgs` from the `orgs` claim. OIDC, the webhook authorizer and openxet access tokens come in M3. | §5.4, ADR 0012 |
 | M2-R4 | `preupload` answers `lfs` when a file is at least `hub.lfs_threshold` (default `1MiB`, bounds `1KiB` to `10MiB`) or its path matches an LFS pattern of the target revision's `.gitattributes`, and `regular` otherwise. A regular file's decoded content is at most `hub.lfs_threshold`; a commit's NDJSON body is at most `hub.max_commit_bytes` (default `64MiB`) and 25,000 operations. The M2 benchmark may revise the default, with the number. | §6 |
 | M2-R5 | `POST /api/repos/create` writes a server-generated `initial commit` on `main` holding huggingface.co's default `.gitattributes` (the S3 capture), authored and committed by `openxet <noreply@openxet.com>`. | §6, S3 |
 | M2-R6 | Hub errors are `{"error", "schema": "openxet.error.v1", "code", "message", "hint"}` with `X-Error-Code` and `X-Error-Message`; CAS routes keep the M1 body. The unknown-repository answer is one constant `404` (`RepoNotFound`, `Repository not found`, body and hint fixed) for a missing repository, one the caller may not read, and a typed view the caller may not read whose label the repository lacks. A missing credential is `401` with `WWW-Authenticate: Bearer realm="openxet"` and a message naming `hf auth login`; an invalid one is `401` with `Invalid credentials in Authorization header`. | §6, ADR 0010, S3 |
@@ -2217,6 +2220,6 @@ decides, with superseded parts marked.
 | M2-R11 | Smart HTTP is served at `/{prefix}{ns}/{name}.git/…` and without `.git`; a gzip request body is inflated, `Git-Protocol: version=2` selects v2, and Basic (the token as the password) and Bearer are accepted. The first push to a missing repository creates it, with the `model` label, if the authorizer allows `create` in the namespace. | §10.9, ADR 0004, ADR 0005 |
 | M2-R12 | openxet's own API lives under `/api/openxet/v1/`; labels are `GET …/repos/{ns}/{name}/labels`, `PUT` and `DELETE …/labels/{label}`, and `openxet label add`, `remove` and `list`. Each change writes the repository's metadata record to the bucket, then the index, then an `audit_log` row (`actor`, `action`, `repo`, `detail`, `at`), the table M4's audit API exposes. | §10.4, ADR 0010 |
 | M2-R13 | `openxet purge <file-hash>` (with the server config) writes `purges/{hash}` to the bucket, then deletes the file's rows from every scope and its dedup candidates, writes an `audit_log` row and prints what it removed; `reindex` (M4) skips purged hashes. It takes `--dry-run`, `--yes` and `--json` (`openxet.purge.v1`). | §5.4 |
-| M2-R14 | `xet://{host}[:{port}]/[{kind}/]{namespace}/{name}[@{revision}][/{path}]`: no `{kind}` for a repository, `datasets`, `spaces` or `kernels` for a typed view, `buckets` for a bucket (resolved from M5); `%40` for a literal `@` in a name; a percent-encoded UTF-8 path (RFC 3986); no userinfo. Hostless legacy forms and forms naming `xethub.com` are rejected with an error that says how to write the address, and nothing is sent to a default server. | ADR 0009 |
+| M2-R14 | `xet://{host}[:{port}]/[{kind}/]{namespace}/{name}[@{revision}][/{path}]`: no `{kind}` for a repository, `datasets`, `spaces` or `kernels` for a typed view, `buckets` for a bucket (resolved from M5); `@{revision}` is a ref or OID, with `%40` for a literal `@` in a name; a percent-encoded UTF-8 path (RFC 3986); no userinfo. Hostless legacy forms and forms naming `xethub.com` are rejected with an error that says how to write the address, and nothing is sent to a default server. | ADR 0009 |
 | M2-R15 | `openxet openapi` prints the OpenAPI 3.1 document generated from the route builders' `utoipa` annotations; it is checked in at `docs/reference/openapi.json`, served at `GET /openapi.json`, and CI fails when the two differ. | §7.1 |
-| M2-R16 | Git budgets take ADR 0004's defaults (`git.reachability.max_commits` 200,000, `max_ms` 2,000, `max_concurrent_per_repo` 2, `max_concurrent_per_principal` 4; `git.thin_bases.max_objects` 2,000,000, `max_ms` 2,000), and the M2 benchmarks record the measured values that replace the thin-base placeholders. The node cache is `git.cache_dir` (default `{data_dir}/git-cache`), `git.cache_max_bytes` (default `20GiB`), and `git.max_plain_blob_bytes` is unset by default. | ADR 0004 |
+| M2-R16 | Git budgets take ADR 0004's defaults (`git.reachability.max_commits` 200,000, `max_ms` 2,000, `max_concurrent_per_repo` 2, `max_concurrent_per_principal` 4; `git.thin_bases.max_objects` 2,000,000, `max_ms` 2,000), and the M2 benchmarks record the measured values that replace the thin-base placeholders. The node cache is `git.cache_dir` (default `{data_dir}/git-cache`) with snapshots under it, `git.cache_max_bytes` (default `20GiB`), and `git.max_plain_blob_bytes` is unset by default. | ADR 0004 |

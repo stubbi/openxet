@@ -16,9 +16,9 @@ model can't answer.
 
 **What is a repository's scope?** Design §5.4 makes the scope the unit of
 access and persists it: its SHA-256 keys every registration record in
-the object-store bucket (ruling M1-R37). ADR 0010 sets a repository's
-scope to `{namespace}/{name}` and asks the M2 plan for an immutable scope
-id, so that a rename never orphans data. If the scope were the name
+the object-store bucket (ruling M1-R37). ADR 0010, as first
+written, set a repository's scope to `{namespace}/{name}` and asked the
+M2 plan for an immutable scope id, so that a rename never orphans data. If the scope were the name
 itself, renaming `foo/bar` to `foo/baz` would leave every registration
 record and every bucket key under the old name, and a later repository
 named `foo/bar` would inherit them.
