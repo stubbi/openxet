@@ -104,15 +104,13 @@ mod tests {
     /// A write-only route, which the CAS gains only in later tasks.
     async fn write_route(dir: &tempfile::TempDir) -> Router {
         let tokens = vec![token(READ, Mode::Read), token(WRITE, Mode::Write)];
-        Routes::new()
-            .route(
-                "/w",
-                on(Method::POST, |WriteAccess(p): WriteAccess| async move {
-                    p.subject
-                }),
-            )
-            .into_router()
-            .with_state(test_support::state(dir.path(), tokens).await)
+        let routes = Routes::new().route(
+            "/w",
+            on(Method::POST, |WriteAccess(p): WriteAccess| async move {
+                p.subject
+            }),
+        );
+        test_support::serve(routes, test_support::state(dir.path(), tokens).await)
     }
 
     async fn call(router: &Router, auth: &[&str]) -> (StatusCode, String) {

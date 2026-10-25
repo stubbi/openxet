@@ -1,19 +1,15 @@
 use std::error::Error as StdError;
 
-use axum::Json;
 use axum::http::header::{CONNECTION, CONTENT_RANGE, RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{AuthError, ForbiddenReason};
+use openxet_http::ErrorBody;
 use openxet_index::IndexError;
 use openxet_protocol::{MerkleHash, ProtocolError, VerifyError, hash_to_hex};
 use openxet_storage::StorageError;
-use serde::Serialize;
 
 use crate::BodyDeadline;
-
-/// The schema of every CAS error body.
-const SCHEMA: &str = "openxet.error.v1";
 
 /// The server-side cause of a `5xx`, logged and never sent.
 type Cause = Box<dyn StdError + Send + Sync>;
@@ -397,14 +393,6 @@ impl From<StorageError> for CasError {
     }
 }
 
-#[derive(Serialize)]
-struct Body<'a> {
-    schema: &'static str,
-    code: &'static str,
-    message: &'a str,
-    hint: &'static str,
-}
-
 /// The hint for a xorb a shard references but the server lacks; the
 /// message itself carries the stale-cache note (ruling M1-R5).
 const UNKNOWN_XORB_HINT: &str = "Upload every xorb before the shard that references it, with \
@@ -696,17 +684,7 @@ impl IntoResponse for CasError {
     fn into_response(self) -> Response {
         let (status, code, hint) = self.parts();
         self.log();
-        let message = self.to_string();
-        let mut response = (
-            status,
-            Json(Body {
-                schema: SCHEMA,
-                code,
-                message: &message,
-                hint,
-            }),
-        )
-            .into_response();
+        let mut response = ErrorBody::new(status, code, self.to_string(), hint).into_response();
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
@@ -736,17 +714,6 @@ pub(crate) fn closing(e: CasError) -> Response {
         .headers_mut()
         .insert(CONNECTION, HeaderValue::from_static("close"));
     response
-}
-
-/// The fallback for paths no route serves.
-pub(crate) async fn no_route() -> CasError {
-    CasError::NoRoute
-}
-
-/// The fallback for a served path with an unserved method. axum adds the
-/// `Allow` header.
-pub(crate) async fn method_not_allowed() -> CasError {
-    CasError::MethodNotAllowed
 }
 
 #[cfg(test)]
@@ -788,7 +755,7 @@ mod tests {
         let reply = respond(e).await;
         assert_eq!(reply.status, status, "{}", reply.body);
         assert_eq!(reply.body["code"], code, "{}", reply.body);
-        assert_eq!(reply.body["schema"], SCHEMA);
+        assert_eq!(reply.body["schema"], openxet_http::SCHEMA);
         reply
     }
 

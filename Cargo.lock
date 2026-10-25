@@ -1866,6 +1866,7 @@ dependencies = [
  "openxet-auth",
  "openxet-cas",
  "openxet-client",
+ "openxet-http",
  "openxet-index",
  "openxet-protocol",
  "openxet-storage",
@@ -1921,6 +1922,7 @@ dependencies = [
  "itoa",
  "openxet-auth",
  "openxet-cas",
+ "openxet-http",
  "openxet-index",
  "openxet-protocol",
  "openxet-storage",
@@ -1957,6 +1959,23 @@ dependencies = [
  "xet-client",
  "xet-data",
  "xet-runtime",
+]
+
+[[package]]
+name = "openxet-http"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "http-body",
+ "http-body-util",
+ "openxet-http",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http 0.7.1",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

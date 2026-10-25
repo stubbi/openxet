@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Test-only: `endpoints()` and `Endpoint`, the routes the router serves, so
+# Test-only: `endpoints()` and `Endpoint`, the routes the CAS serves, so
 # the tests can check every route is in their credential and echo matrices.
 # Never enable it in a shipped build.
-test-support = []
+test-support = ["openxet-http/test-support"]
 # Fuzz-only: `reconstruction_range()`, the `Range` parser of the
 # reconstruction routes, for the target in `fuzz/`. Never enable it in a
 # shipped build.
@@ -26,6 +26,7 @@ http-body-util = { version = "0.1.5", features = ["channel"] }
 foldhash = "0.2.0"
 itoa = "1.0.18"
 openxet-auth = { path = "../auth", version = "0.0.0" }
+openxet-http = { path = "../http", version = "0.0.0" }
 openxet-index = { path = "../index", version = "0.0.0" }
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
 openxet-storage = { path = "../storage", version = "0.0.0" }
@@ -33,10 +34,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2"
 tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
-tower-http = { version = "0.7.1", features = ["catch-panic", "sensitive-headers", "trace"] }
+tower-http = { version = "0.7.1", features = ["trace"] }
 tracing = "0.1.44"
 url = "2.5.8"
-uuid = { version = "1.29.0", features = ["v7"] }
 
 [dev-dependencies]
 async-trait = "0.1.92"

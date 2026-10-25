@@ -19,7 +19,8 @@ use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::header::{AUTHORIZATION, RANGE};
 use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
-use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, router};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, mounted};
+use openxet_http::compose;
 use openxet_index::{
     ChunkTable, FileRecord, Index as _, NewFile, Registrant, SqliteIndex, Term, Visibility,
 };
@@ -245,7 +246,8 @@ pub async fn get(
     }
     let request = request.body(Body::empty()).unwrap();
     let started = Instant::now();
-    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let app = compose(vec![mounted(state.clone())], state.cfg.body_deadline);
+    let response = app.oneshot(request).await.unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let took = started.elapsed();

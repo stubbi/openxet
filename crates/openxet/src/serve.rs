@@ -19,8 +19,9 @@ use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
-use openxet_cas::{AppState, router, starting_router};
+use openxet_cas::{AppState, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
+use openxet_http::compose;
 use openxet_index::SqliteIndex;
 use openxet_storage::{LocalBucket, StorageError, create_private_dir_all};
 use serde::Serialize;
@@ -152,7 +153,8 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
     ));
 
     let (state, dev_token) = open(&config, public_url.clone()).await?;
-    let _ = app.set(router(state));
+    let body_deadline = state.cfg.body_deadline;
+    let _ = app.set(compose(vec![openxet_cas::mounted(state)], body_deadline));
     let endpoint = public_url.as_str().trim_end_matches('/').to_owned();
     tracing::info!(%endpoint, dev_mode = dev_token.is_some(), "ready");
     if !*stop.borrow() {

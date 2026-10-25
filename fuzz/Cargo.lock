@@ -1430,6 +1430,7 @@ dependencies = [
  "http-body-util",
  "itoa",
  "openxet-auth",
+ "openxet-http",
  "openxet-index",
  "openxet-protocol",
  "openxet-storage",
@@ -1440,7 +1441,6 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "url",
- "uuid",
 ]
 
 [[package]]
@@ -1455,6 +1455,19 @@ dependencies = [
  "openxet-cas",
  "openxet-protocol",
  "url",
+]
+
+[[package]]
+name = "openxet-http"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "http-body",
+ "serde",
+ "tokio",
+ "tower-http 0.7.1",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

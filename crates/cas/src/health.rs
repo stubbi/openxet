@@ -12,9 +12,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower_http::trace::TraceLayer;
 
+use crate::CasError;
 use crate::error::closing;
 use crate::routes::{Routes, on};
-use crate::{CasError, request_id};
 
 const JSON: [(axum::http::HeaderName, &str); 1] = [(CONTENT_TYPE, "application/json")];
 
@@ -41,17 +41,17 @@ async fn not_ready() -> Response {
 }
 
 /// What a server answers while its index and bucket open, before it serves
-/// [`crate::router`]: `/healthz` is `200`, and `/readyz` and every other
+/// [`crate::routes`]: `/healthz` is `200`, and `/readyz` and every other
 /// path `503 not_ready` with `Retry-After: 1`, which clients retry.
 #[expect(
     clippy::disallowed_methods,
-    reason = "the probes before the CAS routes exist; `router` serves the listed ones"
+    reason = "the probes and fallback before the CAS routes exist; `routes` lists the served ones"
 )]
 pub fn starting_router() -> Router {
     Router::new()
         .route("/healthz", get(live))
         .route("/readyz", get(not_ready))
         .fallback(not_ready)
-        .layer(TraceLayer::new_for_http().make_span_with(request_id::span))
-        .layer(axum::middleware::from_fn(request_id::assign))
+        .layer(TraceLayer::new_for_http().make_span_with(openxet_http::span))
+        .layer(axum::middleware::from_fn(openxet_http::assign))
 }

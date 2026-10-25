@@ -235,7 +235,7 @@ mod tests {
     use super::*;
     use crate::SendDeadline;
     use crate::test_support::PermitProbe;
-    use crate::{router, test_support};
+    use crate::test_support::{self, router};
 
     // The scheme is a constant so the repository's secret scanner, which
     // flags any literal bearer value, can tell this test token from leaks.
