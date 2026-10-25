@@ -600,8 +600,13 @@ async fn push_over_max_push_bytes_refused() {
     commit(&w, "big", &[("big.bin", &noise)]);
     let run = client_git(&w, &["push", "origin", "main"]);
     assert!(!run.success);
+    // git's refusal reaches the client only if the client is still reading
+    // when receive-pack stops; on a fast server the connection closes while
+    // the client is still sending (seen on macOS runners as curl 55), and
+    // the client reports the hang-up instead. Either way nothing moves.
     assert!(
-        run.stderr.contains("pack exceeds maximum allowed size"),
+        run.stderr.contains("pack exceeds maximum allowed size")
+            || run.stderr.contains("the remote end hung up"),
         "{}",
         run.stderr
     );
