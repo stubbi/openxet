@@ -1476,10 +1476,12 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "openxet-protocol",
+ "serde_json",
  "sqlx",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
