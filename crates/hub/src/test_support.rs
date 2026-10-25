@@ -224,7 +224,7 @@ impl TestHub {
         self.dir.path().join("index.sqlite")
     }
 
-    /// Sends `method path` with `token` as the Bearer credential, if any,
+    /// Sends `method path` with `token` as the `Bearer` credential, if any,
     /// and `body` as JSON, if any.
     pub async fn call(
         &self,

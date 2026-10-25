@@ -172,8 +172,7 @@ impl HubError {
             Self::MissingCredential => (
                 StatusCode::UNAUTHORIZED,
                 "missing_credential",
-                "Log in with `hf auth login --token <token>`, or send `Authorization: Bearer \
-                 <token>`; the server's operator issues tokens.",
+                "Log in with `hf auth login --token <token>`, or send `Authorization: Bearer <token>`; the server's operator issues tokens.",
             ),
             Self::InvalidCredential => (
                 StatusCode::UNAUTHORIZED,
