@@ -20,6 +20,12 @@
 //! with restore and discard ([`reindex_repo`], [`reindex_restore`],
 //! [`reindex_discard`]).
 //!
+//! The Hub API reads and writes with gix in-process, on a request snapshot
+//! only: reads by revision ([`Engine::resolve_revision`]) obey R22, and Hub
+//! commits, tags and ref writes ([`Engine::hub_commit`],
+//! [`Engine::hub_ref_write`]) are published through the same fenced
+//! transaction as a push (ADR 0004 item 6).
+//!
 //! git runs as a separate program with a sanitised environment (ADR 0004
 //! items 7 and 8); `git` 2.37 or newer must be on `PATH`. Unix only, like
 //! the hard links and file descriptors it relies on.
@@ -38,6 +44,7 @@ mod interpose;
 mod lease;
 mod ls_refs;
 mod maintain;
+mod objects;
 mod pkt;
 mod process;
 mod publish;
@@ -62,7 +69,7 @@ use std::time::Duration;
 use openxet_index::{HubIndex, IndexError, Oid, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
-pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
+pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, DEFAULT_HUB_COMMIT_WAIT, GitConfig};
 #[cfg(feature = "fault-injection")]
 pub use fault::{FaultHook, FaultPoint};
 pub use hook::HookServer;
@@ -70,6 +77,12 @@ pub use lease::{DEFAULT_LEASE_TTL, acquire_lease};
 pub use maintain::{
     GEOMETRIC_REPACK_PACKS, MAINTENANCE_INTERVAL, MaintenanceReport, maintain, run_maintenance,
 };
+pub use objects::{
+    Blob, CommitInfo, Entry, EntryKind, HubCommit, Ident, Op, Pointer, Resolved, Revision,
+    Signature, TagInfo, canonical_pointer, parse_pointer,
+};
+#[cfg(feature = "fault-injection")]
+pub use objects::{FAULT_OMIT_BLOBS_ACTOR, HubWriteHold};
 pub use openxet_index::Lease;
 pub use pkt::{
     Fetch, LsRefs, MAX_PKT_LEN, Pkt, PktError, V2Command, err_pkt, find_flush, parse_v0_wants,
@@ -270,6 +283,78 @@ pub enum GitError {
         /// Why, and what to do.
         reason: String,
     },
+    /// A Hub read's revision is no ref of the snapshot, an object id R22
+    /// refuses or the snapshot lacks, or a tree or blob id; or a Hub ref
+    /// write's target is. One answer for all of them, so it doesn't tell
+    /// "exists but unreachable" from "absent" (ADR 0004 item 6).
+    #[error(
+        "revision {revision} not found; name a branch, a tag, or a commit that one of them \
+         contains"
+    )]
+    RevisionNotFound {
+        /// The revision as the caller named it.
+        revision: String,
+    },
+    /// A Hub read's path names no entry of the kind asked for.
+    #[error("{path:?} was not found at this revision; list the revision's tree to see its paths")]
+    EntryNotFound {
+        /// The path as the caller named it.
+        path: String,
+    },
+    /// A Hub commit's `parentCommit` isn't its branch's tip (ruling M2-R7).
+    #[error(
+        "the parent commit {expected} is not the tip of {branch} (which is {}); read the \
+         branch's current commit and commit on it",
+        .actual.map_or_else(|| "missing".to_owned(), |o| o.to_string())
+    )]
+    ParentMismatch {
+        /// The branch, as a full ref name.
+        branch: String,
+        /// The parent the client sent.
+        expected: Oid,
+        /// The branch's tip in the snapshot.
+        actual: Option<Oid>,
+    },
+    /// A Hub ref write's ref isn't at the target the caller expected: it
+    /// exists already, or doesn't, or another writer moved it.
+    #[error(
+        "{name} is not at the expected target (it exists already, is missing, or moved); read the refs again and retry"
+    )]
+    RefConflict {
+        /// The full ref name.
+        name: String,
+    },
+    /// A Hub write can't be applied as asked: the message says why.
+    #[error("{0}")]
+    InvalidHubWrite(String),
+    /// A Hub write would make reachable an object it didn't send and no ref
+    /// reaches (the writer reachability rule, ADR 0004 item 3), or its
+    /// objects aren't connected in its snapshot. The text is git's for a
+    /// missing object.
+    #[error(
+        "{MISSING_OBJECTS}: the write names an object it doesn't carry and no branch or tag \
+         reaches"
+    )]
+    MissingObjects,
+    /// R22's concurrency limits are full for this repository or writer
+    /// (ADR 0004 item 2), or a Hub commit waited longer than
+    /// `hub.commit_wait` for its turn on its branch; retryable.
+    #[error(
+        "too many reads or writes are running in this repository right now; retry in a few \
+         seconds"
+    )]
+    Busy,
+    /// A Hub write lost its commit transaction on every attempt to
+    /// concurrent writers or full repacks; retryable.
+    #[error("{name} kept moving while this write ran; retry it")]
+    Contended {
+        /// The full ref name.
+        name: String,
+    },
+    /// A fault-injection point stopped a Hub write, as a crash would.
+    #[cfg(feature = "fault-injection")]
+    #[error("fault injected: {0}")]
+    Injected(&'static str),
     /// The index holds a Git record openxet would never write.
     #[error(
         "the index holds an invalid Git record ({0}); the bucket is unaffected. Please report \
@@ -317,6 +402,7 @@ pub struct Engine {
     derived: std::sync::Mutex<HashMap<RepoId, Arc<tokio::sync::Mutex<Option<u64>>>>>,
     #[cfg(feature = "fault-injection")]
     hooks: fault::Hooks,
+    hub: objects::HubWrites,
 }
 
 impl std::fmt::Debug for Engine {
@@ -374,6 +460,7 @@ impl Engine {
             derived: std::sync::Mutex::default(),
             #[cfg(feature = "fault-injection")]
             hooks: fault::Hooks::default(),
+            hub: objects::HubWrites::default(),
         };
         engine.v2_advertisement = engine.capture_v2_advertisement().await?;
         Ok(engine)

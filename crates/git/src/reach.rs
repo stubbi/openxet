@@ -295,7 +295,7 @@ pub(crate) fn to_gix(oid: Oid) -> ObjectId {
     ObjectId::Sha1(oid.0)
 }
 
-fn from_gix(id: ObjectId) -> Option<Oid> {
+pub(crate) fn from_gix(id: ObjectId) -> Option<Oid> {
     id.as_bytes().try_into().ok().map(Oid)
 }
 

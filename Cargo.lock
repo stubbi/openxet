@@ -1587,6 +1587,7 @@ dependencies = [
  "clru",
  "crc32fast",
  "gix-chunk",
+ "gix-diff",
  "gix-error",
  "gix-hash",
  "gix-hashtable",
@@ -1594,9 +1595,11 @@ dependencies = [
  "gix-parallel",
  "gix-path",
  "gix-trace",
+ "gix-traverse",
  "gix-utils",
  "gix-zlib",
  "memmap2",
+ "parking_lot",
  "smallvec",
 ]
 
@@ -2851,6 +2854,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "gix",
+ "gix-pack",
  "http-body-util",
  "hyper",
  "hyper-util",
