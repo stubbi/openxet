@@ -46,17 +46,27 @@ fn openxet(endpoint: &str) -> Command {
 fn offered_groups(start: impl FnOnce(&str) -> Child) -> Vec<NamedGroup> {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("https://{}", listener.local_addr().unwrap());
+    // The client core checks that the endpoint accepts a TCP connection
+    // before its first request (`crates/client/src/net.rs`), so a
+    // connection closed before any byte is skipped.
     let hello = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_mins(2)))
-            .unwrap();
-        let mut acceptor = Acceptor::default();
-        loop {
-            let read = acceptor.read_tls(&mut stream).unwrap();
-            assert!(read > 0, "the client closed before a whole ClientHello");
-            if let Some(accepted) = acceptor.accept().map_err(|(e, _)| e).unwrap() {
-                return accepted.client_hello().named_groups().unwrap().to_vec();
+        'connections: loop {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_mins(2)))
+                .unwrap();
+            let mut acceptor = Acceptor::default();
+            let mut read_any = false;
+            loop {
+                match acceptor.read_tls(&mut stream) {
+                    Ok(0) | Err(_) if !read_any => continue 'connections,
+                    Ok(0) => panic!("the client closed inside its ClientHello"),
+                    read => read.unwrap(),
+                };
+                read_any = true;
+                if let Some(accepted) = acceptor.accept().map_err(|(e, _)| e).unwrap() {
+                    return accepted.client_hello().named_groups().unwrap().to_vec();
+                }
             }
         }
     });
