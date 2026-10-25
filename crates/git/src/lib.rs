@@ -69,7 +69,9 @@ use std::time::Duration;
 use openxet_index::{HubIndex, IndexError, Oid, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
-pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, DEFAULT_HUB_COMMIT_WAIT, GitConfig};
+pub use config::{
+    Budget, DEFAULT_CACHE_MAX_BYTES, DEFAULT_HUB_COMMIT_WAIT, DEFAULT_MAX_PUSH_BYTES, GitConfig,
+};
 #[cfg(feature = "fault-injection")]
 pub use fault::{FaultHook, FaultPoint};
 pub use hook::HookServer;
@@ -394,6 +396,7 @@ pub struct Engine {
     cache: NodeCache,
     process: Arc<ProcessEnv>,
     v2_advertisement: Vec<u8>,
+    empty_receive_advertisement: Vec<u8>,
     reach: Reachability,
     counters: Arc<receive::Counters>,
     /// Per repository, the highest `ref_log` row this engine knows the
@@ -455,6 +458,7 @@ impl Engine {
             cache,
             process,
             v2_advertisement: Vec::new(),
+            empty_receive_advertisement: Vec::new(),
             reach,
             counters: Arc::default(),
             derived: std::sync::Mutex::default(),
@@ -462,7 +466,12 @@ impl Engine {
             hooks: fault::Hooks::default(),
             hub: objects::HubWrites::default(),
         };
-        engine.v2_advertisement = engine.capture_v2_advertisement().await?;
+        engine.v2_advertisement = engine.capture_advertisement(Service::UploadPack, 2).await?;
+        engine.empty_receive_advertisement = ls_refs::with_openxet_agent(
+            &engine
+                .capture_advertisement(Service::ReceivePack, 0)
+                .await?,
+        );
         Ok(engine)
     }
 
@@ -470,6 +479,12 @@ impl Engine {
     #[must_use]
     pub fn git(&self) -> &Path {
         &self.git
+    }
+
+    /// `git.max_push_bytes`: the largest pack one push may send.
+    #[must_use]
+    pub fn max_push_bytes(&self) -> u64 {
+        self.config.max_push_bytes
     }
 
     /// The engine's R22 concurrency limits, which every walk shares: R22's
@@ -620,7 +635,23 @@ impl Engine {
         Ok(downloaded)
     }
 
-    async fn capture_v2_advertisement(&self) -> Result<Vec<u8>, GitError> {
+    /// The `receive-pack` advertisement of a repository without refs, as
+    /// [`Engine::advertise`] would print it for one: what a push to a
+    /// repository that doesn't exist yet is answered, so that its first
+    /// push creates it (ruling M2-R11). Captured from git at start-up, so
+    /// its capabilities are git's own, with openxet's `agent`.
+    #[must_use]
+    pub fn empty_receive_advertisement(&self) -> &[u8] {
+        &self.empty_receive_advertisement
+    }
+
+    /// `git {service} --advertise-refs` over `protocol` on an empty
+    /// repository of no repository.
+    async fn capture_advertisement(
+        &self,
+        service: Service,
+        protocol: u8,
+    ) -> Result<Vec<u8>, GitError> {
         let layout = Layout {
             snapshots: self.cache.snapshots(),
             hooks: self.cache.hooks(),
@@ -639,8 +670,8 @@ impl Engine {
             full_repack_gen: 0,
             process: Arc::clone(&self.process),
         };
-        let args = ["upload-pack", "--advertise-refs", "--stateless-rpc", "."];
-        let out = git_command(&self.git, &empty, Some(2))
+        let args = [service.as_str(), "--advertise-refs", "--stateless-rpc", "."];
+        let out = git_command(&self.git, &empty, Some(protocol))
             .args(args)
             .output()
             .await

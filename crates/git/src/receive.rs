@@ -129,7 +129,15 @@ impl Engine {
         };
         let mut hook = HookServer::new(context)?;
         let mut cmd = git_command(&self.git, &snapshot, Some(protocol));
-        cmd.args(["receive-pack", "--stateless-rpc", "."])
+        // git counts the pack as index-pack reads it, after any HTTP
+        // compression is undone, and refuses the push past the limit with
+        // "pack exceeds maximum allowed size", which the client shows.
+        cmd.arg("-c")
+            .arg(format!(
+                "receive.maxInputSize={}",
+                self.config.max_push_bytes
+            ))
+            .args(["receive-pack", "--stateless-rpc", "."])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

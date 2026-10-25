@@ -7,6 +7,7 @@
 //! [`GEOMETRIC_REPACK_PACKS`] committed packs (ADR 0004 item 5). Full
 //! repacks, the pack sweep and `reindex` are operator commands (M4).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -51,6 +52,18 @@ pub struct MaintenanceReport {
 /// [`GitError::Index`] if the repositories can't be listed; a failure on
 /// one repository is logged and counted, and the pass goes on.
 pub async fn maintain(engine: &Engine, holder: &str) -> Result<MaintenanceReport, GitError> {
+    maintain_noting(engine, holder, &mut HashSet::new()).await
+}
+
+/// [`maintain`], with `failing` the repositories whose maintenance failed
+/// in the pass before: a failure repeated is logged at debug, not warn, so
+/// one broken repository doesn't warn every pass on every node. Updated
+/// for the next pass.
+async fn maintain_noting(
+    engine: &Engine,
+    holder: &str,
+    failing: &mut HashSet<RepoId>,
+) -> Result<MaintenanceReport, GitError> {
     let mut report = MaintenanceReport::default();
     let mut cursor = None;
     loop {
@@ -60,9 +73,18 @@ pub async fn maintain(engine: &Engine, holder: &str) -> Result<MaintenanceReport
             .await?;
         for repo in &page.items {
             report.repos += 1;
-            if let Err(e) = maintain_repo(engine, repo.id, holder, &mut report).await {
-                report.failures += 1;
-                tracing::warn!(repo = %repo.id, error = %e, "Git maintenance of a repository failed; the next pass retries it");
+            match maintain_repo(engine, repo.id, holder, &mut report).await {
+                Ok(()) => {
+                    failing.remove(&repo.id);
+                }
+                Err(e) => {
+                    report.failures += 1;
+                    if failing.insert(repo.id) {
+                        tracing::warn!(repo = %repo.id, error = %e, "Git maintenance of a repository failed; the next pass retries it, and logs a repeated failure at debug");
+                    } else {
+                        tracing::debug!(repo = %repo.id, error = %e, "Git maintenance of a repository failed again");
+                    }
+                }
             }
         }
         match page.next {
@@ -105,13 +127,16 @@ async fn maintain_repo(
 
 /// Runs [`maintain`] every [`MAINTENANCE_INTERVAL`] until the task is
 /// dropped or aborted. `holder` names this node in repack leases and must
-/// differ between nodes.
+/// differ between nodes. Aborting it at any point is safe: repacks are
+/// fenced and publish bucket first (ADR 0004 item 5), so an abandoned one
+/// leaves outputs GC removes, and the next pass redoes the rest.
 pub async fn run_maintenance(engine: Arc<Engine>, holder: String) {
     let mut ticks = tokio::time::interval(MAINTENANCE_INTERVAL);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut failing = HashSet::new();
     loop {
         ticks.tick().await;
-        if let Err(e) = maintain(&engine, &holder).await {
+        if let Err(e) = maintain_noting(&engine, &holder, &mut failing).await {
             tracing::warn!(error = %e, "Git maintenance failed; it runs again in 10 s");
         }
     }

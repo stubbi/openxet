@@ -77,9 +77,10 @@ pub(crate) struct NodeCache {
 impl NodeCache {
     /// Opens the cache at `dir`, creating it: takes the process lock, sweeps
     /// leaked snapshots, temp files and half-hydrated packs, recreates the
-    /// hook directory and `HOME` empty, and checks that snapshots can
-    /// hard-link cached packs (ADR 0004 item 4). The path must be UTF-8: it
-    /// is written into every snapshot's config and git's `PATH`.
+    /// hook directory and `HOME` empty, makes the root mode `0700`, and checks
+    /// that snapshots can hard-link cached packs (ADR 0004 item 4). The path
+    /// must be UTF-8: it is written into every snapshot's config and git's
+    /// `PATH`.
     pub(crate) fn open(dir: &Path) -> Result<Self, GitError> {
         if dir.to_str().is_none() {
             return Err(GitError::CacheDirNotUtf8 {
@@ -91,6 +92,11 @@ impl NodeCache {
         if root.to_str().is_none() {
             return Err(GitError::CacheDirNotUtf8 { path: root });
         }
+        // The cache is openxet's alone, like the data directory: a root an
+        // operator created with a wider mode is narrowed, so nothing git
+        // writes under its umask in a snapshot is reachable by others.
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .map_err(io_err("make private", &root))?;
         let lock_path = root.join(LOCK);
         let owner = OpenOptions::new()
             .create(true)
