@@ -1,0 +1,11 @@
+{
+  "edit_upload": {
+    "bytes": 1141116,
+    "display": "1.09 MiB",
+    "client": "hf_xet",
+    "client_version": "1.7.0",
+    "file_bytes": 104857600,
+    "edit_bytes": 1048576,
+    "test": "compat/tests/test_storage_only.py::test_fresh_cache_edit_bytes_recorded"
+  }
+}

@@ -25,6 +25,8 @@ python3 -I "$root/scripts/check-docs-nav.py"
 python3 -I "$root/site/test_repo_links.py" -q
 python3 -I "$root/site/test_site_output.py" -q
 python3 -I "$root/site/test_public_artifact.py" -q
+# Every figure the website quotes comes from site/measurements.json.
+python3 -I "$root/site/test_measurements.py" -q
 node --test "$root/site/"test_*.mjs
 
 rm -rf "$out"
