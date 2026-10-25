@@ -579,6 +579,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Bucket for SlowBucket {
+        async fn probe(&self) -> Result<(), StorageError> {
+            self.inner.probe().await
+        }
+
         async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
             let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.most.fetch_max(now, Ordering::SeqCst);
@@ -611,6 +615,39 @@ mod tests {
 
         async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
             self.inner.size(key).await
+        }
+
+        async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+            self.inner.put_replace(key, bytes).await
+        }
+
+        async fn put_stream(
+            &self,
+            key: Key,
+            body: openxet_storage::BodyStream,
+            len: u64,
+        ) -> Result<(), StorageError> {
+            self.inner.put_stream(key, body, len).await
+        }
+
+        async fn get_to_file(&self, key: Key, path: &std::path::Path) -> Result<u64, StorageError> {
+            self.inner.get_to_file(key, path).await
+        }
+
+        async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
+            self.inner.last_modified(key).await
+        }
+
+        async fn list_under(
+            &self,
+            repo: openxet_storage::RepoIdHex,
+            kind: openxet_storage::KeyKind,
+        ) -> Result<Vec<Key>, StorageError> {
+            self.inner.list_under(repo, kind).await
+        }
+
+        async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+            self.inner.delete(key).await
         }
     }
 
@@ -725,23 +762,26 @@ mod tests {
         // that leaves, and so does the body it holds, so its share of the
         // memory budget goes back only when the work ends.
         use axum::http::header::AUTHORIZATION;
-        use openxet_auth::{Mode, StaticToken};
+        use openxet_auth::{CasGrant, Mode, StaticToken};
         use tower::ServiceExt as _;
 
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest("oxt_unit_write"),
-            scope: "s".to_owned(),
-            mode: Mode::Write,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Write,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.validate = Arc::new(Semaphore::new(1));
         let budget = state.budget.bytes();
         let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
 
-        let response = crate::router(state.clone())
+        let response = crate::test_support::router(state.clone())
             .oneshot(
                 Request::post("/v2/shards")
                     .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
@@ -775,16 +815,19 @@ mod tests {
         // client leaves, but its shard's put can't be cancelled; the commit
         // permit and the body's budget share stay taken until it ends.
         use axum::http::header::AUTHORIZATION;
-        use openxet_auth::{Mode, StaticToken};
+        use openxet_auth::{CasGrant, Mode, StaticToken};
         use tower::ServiceExt as _;
 
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest("oxt_unit_write"),
-            scope: "s".to_owned(),
-            mode: Mode::Write,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Write,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.commit = Arc::new(Semaphore::new(2));
@@ -805,7 +848,7 @@ mod tests {
         let whole = state.budget.bytes();
 
         let upload = tokio::spawn(
-            crate::router(state.clone()).oneshot(
+            crate::test_support::router(state.clone()).oneshot(
                 Request::post("/v1/shards")
                     .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
                     .body(Body::from(capture("upload.shard")))

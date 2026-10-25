@@ -100,12 +100,21 @@ ships them (design §5.5).
 ### `GET /healthz`, `GET /readyz`
 
 No credential: orchestrators call them unauthenticated. Each answers a
-fixed body that names nothing stored.
+fixed body that names nothing stored: at most the component that failed,
+never the cause, which goes to the server's log.
 
 - `/healthz`: `200 {"status":"ok"}` as soon as the server listens.
 - `/readyz`: `200 {"status":"ready"}` once the index and the bucket are
   open. Before that it answers `503 not_ready` with `Retry-After: 1`, as
   does every other path, and closes the connection.
+- Once open, `/readyz` probes both: the index answers a read of its
+  tables, and the bucket takes a write of a few bytes to a temporary file
+  under its `.tmp` directory, removed at once. If either fails or takes
+  over a second, it answers `503 unavailable`, whose message names
+  `index` or `storage` (the index if both fail), so a load balancer stops
+  routing to a node with a full disk, an unwritable bucket or a broken
+  index. A probe's outcome is reused for a second, so however often
+  `/readyz` is called, each component is probed at most once a second.
 
 ### `POST /v1/xorbs/default/{hash}`
 

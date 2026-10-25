@@ -221,6 +221,10 @@ struct CrashBeforeCommit {
 
 #[async_trait::async_trait]
 impl Index for CrashBeforeCommit {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,

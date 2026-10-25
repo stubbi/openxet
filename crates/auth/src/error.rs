@@ -33,6 +33,15 @@ pub enum AuthError {
         reason: ForbiddenReason,
     },
 
+    /// A capability `href` was refused. HTTP `403`.
+    #[error(
+        "the capability URL was refused: {reason}; run the Git LFS batch request again for a fresh one"
+    )]
+    CapabilityRefused {
+        /// Why the capability was refused.
+        reason: CapabilityRefusal,
+    },
+
     /// A signed transfer URL was fetched without a `Range` header. HTTP `400`.
     #[error(
         "a signed transfer URL must be fetched with `Range: bytes={{start}}-{{end}}` equal to its `range` query parameter"
@@ -53,9 +62,10 @@ pub enum AuthError {
         reason: &'static str,
     },
 
-    /// A configured static token has an invalid subject, scope or tenant.
+    /// A configured static token has an invalid subject, scope, tenant,
+    /// name, email or claim, or grants nothing.
     #[error(
-        "static token #{index} is misconfigured: {reason}; give every static token a non-empty subject and scope, and optionally a tenant, without control characters (scope and tenant at most 1024 bytes)"
+        "static token #{index} is misconfigured: {reason}; give every static token a non-empty subject other than `anonymous`, and a scope, a user identity or both, without control characters (scope and tenant at most 1024 bytes)"
     )]
     InvalidStaticToken {
         /// The token's position in the configured list, counting from 0.
@@ -122,4 +132,42 @@ pub enum ForbiddenReason {
     /// The signature does not match the xorb, range and expiry.
     #[error("the signature does not match the xorb, range and expiry")]
     BadSignature,
+}
+
+/// Why a capability `href` was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CapabilityRefusal {
+    /// The signature does not match the scope, operation and expiry.
+    #[error("the signature does not match the scope, operation and expiry")]
+    BadSignature,
+
+    /// The capability is at or past its `exp`.
+    #[error("the capability has expired")]
+    Expired,
+}
+
+/// A repository glob that can't be used in a rule (ruling M2-R3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{reason}")]
+pub struct InvalidGlob {
+    /// What is wrong with the pattern.
+    pub reason: &'static str,
+}
+
+/// An authorizer could not decide.
+///
+/// The config-rules authorizer always decides; an authorizer that asks the
+/// operator's backend (design §5.4, M3) fails with this when it can't.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum AuthzError {
+    /// The authorizer's backend did not answer. HTTP `503`.
+    #[error(
+        "the authorizer could not decide: {reason}; retry, and tell the operator if it persists"
+    )]
+    Unavailable {
+        /// Why; never a credential.
+        reason: String,
+    },
 }

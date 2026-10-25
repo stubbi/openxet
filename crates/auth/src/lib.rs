@@ -12,25 +12,39 @@
 //!   See [`TokenSigner`] and [`PublicKey`].
 //! - **Signed transfer URLs**, each bound by HMAC-SHA256 to one xorb, one
 //!   byte range and one expiry; see [`UrlSigner`].
+//! - **Capability `href`s**, each bound by HMAC-SHA256 to one scope, one
+//!   operation and one expiry (ADR 0003 decision 2); see
+//!   [`CapabilitySigner`].
+//!
+//! A bearer credential authenticates as a [`Credential`]: a CAS credential
+//! ([`Principal`]: scope, tenant, mode), a user credential
+//! ([`UserPrincipal`]: subject and claims), or both (ruling M2-R3, ADR
+//! 0012). CAS routes take the first; the Hub, Git and LFS routes ask an
+//! [`Authorizer`] what the second may do per repository.
 //!
 //! No error or `Debug` output in this crate ever contains a credential or a
 //! key.
 
 #![forbid(unsafe_code)]
 
+mod capability;
 mod error;
 mod jwt;
+mod rules;
 mod signed_url;
 mod static_tokens;
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub use error::{AuthError, ForbiddenReason};
+pub use capability::{CapabilityQuery, CapabilitySigner};
+pub use error::{AuthError, AuthzError, CapabilityRefusal, ForbiddenReason, InvalidGlob};
 pub use jwt::{GeneratedKeypair, MAX_TOKEN_BYTES, PublicKey, TokenSigner, generate_keypair};
+pub use rules::{Action, Authorizer, Glob, Rule, RulesAuthorizer, Target};
 pub use signed_url::{TransferQuery, TransferUrls, UrlSigner, XorbUrls};
-pub use static_tokens::StaticToken;
+pub use static_tokens::{CasGrant, StaticToken, UserProfile};
 
 /// What a credential may do within its scope. `Write` implies `Read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -73,6 +87,80 @@ impl Principal {
     }
 }
 
+/// What starts every repository's scope, `repo:{id}` (ruling M2-R2). Only
+/// the Hub mints CAS tokens for such a scope, for a repository it
+/// resolved and authorized; configuration may not name one.
+pub const REPO_SCOPE_PREFIX: &str = "repo:";
+
+/// The pseudo subject of a request without a credential (ruling M2-R3). No
+/// rule names it unless the operator makes repositories public, and no
+/// user credential may carry it as its subject.
+pub const ANONYMOUS: &str = "anonymous";
+
+/// The user a request acts for, which the [`Authorizer`] decides about
+/// per repository (design §5.4, ruling M2-R3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserPrincipal {
+    /// Who the credential acts for, as the operator's identity system names
+    /// them.
+    pub subject: String,
+    /// The display name `whoami-v2` answers: a static token's `name`, or
+    /// else the subject.
+    pub name: String,
+    /// The address Hub commits are authored with, when the credential
+    /// carries one (ruling M2-R7).
+    pub email: Option<String>,
+    /// String lists under free names, such as `orgs` and `groups`, which
+    /// rules match and `whoami-v2` reads (`orgs`).
+    pub claims: BTreeMap<String, Vec<String>>,
+}
+
+impl UserPrincipal {
+    /// The principal of a request without a credential: subject and name
+    /// [`ANONYMOUS`], no claims.
+    #[must_use]
+    pub fn anonymous() -> Self {
+        Self {
+            subject: ANONYMOUS.to_owned(),
+            name: ANONYMOUS.to_owned(),
+            email: None,
+            claims: BTreeMap::new(),
+        }
+    }
+}
+
+/// What a bearer credential authenticates as (ruling M2-R3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// A CAS credential: a CAS token, or a static token with a scope only.
+    Cas(Principal),
+    /// A user credential: a static token without a scope.
+    User(UserPrincipal),
+    /// Both: a static token with a scope and a user identity, such as the
+    /// dev token.
+    Both(Principal, UserPrincipal),
+}
+
+impl Credential {
+    /// The CAS credential, if there is one.
+    #[must_use]
+    pub fn cas(&self) -> Option<&Principal> {
+        match self {
+            Self::Cas(principal) | Self::Both(principal, _) => Some(principal),
+            Self::User(_) => None,
+        }
+    }
+
+    /// The user credential, if there is one.
+    #[must_use]
+    pub fn user(&self) -> Option<&UserPrincipal> {
+        match self {
+            Self::User(user) | Self::Both(_, user) => Some(user),
+            Self::Cas(_) => None,
+        }
+    }
+}
+
 /// How far apart issuer and verifier clocks may be: 5 minutes. It bounds a
 /// CAS token's `iat` and a signed URL's `exp` from above.
 pub const MAX_CLOCK_SKEW: Duration = Duration::from_mins(5);
@@ -108,8 +196,11 @@ impl Authenticator {
     /// [`Authenticator::MAX_TOKEN_LIFETIME`]: `ZERO` would refuse every
     /// token and `Duration::MAX` would disable the cap.
     /// [`AuthError::InvalidStaticToken`] if a static token's subject, scope
-    /// or tenant fails the checks CAS-token claims must pass: non-empty, no
-    /// control characters, scope and tenant at most [`MAX_SCOPE_BYTES`].
+    /// or tenant fails the checks CAS-token claims must pass (non-empty, no
+    /// control characters, scope and tenant at most [`MAX_SCOPE_BYTES`]),
+    /// its name, email or claims hold control characters, a user token's
+    /// subject is [`ANONYMOUS`], or it grants neither a scope nor a user
+    /// identity.
     pub fn new(
         static_tokens: Vec<StaticToken>,
         jwt_keys: Vec<PublicKey>,
@@ -117,8 +208,8 @@ impl Authenticator {
     ) -> Result<Self, AuthError> {
         check_token_lifetime(max_token_lifetime)?;
         for (index, token) in static_tokens.iter().enumerate() {
-            check_identity(&token.subject, &token.scope)
-                .and_then(|()| token.tenant.as_deref().map_or(Ok(()), check_tenant))
+            token
+                .check()
                 .map_err(|reason| AuthError::InvalidStaticToken { index, reason })?;
         }
         Ok(Self {
@@ -128,10 +219,24 @@ impl Authenticator {
         })
     }
 
+    /// This authenticator, also accepting CAS tokens signed by `key`: the
+    /// server's own key, whose tokens the Hub hands out (design §5.4).
+    #[must_use]
+    pub fn with_jwt_key(&self, key: PublicKey) -> Self {
+        let mut jwt_keys = self.jwt_keys.clone();
+        jwt_keys.push(key);
+        Self {
+            static_tokens: self.static_tokens.clone(),
+            jwt_keys,
+            max_token_lifetime: self.max_token_lifetime,
+        }
+    }
+
     /// Authenticates the token from an `Authorization: Bearer` header.
     ///
     /// `now` is Unix seconds. Static tokens are tried first, then CAS
-    /// tokens.
+    /// tokens. A CAS token is only ever a [`Credential::Cas`]; a static
+    /// token is whatever it was configured as.
     ///
     /// # Errors
     ///
@@ -140,14 +245,14 @@ impl Authenticator {
     /// anything else that does not verify, including a CAS token before its
     /// `nbf`, beyond the lifetime cap, or with `iat` more than
     /// [`MAX_CLOCK_SKEW`] ahead.
-    pub fn authenticate(&self, bearer: &str, now: u64) -> Result<Principal, AuthError> {
+    pub fn authenticate(&self, bearer: &str, now: u64) -> Result<Credential, AuthError> {
         if bearer.is_empty() {
             return Err(AuthError::Missing);
         }
         if let Some(token) = static_tokens::find(&self.static_tokens, bearer) {
-            return Ok(token.principal());
+            return Ok(token.credential());
         }
-        jwt::verify(&self.jwt_keys, bearer, now, self.max_token_lifetime)
+        jwt::verify(&self.jwt_keys, bearer, now, self.max_token_lifetime).map(Credential::Cas)
     }
 }
 
@@ -195,12 +300,12 @@ pub(crate) fn check_tenant(tenant: &str) -> Result<(), &'static str> {
 /// characters that can forge or disguise log lines or widen a scope match
 /// ([`is_disallowed`]). The scope is at most [`MAX_SCOPE_BYTES`].
 pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static str> {
-    if subject.trim().is_empty() {
-        return Err("the subject is empty or only whitespace");
-    }
-    if subject.chars().any(is_disallowed) {
-        return Err("the subject contains control, format or line-separator characters");
-    }
+    check_subject(subject)?;
+    check_scope(scope)
+}
+
+/// Checks a scope as [`check_identity`] does.
+pub(crate) fn check_scope(scope: &str) -> Result<(), &'static str> {
     if scope.trim().is_empty() {
         return Err("the scope is empty or only whitespace");
     }
@@ -213,12 +318,30 @@ pub(crate) fn check_identity(subject: &str, scope: &str) -> Result<(), &'static 
     Ok(())
 }
 
+/// Checks a subject as every credential's subject is checked: something
+/// other than whitespace, and none of the characters that can forge or
+/// disguise log lines (ruling M1-R19). Configuration checks rule subjects
+/// with it, so a rule can only name a subject a credential can carry.
+///
+/// # Errors
+///
+/// What is wrong with `subject`; never the subject itself.
+pub fn check_subject(subject: &str) -> Result<(), &'static str> {
+    if subject.trim().is_empty() {
+        return Err("the subject is empty or only whitespace");
+    }
+    if subject.chars().any(is_disallowed) {
+        return Err("the subject contains control, format or line-separator characters");
+    }
+    Ok(())
+}
+
 /// Control characters (`Cc`), the line and paragraph separators (`Zl`,
 /// `Zp`), and the invisible or bidirectional format characters (`Cf`) that
 /// can reorder or hide text: zero-width and directional marks, bidi
 /// embeddings, overrides and isolates (the "Trojan Source" set, CVE-2021-42574),
 /// invisible operators, the word joiner and the byte-order mark.
-fn is_disallowed(c: char) -> bool {
+pub(crate) fn is_disallowed(c: char) -> bool {
     c.is_control()
         || matches!(
             c,

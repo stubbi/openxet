@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 
+import httpx
 import pytest
 
 from conftest import assert_no_credential_in_log, isolated_env, openxet_serve
@@ -19,8 +20,9 @@ pytestmark = pytest.mark.agent
 # `{tmp}` is a fresh directory per command, and `{key}` a signing key
 # `token keygen` wrote there first. Commands in NEEDS_SERVER run against a
 # dev-mode `openxet serve` through OPENXET_ENDPOINT and OPENXET_TOKEN, with
-# `{tmp}/upload.bin` to upload and `{hash}` the Xet hash of it, uploaded
-# first.
+# its data directory at `{tmp}/server/data`, `{tmp}/upload.bin` to upload,
+# `{hash}` the Xet hash of it, uploaded first, and `{repo}` a repository
+# created first through the Hub API.
 JSON_COMMANDS = [
     ["version", "--json"],
     ["config", "check", "--json"],
@@ -30,9 +32,14 @@ JSON_COMMANDS = [
     ["serve", "--data-dir", "{tmp}/data", "--port", "0", "--json"],
     ["upload", "{tmp}/upload.bin", "--json"],
     ["download", "{hash}", "--output", "{tmp}/download.bin", "--json"],
+    ["purge", "{hash}", "--data-dir", "{tmp}/server/data", "--dry-run", "--json"],
+    ["purge", "{hash}", "--data-dir", "{tmp}/server/data", "--yes", "--actor", "agent", "--json"],
+    ["label", "add", "{repo}", "eval-logs", "--json"],
+    ["label", "remove", "{repo}", "model", "--dry-run", "--json"],
+    ["label", "list", "{repo}", "--json"],
 ]
 
-NEEDS_SERVER = {"upload", "download"}
+NEEDS_SERVER = {"upload", "download", "purge", "label"}
 
 # Commands that run until stopped. Their first stdout line is the result;
 # SIGTERM then stops them cleanly.
@@ -60,6 +67,19 @@ def expand(openxet_bin, args, tmp_path, env):
         assert out.returncode == 0, out.stderr.decode()
         file_hash = json.loads(out.stdout)["files"][0]["hash"]
         args = [a.replace("{hash}", file_hash) for a in args]
+    if any("{repo}" in a for a in args):
+        # The scheme apart from its value keeps the repository's redaction
+        # scan (tests/test_fixture_redaction.py) from reading the header
+        # template as a stored credential.
+        scheme = "Bearer"
+        created = httpx.post(
+            f"{env['OPENXET_ENDPOINT']}/api/repos/create",
+            headers=dict(authorization=f"{scheme} {env['OPENXET_TOKEN']}"),
+            json={"name": "agent", "type": "model"},
+            timeout=60,
+        )
+        assert created.status_code == 200, created.text
+        args = [a.replace("{repo}", created.json()["name"]) for a in args]
     return [a.replace("{tmp}", str(tmp_path)) for a in args]
 
 

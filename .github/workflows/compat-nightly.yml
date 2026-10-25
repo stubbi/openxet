@@ -57,11 +57,15 @@ jobs:
       - name: Run suite with the locked client versions
         if: matrix.clients == 'pinned'
         run: uv run --frozen pytest -m "not agent and not storage_only and not docs" | tee report.txt
+      # The token-signing libraries keep the locked versions: they are test
+      # tooling (the dev group), not HF clients, and the suite imports them at
+      # collection.
       - name: Run suite with the latest HF client releases
         if: matrix.clients == 'latest'
         run: >
           uv run --no-project --with huggingface_hub --with hf_xet
           --with httpx==0.28.1 --with pytest==9.1.1
+          --with pyjwt==2.15.1 --with cryptography==50.0.2
           pytest -m "not agent and not storage_only and not docs and not pinned" | tee report.txt
       - name: Keep the version header
         if: always()

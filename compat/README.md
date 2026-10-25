@@ -22,6 +22,21 @@ Four legs:
   measured per release. Blocks fenced as `bash install` are skipped: the built
   `openxet` and this environment's `hf_xet` stand in for them.
 
+Planned for M2's Hub leg, with stock `huggingface_hub` against openxet's
+typed-route views (design §6, ADR 0010):
+- `untyped_create_is_model`: `hf upload foo/bar` with no `--repo-type`,
+  then `repo_info` and `snapshot_download` both work
+- `typed_route_view_filters_by_label`
+- `wrong_type_route_is_repo_not_found`: `RepositoryNotFoundError` for a
+  repository read through a type it isn't labelled with
+- `wrong_type_with_read_access_shows_label_hint`: with read access, the
+  raised error's text tells how to add the label
+- `wrong_type_without_read_access_matches_unknown_repo`: without read
+  access, the response matches an unknown repository's: status, headers
+  (excluding per-request ids and dates) and body
+- `create_collision_answers_409_with_url`: a name taken under another
+  label
+
 Client version floor: `hf_xet==1.7.0`. It is the oldest `hf_xet` openxet
 supports (ruling M1-R9), and the version this suite pins, so the floor is
 the version CI proves; `test_version_floor_recorded` keeps the two equal.

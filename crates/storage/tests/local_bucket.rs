@@ -82,7 +82,7 @@ async fn put_is_atomic_under_concurrency() {
     let data = payload(256 * 1024);
     let tasks: Vec<_> = (0..16)
         .map(|_| {
-            let (b, d) = (Arc::clone(&bucket), data.clone());
+            let (b, d, key) = (Arc::clone(&bucket), data.clone(), key.clone());
             tokio::spawn(async move { b.put(&key, d).await })
         })
         .collect();

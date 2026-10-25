@@ -1,8 +1,9 @@
 //! The CAS test server, shared by every integration test of `openxet-cas`.
 //!
-//! [`TestServer::start`] serves [`openxet_cas::router`] over real HTTP/1.1 on
-//! `127.0.0.1:0`, backed by a temporary `SqliteIndex` and `LocalBucket`, and
-//! captures every log line the server writes ([`TestServer::logs`]).
+//! [`TestServer::start`] serves the CAS, composed as `openxet serve` composes
+//! it, over real HTTP/1.1 on `127.0.0.1:0`, backed by a temporary
+//! `SqliteIndex` and `LocalBucket`, and captures every log line the server
+//! writes ([`TestServer::logs`]).
 //! [`TestServer::start_with`] swaps in another bucket, such as
 //! [`FailingBucket`], and [`TestServer::start_with_index`] wraps the index,
 //! as [`SlowIndex`] does.
@@ -30,8 +31,11 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use futures_core::stream::BoxStream;
-use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
-use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
+use openxet_auth::{
+    Authenticator, CasGrant, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair,
+};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, mounted};
+use openxet_http::compose;
 use openxet_index::{
     ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, SqliteIndex,
     TermBytes, Visibility,
@@ -472,7 +476,8 @@ impl TestServer {
                 ready_tx
                     .send((tokio::runtime::Handle::current(), index))
                     .unwrap();
-                axum::serve(listener, router(state))
+                let body_deadline = state.cfg.body_deadline;
+                axum::serve(listener, compose(vec![mounted(state)], body_deadline))
                     .with_graceful_shutdown(async {
                         let _ = stop.await;
                     })
@@ -621,10 +626,13 @@ fn new_token() -> String {
 fn static_token(token: &str, scope: &str, mode: Mode) -> StaticToken {
     StaticToken {
         sha256: StaticToken::digest(token),
-        scope: scope.to_owned(),
-        mode,
         subject: format!("test-{scope}-{mode:?}"),
-        tenant: None,
+        cas: Some(CasGrant {
+            scope: scope.to_owned(),
+            mode,
+            tenant: None,
+        }),
+        user: None,
     }
 }
 
@@ -717,6 +725,10 @@ impl SlowIndex {
 
 #[async_trait::async_trait]
 impl Index for SlowIndex {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,
@@ -833,6 +845,10 @@ impl TablelessIndex {
 
 #[async_trait::async_trait]
 impl Index for TablelessIndex {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,
@@ -964,6 +980,10 @@ impl CountingBucket {
 
 #[async_trait::async_trait]
 impl Bucket for CountingBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        self.inner.probe().await
+    }
+
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         self.inner.put(key, bytes).await
     }
@@ -1009,6 +1029,39 @@ impl Bucket for CountingBucket {
     async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
         self.inner.size(key).await
     }
+
+    async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.inner.put_replace(key, bytes).await
+    }
+
+    async fn put_stream(
+        &self,
+        key: Key,
+        body: openxet_storage::BodyStream,
+        len: u64,
+    ) -> Result<(), StorageError> {
+        self.inner.put_stream(key, body, len).await
+    }
+
+    async fn get_to_file(&self, key: Key, path: &std::path::Path) -> Result<u64, StorageError> {
+        self.inner.get_to_file(key, path).await
+    }
+
+    async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
+        self.inner.last_modified(key).await
+    }
+
+    async fn list_under(
+        &self,
+        repo: openxet_storage::RepoIdHex,
+        kind: openxet_storage::KeyKind,
+    ) -> Result<Vec<Key>, StorageError> {
+        self.inner.list_under(repo, kind).await
+    }
+
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
 }
 
 /// A stream whose `poll_next` is `poll`.
@@ -1044,6 +1097,14 @@ pub struct FailingBucket;
 
 #[async_trait::async_trait]
 impl Bucket for FailingBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        Err(StorageError::Io {
+            op: "write probe file",
+            path: PathBuf::from("/failing-bucket"),
+            source: std::io::Error::other("no space left on device"),
+        })
+    }
+
     async fn put(&self, _: &Key, _: Bytes) -> Result<(), StorageError> {
         Err(StorageError::Io {
             op: "write temp file",
@@ -1062,7 +1123,7 @@ impl Bucket for FailingBucket {
 
     async fn get_range(&self, key: &Key, _: u64, _: u64) -> Result<Bytes, StorageError> {
         Err(StorageError::NotFound {
-            key: Box::new(*key),
+            key: Box::new(key.clone()),
         })
     }
 
@@ -1073,11 +1134,44 @@ impl Bucket for FailingBucket {
         _: u64,
     ) -> Result<RangeStream, StorageError> {
         Err(StorageError::NotFound {
-            key: Box::new(*key),
+            key: Box::new(key.clone()),
         })
     }
 
     async fn size(&self, _: &Key) -> Result<Option<u64>, StorageError> {
         Ok(None)
+    }
+
+    async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.put(&key, bytes).await
+    }
+
+    async fn put_stream(
+        &self,
+        key: Key,
+        _: openxet_storage::BodyStream,
+        _: u64,
+    ) -> Result<(), StorageError> {
+        self.put(&key, Bytes::new()).await
+    }
+
+    async fn get_to_file(&self, key: Key, _: &std::path::Path) -> Result<u64, StorageError> {
+        Err(StorageError::NotFound { key: Box::new(key) })
+    }
+
+    async fn last_modified(&self, _: Key) -> Result<Option<u64>, StorageError> {
+        Ok(None)
+    }
+
+    async fn list_under(
+        &self,
+        _: openxet_storage::RepoIdHex,
+        _: KeyKind,
+    ) -> Result<Vec<Key>, StorageError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete(&self, _: &Key) -> Result<bool, StorageError> {
+        Ok(false)
     }
 }

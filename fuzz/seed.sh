@@ -71,3 +71,94 @@ for range in 'bytes=0-99' 'bytes=100-' 'bytes=-10' 'bytes=-0' 'bytes=5-1' \
   'BYTES = 1-2' 'bytes=0-99,200-299' 'items=0-1' $'bytes=0-1\nbytes=2-3'; do
   printf "$size%s" "$range" > "corpus/reconstruction_range/$(printf '%s' "$range" | b64url)"
 done
+
+# The xet:// parser's seeds are the specification's golden vectors
+# (crates/uri/testdata/vectors.json, the single copy), one input per file,
+# valid and malformed, legacy forms included.
+mkdir -p corpus/xet_uri
+python3 -I - ../crates/uri/testdata/vectors.json corpus/xet_uri <<'PY'
+import json
+import pathlib
+import sys
+
+vectors = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+for i, vector in enumerate(vectors["valid"] + vectors["invalid"]):
+    (pathlib.Path(sys.argv[2]) / f"vector-{i:03}").write_text(vector["input"], encoding="utf-8")
+PY
+
+# pkt-line requests as git sends them: a v2 ls-refs and fetch, a v0 want
+# section with capabilities and haves, a v2 command openxet refuses, and a
+# bad length.
+mkdir -p corpus/pkt_line
+pkt() { printf '%04x%s\n' $((${#1} + 5)) "$1"; }
+oid=0123456789abcdef0123456789abcdef01234567
+{ pkt command=ls-refs; pkt agent=git/2.39.5; pkt object-format=sha1; printf 0001
+  pkt peel; pkt symrefs; pkt unborn; pkt 'ref-prefix HEAD'; pkt 'ref-prefix refs/heads/'
+  printf 0000; } > corpus/pkt_line/v2-ls-refs
+{ pkt command=fetch; pkt object-format=sha1; printf 0001; pkt thin-pack; pkt ofs-delta
+  pkt "want $oid"; pkt "have $oid"; pkt done; printf 0000; } > corpus/pkt_line/v2-fetch
+{ pkt "want $oid multi_ack_detailed side-band-64k thin-pack ofs-delta agent=git/2.39.5"
+  pkt "want $oid"; pkt 'deepen 1'; printf 0000; pkt "have $oid"; pkt done; } \
+  > corpus/pkt_line/v0-wants
+{ pkt command=object-info; printf 0001; pkt size; pkt "oid $oid"; printf 0000; } \
+  > corpus/pkt_line/v2-object-info
+printf '0003fff1zzzz' > corpus/pkt_line/bad-length
+
+# Hub commit bodies as huggingface_hub sends them (S3 fixtures 09-…-14 and
+# 10-…-02): byte 0 the regular-file limit, byte 1 the operation limit, then
+# the NDJSON, Python's separators included.
+mkdir -p corpus/commit_ndjson
+python3 -I - ../compat/fixtures/hub corpus/commit_ndjson <<'PY'
+import json
+import pathlib
+import sys
+
+fixtures = pathlib.Path(sys.argv[1])
+for name in ("09-upload-folder--14-POST-models-commit.json",
+             "10-create-commit-delete--02-POST-models-commit.json"):
+    body = json.loads((fixtures / name).read_text(encoding="utf-8"))["request"]["body"]["text"]
+    (pathlib.Path(sys.argv[2]) / name).write_bytes(b"\xff\x10" + body.encode())
+PY
+
+# A receive-pack request and a hook request are written here: pkt-lines of
+# commands, then a pack header (receive_request, byte 0 the chunk size), and
+# the hook's token, pack and command lines (hook_request, with the token
+# the target checks against).
+mkdir -p corpus/receive_request corpus/hook_request
+rawpkt() { printf '%04x%s' $((${#1} + 4)) "$1"; }
+zero=0000000000000000000000000000000000000000
+oid=1111111111111111111111111111111111111111
+{
+  caps='report-status side-band-64k'
+  printf '\007%04x' $((97 + 1 + ${#caps} + 4))
+  printf '%s %s refs/heads/main\000%s' "$zero" "$oid" "$caps"
+  printf '0000PACK\000\000\000\002\000\000\000\003'
+  head -c 64 /dev/zero
+} > corpus/receive_request/push
+{
+  caps='report-status push-options'
+  printf '\001%04x' $((97 + 1 + ${#caps} + 4))
+  printf '%s %s refs/heads/main\000%s' "$zero" "$oid" "$caps"
+  printf '0000'
+  rawpkt 'an option'
+  printf '0000PACK\000\000\000\002\000\000\000\001'
+} > corpus/receive_request/push-options
+{
+  printf '\003'
+  rawpkt "shallow $oid"
+  rawpkt "$oid $zero refs/heads/old"
+  printf '0000'
+} > corpus/receive_request/delete
+token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+{
+  rawpkt "token $token"
+  rawpkt "pack /cache/snapshots/x/objects/pack/pack-$oid.pack"
+  rawpkt "command $zero $oid refs/heads/main"
+  rawpkt "repo 0192f3a4b5c67d8e9fa0b1c2d3e4f5a6"
+  printf '0000'
+} > corpus/hook_request/push
+{
+  rawpkt "token $token"
+  rawpkt "command $oid $zero refs/heads/old"
+  printf '0000'
+} > corpus/hook_request/delete

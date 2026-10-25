@@ -7,9 +7,9 @@ use axum::http::HeaderMap;
 use axum::http::header::EXPECT;
 use axum::response::{IntoResponse as _, Response};
 use http_body_util::BodyExt as _;
+use openxet_http::{BodyTimedOut, timed_out};
 
 use crate::budget::Reservation;
-use crate::deadline::{BodyTimedOut, timed_out};
 use crate::error::closing;
 use crate::{CasError, MemoryBudget};
 

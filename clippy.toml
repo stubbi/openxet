@@ -1,13 +1,17 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
-doc-valid-idents = ["SQLite", ".."]
-# Routes are added only through each crate's route builder (for the CAS,
-# `openxet_cas`'s `routes::Routes`), which lists every route it serves, so
-# the security tests can check each one is authenticated.
+doc-valid-idents = ["SQLite", "XetHub", ".."]
+# Routes are added only through `openxet_http::Routes`, the route builder
+# every crate uses, which lists every route it serves, so the security tests
+# can check each one is authenticated. The one fallback is set by
+# `openxet_http::compose` (issue #46, ruling M2-R1): axum panics when two
+# routers with fallbacks are merged.
 disallowed-methods = [
   { path = "axum::Router::route", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
   { path = "axum::Router::route_service", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
   { path = "axum::Router::nest", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
   { path = "axum::Router::nest_service", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
   { path = "axum::Router::merge", reason = "build routes through the crate's route builder, so every route is in the security matrices" },
+  { path = "axum::Router::fallback", reason = "openxet_http::compose sets the server's one fallback" },
+  { path = "axum::Router::fallback_service", reason = "openxet_http::compose sets the server's one fallback" },
 ]

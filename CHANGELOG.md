@@ -21,6 +21,10 @@ once built.
 - `openxet upload` and `openxet download`, on the same client core as
   `hf_xet`, with `--json` output and stable exit codes
   ([command line](docs/reference/cli.md)).
+- Every TLS connection the `openxet` binary makes (the client core's and
+  `openxet label`'s) offers the hybrid post-quantum key exchange
+  `X25519MLKEM768` first, with X25519 kept for servers without it
+  ([ADR 0011](docs/adr/0011-post-quantum-readiness.md)).
 - The CAS routes ([routes](docs/reference/routes.md)):
   - xorb upload with validation of every chunk
   - shard upload, v1 and the v2 progress stream, verified against the
@@ -30,6 +34,9 @@ once built.
   - reconstruction v1, v2 and batch, with transfer URLs signed for one
     byte range each
   - telemetry accepted and dropped
+  - `GET /healthz` and `GET /readyz`; readiness probes the index with a
+    read and the bucket with a small write, and answers
+    `503 unavailable` naming the failing one
 - Every security requirement of design §5.9 that applies to the CAS, each
   with its test ([security tests](docs/reference/security-tests.md)).
 - Reconstruction answers a 100k-term file within 50 ms at p99 on an idle

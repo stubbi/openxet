@@ -385,6 +385,38 @@ pub fn transfer_key(path: &Path) -> Result<(Zeroizing<[u8; 32]>, bool), CliError
     )
 }
 
+/// The server's CAS token key at `path`, creating one if the file doesn't
+/// exist, and whether this call created it: an Ed25519 private key in
+/// `openxet token keygen`'s format (PKCS#8 PEM). The Hub signs the CAS
+/// tokens it hands out with it, and the CAS accepts them, so every node
+/// behind one endpoint must share it, like the transfer key (ruling
+/// M1-R29).
+pub fn cas_token_key(path: &Path) -> Result<(openxet_auth::TokenSigner, bool), CliError> {
+    load_or_create(
+        path,
+        |text| {
+            openxet_auth::TokenSigner::from_pem(text).map_err(|_| {
+                CliError::new(
+                    "invalid_key",
+                    format!("{} is not an Ed25519 private key", path.display()),
+                    "Restore the file, or remove it to generate a new key, which invalidates \
+                     the CAS tokens the Hub handed out (clients fetch new ones).",
+                )
+            })
+        },
+        || {
+            let pair = openxet_auth::generate_keypair().map_err(|_| {
+                CliError::new(
+                    "random",
+                    "generating the CAS token key failed",
+                    "Retry; if it persists, check the host's entropy source.",
+                )
+            })?;
+            Ok(Zeroizing::new(pair.private_pem().to_owned()))
+        },
+    )
+}
+
 fn parse_key(text: &str) -> Option<Zeroizing<[u8; 32]>> {
     if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;

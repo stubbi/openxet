@@ -42,7 +42,7 @@ Acceptance checks:
   the default endpoint's token on another host and prevent redirect leakage.
 - Preserve the existing HTTPS/stock-client contracts and storage-only hash-based
   CLI behavior. Unsupported resource kinds fail clearly; this task does not
-  bring M5 bucket/space/kernel support forward into M2.
+  bring M5's bucket primitive forward into M2.
 
 M2 completion supplies the reviewed contract and parser, not a claim that all
 third-party tools accept `xet://` or that public hosted accounts exist.

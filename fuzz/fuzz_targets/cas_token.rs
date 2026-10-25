@@ -20,8 +20,8 @@ use base64::engine::general_purpose::STANDARD;
 use libfuzzer_sys::arbitrary::{Result as ArbitraryResult, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use openxet_auth::{
-    Authenticator, DEFAULT_TENANT_PREFIX, MAX_SCOPE_BYTES, Mode, Principal, StaticToken,
-    TokenSigner, default_tenant,
+    Authenticator, CasGrant, Credential, DEFAULT_TENANT_PREFIX, MAX_SCOPE_BYTES, Mode, Principal,
+    StaticToken, TokenSigner, default_tenant,
 };
 
 /// A fixed `now`, so a minted token's validity never depends on the clock.
@@ -82,10 +82,13 @@ fn static_secret() -> String {
 fn static_token() -> StaticToken {
     StaticToken {
         sha256: StaticToken::digest(&static_secret()),
-        scope: "model/org/repo".to_owned(),
-        mode: Mode::Read,
         subject: "fuzz".to_owned(),
-        tenant: None,
+        cas: Some(CasGrant {
+            scope: "model/org/repo".to_owned(),
+            mode: Mode::Read,
+            tenant: None,
+        }),
+        user: None,
     }
 }
 
@@ -93,8 +96,11 @@ fn raw(bearer: &[u8]) {
     let Ok(bearer) = std::str::from_utf8(bearer) else {
         return;
     };
-    if let Ok(principal) = keys().1.authenticate(bearer, NOW) {
-        assert_eq!(bearer, static_secret(), "{principal:?}");
+    if let Ok(credential) = keys().1.authenticate(bearer, NOW) {
+        assert_eq!(bearer, static_secret(), "{credential:?}");
+        let Credential::Cas(principal) = credential else {
+            panic!("the static token is a CAS credential only: {credential:?}");
+        };
         assert_valid_identity(&principal);
     }
 }
@@ -132,10 +138,11 @@ fn minted(input: &mut Unstructured<'_>) -> ArbitraryResult<()> {
         return Ok(());
     };
     match authenticator.authenticate(&bearer, NOW) {
-        Ok(principal) => {
+        Ok(Credential::Cas(principal)) => {
             assert_valid_identity(&principal);
             assert_eq!(principal, expected);
         }
+        Ok(other) => panic!("a CAS token is only ever a CAS credential: {other:?}"),
         Err(err) => assert!(
             flips.iter().any(|&(_, mask)| mask != 0),
             "an unaltered minted token was refused: {err}"
