@@ -1489,3 +1489,61 @@ async fn long_repack_renews_its_lease() {
         "the holder still has it"
     );
 }
+
+/// Every maintenance pass finishes the deletion claims a sweep that died
+/// left (ADR 0004 item 5), under the repack lease, so a byte-identical push
+/// isn't refused until the next operator sweep; with the lease held
+/// elsewhere it leaves them for that holder or the next pass.
+#[tokio::test(flavor = "multi_thread")]
+async fn maintenance_finishes_stale_claims() {
+    let env = env(12).await;
+    let orphan = "pack-89abcdef0123456789abcdef0123456789abcdef";
+    let hex = ok(RepoIdHex::parse(&env.repo.to_string()));
+    let key = Key::Pack {
+        repo: hex,
+        name: ok(PackName::parse(orphan)),
+        ext: PackExt::Pack,
+    };
+    ok(env
+        .world
+        .bucket
+        .put(&key, bytes::Bytes::from_static(b"PACK"))
+        .await);
+    // A claim a sweep that died two hours ago left.
+    ok(sqlx::query(
+        "INSERT INTO pack_deletions (repo, name, claimed_at) VALUES (?, ?, unixepoch() - 7200)",
+    )
+    .bind(&env.repo.0[..])
+    .bind(orphan)
+    .execute(&env.world.sql().await)
+    .await);
+    let row = |name: &str| openxet_index::Pack {
+        id: openxet_index::PackId::generate(),
+        repo: env.repo,
+        name: name.to_owned(),
+        state: PackState::Pending,
+        created_at: now(),
+        bytes: 4,
+        midx_gen: None,
+    };
+    let blocked = env.world.index.insert_pack(&row(orphan)).await;
+    assert!(
+        matches!(blocked, Err(openxet_index::IndexError::PackDeleting { .. })),
+        "{blocked:?}"
+    );
+
+    let held = env.lease("node-a").await;
+    let report = ok(maintain(&env.node, "node-m").await);
+    assert_eq!(report.claims_finished, 0, "the lease is held elsewhere");
+    assert_eq!(ok(env.world.index.pack_deletions(env.repo).await).len(), 1);
+    drop(held);
+    ok(sqlx::query("UPDATE repo_leases SET expires_at = 0")
+        .execute(&env.world.sql().await)
+        .await);
+
+    let report = ok(maintain(&env.node, "node-m").await);
+    assert_eq!(report.claims_finished, 1, "{report:?}");
+    assert!(ok(env.world.index.pack_deletions(env.repo).await).is_empty());
+    assert!(!env.bucket_has_pack(orphan).await, "the claimed files went");
+    ok(env.world.index.insert_pack(&row(orphan)).await);
+}

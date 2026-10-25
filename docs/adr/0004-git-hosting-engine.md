@@ -28,7 +28,8 @@
   leaseholder renews its lease while it works; GC refuses a grace period
   below 28 days; item 4's ref fallback stays within the ref's current
   lifetime, and discard is one transaction whose lost packs keep a full
-  grace period
+  grace period; reindex holds the repack lease, and maintenance finishes
+  stale deletion claims
 
 ## Context
 
@@ -482,6 +483,11 @@ results below are **observed**.
    - **Rebuilding (`reindex`, §5.3).** It runs with the repo's writes
      stopped. It rebuilds refs, `ref_log` rows and the pack list from the
      bucket, and starts a fresh `full_repack_gen`.
+     - It also holds the repo's repack lease (item 5) for its whole run,
+       renewing it, and checks it again right before its index
+       transaction. Stopping writes doesn't stop repacks or pack sweeps;
+       the lease does. Without it, a sweep holding a deletion claim could
+       go on deleting the files of a row reindex had just committed.
      - Refs and `ref_log` rows come from the bucket ref log. If a ref's
        closure is incomplete in the listed packs, the ref falls back to
        its newest earlier ref-log value whose closure is complete, and
@@ -729,8 +735,11 @@ results below are **observed**.
          with a retryable error. A push answers a retryable `ng` and Hub
          writes retry.
        - The claim is removed once the files are gone. A claim a dead
-         sweep left is finished by the next sweep, which deletes the
-         files only if the check still holds. `reindex` drops the
+         sweep left is finished, under the lease, by the next sweep or by
+         the server's next maintenance pass (every 10 s), whichever comes
+         first. The files are deleted only if the check still holds. A
+         claim more than an hour old is logged as a warning, since only
+         a sweep that died leaves one. `reindex` drops the
          repository's claims, since it has just listed the bucket.
        - So a late row either stops the claim, and the files stay, or
          waits for the deletion and uploads the files again. A committed
@@ -1143,6 +1152,12 @@ results below are **observed**.
     files.
   - `long_repack_renews_its_lease`: a repack that runs longer than its
     lease's TTL still publishes.
+  - `reindex_excludes_repacks_and_sweeps`: reindex with a lease another
+    holder has taken over changes nothing. While reindex holds the lease,
+    no sweep or repack can get it.
+  - `maintenance_finishes_stale_claims`: a maintenance pass finishes a
+    dead sweep's claim, so a pack row of that name can be inserted again.
+    While another holder has the lease, the pass leaves the claim alone.
   - `ref_fallback_stops_at_recreation`: a ref that was deleted and created
     again, whose new value is gone from the bucket, is left out rather
     than rebuilt at a value from its earlier lifetime.

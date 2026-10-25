@@ -42,8 +42,13 @@ use std::time::Duration;
 use openxet_index::{Lease, PackRecord, PackState, RepoId};
 use openxet_storage::{Key, MidxExt, PackExt, PackName, RepoIdHex};
 
+use crate::lease::renew;
 use crate::reflog::{derived_head, repo_hex};
-use crate::{Engine, GitError, check_grace};
+use crate::{Engine, GitError, check_grace, unix_now};
+
+/// How old a deletion claim must be before finishing it is logged as a
+/// warning: one hour, far longer than a sweep takes to delete a pack.
+pub(crate) const STALE_CLAIM: Duration = Duration::from_hours(1);
 
 /// Every file a pack can have.
 const PACK_FILES: [PackExt; 5] = [
@@ -114,7 +119,7 @@ pub async fn sweep_packs(
         ..SweepReport::default()
     };
     if !dry_run {
-        report.finished_claims = finish_claims(engine, lease, repo_hex).await?;
+        report.finished_claims = finish_claims(engine, lease).await?;
     }
 
     let mut rows = engine.index.packs(repo).await?;
@@ -204,16 +209,26 @@ pub async fn sweep_packs(
     Ok(report)
 }
 
-/// Finishes the deletion claims a sweep that died left: deletes a claimed
-/// pack's files if still no live row names it, then removes the claim.
-async fn finish_claims(
-    engine: &Engine,
-    lease: &Lease,
-    repo_hex: RepoIdHex,
-) -> Result<Vec<String>, GitError> {
+/// Finishes the deletion claims a sweep that died left, holding `lease`:
+/// deletes a claimed pack's files if still no live row names it, then
+/// removes the claim. Returns the names. The sweep and every maintenance
+/// pass ([`crate::maintain`]) call it, so a dead sweep's claim blocks
+/// pushes of an identical pack for one pass at most; a claim older than
+/// [`STALE_CLAIM`] is logged, since only a sweep that died leaves one.
+///
+/// # Errors
+///
+/// [`GitError::LeaseLost`], [`GitError::Index`] and [`GitError::Storage`].
+pub(crate) async fn finish_claims(engine: &Engine, lease: &Lease) -> Result<Vec<String>, GitError> {
     let repo = lease.repo;
+    let repo_hex = repo_hex(repo)?;
+    let now = unix_now();
     let mut finished = Vec::new();
-    for name in engine.index.pack_deletions(repo).await? {
+    for claim in engine.index.pack_deletions(repo).await? {
+        let name = claim.name;
+        if claim.claimed_at.saturating_add(STALE_CLAIM.as_secs()) <= now {
+            tracing::warn!(%repo, pack = %name, claimed_at = claim.claimed_at, "a pack deletion claim is over an hour old: a pack sweep died holding it; finishing it now");
+        }
         renew(engine, lease).await?;
         if engine.index.claim_pack_deletion(repo, &name).await? {
             delete_files(engine, repo_hex, &name).await?;
@@ -241,17 +256,6 @@ async fn prune_ref_log(
     } else {
         engine.index.prune_ref_log(repo, before, through).await?
     })
-}
-
-/// Renews the sweep's lease, failing with [`GitError::LeaseLost`] if it is
-/// gone.
-async fn renew(engine: &Engine, lease: &Lease) -> Result<(), GitError> {
-    engine
-        .index
-        .renew_lease(lease.repo, &lease.holder, lease.epoch, lease.ttl)
-        .await?
-        .map(drop)
-        .ok_or(GitError::LeaseLost)
 }
 
 /// Deletes every file of pack `name`.

@@ -190,7 +190,7 @@ async fn reindex_unplaced_persisted() {
     let l = lagging().await;
     let env = &l.env;
     let started = now();
-    let report = ok(reindex_repo(&env.node, env.repo).await);
+    let report = ok(reindex_repo(&env.node, env.repo, &env.lease("node-r").await).await);
 
     // The rebuilt refs: as far as the bucket ref log reaches, complete.
     let refs: BTreeSet<(String, Oid)> = report.refs.iter().cloned().collect();
@@ -351,7 +351,7 @@ async fn reindex_unplaced_persisted() {
 async fn reindex_hold_never_blocks_repack() {
     let l = lagging().await;
     let env = &l.env;
-    let report = ok(reindex_repo(&env.node, env.repo).await);
+    let report = ok(reindex_repo(&env.node, env.repo, &env.lease("node-r").await).await);
     let edges: Vec<Oid> = report
         .unplaced
         .iter()
@@ -407,7 +407,7 @@ async fn reindex_hold_never_blocks_repack() {
 async fn recovered_packs_never_exposed() {
     let l = lagging().await;
     let env = &l.env;
-    ok(reindex_repo(&env.node, env.repo).await);
+    ok(reindex_repo(&env.node, env.repo, &env.lease("node-r").await).await);
     let fresh = env.engine("node-fresh").await;
     for engine in [&env.node, &fresh] {
         let snap = ok(engine.snapshot(env.repo).await);
@@ -466,7 +466,7 @@ async fn recovered_packs_never_exposed() {
 async fn discard_releases_committed_objects() {
     let l = lagging().await;
     let env = &l.env;
-    ok(reindex_repo(&env.node, env.repo).await);
+    ok(reindex_repo(&env.node, env.repo, &env.lease("node-r").await).await);
     env.age(100 * DAY).await;
     let lease = env.lease("node-r").await;
     ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
@@ -532,7 +532,7 @@ async fn ref_fallback_stops_at_recreation() {
         ok(env.world.bucket.delete(&key).await);
     }
 
-    let report = ok(reindex_repo(&env.node, env.repo).await);
+    let report = ok(reindex_repo(&env.node, env.repo, &env.lease("node-a").await).await);
     assert_eq!(env.db_ref("refs/heads/x").await, None, "{report:?}");
     assert!(
         report
@@ -542,5 +542,38 @@ async fn ref_fallback_stops_at_recreation() {
         "{report:?}"
     );
     assert!(env.db_ref("refs/heads/main").await.is_some());
+    assert_i1(&env.node, env.repo).await;
+}
+
+/// `reindex` holds the repository's repack lease (ADR 0004 item 4), so it
+/// excludes repacks and pack sweeps: with a lease another holder took over
+/// it changes nothing, and while it holds the lease no sweep or repack can
+/// take it.
+#[tokio::test(flavor = "multi_thread")]
+async fn reindex_excludes_repacks_and_sweeps() {
+    let env = env(12).await;
+    let stale = env.lease("node-a").await;
+    let holder = env.take_over("node-b").await;
+    let before = ok(env.world.index.snapshot(env.repo).await);
+    let refused = reindex_repo(&env.node, env.repo, &stale).await;
+    assert!(matches!(refused, Err(GitError::LeaseLost)), "{refused:?}");
+    assert_eq!(
+        ok(env.world.index.snapshot(env.repo).await),
+        before,
+        "nothing changed"
+    );
+
+    ok(reindex_repo(&env.node, env.repo, &holder).await);
+    assert_eq!(
+        ok(env
+            .world
+            .index
+            .acquire_lease(env.repo, "gc", std::time::Duration::from_mins(10))
+            .await),
+        None,
+        "the lease stays with reindex's holder"
+    );
+    let sweep = sweep_packs(&env.node, env.repo, &stale, DEFAULT_GRACE, now(), false).await;
+    assert!(matches!(sweep, Err(GitError::LeaseLost)), "{sweep:?}");
     assert_i1(&env.node, env.repo).await;
 }

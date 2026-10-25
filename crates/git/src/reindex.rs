@@ -1,7 +1,10 @@
 //! `reindex` of a repository's Git data from the bucket (ADR 0004 item 4,
 //! design §5.3, ruling R24); the operator's restore and discard of what it
 //! couldn't place are in `recover`. It runs with the repository's writes
-//! stopped; the `openxet reindex` command (M4) sees to that.
+//! stopped, which the `openxet reindex` command (M4) sees to, and holding
+//! the repository's repack lease, which excludes repacks and pack sweeps:
+//! a sweep holding a deletion claim could otherwise go on deleting the
+//! files of a row reindex has just committed.
 //!
 //! Refs and `ref_log` rows come from the bucket ref log. A ref whose
 //! closure is incomplete in the bucket's packs falls back to its newest
@@ -19,10 +22,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use openxet_index::{
-    Oid, Pack, PackId, PackState, RefLogRow, RefUpdate, Reindexed, RepoId, Unplaced, UnplacedKind,
+    Lease, Oid, Pack, PackId, PackState, RefLogRow, RefUpdate, Reindexed, RepoId, Unplaced,
+    UnplacedKind,
 };
 use openxet_storage::{Key, KeyKind, PackExt, PackName};
 
+use crate::lease::{renew, while_renewing};
 use crate::reach::{open, to_gix};
 use crate::receive::valid_ref_name;
 use crate::reflog::{bucket_rows, repo_hex};
@@ -77,15 +82,36 @@ struct Found {
 
 /// Rebuilds `repo`'s refs, `ref_log` rows and pack rows from the bucket,
 /// records what it could not place, and starts a fresh full-repack
-/// generation (ADR 0004 item 4).
+/// generation (ADR 0004 item 4), holding `lease`, the repository's repack
+/// lease, which it renews while it works and checks again right before
+/// its index transaction.
 ///
 /// # Errors
 ///
+/// [`GitError::LeaseLost`] if `lease` isn't held, then or at the end;
 /// [`GitError::Storage`] (a malformed ref log record included),
 /// [`GitError::Index`], [`GitError::Corrupt`] for a ref log row naming an
 /// object id openxet doesn't store, [`GitError::GitFailed`] and
 /// [`GitError::Io`]. Nothing in the index changes on error.
-pub async fn reindex_repo(engine: &Engine, repo: RepoId) -> Result<ReindexReport, GitError> {
+pub async fn reindex_repo(
+    engine: &Engine,
+    repo: RepoId,
+    lease: &Lease,
+) -> Result<ReindexReport, GitError> {
+    if lease.repo != repo {
+        return Err(GitError::LeaseLost);
+    }
+    renew(engine, lease).await?;
+    while_renewing(engine, lease, reindex_under(engine, repo, lease))
+        .await
+        .0
+}
+
+async fn reindex_under(
+    engine: &Engine,
+    repo: RepoId,
+    lease: &Lease,
+) -> Result<ReindexReport, GitError> {
     let started = unix_now();
     let ref_log = read_ref_log(engine, repo).await?;
     let (mut found, incomplete) = list_packs(engine, repo, started).await?;
@@ -121,6 +147,7 @@ pub async fn reindex_repo(engine: &Engine, repo: RepoId) -> Result<ReindexReport
 
     let packs: Vec<Pack> = found.iter().map(|f| f.pack.clone()).collect();
     let request = uuid::Uuid::new_v4().simple().to_string();
+    renew(engine, lease).await?;
     engine
         .index
         .reindex(

@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use openxet_protocol::MerkleHash;
 
 pub use git::{
-    CommitError, CommitTx, GitStore, Lease, Pack, PackRecord, PackState, RefLogRow, RefUpdate,
-    Reindexed, RepackPublish, Snapshot, Unplaced, UnplacedKind,
+    CommitError, CommitTx, GitStore, Lease, Pack, PackDeletion, PackRecord, PackState, RefLogRow,
+    RefUpdate, Reindexed, RepackPublish, Snapshot, Unplaced, UnplacedKind,
 };
 #[cfg(feature = "test-support")]
 pub use rebuild::{FileRow, RebuildError, ScopeTables, rebuild_scope_tables};

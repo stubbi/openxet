@@ -89,6 +89,15 @@ pub struct PackRecord {
     pub superseded_at: Option<u64>,
 }
 
+/// A pack deletion claim (ADR 0004 item 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackDeletion {
+    /// The pack's name.
+    pub name: String,
+    /// When the claim was taken, Unix seconds on the database clock.
+    pub claimed_at: u64,
+}
+
 /// What `reindex` writes for one repository in place of its Git rows (ADR
 /// 0004 item 4).
 #[derive(Debug, Clone, Copy)]
@@ -448,13 +457,14 @@ pub trait GitStore: Send + Sync + 'static {
     /// [`IndexError::Database`].
     async fn claim_pack_deletion(&self, repo: RepoId, name: &str) -> Result<bool, IndexError>;
 
-    /// The repository's pack deletion claims, by name: those a sweep that
-    /// died left, for the next one to finish.
+    /// The repository's pack deletion claims, ordered by name: those a
+    /// sweep that died left, for the next sweep or maintenance pass to
+    /// finish.
     ///
     /// # Errors
     ///
-    /// [`IndexError::Database`].
-    async fn pack_deletions(&self, repo: RepoId) -> Result<Vec<String>, IndexError>;
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn pack_deletions(&self, repo: RepoId) -> Result<Vec<PackDeletion>, IndexError>;
 
     /// Removes the claim on `name`, once its files are gone.
     ///

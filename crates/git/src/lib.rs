@@ -251,11 +251,13 @@ pub enum GitError {
          it ran; its outputs are marked lost for GC. Take the lease again and rerun it"
     )]
     RepackFenced,
-    /// The repository's repack lease was lost or taken over while the pack
-    /// sweep held it (ADR 0004 item 5); it deleted nothing further.
+    /// The repository's repack lease isn't held by the caller, or was lost
+    /// or taken over while the pack sweep or `reindex` held it (ADR 0004
+    /// items 4 and 5); nothing further was changed.
     #[error(
-        "the repository's repack lease was lost or taken over during the pack sweep; take the \
-         lease again and rerun the sweep, which finishes what this one started"
+        "the repository's repack lease is not held, or was lost or taken over while the pack \
+         sweep or reindex ran; wait for the holder (a repack or another sweep) to finish, take \
+         the lease again and rerun, which finishes what this run started"
     )]
     LeaseLost,
     /// A `reindex restore` was refused.

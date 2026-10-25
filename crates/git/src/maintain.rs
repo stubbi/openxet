@@ -1,7 +1,9 @@
 //! The server's Git background task: every [`MAINTENANCE_INTERVAL`] it
 //! derives the bucket ref log of every repository, which keeps it within
-//! the documented RPO of 60 s (design §5.3), and runs a geometric repack
-//! under the lease on each repository with more than
+//! the documented RPO of 60 s (design §5.3); under the repack lease it
+//! finishes the pack deletion claims a sweep that died left, which would
+//! otherwise refuse pushes of an identical pack until the next sweep, and
+//! runs a geometric repack on each repository with more than
 //! [`GEOMETRIC_REPACK_PACKS`] committed packs (ADR 0004 item 5). Full
 //! repacks, the pack sweep and `reindex` are operator commands (M4).
 
@@ -10,6 +12,7 @@ use std::time::Duration;
 
 use openxet_index::{RepoFilter, RepoId};
 
+use crate::sweep::finish_claims;
 use crate::{
     DEFAULT_LEASE_TTL, Engine, GitError, acquire_lease, derive_bucket_ref_log, repack_geometric,
 };
@@ -34,6 +37,8 @@ pub struct MaintenanceReport {
     pub ref_log_rows: u64,
     /// The repositories it repacked.
     pub repacked: Vec<RepoId>,
+    /// How many stale pack deletion claims it finished.
+    pub claims_finished: usize,
     /// How many repositories failed a step; each failure is logged and the
     /// next pass retries it.
     pub failures: usize,
@@ -74,17 +79,24 @@ async fn maintain_repo(
     report: &mut MaintenanceReport,
 ) -> Result<(), GitError> {
     report.ref_log_rows += derive_bucket_ref_log(engine, repo).await?;
-    let packs = engine.index.snapshot(repo).await?.packs.len();
-    if packs <= GEOMETRIC_REPACK_PACKS {
+    let claims = !engine.index.pack_deletions(repo).await?.is_empty();
+    let repack = engine.index.snapshot(repo).await?.packs.len() > GEOMETRIC_REPACK_PACKS;
+    if !claims && !repack {
         return Ok(());
     }
+    // Held by a sweep or a repack elsewhere: that holder finishes the
+    // claims, or the next pass does.
     let Some(lease) = acquire_lease(engine, repo, holder, DEFAULT_LEASE_TTL).await? else {
         return Ok(());
     };
-    if !repack_geometric(engine, repo, &lease)
-        .await?
-        .published
-        .is_empty()
+    if claims {
+        report.claims_finished += finish_claims(engine, &lease).await?.len();
+    }
+    if repack
+        && !repack_geometric(engine, repo, &lease)
+            .await?
+            .published
+            .is_empty()
     {
         report.repacked.push(repo);
     }

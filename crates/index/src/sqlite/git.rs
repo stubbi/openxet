@@ -12,8 +12,9 @@ use sqlx::{Sqlite, Transaction};
 
 use super::{HASHES_PER_QUERY, SqliteIndex, to_i64, to_u64, with_placeholders};
 use crate::{
-    CommitError, CommitTx, GitStore, IndexError, Lease, Oid, Pack, PackId, PackRecord, PackState,
-    RefLogRow, RefUpdate, Reindexed, RepackPublish, RepoId, Snapshot, Unplaced, UnplacedKind,
+    CommitError, CommitTx, GitStore, IndexError, Lease, Oid, Pack, PackDeletion, PackId,
+    PackRecord, PackState, RefLogRow, RefUpdate, Reindexed, RepackPublish, RepoId, Snapshot,
+    Unplaced, UnplacedKind,
 };
 
 /// The database clock in Unix milliseconds, which leases are compared on
@@ -640,13 +641,19 @@ impl GitStore for SqliteIndex {
         Ok(true)
     }
 
-    async fn pack_deletions(&self, repo: RepoId) -> Result<Vec<String>, IndexError> {
-        Ok(
-            sqlx::query_scalar("SELECT name FROM pack_deletions WHERE repo = ? ORDER BY name")
-                .bind(&repo.0[..])
-                .fetch_all(&self.reader)
-                .await?,
-        )
+    async fn pack_deletions(&self, repo: RepoId) -> Result<Vec<PackDeletion>, IndexError> {
+        sqlx::query("SELECT name, claimed_at FROM pack_deletions WHERE repo = ? ORDER BY name")
+            .bind(&repo.0[..])
+            .fetch_all(&self.reader)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(PackDeletion {
+                    name: row.try_get(0)?,
+                    claimed_at: to_u64(row.try_get(1)?, "pack deletion claim time")?,
+                })
+            })
+            .collect()
     }
 
     async fn release_pack_deletion(&self, repo: RepoId, name: &str) -> Result<(), IndexError> {

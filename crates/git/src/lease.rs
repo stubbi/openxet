@@ -37,6 +37,18 @@ pub async fn acquire_lease(
     Ok(engine.index.acquire_lease(repo, holder, ttl).await?)
 }
 
+/// Renews `lease`, failing with [`GitError::LeaseLost`] if it is gone: how
+/// the sweep and `reindex` check they still exclude repacks before each
+/// step that must not overlap one.
+pub(crate) async fn renew(engine: &Engine, lease: &Lease) -> Result<(), GitError> {
+    engine
+        .index
+        .renew_lease(lease.repo, &lease.holder, lease.epoch, lease.ttl)
+        .await?
+        .map(drop)
+        .ok_or(GitError::LeaseLost)
+}
+
 /// Runs `work` while renewing `lease` every `lease.ttl / 3`. Once a renewal
 /// finds the lease lost, renewing stops and `work` runs on: its publish is
 /// fenced by the epoch anyway, and stopping it midway would only leave

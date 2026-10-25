@@ -1062,10 +1062,12 @@ async fn pack_deletion_claims_exclude_new_rows() {
         ok(index.claim_pack_deletion(repo, "shared").await),
         "a held claim is kept"
     );
+    let claims = ok(index.pack_deletions(repo).await);
     assert_eq!(
-        ok(index.pack_deletions(repo).await),
-        vec!["shared".to_owned()]
+        claims.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        vec!["shared"]
     );
+    assert!(claims[0].claimed_at > 1_700_000_000, "{claims:?}");
 
     match index.insert_pack(&pending(repo, "shared")).await {
         Err(IndexError::PackDeleting { name }) => assert_eq!(name, "shared"),

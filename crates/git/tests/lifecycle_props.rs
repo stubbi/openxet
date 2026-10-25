@@ -283,7 +283,7 @@ impl Model {
                 if *derive {
                     ok(derive_bucket_ref_log(&env.node, env.repo).await);
                 }
-                ok(reindex_repo(&env.node, env.repo).await);
+                ok(reindex_repo(&env.node, env.repo, &env.gc_lease().await).await);
                 match then {
                     1 => {
                         let entry = ok(env.world.index.unplaced(env.repo).await)
