@@ -2899,6 +2899,8 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "bstr",
+ "flate2",
+ "futures-util",
  "gix-attributes",
  "http-body-util",
  "humantime",
@@ -2920,6 +2922,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "zeroize",
 ]
 
 [[package]]

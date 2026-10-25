@@ -193,6 +193,18 @@ pub enum HubError {
     /// `Retry-After`.
     #[error("{0}")]
     Busy(String),
+    /// A Git request of the dumb HTTP protocol, which isn't served: only
+    /// smart HTTP is (ruling M2-R11). `404`.
+    #[error(
+        "this server serves Git over smart HTTP only: info/refs needs \
+         ?service=git-upload-pack or ?service=git-receive-pack"
+    )]
+    DumbHttp,
+    /// R22's reachability check is over a concurrency limit for the
+    /// repository or the caller (ADR 0004 item 2). `429` with
+    /// `Retry-After`.
+    #[error("{0}")]
+    Throttled(String),
     /// A Hub endpoint openxet doesn't implement (design §6). `501`, naming
     /// it, never a confusing `404`.
     #[error("{endpoint} is not implemented by this openxet server")]
@@ -301,6 +313,17 @@ impl HubError {
                 "Fix the request as the message says and send it again; nothing was changed.",
             ),
             Self::Busy(_) => (StatusCode::SERVICE_UNAVAILABLE, "busy", RETRY_HINT),
+            Self::DumbHttp => (
+                StatusCode::NOT_FOUND,
+                "dumb_http_not_served",
+                "Clone the repository's URL with git, which asks for smart HTTP itself; \
+                 openxet serves no files under a repository's Git URL.",
+            ),
+            Self::Throttled(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_requests",
+                RETRY_HINT,
+            ),
             Self::NotImplemented { .. } => (
                 StatusCode::NOT_IMPLEMENTED,
                 "not_implemented",
@@ -379,7 +402,10 @@ impl IntoResponse for HubError {
                     HeaderValue::from_static(r#"Bearer realm="openxet", error="invalid_token""#),
                 );
             }
-            Self::AuthorizerUnavailable(_) | Self::Unavailable(_) | Self::Busy(_) => {
+            Self::AuthorizerUnavailable(_)
+            | Self::Unavailable(_)
+            | Self::Busy(_)
+            | Self::Throttled(_) => {
                 headers.insert(RETRY_AFTER, HeaderValue::from_static("1"));
             }
             Self::EntryNotFound {

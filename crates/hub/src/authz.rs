@@ -6,10 +6,14 @@
 //! `401` instead, whatever exists, so neither reveals a repository.
 
 use axum::extract::{FromRequestParts, MatchedPath, RawPathParams};
+use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
+use base64::Engine as _;
+use base64::prelude::BASE64_STANDARD;
 use openxet_auth::{ANONYMOUS, Action, Credential, Target, UserPrincipal};
 use openxet_index::Repo;
+use zeroize::Zeroizing;
 
 use crate::{HubError, HubState, View, names};
 
@@ -37,31 +41,67 @@ pub(crate) fn is_anonymous(who: &UserPrincipal) -> bool {
     who.subject == ANONYMOUS
 }
 
-impl FromRequestParts<HubState> for Who {
-    type Rejection = HubError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &HubState) -> Result<Self, HubError> {
-        let mut values = parts.headers.get_all(AUTHORIZATION).iter();
+impl Who {
+    /// The user of `headers`' `Authorization`: a `Bearer` token, or with
+    /// `basic` also HTTP Basic whose password is the token and whose user
+    /// name is ignored, as git and its credential helpers send it (ADR 0005
+    /// item 2, ruling M2-R11). No header is [`UserPrincipal::anonymous`].
+    ///
+    /// # Errors
+    ///
+    /// [`HubError::InvalidCredential`] for a malformed, unknown or expired
+    /// credential or more than one header, and [`HubError::CasCredential`]
+    /// for a CAS-only one.
+    pub(crate) fn from_headers(
+        headers: &HeaderMap,
+        state: &HubState,
+        basic: bool,
+    ) -> Result<Self, HubError> {
+        let mut values = headers.get_all(AUTHORIZATION).iter();
         let value = match (values.next(), values.next()) {
             (None, _) => return Ok(Self(UserPrincipal::anonymous())),
             (Some(value), None) => value,
             (Some(_), Some(_)) => return Err(HubError::InvalidCredential),
         };
         // The scheme is case-insensitive (RFC 9110 §11.1); anything other
-        // than `Bearer`, or a value that isn't visible ASCII, is invalid.
-        let token = value
+        // than `Bearer` (or `Basic` where taken), or a value that isn't
+        // visible ASCII, is invalid.
+        let (scheme, rest) = value
             .to_str()
             .ok()
             .and_then(|v| v.split_once(' '))
-            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-            .map(|(_, token)| token.trim_start_matches(' '))
+            .map(|(scheme, rest)| (scheme, rest.trim_start_matches(' ')))
             .ok_or(HubError::InvalidCredential)?;
-        match state.auth.authenticate(token, state.clock.now()) {
+        let token = if scheme.eq_ignore_ascii_case("bearer") {
+            Zeroizing::new(rest.to_owned())
+        } else if basic && scheme.eq_ignore_ascii_case("basic") {
+            basic_password(rest).ok_or(HubError::InvalidCredential)?
+        } else {
+            return Err(HubError::InvalidCredential);
+        };
+        match state.auth.authenticate(&token, state.clock.now()) {
             Ok(Credential::User(user) | Credential::Both(_, user)) => Ok(Self(user)),
             Ok(Credential::Cas(_)) => Err(HubError::CasCredential),
             // An empty token is a malformed credential, not none.
             Err(_) => Err(HubError::InvalidCredential),
         }
+    }
+}
+
+/// The password of HTTP Basic credentials `encoded`, `base64(user ":"
+/// password)` (RFC 7617); `None` if they aren't that.
+fn basic_password(encoded: &str) -> Option<Zeroizing<String>> {
+    let decoded = Zeroizing::new(BASE64_STANDARD.decode(encoded).ok()?);
+    let colon = decoded.iter().position(|&b| b == b':')?;
+    let password = std::str::from_utf8(&decoded[colon + 1..]).ok()?;
+    Some(Zeroizing::new(password.to_owned()))
+}
+
+impl FromRequestParts<HubState> for Who {
+    type Rejection = HubError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &HubState) -> Result<Self, HubError> {
+        Self::from_headers(&parts.headers, state, false)
     }
 }
 

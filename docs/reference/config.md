@@ -194,6 +194,25 @@ The Git engine behind the Hub's commits and reads and Git smart HTTP. It
 keeps a node-local cache of packs hydrated from the bucket, and runs
 `git` 2.37 or newer from `PATH`.
 
+Git is served over smart HTTP at the Hub's URL: `{hub.public_url}/{namespace}/{name}`,
+with or without `.git`, and under `datasets/`, `spaces/` or `kernels/` for
+a repository with that label. git sends the token as the password of HTTP
+Basic (any user name), or as a `Bearer` header with
+`http.extraHeader`. The first push to a missing repository creates it,
+with the `model` label or the prefix's, when the caller may create in the
+namespace and read and write the repository. The dumb HTTP protocol is
+not served.
+
+Every 10 seconds `serve` copies new ref changes to the bucket's ref log,
+which keeps the bucket's copy within a minute of the index (design §5.3),
+and repacks a repository holding more than 50 packs.
+
+The cache is as private as the data directory: its directories are mode
+`0700`, its files `0600`, and cached pack files `0400`. git runs as a
+child of `serve` and inherits every descriptor `serve` holds without
+`FD_CLOEXEC`: start `serve` from a supervisor that passes it only
+standard input, output and error.
+
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
 | `cache_dir` | `<data_dir>/git-cache` | a directory path | The node's Git cache: hydrated packs, per-request snapshots and the `proc-receive` hook (a link to the openxet binary). It must be on a filesystem with hard links. One process holds it at a time: a second `serve` given the same directory refuses to start, naming the key, so servers that share a data directory each need their own `cache_dir`. |
@@ -240,7 +259,8 @@ Without a configuration file, or with one that has no `[auth]` section,
 It reuses all of them on every later start, so data, the token and transfer
 URLs signed before a restart keep working. It prints the endpoint, the data
 directory, the token, ready-to-paste upload commands and the `HF_ENDPOINT`
-and `hf auth login --token …` lines for the `hf` CLI on stdout. With
+and `hf auth login --token …` lines for the `hf` CLI, and `git push` and
+`git clone` lines, on stdout. With
 `--json` it prints one line instead:
 
 ```json

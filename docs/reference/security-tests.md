@@ -55,6 +55,8 @@ its clients sent (`assert_no_credential_in_log`).
 | 2 | `repo_create_authorized_per_namespace` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `wrong_type_without_read_access_matches_unknown_repo` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `create_collision_authorized_first` | `crates/hub/tests/security.rs` | M2 |
+| 2 | `upload_pack_needs_read_and_hides_private` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
+| 2 | `receive_pack_needs_write` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
 | 2 | `credential_scoped_to_repo`, bucket routes | pending | M5 |
 | 2 | `bucket_create_authorized_per_namespace` | pending | M5 |
 | 2 | `bucket_add_file_hash_must_be_readable` | pending | M5 |
@@ -76,7 +78,7 @@ its clients sent (`assert_no_credential_in_log`).
 | 6 | `responses_never_echo_credential` | `crates/cas/tests/routes_misc.rs` | M1 |
 | 6 | `responses_never_echo_credential` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
 | 6 | `credentials_never_logged` | `crates/openxet/tests/serve.rs` | M1 |
-| 6 | `credentials_never_logged` | pending (M2, `crates/openxet/tests/hub_serve.rs`) | M2 (Hub, Git and LFS routes) |
+| 6 | `credentials_never_logged` | `crates/openxet/tests/hub_serve.rs` | M2 (Hub, Git and LFS routes) |
 | 6 | `test_fixture_redaction` | `compat/tests/test_fixture_redaction.py` | M0 |
 | 7 | `acknowledged_xorb_write_is_visible` | `crates/cas/tests/xorbs.rs` | M1 |
 | 7 | `acknowledged_shard_write_is_visible` | `crates/cas/tests/shards.rs` | M1 |
@@ -134,9 +136,18 @@ Notes on what some tests cover:
   still sees none of it.
 - `credentials_never_logged` runs a server at `trace` level through
   uploads, downloads and every kind of refusal, then scans its whole log
-  for each credential, signature and key. The compatibility suite repeats
-  the scan for every server it starts (`assert_no_credential_in_log`
-  below).
+  for each credential, signature and key. Its M2 half pushes, clones and
+  fetches with git, the token as the Basic password (and a wrong one),
+  calls the Hub routes and the CAS with the tokens the Hub hands out, and
+  scans for each token and each Basic header's base64. The compatibility
+  suite repeats the scan for every server it starts
+  (`assert_no_credential_in_log` below).
+- `upload_pack_needs_read_and_hides_private` and `receive_pack_needs_write`
+  call every Git smart HTTP route, unprefixed, with `.git` and under a
+  typed prefix, with `Bearer` and Basic credentials that can't read the
+  repository, and compare each answer with an unknown repository's; a
+  reader may fetch but not push, and a push creates a missing repository
+  only for a caller who may create, read and write it.
 
 ## Supporting tests
 

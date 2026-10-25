@@ -1,6 +1,7 @@
 //! openxet's Hub API: the routes `huggingface_hub` and the `hf` CLI call
 //! for repositories, their uploads, commits, refs and listings (design
-//! §6). [`routes`] are served at the root of the server's origin beside
+//! §6), and Git's smart HTTP protocol for the same repositories (ruling
+//! M2-R11). [`routes`] are served at the root of the server's origin beside
 //! the CAS; `openxet serve` mounts them ([`mounted`]) with
 //! [`openxet_http::compose`].
 //!
@@ -45,6 +46,7 @@ macro_rules! typed_paths {
 mod authz;
 mod commit;
 mod error;
+mod githttp;
 mod info;
 mod labels;
 mod listing;
@@ -188,6 +190,7 @@ pub fn routes() -> routes::Routes {
         .merge(listing::routes())
         .merge(labels::routes())
         .merge(misc::routes())
+        .merge(githttp::routes())
 }
 
 /// The Hub's [`routes`] with `state`, for [`openxet_http::compose`].
