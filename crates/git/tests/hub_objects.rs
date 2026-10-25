@@ -26,6 +26,9 @@ use push_support::{blob, commit_tree, config, db_ref, engine, fsck, principal, s
 
 const MAIN: &str = "refs/heads/main";
 
+/// The subject Hub reads run as.
+const READER: &str = "reader";
+
 /// What no ref reaches any more in the tests' unreachable commit.
 const SECRET: &[u8] = b"no ref reaches this any more\n";
 
@@ -547,7 +550,9 @@ async fn hub_read_by_sha_obeys_r22() {
     let snap = ok(node.snapshot(repo).await);
 
     let deep = rev(&src, "main~5");
-    let resolved = ok(node.resolve_revision(&snap, Revision::Oid(deep)).await);
+    let resolved = ok(node
+        .resolve_revision(&snap, Revision::Oid(deep), READER)
+        .await);
     assert_eq!(resolved.commit, deep);
     assert_eq!(resolved.tree, rev(&src, "main~5^{tree}"));
     assert!(!ok(node.read_tree(&snap, deep, "src", false).await).is_empty());
@@ -559,7 +564,7 @@ async fn hub_read_by_sha_obeys_r22() {
         String::from_utf8_lossy(&bytes),
         git(&src, &["show", "main~5:src/dir0/file0.txt"])
     );
-    let log = ok(node.log(&snap, deep, None, 3).await);
+    let log = ok(node.log(&snap, deep, None, 3, READER).await);
     assert_eq!(
         log.iter().map(|c| c.oid).collect::<Vec<_>>(),
         vec![deep, rev(&src, "main~6"), rev(&src, "main~7")]
@@ -576,7 +581,7 @@ async fn hub_read_by_sha_obeys_r22() {
         Revision::Ref("HEAD"),
     ] {
         let label = format!("{revision:?}");
-        let r = ok(node.resolve_revision(&snap, revision).await);
+        let r = ok(node.resolve_revision(&snap, revision, READER).await);
         assert_eq!(r.commit, tip, "{label}");
     }
 
@@ -586,7 +591,7 @@ async fn hub_read_by_sha_obeys_r22() {
     let text_of = |e: &GitError, oid: Oid| e.to_string().replace(&oid.to_string(), "<rev>");
     let absent_text = {
         let e = node
-            .resolve_revision(&snap, Revision::Oid(absent))
+            .resolve_revision(&snap, Revision::Oid(absent), READER)
             .await
             .err()
             .unwrap_or_else(|| panic!("an absent object resolved"));
@@ -595,7 +600,7 @@ async fn hub_read_by_sha_obeys_r22() {
     };
     for oid in [gone.commit, gone.tree, gone.blob, main_tree, main_blob] {
         let e = node
-            .resolve_revision(&snap, Revision::Oid(oid))
+            .resolve_revision(&snap, Revision::Oid(oid), READER)
             .await
             .err()
             .unwrap_or_else(|| panic!("{oid} resolved"));
@@ -608,7 +613,7 @@ async fn hub_read_by_sha_obeys_r22() {
     }
     for name in ["nope", "refs/heads/gone", "refs/heads/main/x"] {
         let e = node
-            .resolve_revision(&snap, Revision::Ref(name))
+            .resolve_revision(&snap, Revision::Ref(name), READER)
             .await
             .err()
             .unwrap_or_else(|| panic!("{name} resolved"));
@@ -623,14 +628,58 @@ async fn hub_read_by_sha_obeys_r22() {
     let tight = engine(&world, tight).await;
     let snap = ok(tight.snapshot(repo).await);
     ok(tight
-        .resolve_revision(&snap, Revision::Oid(rev(&src, "main~1")))
+        .resolve_revision(&snap, Revision::Oid(rev(&src, "main~1")), READER)
         .await);
     let e = tight
-        .resolve_revision(&snap, Revision::Oid(rev(&src, "main~10")))
+        .resolve_revision(&snap, Revision::Oid(rev(&src, "main~10")), READER)
         .await
         .err()
         .unwrap_or_else(|| panic!("a commit beyond the budget resolved"));
     assert!(is_revision_not_found(&e), "{e}");
+}
+
+/// The log walks within `git.reachability`'s budget, skipped commits
+/// included; a read by id takes the reader's per-principal R22 slot, a ref
+/// read doesn't, and a log page after a cursor takes the slots too.
+#[tokio::test(flavor = "multi_thread")]
+async fn hub_log_budget_and_reader_slots() {
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 30).await;
+    let src = fixture_repo(&fx);
+    let deep = rev(&src, "main~5");
+    let mut tight = config(&world, "tight");
+    tight.reachability = Budget {
+        max_objects: 3,
+        ..Budget::REACHABILITY
+    };
+    let tight = engine(&world, tight).await;
+    let snap = ok(tight.snapshot(repo).await);
+    let tip = rev(&src, MAIN);
+    let page = ok(tight.log(&snap, tip, None, 10, READER).await);
+    assert_eq!(page.len(), 3, "a page ends where the budget does");
+    let beyond = ok(tight
+        .log(&snap, tip, Some(rev(&src, "main~5")), 10, READER)
+        .await);
+    assert_eq!(beyond, Vec::new(), "a cursor beyond the budget");
+
+    // A read by id takes the reader's per-principal slot; a ref doesn't.
+    let mut busy = config(&world, "busy");
+    busy.reachability = Budget {
+        max_concurrent_per_principal: Some(0),
+        ..Budget::REACHABILITY
+    };
+    let busy = engine(&world, busy).await;
+    let snap = ok(busy.snapshot(repo).await);
+    let e = busy
+        .resolve_revision(&snap, Revision::Oid(deep), READER)
+        .await
+        .err();
+    assert!(matches!(e, Some(GitError::Busy)), "{e:?}");
+    ok(busy
+        .resolve_revision(&snap, Revision::Ref("main"), READER)
+        .await);
+    let e = busy.log(&snap, tip, Some(deep), 1, READER).await.err();
+    assert!(matches!(e, Some(GitError::Busy)), "{e:?}");
 }
 
 /// Tree listings, blobs, the log with its cursor, and the last commit that
@@ -679,7 +728,10 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
 
     let snap = ok(node.snapshot(repo).await);
     assert_eq!(
-        ok(node.resolve_revision(&snap, Revision::Ref("main")).await).commit,
+        ok(node
+            .resolve_revision(&snap, Revision::Ref("main"), READER)
+            .await)
+        .commit,
         c3
     );
     let docs = ok(node.read_tree(&snap, c3, "docs", false).await);
@@ -713,9 +765,9 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
         );
     }
 
-    let page = ok(node.log(&snap, c3, None, 2).await);
+    let page = ok(node.log(&snap, c3, None, 2, READER).await);
     assert_eq!(page.iter().map(|c| c.oid).collect::<Vec<_>>(), vec![c3, c2]);
-    let next = ok(node.log(&snap, c3, Some(c2), 2).await);
+    let next = ok(node.log(&snap, c3, Some(c2), 2, READER).await);
     assert_eq!(
         next.iter().map(|c| c.oid).collect::<Vec<_>>(),
         vec![c1, seed]
@@ -776,7 +828,7 @@ async fn hub_commit_on_snapshot() {
 
     let snap = ok(node.snapshot(repo).await);
     let e = node
-        .resolve_revision(&snap, Revision::Oid(gone.commit))
+        .resolve_revision(&snap, Revision::Oid(gone.commit), READER)
         .await
         .err();
     assert!(
@@ -842,6 +894,152 @@ async fn hub_commit_on_snapshot() {
     assert_eq!(db_ref(&world, repo, MAIN).await, Some(commit));
 }
 
+/// A Hub commit whose pack row the pack sweep refuses, because it holds
+/// the deletion claim of a pack of the same name, runs again a bounded
+/// number of times and then answers retryable `Contended` with nothing
+/// written; once the claim is released the same commit lands.
+#[tokio::test(flavor = "multi_thread")]
+async fn hub_commit_retries_while_its_pack_is_being_deleted() {
+    let world = World::new().await;
+    let (repo, _fx) = seeded(&world, 3).await;
+    let node = node(&world, "node").await;
+    let who = principal("dora");
+    let before = db_ref(&world, repo, MAIN).await;
+    let rows = pack_rows(&world, repo).await;
+
+    let mut hold = node.hold_next_hub_write();
+    let task = {
+        let (node, who) = (node.clone(), who.clone());
+        tokio::spawn(async move {
+            node.hub_commit(repo, &who, upload(vec![file("d.txt", b"d\n")]))
+                .await
+        })
+    };
+    assert!(hold.reached().await);
+    // The held attempt's pack, in its snapshot's quarantine.
+    let name = quarantined_pack(&world.dir.path().join("node"))
+        .unwrap_or_else(|| panic!("the held write has a quarantined pack"));
+    assert!(ok(world.index.claim_pack_deletion(repo, &name).await));
+    hold.release();
+    let e = ok(task.await).err();
+    assert!(matches!(e, Some(GitError::Contended { .. })), "{e:?}");
+    assert_eq!(db_ref(&world, repo, MAIN).await, before);
+    assert_eq!(pack_rows(&world, repo).await, rows, "no pack row written");
+
+    ok(world.index.release_pack_deletion(repo, &name).await);
+    let landed = ok(node
+        .hub_commit(repo, &who, upload(vec![file("d.txt", b"d\n")]))
+        .await);
+    assert_eq!(db_ref(&world, repo, MAIN).await, Some(landed));
+}
+
+/// The name of the first pack under `dir`'s `objects/quarantine/pack`
+/// directories (a Hub write's, in its snapshot).
+fn quarantined_pack(dir: &Path) -> Option<String> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.ends_with("objects/quarantine/pack") {
+            for file in std::fs::read_dir(&path).ok()?.flatten() {
+                let name = file.file_name().to_string_lossy().into_owned();
+                if let Some(stem) = name.strip_suffix(".pack") {
+                    return Some(stem.to_owned());
+                }
+            }
+        } else if path.is_dir()
+            && let Some(found) = quarantined_pack(&path)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// A Hub commit waits for the commit to its branch already running on its
+/// node at most `hub.commit_wait`, then is refused as retryable `Busy`;
+/// another branch doesn't wait.
+#[tokio::test(flavor = "multi_thread")]
+async fn hub_commit_wait_is_bounded() {
+    let world = World::new().await;
+    let (repo, _fx) = seeded(&world, 3).await;
+    let mut short = config(&world, "short");
+    short.hub_commit_wait = Duration::from_millis(200);
+    let node = engine(&world, short).await;
+
+    let mut hold = node.hold_next_hub_write();
+    let first = {
+        let node = node.clone();
+        tokio::spawn(async move {
+            node.hub_commit(repo, &principal("ann"), upload(vec![file("a", b"a")]))
+                .await
+        })
+    };
+    assert!(hold.reached().await);
+    let e = node
+        .hub_commit(repo, &principal("ben"), upload(vec![file("b", b"b")]))
+        .await
+        .err();
+    assert!(matches!(e, Some(GitError::Busy)), "{e:?}");
+    let mut elsewhere = upload(vec![file("c", b"c")]);
+    elsewhere.branch = "refs/heads/v";
+    let e = node
+        .hub_commit(repo, &principal("cal"), elsewhere)
+        .await
+        .err();
+    assert!(
+        matches!(e, Some(GitError::RevisionNotFound { .. })),
+        "another branch takes its own turn: {e:?}"
+    );
+    hold.release();
+    let landed = ok(ok(first.await));
+    assert_eq!(db_ref(&world, repo, MAIN).await, Some(landed));
+}
+
+/// A Hub commit to a repository with no refs is its root commit (how
+/// Task 12 writes M2-R5's initial commit): no parent, the branch created,
+/// readable and `fsck`-clean on a fresh node. A `parentCommit` on an empty
+/// repository is a mismatch, and once the branch exists a missing branch
+/// is not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn hub_root_commit_on_empty_repository() {
+    let world = World::new().await;
+    let repo = world.repo("org", "empty").await;
+    let node = node(&world, "node").await;
+    let who = principal("rosa");
+
+    let mut with_parent = upload(vec![file("README.md", b"# hi\n")]);
+    with_parent.parent = Some(Oid([7; 20]));
+    let e = node.hub_commit(repo, &who, with_parent).await.err();
+    assert!(
+        matches!(e, Some(GitError::ParentMismatch { actual: None, .. })),
+        "{e:?}"
+    );
+    assert_eq!(db_ref(&world, repo, MAIN).await, None);
+
+    let root = ok(node
+        .hub_commit(repo, &who, upload(vec![file("README.md", b"# hi\n")]))
+        .await);
+    assert_eq!(db_ref(&world, repo, MAIN).await, Some(root));
+    let snap = ok(node.snapshot(repo).await);
+    let log = ok(node.log(&snap, root, None, 10, READER).await);
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].oid, root);
+    assert_eq!(log[0].parents, Vec::new());
+    let Blob::Inline { bytes, .. } = ok(node.read_blob(&snap, root, "README.md").await) else {
+        panic!("a small file reads inline");
+    };
+    assert_eq!(&bytes[..], b"# hi\n");
+    let fresh = self::node(&world, "fresh").await;
+    fsck(&fresh, repo).await;
+
+    let mut other = upload(vec![file("x", b"x")]);
+    other.branch = "other";
+    let e = node.hub_commit(repo, &who, other).await.err();
+    assert!(
+        matches!(e, Some(GitError::RevisionNotFound { .. })),
+        "{e:?}"
+    );
+}
+
 /// `concurrent_hub_commits_both_land` (Review Focus 2, ADR 0004 item 3):
 /// eight Hub commits to `main` on one node all land, one after another; a
 /// commit on a second node held after its snapshot loses the ref race when
@@ -889,7 +1087,7 @@ async fn concurrent_hub_commits_both_land() {
     assert_eq!(db_ref(&world, repo, MAIN).await, Some(last));
 
     let snap = ok(a.snapshot(repo).await);
-    let log = ok(a.log(&snap, last, None, 10).await);
+    let log = ok(a.log(&snap, last, None, 10, READER).await);
     assert_eq!(log[9].oid, seed);
     for pair in log.windows(2) {
         assert_eq!(pair[0].parents, vec![pair[1].oid], "a linear history");
@@ -995,7 +1193,10 @@ async fn ref_log_in_cas_transaction() {
     assert!(raw.ends_with("\n\nrelease 2\n"), "{raw}");
     let snap = ok(node.snapshot(repo).await);
     assert_eq!(
-        ok(node.resolve_revision(&snap, Revision::Ref("v2")).await).commit,
+        ok(node
+            .resolve_revision(&snap, Revision::Ref("v2"), READER)
+            .await)
+        .commit,
         c
     );
     drop(snap);
@@ -1184,7 +1385,10 @@ async fn hub_ref_write_fenced() {
 /// repack publishes g+1 and GC deletes the superseded inputs, fail on the
 /// fence and retry from a fresh snapshot, and no ref points at a dropped
 /// object. An object no ref has reached for longer than the grace period is
-/// refused by the writer reachability rule before any transaction.
+/// refused by the writer reachability rule before any transaction. The
+/// test's object was made unreachable just before the write: it stands in
+/// for one unreachable longer than the grace, since R22 refuses both alike
+/// (reachability from the snapshot's refs has no grace).
 #[tokio::test(flavor = "multi_thread")]
 async fn publish_then_cas_survives_faults() {
     let world = World::new().await;
@@ -1227,6 +1431,20 @@ async fn publish_then_cas_survives_faults() {
         let peeled = in_snapshot(&fresh, repo, &["rev-parse", &format!("{name}^{{commit}}")]).await;
         assert_eq!(peeled.trim().parse::<Oid>().ok(), target);
         fsck(&fresh, repo).await;
+        if name.starts_with("refs/tags/") {
+            // The retry rebuilt the same tag object, so its pack has the
+            // lost attempt's name: one row `lost`, one `committed`. Task 9's
+            // sweep deletes a pack's files only when no `pending` or
+            // `committed` row names them (`sweep_keeps_files_another_row_names`).
+            let rows = pack_rows(&world, repo).await;
+            let shared: Vec<&(String, String)> = rows
+                .iter()
+                .filter(|(n, _)| rows.iter().filter(|(m, _)| m == n).count() == 2)
+                .collect();
+            let mut states: Vec<&str> = shared.iter().map(|(_, s)| s.as_str()).collect();
+            states.sort_unstable();
+            assert_eq!(states, ["committed", "lost"], "{rows:?}");
+        }
     }
 
     let gone = unreachable(&world, repo, &src).await;

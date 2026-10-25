@@ -28,18 +28,21 @@ impl Engine {
     /// Resolves `rev` in `snap` to a commit: a ref name (a branch, then a
     /// tag, or a full name), or a commit or tag id that passes R22 from the
     /// snapshot's refs (a ref tip or peeled tag target, otherwise the walk
-    /// within `git.reachability`). Tags are peeled.
+    /// within `git.reachability`). Tags are peeled. `who` is the reading
+    /// principal's subject: a read by id takes R22's per-principal slot
+    /// under it, as a fetch does.
     ///
     /// # Errors
     ///
     /// [`GitError::RevisionNotFound`] for a missing ref, an id R22 refuses
     /// or the snapshot lacks, a tree or blob id, or a ref that peels to no
-    /// commit, all alike; [`GitError::Busy`] over R22's concurrency limit
-    /// for this repository.
+    /// commit, all alike; [`GitError::Busy`] over R22's concurrency limits
+    /// for this repository or `who`.
     pub async fn resolve_revision(
         &self,
         snap: &SnapshotRepo,
         rev: Revision<'_>,
+        who: &str,
     ) -> Result<Resolved, GitError> {
         let not_found = || GitError::RevisionNotFound {
             revision: rev.to_string(),
@@ -47,7 +50,7 @@ impl Engine {
         let target = match rev {
             Revision::Ref(name) => find_ref(&snap.refs, name).ok_or_else(not_found)?,
             Revision::Oid(oid) => {
-                if let Err(refused) = self.reach.check(snap, &[oid], &hub_reader(snap)).await {
+                if let Err(refused) = self.reach.check(snap, &[oid], who).await {
                     return Err(if refused.retryable() {
                         GitError::Busy
                     } else {
@@ -141,29 +144,51 @@ impl Engine {
     /// Up to `limit` commits of `from`'s history (from
     /// [`Engine::resolve_revision`] on the same snapshot), newest first by
     /// commit time as `git log` lists them, starting after `cursor`, the
-    /// last commit of the previous page. A cursor that isn't in the history
-    /// gives an empty page.
+    /// last commit of the previous page. The walk stays within
+    /// `git.reachability`'s commit and time budget, skipped commits
+    /// included: a page ends where the budget does, and a cursor that isn't
+    /// in the history, or not within the budget, gives an empty page. A
+    /// page after a cursor takes R22's concurrency slots for this
+    /// repository and `who` (the reading principal's subject) while it
+    /// walks, as R22's own walk does.
     ///
     /// # Errors
     ///
-    /// [`GitError::Objects`] if the snapshot can't be read.
+    /// [`GitError::Busy`] over R22's concurrency limits for a page after a
+    /// cursor; [`GitError::Objects`] if the snapshot can't be read.
     pub async fn log(
         &self,
         snap: &SnapshotRepo,
         from: Oid,
         cursor: Option<Oid>,
         limit: usize,
+        who: &str,
     ) -> Result<Vec<CommitInfo>, GitError> {
+        // A first page walks at most `limit` commits; one after a cursor
+        // may walk the whole budget to find it.
+        let _slots = match cursor {
+            Some(_) => Some(
+                self.reach
+                    .walk_slots(snap.repo, who)
+                    .map_err(|_| GitError::Busy)?,
+            ),
+            None => None,
+        };
         let dir = snap.dir.path().to_path_buf();
+        let budget = self.config.reachability;
         blocking(move || {
+            let started = Instant::now();
             let repo = open_snapshot(&dir)?;
             let mut skipping = cursor.is_some();
             let mut out = Vec::new();
-            for id in walk(&repo, from)? {
-                let id = id?;
-                if out.len() >= limit {
+            for (visited, id) in (0u64..).zip(walk(&repo, from)?) {
+                if out.len() >= limit
+                    || visited >= budget.max_objects
+                    || started.elapsed() >= budget.max_time
+                {
                     break;
                 }
+                let id = id?;
                 if skipping {
                     skipping = Some(id) != cursor;
                     continue;
@@ -244,13 +269,6 @@ impl Engine {
         })
         .await
     }
-}
-
-/// The principal key Hub reads by object id take R22's per-principal slot
-/// under: the read API has no principal, so the repository stands in, and
-/// the per-repository limit is what applies.
-fn hub_reader(snap: &SnapshotRepo) -> String {
-    format!("hub-read:{}", snap.repo)
 }
 
 /// The ref `name` names in `refs`: `HEAD`, a full ref name, or a branch

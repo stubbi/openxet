@@ -421,6 +421,10 @@ results below are **observed**.
        a fresh snapshot and, for commits, builds a new pack with a new
        row. A pack row is never reused across attempts. After that, the
        Hub API returns a retryable error.
+     - Hub commits to one branch take turns on each node, so they don't
+       spend their retries racing each other; one that waits longer than
+       `hub.commit_wait` (default 30 s) for its turn gets a retryable
+       error.
    - It answers `ok` or `ng <ref> <reason>`, and the reason reaches the
      client verbatim.
    - A pack is durable in the bucket before any ref points to it.

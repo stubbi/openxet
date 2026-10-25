@@ -40,6 +40,10 @@ impl Budget {
     };
 }
 
+/// `hub.commit_wait`'s default: how long a Hub commit waits for its turn
+/// on its branch on one node.
+pub const DEFAULT_HUB_COMMIT_WAIT: Duration = Duration::from_secs(30);
+
 /// `cache_max_bytes`'s default: 20 GiB (ruling M2-R16).
 pub const DEFAULT_CACHE_MAX_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 
@@ -60,6 +64,10 @@ pub struct GitConfig {
     /// The largest blob a push may carry that isn't an LFS pointer; `None`
     /// accepts any size and only reports large ones.
     pub max_plain_blob_bytes: Option<u64>,
+    /// `hub.commit_wait`: how long a Hub commit waits for the commits to
+    /// its branch already running on this node; longer is refused as
+    /// retryable ([`GitError::Busy`](crate::GitError::Busy)).
+    pub hub_commit_wait: Duration,
     /// The program the `proc-receive` hook runs; `None` for the running
     /// executable, which is `openxet` in the server. It must run the hook
     /// when started as `proc-receive` (`openxet_git::hook::proc_receive_hook`).
@@ -76,6 +84,7 @@ impl GitConfig {
             reachability: Budget::REACHABILITY,
             thin_bases: Budget::THIN_BASES,
             max_plain_blob_bytes: None,
+            hub_commit_wait: DEFAULT_HUB_COMMIT_WAIT,
             hook_program: None,
         }
     }

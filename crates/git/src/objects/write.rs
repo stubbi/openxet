@@ -8,38 +8,39 @@
 //! runs as for a push, and the pack is published through the fenced commit
 //! transaction ([`Publisher`]). A ref write without new objects checks its
 //! target as R22 checks a want and commits with no pack. An attempt that
-//! loses its transaction to a concurrent writer or to the repack fence runs
-//! again, at most [`RETRIES`] times, each with a new snapshot and a new pack
-//! row (ADR 0004 item 3).
+//! loses its transaction to a concurrent writer or to the repack fence, or
+//! whose pack row the pack sweep refuses while it deletes files of the same
+//! name, runs again, at most [`RETRIES`] times, each with a new snapshot
+//! and a new pack row (ADR 0004 item 3).
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gix::objs::Kind;
-use gix_pack::data::output;
 use openxet_auth::UserPrincipal;
-use openxet_index::{CommitError, Oid, RefUpdate, RepoId};
-use openxet_storage::{PackExt, PackName};
-use tokio::io::AsyncWriteExt as _;
+use openxet_index::{CommitError, IndexError, Oid, RefUpdate, RepoId};
+use openxet_storage::PackExt;
 
-use super::read::{objects_err, oid_of, open_snapshot};
-use super::tree::{NewObject, Objects, build_commit, components, op_path, signature};
+use super::pack::{link_pack, run_quarantined, write_pack};
+use super::read::{oid_of, open_snapshot};
+use super::tree::{Objects, build_commit, components, op_path, signature};
 use super::{HubCommit, Ident, TagInfo};
 use crate::publish::{PackFiles, Publication, PublishError, Publisher};
 use crate::reach::{kind, to_gix};
 use crate::receive::valid_ref_name;
 use crate::snapshot::HEAD_REF;
 use crate::thin::{WalkLimits, WriterRefused, check_writer_rule, classify_sent, oid_lines};
-use crate::{Engine, GitError, SnapshotRepo, blocking, git_command, io_err};
+use crate::{Engine, GitError, SnapshotRepo, blocking};
 
 /// How many times a Hub write runs again after losing its commit
 /// transaction (ADR 0004 item 3).
 const RETRIES: usize = 3;
+
+/// How long a Hub write waits before running again after the pack sweep
+/// refused its pack row ([`IndexError::PackDeleting`]).
+const PACK_DELETING_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// With the `fault-injection` feature, a Hub write by this actor leaves
 /// every blob out of its pack, as a writer that names objects without
@@ -55,7 +56,9 @@ type BranchLock = tokio::sync::Mutex<()>;
 pub(crate) struct HubWrites {
     /// One lock per repository and branch: Hub commits to one branch on one
     /// node take turns instead of racing each other for the ref, so they all
-    /// land (Review Focus 2); across nodes the retries settle the race.
+    /// land (Review Focus 2); across nodes the retries settle the race. A
+    /// commit waits for its turn at most `hub.commit_wait`
+    /// ([`GitConfig::hub_commit_wait`](crate::GitConfig::hub_commit_wait)).
     locks: Mutex<HashMap<(RepoId, String), Weak<BranchLock>>>,
     #[cfg(feature = "fault-injection")]
     hold: Mutex<
@@ -118,7 +121,8 @@ impl Engine {
     /// the fenced commit transaction. Retries up to three times, each from a
     /// fresh snapshot, when another writer moved the branch or a full
     /// repack published meanwhile. Commits to one branch on this node run
-    /// one at a time.
+    /// one at a time; one that waits longer than `hub.commit_wait` for its
+    /// turn is refused as [`GitError::Busy`].
     ///
     /// # Errors
     ///
@@ -127,6 +131,7 @@ impl Engine {
     /// file or folder; [`GitError::RevisionNotFound`] for a missing branch
     /// in a repository that has refs; [`GitError::ParentMismatch`];
     /// [`GitError::MissingObjects`] if the rule refuses;
+    /// [`GitError::Busy`] if its turn doesn't come within `hub.commit_wait`;
     /// [`GitError::Contended`] when every attempt lost; and the errors of
     /// [`Engine::snapshot`] and of the publish.
     pub async fn hub_commit(
@@ -142,8 +147,13 @@ impl Engine {
         let message = commit_message(req.summary, req.description);
         let author = Ident::author(who);
         let request = new_request();
+        // One time for every attempt: a retry rebuilds the same objects on
+        // the same tip.
+        let time = now();
         let lock = self.hub.lock(repo, &branch);
-        let _turn = lock.lock().await;
+        let _turn = tokio::time::timeout(self.config.hub_commit_wait, lock.lock())
+            .await
+            .map_err(|_| GitError::Busy)?;
         for _ in 0..=RETRIES {
             let snapshot = self.snapshot(repo).await?;
             let tip = ref_target(&snapshot, &branch);
@@ -165,7 +175,7 @@ impl Engine {
             let dir = snapshot.dir.path().to_path_buf();
             let (ops, author, message) = (req.ops.clone(), author.clone(), message.clone());
             let (commit, objects) = blocking(move || {
-                build_commit(&open_snapshot(&dir)?, tip, &ops, &author, &message, now())
+                build_commit(&open_snapshot(&dir)?, tip, &ops, &author, &message, time)
             })
             .await?;
             let update = RefUpdate {
@@ -212,6 +222,9 @@ impl Engine {
     ) -> Result<(), GitError> {
         check_ref_command(&update, tag.as_ref())?;
         let request = new_request();
+        // One time for every attempt: a retry builds the same tag object,
+        // so its pack has the same name as the lost attempt's.
+        let time = now();
         for _ in 0..=RETRIES {
             let snapshot = self.snapshot(repo).await?;
             if ref_target(&snapshot, &update.name) != update.old {
@@ -225,7 +238,8 @@ impl Engine {
                         .await?
                 }
                 Some(target) => {
-                    self.ref_write_to(&snapshot, &update, target, tag.as_ref(), who, &request)
+                    let tag = tag.as_ref().map(|t| (t, time));
+                    self.ref_write_to(&snapshot, &update, target, tag, who, &request)
                         .await?
                 }
             };
@@ -242,7 +256,7 @@ impl Engine {
         snapshot: &SnapshotRepo,
         update: &RefUpdate,
         target: Oid,
-        tag: Option<&TagInfo>,
+        tag: Option<(&TagInfo, i64)>,
         who: &UserPrincipal,
         request: &str,
     ) -> Result<Outcome, GitError> {
@@ -270,7 +284,7 @@ impl Engine {
                 update.name
             )));
         }
-        let Some(tag) = tag else {
+        let Some((tag, time)) = tag else {
             return self
                 .publish(snapshot, None, update, &who.subject, request)
                 .await;
@@ -284,7 +298,7 @@ impl Engine {
             target: to_gix(target),
             target_kind,
             name: name.into(),
-            tagger: Some(signature(&tag.tagger, now())),
+            tagger: Some(signature(&tag.tagger, time)),
             message: with_newline(&tag.message).into(),
             signature: None,
         })?;
@@ -330,9 +344,7 @@ impl Engine {
         )
         .await?;
         if let Err(stderr) = indexed {
-            return Err(GitError::InvalidHubWrite(format!(
-                "git's object checks refused this write ({stderr}); check its paths and names"
-            )));
+            return Err(GitError::InvalidHubWrite(fsck_refusal(&stderr)));
         }
         let mut input = oid_lines("", &new_tips);
         input.push_str(&oid_lines("^", snapshot.refs.iter().map(|(_, oid)| *oid)));
@@ -343,8 +355,9 @@ impl Engine {
             input.into_bytes(),
         )
         .await?;
-        if let Err(stderr) = connected {
-            tracing::warn!(%stderr, "a Hub write's objects are not connected in its snapshot");
+        if connected.is_err() {
+            // git's text names object ids from the request: none in the log.
+            tracing::warn!("a Hub write's objects are not connected in its snapshot");
             return Err(GitError::MissingObjects);
         }
 
@@ -392,6 +405,13 @@ impl Engine {
             Err(PublishError::Commit(
                 CommitError::Fenced | CommitError::RefMismatch(_) | CommitError::PackNotPending,
             )) => Ok(Outcome::Retry),
+            // The pack sweep is deleting files of this pack's name (a lost
+            // attempt's, ADR 0004 item 5): a retry rebuilds the same pack,
+            // so give the sweep a moment to finish first.
+            Err(PublishError::Index(IndexError::PackDeleting { .. })) => {
+                tokio::time::sleep(PACK_DELETING_PAUSE).await;
+                Ok(Outcome::Retry)
+            }
             Err(e) => Err(publish_error(e)),
         }
     }
@@ -501,110 +521,34 @@ fn now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// Writes `objects` whole, undeltified, as one version 2 pack in `dir`,
-/// named by its checksum as git names packs. Returns the files, the object
-/// count and the pack's size.
-fn write_pack(dir: &Path, objects: &[NewObject]) -> Result<(PackFiles, u32, u64), GitError> {
-    std::fs::create_dir_all(dir).map_err(io_err("create", dir))?;
-    let entries = objects
-        .iter()
-        .map(|o| {
-            output::Entry::from_data(
-                &output::Count::from_data(o.id, None),
-                &gix::objs::Data::new(&o.data, o.kind, gix::hash::Kind::Sha1),
-                gix::zlib::Compression::default(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(objects_err)?;
-    let count = u32::try_from(entries.len()).map_err(|_| {
-        GitError::InvalidHubWrite("a Hub write creates too many objects".to_owned())
-    })?;
-    let tmp = dir.join("incoming.pack");
-    let file = std::fs::File::create(&tmp).map_err(io_err("create", &tmp))?;
-    let mut writer = output::bytes::FromEntriesIter::new(
-        std::iter::once(Ok(entries)),
-        std::io::BufWriter::new(file),
-        count,
-        gix_pack::data::Version::V2,
-        gix::hash::Kind::Sha1,
-    );
-    for written in writer.by_ref() {
-        written.map_err(objects_err)?;
+/// The refusal of a Hub write `index-pack --strict` rejected: a fixed text
+/// with git's fsck message id (`hasDotgit`, `badTimezone`, ...) when its
+/// output names one, never git's text, which quotes the request's names
+/// and object ids.
+fn fsck_refusal(stderr: &str) -> String {
+    const TEXT: &str = "git's object checks refused this write; check its paths and names";
+    match fsck_msg_id(stderr) {
+        Some(id) => format!("{TEXT} (git fsck: {id})"),
+        None => TEXT.to_owned(),
     }
-    let digest = writer
-        .digest()
-        .ok_or_else(|| GitError::Objects("the Hub write's pack has no checksum".to_owned()))?;
-    let mut out = writer.into_write();
-    out.flush().map_err(io_err("write", &tmp))?;
-    let file = out
-        .into_inner()
-        .map_err(|e| io_err("write", &tmp)(e.into_error()))?;
-    file.sync_all().map_err(io_err("write", &tmp))?;
-    let name = PackName::parse(&format!("pack-{digest}"))
-        .map_err(|_| GitError::Corrupt(format!("pack checksum {digest} makes no pack name")))?;
-    let files = PackFiles {
-        dir: dir.to_path_buf(),
-        name,
-    };
-    let pack = files.path(PackExt::Pack);
-    std::fs::rename(&tmp, &pack).map_err(io_err("rename", &tmp))?;
-    let bytes = std::fs::metadata(&pack)
-        .map_err(io_err("read", &pack))?
-        .len();
-    Ok((files, count, bytes))
 }
 
-/// Links the checked pack into the snapshot's own pack directory, as
-/// receive-pack migrates its quarantine, so the writer reachability rule
-/// sees it. The snapshot is this request's alone.
-fn link_pack(files: &PackFiles, objects_pack: &Path) -> Result<(), GitError> {
-    for ext in [PackExt::Pack, PackExt::Idx, PackExt::Rev] {
-        let from = files.path(ext);
-        if ext == PackExt::Rev && !from.exists() {
-            continue;
+/// The first fsck message id in git's output: the camelCase word after
+/// `object <id>: ` (fsck.c `fsck_vreport`), as in `error: object 1f…:
+/// hasDotgit: contains '.git'`.
+fn fsck_msg_id(stderr: &str) -> Option<&str> {
+    stderr.lines().find_map(|line| {
+        let (_, rest) = line.split_once("object ")?;
+        let (oid, rest) = rest.split_once(": ")?;
+        if oid.is_empty() || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
         }
-        let to = objects_pack.join(format!("{}.{}", files.name, ext.as_str()));
-        std::fs::hard_link(&from, &to).map_err(io_err("link the Hub write's pack into", &to))?;
-    }
-    Ok(())
-}
-
-/// Runs git in `snapshot` with `quarantine` as its object directory and the
-/// snapshot's objects as its only alternate (the layout receive-pack gives
-/// its connectivity check): `Ok(stdout)` when it succeeds, `Err(stderr)`
-/// when it exits with an error.
-async fn run_quarantined(
-    snapshot: &SnapshotRepo,
-    quarantine: &Path,
-    args: &[&OsStr],
-    input: Vec<u8>,
-) -> Result<Result<Vec<u8>, String>, GitError> {
-    let git = snapshot.process.git();
-    let alternate: PathBuf = snapshot.dir.path().join("objects");
-    let mut child = git_command(git, snapshot, None)
-        .args(args)
-        .env("GIT_OBJECT_DIRECTORY", quarantine)
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternate)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(io_err("run", git))?;
-    let writer = child.stdin.take().map(|mut stdin| {
-        tokio::spawn(async move {
-            let _ = stdin.write_all(&input).await;
-        })
-    });
-    let out = child.wait_with_output().await.map_err(io_err("run", git))?;
-    if let Some(writer) = writer {
-        let _ = writer.await;
-    }
-    if out.status.success() {
-        Ok(Ok(out.stdout))
-    } else {
-        Ok(Err(String::from_utf8_lossy(&out.stderr).trim().to_owned()))
-    }
+        let (id, _) = rest.split_once(':')?;
+        let ok = id.len() <= 64
+            && id.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+            && id.bytes().all(|b| b.is_ascii_alphanumeric());
+        ok.then_some(id)
+    })
 }
 
 fn writer_error(refused: WriterRefused) -> GitError {
@@ -638,7 +582,22 @@ fn publish_error(e: PublishError) -> GitError {
 mod tests {
     use openxet_index::{Oid, RefUpdate};
 
-    use super::{branch_ref, check_ref_command, commit_message};
+    use super::{branch_ref, check_ref_command, commit_message, fsck_msg_id, fsck_refusal};
+
+    #[test]
+    fn fsck_refusals_carry_only_the_message_id() {
+        let stderr = "error: object 0123abcd: hasDotgit: contains '.git' at secret/path\n\
+                      fatal: fsck error in packed object";
+        assert_eq!(fsck_msg_id(stderr), Some("hasDotgit"));
+        let text = fsck_refusal(stderr);
+        assert!(text.ends_with("(git fsck: hasDotgit)"), "{text}");
+        assert!(
+            !text.contains("secret") && !text.contains("0123abcd"),
+            "{text}"
+        );
+        assert_eq!(fsck_msg_id("fatal: pack has bad object at offset 12"), None);
+        assert_eq!(fsck_msg_id("error: object 12: Bad Id: x"), None);
+    }
 
     #[test]
     fn messages() {

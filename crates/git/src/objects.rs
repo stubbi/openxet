@@ -12,6 +12,7 @@
 //!
 //! [`SnapshotRepo`]: crate::SnapshotRepo
 
+mod pack;
 mod pointer;
 mod read;
 mod tree;
@@ -161,14 +162,19 @@ pub struct Ident {
 impl Ident {
     /// The author of a Hub commit by `who` (ruling M2-R7): the subject, at
     /// the credential's `email` claim or else
-    /// `{subject}@users.noreply.openxet.com`. Characters git refuses in an
-    /// identity (`<`, `>`, line breaks, NUL) are dropped.
+    /// `{subject}@users.noreply.openxet.com`, whose local part keeps only
+    /// the subject's `[A-Za-z0-9._-]` characters. Characters git refuses in
+    /// an identity (`<`, `>`, line breaks, NUL) are dropped.
     #[must_use]
     pub fn author(who: &UserPrincipal) -> Self {
-        let email = who
-            .email
-            .clone()
-            .unwrap_or_else(|| format!("{}@users.noreply.openxet.com", who.subject));
+        let email = who.email.clone().unwrap_or_else(|| {
+            let local: String = who
+                .subject
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                .collect();
+            format!("{local}@users.noreply.openxet.com")
+        });
         Self {
             name: clean(&who.subject),
             email: clean(&email),
@@ -271,7 +277,15 @@ mod tests {
         };
         let ident = Ident::author(&who);
         assert_eq!(ident.name, "evex");
-        assert_eq!(ident.email, "evex @users.noreply.openxet.com");
+        assert_eq!(ident.email, "evex@users.noreply.openxet.com");
+        let spaced = UserPrincipal {
+            subject: "Ada Lovelace/1+é".to_owned(),
+            ..who.clone()
+        };
+        assert_eq!(
+            Ident::author(&spaced).email,
+            "AdaLovelace1@users.noreply.openxet.com"
+        );
         let mut with_email = who;
         with_email.email = Some("e@example.org>".to_owned());
         assert_eq!(Ident::author(&with_email).email, "e@example.org");

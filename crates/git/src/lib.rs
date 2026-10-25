@@ -69,7 +69,7 @@ use std::time::Duration;
 use openxet_index::{HubIndex, IndexError, Oid, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
-pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
+pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, DEFAULT_HUB_COMMIT_WAIT, GitConfig};
 #[cfg(feature = "fault-injection")]
 pub use fault::{FaultHook, FaultPoint};
 pub use hook::HookServer;
@@ -77,13 +77,13 @@ pub use lease::{DEFAULT_LEASE_TTL, acquire_lease};
 pub use maintain::{
     GEOMETRIC_REPACK_PACKS, MAINTENANCE_INTERVAL, MaintenanceReport, maintain, run_maintenance,
 };
-pub use openxet_index::Lease;
 pub use objects::{
     Blob, CommitInfo, Entry, EntryKind, HubCommit, Ident, Op, Pointer, Resolved, Revision,
     Signature, TagInfo, canonical_pointer, parse_pointer,
 };
 #[cfg(feature = "fault-injection")]
 pub use objects::{FAULT_OMIT_BLOBS_ACTOR, HubWriteHold};
+pub use openxet_index::Lease;
 pub use pkt::{
     Fetch, LsRefs, MAX_PKT_LEN, Pkt, PktError, V2Command, err_pkt, find_flush, parse_v0_wants,
     parse_v2_command, read_pkt,
@@ -337,10 +337,11 @@ pub enum GitError {
     )]
     MissingObjects,
     /// R22's concurrency limits are full for this repository or writer
-    /// (ADR 0004 item 2); retryable.
+    /// (ADR 0004 item 2), or a Hub commit waited longer than
+    /// `hub.commit_wait` for its turn on its branch; retryable.
     #[error(
-        "too many reads or writes by commit id are being checked in this repository right now; \
-         retry in a few seconds"
+        "too many reads or writes are running in this repository right now; retry in a few \
+         seconds"
     )]
     Busy,
     /// A Hub write lost its commit transaction on every attempt to
