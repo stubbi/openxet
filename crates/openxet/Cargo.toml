@@ -23,6 +23,8 @@ openxet-hub = { path = "../hub", version = "0.0.0" }
 openxet-index = { path = "../index", version = "0.0.0" }
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
 openxet-storage = { path = "../storage", version = "0.0.0" }
+# `openxet label`'s requests, with the TLS the client core uses.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -39,7 +41,6 @@ libc = "0.2.191"
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
-reqwest = { version = "0.13.5", default-features = false }
 sha2 = "0.11.1"
 tempfile = "3"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }

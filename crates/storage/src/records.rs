@@ -123,10 +123,16 @@ pub struct RefLogEntry {
 }
 
 /// A file purged from every scope (ruling M2-R13), at [`Key::Purge`]:
-/// `{"v":1,"file":…,"actor":…,"at":…}`.
+/// `{"v":1,"file":…,"actor":…,"at":…,"through_seq":…}`.
 ///
 /// Written once ([`crate::Bucket::create`]) before any index row is
-/// removed, so `reindex` skips the file even if the purge was interrupted.
+/// removed, so `reindex` skips the file's registrations up to
+/// `through_seq` even if the purge was interrupted, and keeps a later
+/// upload of the same bytes.
+///
+/// `through_seq` is optional within version 1, as [`RepoMeta`]'s
+/// `deleted_at` is: left out when `None`, so a record written before it
+/// existed reads unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeRecord {
     /// The purged file's Xet hash.
@@ -135,6 +141,11 @@ pub struct PurgeRecord {
     pub actor: String,
     /// When, in seconds since the Unix epoch.
     pub at: u64,
+    /// The registration sequence number current when it was purged
+    /// (ruling M2-R13 as amended): `reindex` skips the file's
+    /// registrations with a `seq` up to this one, and only those. `None`
+    /// skips every registration of the file.
+    pub through_seq: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -198,6 +209,8 @@ struct PurgeV1 {
     file: String,
     actor: String,
     at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    through_seq: Option<u64>,
 }
 
 /// Only the version, read first so a newer record is reported as newer
@@ -420,6 +433,7 @@ impl PurgeRecord {
             file: hash_to_hex(&self.file),
             actor: self.actor.clone(),
             at: self.at,
+            through_seq: self.through_seq,
         })
     }
 
@@ -435,6 +449,7 @@ impl PurgeRecord {
             file: parse_hash(key, &raw.file)?,
             actor: raw.actor,
             at: raw.at,
+            through_seq: raw.through_seq,
         };
         check_key(key, &record.key())?;
         Ok(record)

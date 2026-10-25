@@ -370,8 +370,12 @@ async fn purge_removes_every_scope_row() {
         dedup_answers(&index, &other_t).await,
     );
     assert!(dedup_before.0.iter().all(|x| *x == Some(xorb)));
+    // What `openxet purge --dry-run` reports, without changing anything.
+    assert_eq!(ok(index.file_scope_count(&secret.record.hash).await), 2);
 
     assert_eq!(ok(index.purge_file(&secret.record.hash).await), 2);
+    assert_eq!(ok(index.file_scope_count(&secret.record.hash).await), 0);
+    assert_eq!(ok(index.file_scope_count(&other.record.hash).await), 1);
 
     for scope in ["repo:a", "repo:b"] {
         assert_eq!(ok(index.file(&secret.record.hash, scope).await), None);

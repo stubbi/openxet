@@ -18,12 +18,12 @@ use openxet_client::{ClientError, Endpoint, Options};
 
 use crate::error::CliError;
 use crate::output::Output;
-use failure::{client_error, usage_error};
+pub(crate) use failure::{client_error, usage_error};
 use report::{DownloadResult, UploadResult};
 use run::{ProgressLine, Transfer};
 
-const ENDPOINT_VAR: &str = "OPENXET_ENDPOINT";
-const TOKEN_VAR: &str = "OPENXET_TOKEN";
+pub(crate) const ENDPOINT_VAR: &str = "OPENXET_ENDPOINT";
+pub(crate) const TOKEN_VAR: &str = "OPENXET_TOKEN";
 
 /// Where to transfer, with which token and cache.
 #[derive(Debug, clap::Args)]
@@ -159,7 +159,7 @@ fn resolve(
 }
 
 /// The flag's value, else the variable's; an empty value counts as unset.
-fn flag_or_env(flag: Option<&String>, var: &str) -> Option<String> {
+pub(crate) fn flag_or_env(flag: Option<&String>, var: &str) -> Option<String> {
     flag.cloned()
         .or_else(|| std::env::var_os(var).map(OsString::into_string)?.ok())
         .filter(|v| !v.is_empty())

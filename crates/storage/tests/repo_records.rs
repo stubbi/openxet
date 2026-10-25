@@ -498,6 +498,7 @@ async fn purge_record_is_create_only() {
         file: h("purged"),
         actor: "operator".to_owned(),
         at: 1_761_400_000,
+        through_seq: Some(42),
     };
     let key = first.key();
     assert_eq!(key, Key::Purge(h("purged")));
@@ -518,6 +519,32 @@ async fn purge_record_is_create_only() {
 
     let err = PurgeRecord::from_bytes(&Key::Purge(h("other")), &stored).unwrap_err();
     assert!(matches!(err, StorageError::CorruptRecord { .. }), "{err:?}");
+}
+
+/// `through_seq` (ruling M2-R13 as amended) is optional within version 1,
+/// as `deleted_at` is: a record without it reads as `None`, which skips
+/// every registration of the file, and one with it round-trips.
+#[test]
+fn purge_record_through_seq_is_optional_within_version_1() {
+    let key = Key::Purge(h("purged"));
+    let hex = hash_to_hex(&h("purged"));
+    let without = format!(r#"{{"v":1,"file":"{hex}","actor":"operator","at":1761400000}}"#);
+    let record = PurgeRecord::from_bytes(&key, without.as_bytes()).unwrap();
+    assert_eq!(record.through_seq, None);
+    assert_eq!(&record.to_bytes()[..], without.as_bytes());
+
+    let with = PurgeRecord {
+        through_seq: Some(7),
+        ..record
+    };
+    let bytes = with.to_bytes();
+    assert!(
+        std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains(r#""through_seq":7"#),
+        "{bytes:?}"
+    );
+    assert_eq!(PurgeRecord::from_bytes(&key, &bytes).unwrap(), with);
 }
 
 #[test]

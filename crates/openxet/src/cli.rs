@@ -6,7 +6,9 @@ use serde::Serialize;
 
 use crate::config_cmd::{self, ConfigCommand};
 use crate::error::{CliError, ExitCode};
+use crate::label_cmd::{self, LabelCommand};
 use crate::output::{HumanDisplay, Output};
+use crate::purge_cmd::{self, PurgeArgs};
 use crate::serve::{self, ServeArgs};
 use crate::token_cmd::{self, TokenCommand};
 use crate::transfer_cmd::{self, DownloadArgs, UploadArgs};
@@ -46,6 +48,13 @@ enum Command {
     Upload(UploadArgs),
     /// Download a file from a Xet CAS by its Xet hash
     Download(DownloadArgs),
+    /// Unregister a file from every scope, in the server's data directory
+    Purge(PurgeArgs),
+    /// Add, remove and list a repository's labels on a running server
+    Label {
+        #[command(subcommand)]
+        command: LabelCommand,
+    },
 }
 
 #[derive(Serialize)]
@@ -104,6 +113,8 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Command::Token { command } => token_cmd::run(command, output),
         Command::Upload(args) => transfer_cmd::upload(args, output),
         Command::Download(args) => transfer_cmd::download(args, output),
+        Command::Purge(args) => purge_cmd::run(args, output),
+        Command::Label { command } => label_cmd::run(command, output),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -257,6 +268,10 @@ mod tests {
             r#"["token", "generate""#,
             r#"["upload""#,
             r#"["download""#,
+            r#"["purge""#,
+            r#"["label", "add""#,
+            r#"["label", "remove""#,
+            r#"["label", "list""#,
         ] {
             assert!(
                 listed.iter().any(|l| l == invocation),

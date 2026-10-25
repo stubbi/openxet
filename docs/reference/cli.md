@@ -2,8 +2,9 @@
 
 Every command takes `--json`, which prints one JSON object with a versioned
 `schema` on stdout instead of text, and reports failures as one
-`openxet.error.v1` object on stderr ([exit codes](exit-codes.md)). No
-command prompts: stdin is never read.
+`openxet.error.v1` object on stderr ([exit codes](exit-codes.md)). Only
+`openxet purge` ever asks a question, on a terminal and without `--yes`;
+with `--json`, or without a terminal, no command reads stdin.
 
 | Command | Does | `--json` schema |
 | ------- | ---- | --------------- |
@@ -15,6 +16,8 @@ command prompts: stdin is never read.
 | `openxet token generate` | Generates a static token and its config entry | `openxet.token-generate.v1` |
 | `openxet upload` | Uploads files and prints their Xet hashes | `openxet.upload.v1` |
 | `openxet download` | Downloads a file by its Xet hash | `openxet.download.v1` |
+| `openxet purge` | Unregisters a file from every scope | `openxet.purge.v1` |
+| `openxet label add`, `remove`, `list` | Changes or lists a repository's labels | `openxet.labels.v1` |
 
 ## `openxet serve`
 
@@ -214,9 +217,114 @@ written.
   example SMB or exFAT on macOS, FAT on Linux), the download fails with
   `no_clobber_unsupported` and writes nothing; pass `--force` there.
 
+## `openxet purge`
+
+```
+openxet purge <HASH> [--config FILE] [--data-dir DIR] [--dry-run] [--yes] [--actor NAME] [--json]
+```
+
+Unregisters the file with Xet hash `HASH` from every scope that holds it,
+so no scope, repository or token can download it again, for content that
+must go: leaked credentials, personal data, a takedown. It works on the
+server's own data directory, from `--config` and `--data-dir` as `serve`
+reads them, and doesn't need the server running; a running server stops
+serving the file at once.
+
+```bash
+openxet purge 36f01138cb24db2e9c72d0c9fdb7dff31322b73b2e60b4d365bb1e3fb54d0f23 --config openxet.toml --dry-run
+openxet purge 36f01138cb24db2e9c72d0c9fdb7dff31322b73b2e60b4d365bb1e3fb54d0f23 --config openxet.toml --yes
+```
+
+```json
+{"schema":"openxet.purge.v1","file":"36f0…0f23","scopes_removed":2,"dry_run":false}
+```
+
+- **Order.** It writes the purge record `purges/{hash}` to the bucket
+  first, then removes the file's registrations from the index, then
+  appends an `audit_log` row naming the actor, so the purge survives a
+  rebuild of the index. The record carries `through_seq`, the
+  registration sequence number at the time of the purge: a rebuild skips
+  the file's registrations up to it, and keeps a later upload's.
+- **Repeating.** If it fails after the record, run it again: a repeat
+  completes the earlier purge under its record (its actor and
+  `through_seq`), with an audit row saying so, and reports
+  `scopes_removed` 0 once nothing is left.
+- **Unknown files.** A hash no scope holds and no purge recorded answers
+  `not_found` (exit 1), with `--dry-run` too, and writes nothing.
+- **What stays.** Dedup entries describe chunks, not files, and stay. The
+  file's bytes stay in the bucket until garbage collection removes data no
+  file references (nothing is deleted outside GC); until then they can't
+  be downloaded, since no scope lists the file. Purge doesn't block the
+  content: an upload of the same bytes afterwards registers the file
+  again to the uploader's scope, and that registration survives a
+  rebuild.
+- **Confirmation.** `--dry-run` reports `scopes_removed`, the scopes it
+  would remove the file from, and changes nothing. Otherwise, on a
+  terminal it asks first, unless `--yes` is given. With `--json`, or
+  without a terminal, it never asks: without `--yes` it exits 2 with
+  `confirmation_required` and changes nothing.
+- **Actor.** The audit row and the purge record name `--actor`, or `cli:`
+  and the operating system user (`USER`, `LOGNAME` or `USERNAME`), at
+  most 256 bytes. With none of those set, pass `--actor`; it exits 2 with
+  `no_actor` otherwise.
+- **Data directory.** A directory without an index (`index.sqlite`) is
+  refused with `index`, and nothing is created there. A bucket write that
+  fails is `storage` and leaves the file registered everywhere.
+
+## `openxet label`
+
+```
+openxet label add <NAMESPACE/NAME> <LABEL> [--dry-run] [--endpoint URL] [--token TOKEN] [--json]
+openxet label remove <NAMESPACE/NAME> <LABEL> [--dry-run] [--endpoint URL] [--token TOKEN] [--json]
+openxet label list <NAMESPACE/NAME> [--endpoint URL] [--token TOKEN] [--json]
+```
+
+Changes or lists a repository's labels on a running server, through its
+labels API (`/api/openxet/v1/repos/{namespace}/{name}/labels`; [ADR
+0010](../adr/0010-two-storage-primitives.md)). A label is a
+lowercase slug of `a`-`z`, `0`-`9` and `-`, 1 to 64 bytes; a repository
+carries at most 32. Labels decide which typed views show a repository: one
+without `model` is no longer found as a model by `hf`, while `openxet
+label` still finds it.
+
+```bash
+openxet label add alice/my-model eval-logs
+```
+
+```
+alice/my-model: model, eval-logs
+```
+
+```json
+{"schema":"openxet.labels.v1","repo":"alice/my-model","labels":["model","eval-logs"],"dry_run":false}
+```
+
+- **Idempotent.** Adding a label the repository carries, or removing one
+  it lacks, changes nothing and succeeds. If another writer changes the
+  labels at the same moment, the server answers `labels_changed` and the
+  command sends its change again after a random 50 to 200 ms pause, for
+  up to three attempts in all.
+- **Dry run.** `add` and `remove` with `--dry-run` read the labels and
+  print what they would become, with `"dry_run":true`; nothing is
+  changed. A dry run needs only `read` on the repository, so it doesn't
+  prove you may change it. `list` prints no `dry_run`.
+- **Access.** `list` needs `read` on the repository and `add` and
+  `remove` need `write` ([rules](config.md#rules)). The token is a user
+  token: the dev token, or a static token without `scope`. A repository
+  the token may not read answers `repo_not_found`, as one that doesn't
+  exist does. `repo` is the name as the server stores it.
+- **Errors.** A repository not written `namespace/name`, or a name or
+  label the server would refuse, exits 2 before any request
+  (`invalid_repo`, `invalid_label`). The server's refusals keep their code
+  (`repo_not_found`, `forbidden`, `unauthorized`, `labels_changed`) with a
+  hint, and exit 1.
+- **Endpoint and token** are taken as by `upload` and `download` (below).
+  Where `hub.public_url` differs from the CAS endpoint, pass the Hub's.
+
 ## Endpoint, token and cache
 
-`upload` and `download` take:
+`upload`, `download` and `label` take `--endpoint` and `--token`; `upload`
+and `download` also take `--cache-dir`:
 
 | Option | Default | Meaning |
 | ------ | ------- | ------- |

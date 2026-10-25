@@ -31,8 +31,8 @@ lines.
 | `address_in_use` | 1 | `serve` couldn't listen: another process has the port. The hint names `--port`. |
 | `bind` | 1 | `serve` couldn't listen for another reason, such as a privileged port. |
 | `data_dir` | 1 | `serve` couldn't create the data directory. |
-| `index` | 1 | `serve` couldn't open the index in the data directory. |
-| `storage` | 1 | `serve` couldn't open the bucket in the data directory. |
+| `index` | 1 | `serve` or `purge` couldn't open or write the index in the data directory, or `purge` found none there (the hint names `--config` and `--data-dir`). |
+| `storage` | 1 | `serve` or `purge` couldn't open the bucket in the data directory, or `purge` couldn't write its purge record there. Nothing was purged. |
 | `insecure_permissions` | 1 | A secret file (`dev-token`, `transfer.key`, a signing key) can be read by other users. The hint names the `chmod`. |
 | `invalid_key` | 1 | A key or token file doesn't hold what it should. |
 | `exists` | 2 | `token keygen` would overwrite a file. Nothing was written. |
@@ -41,22 +41,29 @@ lines.
 | `invalid_claims` | 1 | `token mint` or `token generate` was given an empty or invalid `--scope` or `--subject`. |
 | `key`, `random` | 1 | The operating system's random number generator failed. |
 | `signal`, `runtime` | 1 | `serve` couldn't install its signal handlers, or a command couldn't start its runtime. |
-| `missing_endpoint` | 2 | `upload` or `download` has no endpoint. The hint names `OPENXET_ENDPOINT`. |
-| `missing_token` | 2 | `upload` or `download` has no token. The hint names `OPENXET_TOKEN`. |
+| `missing_endpoint` | 2 | `upload`, `download` or `label` has no endpoint. The hint names `OPENXET_ENDPOINT`. |
+| `missing_token` | 2 | `upload`, `download` or `label` has no token. The hint names `OPENXET_TOKEN`. |
 | `invalid_endpoint` | 2 | The endpoint is not an `http` or `https` URL, or holds credentials, a query or a fragment. |
 | `invalid_input` | 2 | `upload` was given paths that are missing, not regular files, or unreadable. `files` lists each with its `problem`. Nothing was uploaded. |
-| `invalid_hash` | 2 | `download` was given a hash that isn't 64 lowercase hex characters. |
+| `invalid_hash` | 2 | `download` or `purge` was given a hash that isn't 64 lowercase hex characters. |
 | `output_exists` | 2 | `download --output` names an existing file and `--force` wasn't given. Nothing was downloaded. |
 | `token_expired` | 1 | The token expires within 30 seconds, or expired during the transfer. Nothing was sent if it was found before. |
 | `unreachable_endpoint` | 1 | Nothing answered at the endpoint, or at the proxy in front of it (named in the message). |
+| `confirmation_required` | 2 | `purge` without `--yes`, with `--json` or without a terminal to ask on. Nothing was purged. |
+| `declined` | 1 | `purge` asked on the terminal and the answer wasn't `yes`. Nothing was purged. |
+| `no_actor`, `invalid_actor` | 2 | `purge` couldn't tell who is running it (none of `USER`, `LOGNAME`, `USERNAME` is set), or `--actor` is empty, longer than 256 bytes, or holds a control character. The hint names `--actor`. |
+| `invalid_repo` | 2 (1 from the server) | `label` was given a repository that isn't `namespace/name` with a valid namespace and name. |
+| `invalid_label` | 2 (1 from the server) | `label` was given a label that isn't a lowercase slug of 1 to 64 bytes, or `add` would give a repository more than 32 labels. |
+| `repo_not_found` | 1 | `label`: no such repository, or the token may not read it; the two answer alike. |
+| `labels_changed` | 1 | `label add` or `remove` lost to concurrent label changes three times in a row, 50 to 200 ms apart. Nothing was changed; run it again. |
 | `unauthorized` | 1 | The server refused the token (`401`): unknown, revoked or expired. |
-| `forbidden` | 1 | The token doesn't allow this (`403`), e.g. a read token uploading. |
-| `not_found` | 1 | `download`: no file with this hash in the token's scope. |
+| `forbidden` | 1 | The token doesn't allow this (`403`), e.g. a read token uploading, a token without `write` changing labels, or a CAS token used with `label`. |
+| `not_found` | 1 | `download`: no file with this hash in the token's scope. `purge`: no scope holds the hash and no purge recorded it; nothing was written. |
 | `no_clobber_unsupported` | 1 | `download` without `--force` on a filesystem that can neither rename without replacing nor hard-link. Nothing was written. The hint names `--force`. |
 | `size_mismatch` | 1 | `download --size` doesn't match the file's size: the size or the hash is wrong. Nothing was written. |
 | `interrupted` | 130 | `upload` or `download` was stopped by a signal. The message says what is known: a download wrote nothing to its output; an upload may or may not have been registered, and re-running it is safe. |
 | `upload_rejected` | 1 | The server refused the upload's shard. The message is the server's reason, without control characters, e.g. a stale client cache after a server reset. |
-| `server_error` | 1 | The server kept answering with an error status after the client's retries. |
+| `server_error` | 1 | The server kept answering with an error status after the client's retries, or `label` got an answer it doesn't recognise; the message and hint are the server's where it sent them. |
 | `transfer_failed` | 1 | The transfer failed for another reason; the message names its kind. |
 | `internal` | 1 | A bug, such as a panic. Its details are never printed, since they may hold request data. Report it with the command you ran or the log. |
 
