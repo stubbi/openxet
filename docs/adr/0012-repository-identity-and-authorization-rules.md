@@ -51,6 +51,10 @@ repository its holder may use, not one scope.
    contain no `..`, and the name doesn't end in `.git`.
    `{namespace}/{name}` is unique case-insensitively and stored as
    written. Names are unique across labels (ADR 0010 item 5).
+   The namespaces `models`, `datasets`, `spaces`, `kernels`, `buckets`,
+   `api`, `v1`, `v2`, `openapi.json`, `healthz` and `readyz` are
+   reserved, because they are route prefixes; the Hub refuses to create
+   a repository in one.
 
 **User credentials and the authorizer (ruling M2-R3).**
 5. A credential is a **CAS credential** (M1: scope, tenant, mode), a
@@ -69,19 +73,24 @@ repository its holder may use, not one scope.
    - `subjects`, a list of subjects, and/or `claims`, a table of claim
      names to lists of values. A rule matches a principal whose subject
      is listed, or who carries one of the listed values under the named
-     claim.
+     claim. Subjects match exactly; `*` is not a wildcard there.
    - `repos`, a list of globs over `{namespace}/{name}`. `*` matches
      within one path segment and never crosses the `/`, except that `*`
      alone matches every repository: `org/*` matches `org/x`, and `o*/x`
-     matches `org/x`.
-   - `actions`, a subset of `read`, `write` and `create`. `create` on
-     `org/*` allows creating repositories in namespace `org`.
+     matches `org/x`. Globs match ignoring ASCII case, as names are
+     unique that way (item 4).
+   - `actions`, a subset of `read`, `write` and `create`. `write`
+     includes `read`. `create` is granted only by a pattern that covers
+     the whole namespace: `org/*` allows creating repositories in
+     namespace `org`, and `*` in every namespace; `org/x` or `o*/x`
+     grants no `create`.
 8. **Rules only grant.** A request is allowed if any rule allows it, and
    refused if none does. Rule order doesn't matter: there is no
    first-match-wins and no deny rule.
-9. The pseudo subject `anonymous` matches a request with no credential,
-   so an operator can make repositories public with an explicit rule. No
-   rule names it by default.
+9. The pseudo subject `anonymous` stands for everyone: a rule naming
+   it matches every request, signed in or not, so an operator can make
+   repositories public with an explicit rule. No rule names it by
+   default.
 10. Dev mode installs one rule: `subjects = ["dev"], repos = ["*"],
     actions = ["read", "write", "create"]`.
 11. `GET /api/whoami-v2` answers `name` from the subject, or from the
