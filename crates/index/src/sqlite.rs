@@ -1,4 +1,8 @@
-//! The SQLite implementation of [`Index`].
+//! The SQLite implementation of [`Index`], and in its submodules of
+//! [`Repos`](crate::Repos) and [`GitStore`](crate::GitStore).
+
+mod git;
+mod repos;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions, TryLockError};
