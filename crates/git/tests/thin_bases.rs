@@ -464,6 +464,41 @@ async fn fallback_walk_places_deep_bases_within_budget() {
         assert_eq!(delta(before, tight.writer_rule_counts()), REFUSED, "{name}");
     }
 
+    // The walk shares R22's per-repository and per-principal limits: with
+    // no slot free it is refused as retryable, before any walking, while a
+    // push that needs no walk is unaffected.
+    for (name, repo_max, principal_max) in [("repo", Some(0), None), ("principal", None, Some(0))] {
+        let mut cfg = config(&s.world, &format!("busy-{name}"));
+        cfg.reachability.max_concurrent_per_repo = repo_max;
+        cfg.reachability.max_concurrent_per_principal = principal_max;
+        let busy = engine(&s.world, cfg).await;
+        let r = raw_push(
+            &busy,
+            s.repo,
+            "pusher",
+            &[(None, Some(moved), "refs/heads/moved")],
+            Some(pack()),
+        )
+        .await;
+        let reason = r.ng("refs/heads/moved").unwrap_or_default();
+        assert!(
+            reason.contains("push again in a few seconds"),
+            "{name}: {r:?}"
+        );
+        assert!(!r.messages.contains(THIN_HINT), "{name}: {r:?}");
+        let sent_all = commit_tree(&w, "main^{tree}", &[s.main], &[("sent.txt", d)]);
+        let sent_tree = oid(&w, &format!("{sent_all}^{{tree}}"));
+        let r = raw_push(
+            &busy,
+            s.repo,
+            "pusher",
+            &[(None, Some(sent_all), &format!("refs/heads/sent-{name}"))],
+            Some(pack_of(&w, &[sent_all, sent_tree, d])),
+        )
+        .await;
+        assert!(r.ok(&format!("refs/heads/sent-{name}")), "{name}: {r:?}");
+    }
+
     let before = s.node.writer_rule_counts();
     let r = raw_push(
         &s.node,

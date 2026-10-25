@@ -25,7 +25,7 @@ use openxet_index::Oid;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::time::Instant;
 
-use crate::{Budget, GitError, SnapshotRepo, git_command, io_err};
+use crate::{Budget, GitError, Reachability, SnapshotRepo, git_command, io_err};
 
 /// git's reason for a ref whose objects the connectivity check can't find
 /// (`builtin/receive-pack.c`, `set_connectivity_errors`, git v2.39.5). Every
@@ -170,6 +170,17 @@ pub enum Proof {
     Walk,
 }
 
+/// The concurrency limits the fallback walk shares with R22 (ADR 0004
+/// item 3): the engine's [`Reachability`] (`Engine::reachability`) and the
+/// writer it counts against.
+#[derive(Debug, Clone, Copy)]
+pub struct WalkLimits<'a> {
+    /// The engine's R22 limits.
+    pub reach: &'a Reachability,
+    /// The writer's principal (its subject).
+    pub who: &'a str,
+}
+
 /// Why the rule refused a push.
 #[derive(Debug, thiserror::Error)]
 pub enum WriterRefused {
@@ -186,6 +197,10 @@ pub enum WriterRefused {
         /// Whether an appended base was among them.
         thin_base: bool,
     },
+    /// The repository or the writer already has as many walks running as
+    /// R22's concurrency limits allow; retryable.
+    #[error("too many pushes are being checked right now")]
+    Busy,
     /// git failed while checking.
     #[error("the push could not be checked: {0}")]
     Failed(#[from] GitError),
@@ -197,6 +212,10 @@ impl WriterRefused {
     pub fn reason(&self) -> &'static str {
         match self {
             Self::Unreachable { .. } | Self::OverBudget { .. } => MISSING_OBJECTS,
+            Self::Busy => {
+                "too many pushes to this repository are being checked right now; push again in \
+                 a few seconds"
+            }
             Self::Failed(_) => {
                 "the server failed to check this push; push again, and report it \
                                 to the server's operator if it persists"
@@ -245,8 +264,9 @@ pub async fn check_writer_rule(
     new_tips: &[Oid],
     sent: &SentObjects,
     budget: &Budget,
+    limits: WalkLimits<'_>,
 ) -> Result<Proof, WriterRefused> {
-    analyse(snapshot, new_tips, sent, budget, u64::MAX)
+    analyse(snapshot, new_tips, sent, budget, limits, u64::MAX)
         .await
         .map(|a| a.proof)
 }
@@ -258,6 +278,7 @@ pub(crate) async fn analyse(
     new_tips: &[Oid],
     sent: &SentObjects,
     budget: &Budget,
+    limits: WalkLimits<'_>,
     large_blob_bytes: u64,
 ) -> Result<Analysis, WriterRefused> {
     let tips = snapshot_tips(snapshot);
@@ -326,7 +347,7 @@ pub(crate) async fn analyse(
         });
     }
     let thin_base = remaining.iter().any(|o| appended.contains(o));
-    walk(snapshot, &tips, remaining, budget, thin_base).await?;
+    walk(snapshot, &tips, remaining, budget, limits, thin_base).await?;
     Ok(Analysis {
         proof: Proof::Walk,
         large_blobs,
@@ -509,22 +530,24 @@ async fn fast_paths(
 }
 
 /// One walk of every object reachable from the snapshot's refs, under
-/// `budget`, until each of `remaining` is found.
-///
-/// It enforces only the walk's own object and time budget. Sharing R22's
-/// per-repository and per-principal concurrency limits (ADR 0004 item 3),
-/// which live in R22's limiter, is
-/// <https://github.com/stubbi/openxet/issues/79>.
+/// `budget`, until each of `remaining` is found. It takes a per-repository
+/// and a per-principal slot of R22's limits first (ADR 0004 item 3), so
+/// concurrent pushes can't stack full walks.
 async fn walk(
     snapshot: &SnapshotRepo,
     tips: &[Oid],
     mut remaining: HashSet<Oid>,
     budget: &Budget,
+    limits: WalkLimits<'_>,
     thin_base: bool,
 ) -> Result<(), WriterRefused> {
     if tips.is_empty() {
         return Err(WriterRefused::Unreachable { thin_base });
     }
+    let _slots = limits
+        .reach
+        .walk_slots(snapshot.repo, limits.who)
+        .map_err(|_| WriterRefused::Busy)?;
     let deadline = Instant::now() + budget.max_time;
     let mut child = git_command(snapshot.process.git(), snapshot, None)
         .args(["rev-list", "--objects", "--stdin"])

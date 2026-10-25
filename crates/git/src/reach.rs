@@ -73,8 +73,10 @@ impl Refused {
 }
 
 /// The R22 check of one engine: its budget and the walks running per
-/// repository and per principal.
-#[derive(Debug)]
+/// repository and per principal. A clone shares the counts, so every walk
+/// of the engine (R22's and the writer rule's thin-base walk, ADR 0004
+/// item 3) is limited together.
+#[derive(Debug, Clone)]
 pub struct Reachability {
     budget: Budget,
     per_repo: Arc<Limiter<RepoId>>,
@@ -134,6 +136,30 @@ impl Reachability {
         })
         .await
     }
+}
+
+impl Reachability {
+    /// Takes one per-repository and one per-principal slot for a walk that
+    /// isn't R22's own: the writer rule's thin-base walk shares R22's
+    /// limits (ADR 0004 item 3), so concurrent pushes can't stack full
+    /// walks. The slots are given back when the returned value is dropped.
+    pub(crate) fn walk_slots(&self, repo: RepoId, who: &str) -> Result<WalkSlots, Refused> {
+        let repo_slot = self.per_repo.try_acquire(repo).ok_or(Refused::RepoBusy)?;
+        let principal_slot = self
+            .per_principal
+            .try_acquire(who.to_owned())
+            .ok_or(Refused::PrincipalBusy)?;
+        Ok(WalkSlots {
+            _repo: repo_slot,
+            _principal: principal_slot,
+        })
+    }
+}
+
+/// A walk's places in both limits, held while it runs.
+pub(crate) struct WalkSlots {
+    _repo: Slot<RepoId>,
+    _principal: Slot<String>,
 }
 
 async fn blocking<T: Send + 'static>(

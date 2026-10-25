@@ -31,9 +31,10 @@ use tokio_util::io::ReaderStream;
 use crate::hook::{HookCommand, HookContext, HookReply, HookRequest, HookServer, confine};
 use crate::publish::{PackFiles, Publication, PublishError, Publisher};
 use crate::request::{PackStats, RequestParser};
-use crate::thin::{self, Proof, SentObjects, WriterRefused, analyse, classify_sent};
+use crate::thin::{self, Proof, SentObjects, WalkLimits, WriterRefused, analyse, classify_sent};
 use crate::{
-    Engine, GitConfig, GitError, ResponseStream, SnapshotRepo, blocking, git_command, io_err,
+    Engine, GitConfig, GitError, Reachability, ResponseStream, SnapshotRepo, blocking, git_command,
+    io_err,
 };
 
 /// The branch that can't be deleted (M2 policy).
@@ -156,6 +157,7 @@ impl Engine {
             config: self.config.clone(),
             snapshot: Arc::clone(&snapshot),
             counters: Arc::clone(&self.counters),
+            reach: self.reach.clone(),
         };
         tokio::spawn(hook.serve(move |ctx, request| receive.handle(ctx, request, stats_rx)));
 
@@ -234,6 +236,7 @@ struct Receive {
     config: GitConfig,
     snapshot: Arc<SnapshotRepo>,
     counters: Arc<Counters>,
+    reach: Reachability,
 }
 
 /// A refusal of the whole push: the refs that caused it with their reasons,
@@ -331,6 +334,10 @@ impl Receive {
             &new_tips,
             &sent,
             &self.config.thin_bases,
+            WalkLimits {
+                reach: &self.reach,
+                who: &ctx.actor,
+            },
             large_bytes,
         )
         .await
@@ -499,7 +506,10 @@ impl Receive {
     /// objects must have exactly one. openxet finds it itself; each path the
     /// hook reported must still resolve, symlinks and `..` included, inside
     /// the snapshot and name that pack (ADR 0004 item 7), as defence in
-    /// depth.
+    /// depth. A pushed pack named like a committed one holds exactly the
+    /// same objects (a pack is named by its object set), as when a push
+    /// whose answer was lost is sent again: then nothing new is published,
+    /// and the rule treats every object as unsent, which only asks more.
     async fn new_pack(
         &self,
         reported: Vec<PathBuf>,
@@ -508,16 +518,17 @@ impl Receive {
         let root = self.snapshot.dir.path().to_path_buf();
         let committed: HashSet<String> =
             self.snapshot.packs.iter().map(|p| p.name.clone()).collect();
-        let (mut found, all_named) = blocking(move || {
-            let found = kept_packs(&root.join("objects/pack"), &committed)?;
+        let (mut found, again, all_named) = blocking(move || {
+            let (found, again) = kept_packs(&root.join("objects/pack"), &committed)?;
             let ours: Vec<PathBuf> = found
                 .iter()
+                .chain(&again)
                 .filter_map(|f| std::fs::canonicalize(f.path(PackExt::Pack)).ok())
                 .collect();
             let all_named = reported
                 .iter()
                 .all(|p| confine(p, &root).is_some_and(|c| ours.contains(&c)));
-            Ok((found, all_named))
+            Ok((found, !again.is_empty(), all_named))
         })
         .await
         .map_err(|e| internal(&e))?;
@@ -527,6 +538,7 @@ impl Receive {
         let expected = stats.header_count.is_some_and(|n| n > 0);
         match (found.len(), expected) {
             (0, false) => Ok(None),
+            (0, true) if again => Ok(None),
             (1, true) => Ok(found.pop()),
             _ => Err(Refusal::all(
                 "the pushed pack doesn't match what receive-pack wrote; push again",
@@ -535,9 +547,13 @@ impl Receive {
     }
 }
 
-/// The packs in `dir` with a `.keep` file, other than `committed`.
-fn kept_packs(dir: &Path, committed: &HashSet<String>) -> Result<Vec<PackFiles>, GitError> {
-    let mut found = Vec::new();
+/// The packs in `dir` with a `.keep` file: those not in `committed`, and
+/// those named like a committed pack.
+fn kept_packs(
+    dir: &Path,
+    committed: &HashSet<String>,
+) -> Result<(Vec<PackFiles>, Vec<PackFiles>), GitError> {
+    let (mut found, mut again) = (Vec::new(), Vec::new());
     for entry in std::fs::read_dir(dir).map_err(io_err("list", dir))? {
         let path = entry.map_err(io_err("list", dir))?.path();
         let name = path
@@ -546,16 +562,20 @@ fn kept_packs(dir: &Path, committed: &HashSet<String>) -> Result<Vec<PackFiles>,
             .and_then(|n| n.strip_suffix(".keep"))
             .and_then(|n| PackName::parse(n).ok());
         if let Some(name) = name
-            && !committed.contains(name.as_str())
             && path.with_extension("pack").is_file()
         {
-            found.push(PackFiles {
+            let list = if committed.contains(name.as_str()) {
+                &mut again
+            } else {
+                &mut found
+            };
+            list.push(PackFiles {
                 dir: dir.to_path_buf(),
                 name,
             });
         }
     }
-    Ok(found)
+    Ok((found, again))
 }
 
 fn internal(e: &dyn std::fmt::Display) -> Refusal {

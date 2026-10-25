@@ -59,7 +59,8 @@ pub use request::{PackStats, RequestParser};
 pub use snapshot::SnapshotRepo;
 pub use store::Eviction;
 pub use thin::{
-    MISSING_OBJECTS, Proof, SentObjects, THIN_HINT, WriterRefused, check_writer_rule, classify_sent,
+    MISSING_OBJECTS, Proof, SentObjects, THIN_HINT, WalkLimits, WriterRefused, check_writer_rule,
+    classify_sent,
 };
 pub use upload::{ResponseStream, Service};
 
@@ -281,6 +282,14 @@ impl Engine {
     #[must_use]
     pub fn git(&self) -> &Path {
         &self.git
+    }
+
+    /// The engine's R22 concurrency limits, which every walk shares: R22's
+    /// own and the writer rule's thin-base walk ([`WalkLimits`], ADR 0004
+    /// items 2 and 3).
+    #[must_use]
+    pub fn reachability(&self) -> &Reachability {
+        &self.reach
     }
 
     /// git's protocol v2 capability advertisement, as `git upload-pack`
