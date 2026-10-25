@@ -21,10 +21,11 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use openxet_auth::{
     Action, Authenticator, Authorizer, CasGrant, Glob, Mode, Rule, RulesAuthorizer, StaticToken,
-    UrlSigner, UserProfile,
+    TokenSigner, UrlSigner, UserProfile,
 };
 use openxet_cas::{AppState, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
+use openxet_git::Engine;
 use openxet_http::compose;
 use openxet_hub::HubState;
 use openxet_index::SqliteIndex;
@@ -390,13 +391,14 @@ async fn open(
     let key = transfer_key(config)?;
     let urls = UrlSigner::new(*key, config.url_lifetime)
         .map_err(|err| CliError::new("config", err.to_string(), "Fix cas.url_lifetime."))?;
+    let signer = cas_token_signer(config)?;
     let (auth, dev_token) = if let Some(auth) = &config.auth {
-        (Arc::clone(auth), None)
+        (Arc::new(auth.with_jwt_key(signer.public_key())), None)
     } else {
         let token = secret::dev_token(&dir.join("dev-token"))?;
         let auth = Authenticator::new(
             vec![dev_static_token(&token)],
-            vec![],
+            vec![signer.public_key()],
             config.max_token_lifetime,
         )
         .map_err(|err| CliError::new("config", err.to_string(), "Fix [auth]."))?;
@@ -404,12 +406,28 @@ async fn open(
     };
     let index = Arc::new(index);
     let bucket = Arc::new(bucket);
+    let engine = Engine::start(
+        Arc::clone(&index) as _,
+        Arc::clone(&bucket) as _,
+        config.git.clone(),
+    )
+    .await
+    .map_err(|err| {
+        CliError::new(
+            "git",
+            format!("could not start the Git engine: {err}"),
+            "The message says what to fix; the Git role needs git 2.37 or newer on PATH and \
+             git.cache_dir on a filesystem with hard links.",
+        )
+    })?;
     let hub = HubState::new(
         Arc::clone(&index) as _,
         Arc::clone(&bucket) as _,
         Arc::clone(&auth),
         authorizer,
         config.hub(public_url),
+        Arc::new(engine),
+        Arc::new(signer),
     );
     let cas = AppState::new(
         index,
@@ -523,6 +541,29 @@ fn transfer_key(config: &Config) -> Result<Zeroizing<[u8; 32]>, CliError> {
     }
     Ok(key)
 }
+
+/// The server's CAS token key, `{data_dir}/cas-token.key`, generated on
+/// first start with a warning outside dev mode: every node behind one
+/// endpoint must share it, or tokens one node's Hub hands out are refused
+/// by the others' CAS (ruling M1-R29).
+fn cas_token_signer(config: &Config) -> Result<TokenSigner, CliError> {
+    let path = config.data_dir.join(CAS_TOKEN_KEY_FILE);
+    let (signer, created) = secret::cas_token_key(&path)?;
+    let signer = signer
+        .with_max_token_lifetime(config.max_token_lifetime)
+        .map_err(|err| CliError::new("config", err.to_string(), "Fix auth.max_token_lifetime."))?;
+    if created && config.auth.is_some() {
+        tracing::warn!(
+            path = %path.display(),
+            "generated a new CAS token key; every node serving this deployment must share this \
+             file, or CAS tokens the Hub hands out on one node are refused by the others"
+        );
+    }
+    Ok(signer)
+}
+
+/// The CAS token key's file in the data directory.
+pub(crate) const CAS_TOKEN_KEY_FILE: &str = "cas-token.key";
 
 /// Where the server is reached: the CAS at the server's public URL, the
 /// Hub API at `hub.public_url`.

@@ -200,6 +200,38 @@ impl Engine {
         .await
     }
 
+    /// How many commits `from`'s history holds (from
+    /// [`Engine::resolve_revision`] on the same snapshot): the Hub's
+    /// `X-Total-Count` of `commits`. `None` when the walk doesn't finish
+    /// within `git.reachability`'s commit and time budget, so a huge history
+    /// costs no more than one budget.
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::Objects`] if the snapshot can't be read.
+    pub async fn count_commits(
+        &self,
+        snap: &SnapshotRepo,
+        from: Oid,
+    ) -> Result<Option<u64>, GitError> {
+        let dir = snap.dir.path().to_path_buf();
+        let budget = self.config.reachability;
+        blocking(move || {
+            let started = Instant::now();
+            let repo = open_snapshot(&dir)?;
+            let mut count = 0u64;
+            for id in walk(&repo, from)? {
+                if count >= budget.max_objects || started.elapsed() >= budget.max_time {
+                    return Ok(None);
+                }
+                id?;
+                count += 1;
+            }
+            Ok(Some(count))
+        })
+        .await
+    }
+
     /// For each of `paths`, the newest commit of `commit`'s history (by
     /// commit time) whose entry at the path differs from the entry in every
     /// one of its parents, and exists: the Hub's `lastCommit` with

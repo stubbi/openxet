@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::missing_panics_doc)]
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -14,8 +15,10 @@ use axum::body::{Body, Bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use openxet_auth::{
-    Action, Authenticator, Authorizer, Glob, Rule, RulesAuthorizer, StaticToken, UserProfile,
+    Action, Authenticator, Authorizer, Glob, Rule, RulesAuthorizer, StaticToken, TokenSigner,
+    UserProfile, generate_keypair,
 };
+use openxet_git::{Engine, GitConfig};
 use openxet_http::BodyDeadline;
 use openxet_index::SqliteIndex;
 use openxet_storage::{Bucket, LocalBucket};
@@ -187,25 +190,61 @@ impl TestHub {
         tokens: Vec<StaticToken>,
         authz: Arc<dyn Authorizer>,
     ) -> Self {
-        let index = SqliteIndex::open(&dir.path().join("index.sqlite"))
-            .await
-            .unwrap();
-        let auth =
-            Authenticator::new(tokens, vec![], Authenticator::DEFAULT_MAX_TOKEN_LIFETIME).unwrap();
+        Self::start_config(dir, bucket, tokens, authz, Self::config()).await
+    }
+
+    /// The configuration of every [`TestHub`]: the defaults, at
+    /// [`PUBLIC_URL`].
+    #[must_use]
+    pub fn config() -> HubConfig {
         let public_url = Url::parse(PUBLIC_URL).unwrap();
+        HubConfig {
+            public_url: public_url.clone(),
+            cas_url: public_url,
+            lfs_threshold: HubConfig::DEFAULT_LFS_THRESHOLD,
+            max_commit_bytes: HubConfig::DEFAULT_MAX_COMMIT_BYTES,
+            token_ttl: HubConfig::DEFAULT_TOKEN_TTL,
+            page_size: HubConfig::MAX_PAGE_SIZE,
+        }
+    }
+
+    /// [`TestHub::start_custom`] with `cfg`: a Git engine with its cache
+    /// in `dir`, and a fresh CAS token key whose tokens the authenticator
+    /// accepts, as `openxet serve` sets them up.
+    pub async fn start_config(
+        dir: TempDir,
+        bucket: Arc<dyn Bucket>,
+        tokens: Vec<StaticToken>,
+        authz: Arc<dyn Authorizer>,
+        cfg: HubConfig,
+    ) -> Self {
+        let index = Arc::new(
+            SqliteIndex::open(&dir.path().join("index.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let engine = Engine::start(
+            Arc::clone(&index) as _,
+            Arc::clone(&bucket),
+            GitConfig::new(dir.path().join("git-cache")),
+        )
+        .await
+        .unwrap();
+        let signer = TokenSigner::from_pem(generate_keypair().unwrap().private_pem()).unwrap();
+        let auth = Authenticator::new(
+            tokens,
+            vec![signer.public_key()],
+            Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+        )
+        .unwrap();
         let state = HubState::new(
-            Arc::new(index),
+            index,
             bucket,
             Arc::new(auth),
             authz,
-            HubConfig {
-                public_url: public_url.clone(),
-                cas_url: public_url,
-                lfs_threshold: HubConfig::DEFAULT_LFS_THRESHOLD,
-                max_commit_bytes: HubConfig::DEFAULT_MAX_COMMIT_BYTES,
-                token_ttl: HubConfig::DEFAULT_TOKEN_TTL,
-                page_size: HubConfig::MAX_PAGE_SIZE,
-            },
+            cfg,
+            Arc::new(engine),
+            Arc::new(signer),
         );
         Self::with_state(dir, state)
     }
@@ -245,6 +284,43 @@ impl TestHub {
             None => Body::empty(),
         };
         self.send(request.body(body).unwrap()).await
+    }
+
+    /// Sends `method path` with `token` as the `Bearer` credential, if any,
+    /// and `body` as it is, of `content_type`.
+    pub async fn call_raw(
+        &self,
+        method: Method,
+        path: &str,
+        token: Option<&str>,
+        content_type: &str,
+        body: impl Into<Body>,
+    ) -> Reply {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", content_type);
+        if let Some(token) = token {
+            request = request.header(AUTHORIZATION, format!("{BEARER} {token}"));
+        }
+        self.send(request.body(body.into()).unwrap()).await
+    }
+
+    /// Posts `lines` as a commit body to `{prefix}/commit/{rev}`, each
+    /// line as `huggingface_hub` writes it: JSON with Python's separators.
+    pub async fn commit(&self, token: &str, prefix: &str, rev: &str, lines: &[Value]) -> Reply {
+        let body: String = lines
+            .iter()
+            .flat_map(|l| [python_json(l), "\n".to_owned()])
+            .collect();
+        self.call_raw(
+            Method::POST,
+            &format!("{prefix}/commit/{rev}"),
+            Some(token),
+            "application/x-ndjson",
+            body,
+        )
+        .await
     }
 
     /// Sends `request` as it is.
@@ -320,5 +396,51 @@ impl Reply {
             .collect();
         headers.sort();
         (self.status, headers, self.body.clone())
+    }
+}
+
+/// `value` as Python's `json.dumps` writes it by default: `", "` between
+/// items and `": "` after keys, non-ASCII escaped (`_commit_api.py` line
+/// 1055, S3).
+#[must_use]
+pub fn python_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let items: Vec<String> = map
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        python_json(&Value::String(k.clone())),
+                        python_json(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", items.join(", "))
+        }
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(python_json).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::String(text) => {
+            let mut out = String::from("\"");
+            for c in text.chars() {
+                match c {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    c if c.is_ascii() && !c.is_ascii_control() => out.push(c),
+                    c => {
+                        let mut units = [0u16; 2];
+                        for unit in c.encode_utf16(&mut units) {
+                            let _ = write!(out, "\\u{unit:04x}");
+                        }
+                    }
+                }
+            }
+            out.push('"');
+            out
+        }
+        other => other.to_string(),
     }
 }

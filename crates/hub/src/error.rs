@@ -8,11 +8,12 @@ use std::error::Error as StdError;
 
 use axum::body::Body;
 use axum::http::header::{RETRY_AFTER, WWW_AUTHENTICATE};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::AuthzError;
+use openxet_git::GitError;
 use openxet_http::{ErrorBody, HubErrorBody};
-use openxet_index::IndexError;
+use openxet_index::{IndexError, Oid};
 use openxet_storage::StorageError;
 use serde::Serialize;
 
@@ -23,6 +24,11 @@ pub const REPO_NOT_FOUND: &str = "Repository not found";
 /// The hint of the unknown-repository answer (ruling M2-R6).
 const REPO_NOT_FOUND_HINT: &str = "Check the repository id and the token's access: a repository \
      the token may not read answers exactly like one that doesn't exist.";
+
+/// `X-Repo-Commit`: the commit a read was answered at, which
+/// `huggingface_hub` reads from an `EntryNotFound` answer to cache the
+/// miss (`file_download.py` line 1773, S3).
+pub const X_REPO_COMMIT: HeaderName = HeaderName::from_static("x-repo-commit");
 
 /// What a missing credential answers on a Hub route (ruling M2-R6).
 const MISSING_CREDENTIAL: &str =
@@ -146,6 +152,47 @@ pub enum HubError {
     /// `server.body_min_rate`). `408`.
     #[error("the request body arrived too slowly")]
     BodyTimeout,
+    /// The revision is no branch or tag, nor a commit a branch or tag
+    /// contains (ADR 0004 item 6). `404` with `X-Error-Code:
+    /// RevisionNotFound` and huggingface.co's text (S3 fixture `25`).
+    #[error("Invalid rev id: {revision}")]
+    RevisionNotFound {
+        /// The revision as the client named it.
+        revision: String,
+    },
+    /// The path names no entry at the revision. `404` with `X-Error-Code:
+    /// EntryNotFound`, huggingface.co's text (S3 fixture `18`) and
+    /// `X-Repo-Commit`.
+    #[error("{path} does not exist on \"{revision}\"")]
+    EntryNotFound {
+        /// The path as the client named it.
+        path: String,
+        /// The revision as the client named it.
+        revision: String,
+        /// The commit the revision resolved to.
+        commit: Option<Oid>,
+    },
+    /// A commit's `parentCommit` isn't its branch's tip (ruling M2-R7).
+    /// `412`.
+    #[error("{0}")]
+    ParentMismatch(String),
+    /// A branch or tag to create exists already, or one to delete or move
+    /// isn't where the request read it. `409` with `X-Error-Message`, which
+    /// `create_branch(exist_ok=True)` swallows (S3 fixture `12`).
+    #[error("{message}")]
+    RefConflict {
+        /// Which ref, and what about it.
+        message: String,
+    },
+    /// A commit or ref write that can't be applied as asked: a bad path,
+    /// branch or tag name, a delete of `main`, objects git refuses. `400`.
+    #[error("{0}")]
+    InvalidWrite(String),
+    /// Too many reads or writes run in the repository at once, or a commit
+    /// lost its branch to concurrent writers on every attempt. `503` with
+    /// `Retry-After`.
+    #[error("{0}")]
+    Busy(String),
     /// A Hub endpoint openxet doesn't implement (design §6). `501`, naming
     /// it, never a confusing `404`.
     #[error("{endpoint} is not implemented by this openxet server")]
@@ -225,6 +272,35 @@ impl HubError {
                 "Send the body without long pauses; the operator can lower \
                  `server.body_min_rate`.",
             ),
+            Self::RevisionNotFound { .. } => (
+                StatusCode::NOT_FOUND,
+                "revision_not_found",
+                "Name a branch, a tag, or a commit one of them contains; `list_repo_refs` lists \
+                 the branches and tags.",
+            ),
+            Self::EntryNotFound { .. } => (
+                StatusCode::NOT_FOUND,
+                "entry_not_found",
+                "Check the path and the revision; `list_repo_tree` lists the revision's paths.",
+            ),
+            Self::ParentMismatch(_) => (
+                StatusCode::PRECONDITION_FAILED,
+                "precondition_failed",
+                "Another commit landed on the branch first. Read its current commit and commit \
+                 again on top of it, or leave out parent_commit.",
+            ),
+            Self::RefConflict { .. } => (
+                StatusCode::CONFLICT,
+                "ref_conflict",
+                "List the refs again (`list_repo_refs`): choose another name, or delete the \
+                 existing ref first.",
+            ),
+            Self::InvalidWrite(_) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_write",
+                "Fix the request as the message says and send it again; nothing was changed.",
+            ),
+            Self::Busy(_) => (StatusCode::SERVICE_UNAVAILABLE, "busy", RETRY_HINT),
             Self::NotImplemented { .. } => (
                 StatusCode::NOT_IMPLEMENTED,
                 "not_implemented",
@@ -251,6 +327,8 @@ impl HubError {
     fn error_code(&self) -> Option<&'static str> {
         match self {
             Self::UnknownRepo | Self::WrongView { .. } => Some("RepoNotFound"),
+            Self::RevisionNotFound { .. } => Some("RevisionNotFound"),
+            Self::EntryNotFound { .. } => Some("EntryNotFound"),
             _ => None,
         }
     }
@@ -301,8 +379,16 @@ impl IntoResponse for HubError {
                     HeaderValue::from_static(r#"Bearer realm="openxet", error="invalid_token""#),
                 );
             }
-            Self::AuthorizerUnavailable(_) | Self::Unavailable(_) => {
+            Self::AuthorizerUnavailable(_) | Self::Unavailable(_) | Self::Busy(_) => {
                 headers.insert(RETRY_AFTER, HeaderValue::from_static("1"));
+            }
+            Self::EntryNotFound {
+                commit: Some(commit),
+                ..
+            } => {
+                if let Ok(value) = HeaderValue::try_from(commit.to_string()) {
+                    headers.insert(X_REPO_COMMIT, value);
+                }
             }
             _ => {}
         }
@@ -358,6 +444,48 @@ impl From<StorageError> for HubError {
     fn from(e: StorageError) -> Self {
         match e {
             StorageError::Io { .. } => Self::Unavailable(Box::new(e)),
+            _ => Self::Internal(Box::new(e)),
+        }
+    }
+}
+
+impl HubError {
+    /// The engine's failure `e` of a read or write at `revision`, which
+    /// resolved to `commit`: an entry that isn't found names both.
+    pub(crate) fn at(e: GitError, revision: &str, commit: Option<Oid>) -> Self {
+        match e {
+            GitError::EntryNotFound { path } => Self::EntryNotFound {
+                path,
+                revision: revision.to_owned(),
+                commit,
+            },
+            e => e.into(),
+        }
+    }
+}
+
+impl From<GitError> for HubError {
+    /// The engine's failures. An entry that isn't found is answered by
+    /// the read that knows the revision; here it carries none.
+    fn from(e: GitError) -> Self {
+        match e {
+            GitError::RevisionNotFound { revision } => Self::RevisionNotFound { revision },
+            GitError::EntryNotFound { path } => Self::EntryNotFound {
+                path,
+                revision: String::new(),
+                commit: None,
+            },
+            GitError::ParentMismatch { .. } => Self::ParentMismatch(e.to_string()),
+            GitError::RefConflict { .. } => Self::RefConflict {
+                message: e.to_string(),
+            },
+            GitError::InvalidHubWrite(message) => Self::InvalidWrite(message),
+            GitError::MissingObjects => Self::InvalidWrite(e.to_string()),
+            GitError::Busy | GitError::Contended { .. } | GitError::Refused(_) => {
+                Self::Busy(e.to_string())
+            }
+            GitError::Index(e) => e.into(),
+            GitError::Storage(e) => e.into(),
             _ => Self::Internal(Box::new(e)),
         }
     }
