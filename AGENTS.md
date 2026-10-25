@@ -226,8 +226,10 @@ Run from the repository root. The toolchain is pinned in
 `rust-toolchain.toml`; `cargo nextest` needs `cargo install cargo-nextest
 --locked` once. CI runs these same commands (`.github/workflows/ci.yml`), so
 green locally means green there, except for the latency gate: timed, it
-needs a quiet machine, and a p99 failure with steady p50s on a busy host is
-load, not a regression. Keep this list exact and current. The
+needs a quiet machine, and a failure on a busy host, p99 first and p50s
+too under heavy load, is load, not a regression. On a pull request CI
+compares the gate with the base measured on the same runner (ruling
+M2-R17, `docs/reference/benchmarks.md`). Keep this list exact and current. The
 criterion benchmarks are for humans, not CI gates: record their results, with
 the machine, in `docs/reference/benchmarks.md`.
 
@@ -236,7 +238,10 @@ cargo build                                                # build the workspace
 scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
 cargo nextest run --workspace                              # run all tests
 cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
-cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate)
+cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate, absolute on main)
+OPENXET_LATENCY_GATE=measure OPENXET_LATENCY_GATE_BUILD=$(git rev-parse HEAD) cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # the same, printing the JSON lines without asserting (CI, on a pull request: base, then head)
+python3 -I scripts/check-latency-gate.py --base base.json --head head.json --head-build <commit> # a PR's gate run against its base's, ruling M2-R17 (CI gate on a pull request)
+python3 -I scripts/test_check_latency_gate.py              # the comparison script's tests (CI gate)
 cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo bench -p openxet-cas --bench commit_throughput      # durable shard and index commits per second on local disk
