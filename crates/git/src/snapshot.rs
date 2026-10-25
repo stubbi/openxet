@@ -7,12 +7,13 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs::{self, File};
-use std::io::{Read as _, Seek as _, SeekFrom};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use openxet_index::{Oid, Pack, RepoId};
-use openxet_storage::{MidxExt, PackExt, PackName};
+use openxet_storage::{MidxExt, PackExt, PackName, create_private_dir_all};
 use tempfile::TempDir;
 
 use crate::process::{PINNED_CONFIG, ProcessEnv};
@@ -61,6 +62,7 @@ pub(crate) fn build(layout: &Layout) -> Result<TempDir, GitError> {
     let dir = tempfile::Builder::new()
         .prefix(&name)
         .rand_bytes(0)
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir_in(&layout.snapshots)
         .map_err(io_err("create a snapshot in", &layout.snapshots))?;
     let root = dir.path();
@@ -70,7 +72,7 @@ pub(crate) fn build(layout: &Layout) -> Result<TempDir, GitError> {
         root.join("objects/info"),
         root.join("refs"),
     ] {
-        fs::create_dir_all(&sub).map_err(io_err("create", &sub))?;
+        create_private_dir_all(&sub).map_err(io_err("create", &sub))?;
     }
     write(&root.join("HEAD"), &format!("ref: {HEAD_REF}\n"))?;
     write(&root.join("config"), &config(&layout.hooks))?;
@@ -98,8 +100,17 @@ pub(crate) fn build(layout: &Layout) -> Result<TempDir, GitError> {
     Ok(dir)
 }
 
+/// Writes `path`, created readable by this process's user only (design
+/// §5.9: the data directory is private).
 fn write(path: &Path, contents: &str) -> Result<(), GitError> {
-    fs::write(path, contents).map_err(io_err("write", path))
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .and_then(|mut f| f.write_all(contents.as_bytes()))
+        .map_err(io_err("write", path))
 }
 
 fn link(from: &Path, to: &Path) -> Result<(), GitError> {

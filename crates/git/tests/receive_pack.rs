@@ -68,6 +68,56 @@ async fn push_round_trip() {
     drop(server);
 }
 
+/// The Git cache is as private as the data directory it defaults into
+/// (design §5.9): after a push, with a snapshot open on the hydrated packs,
+/// every directory is `0700` and every file is its owner's alone, `0600`,
+/// or `0400` for a cached pack file, which is read-only. The `proc-receive`
+/// hook is a link to the openxet binary and holds no data.
+#[tokio::test(flavor = "multi_thread")]
+async fn git_cache_is_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 5).await;
+    let cache = config(&world, "node");
+    let root = cache.cache_dir.clone();
+    let node = engine(&world, cache).await;
+    let server = Server::start(vec![node.clone()]).await;
+    let client = clone(&fixture_repo(&fx), &server.url(0, repo), &[]);
+    let w = work(&client);
+    commit(&w, "one", &[("a.txt", b"a\n")]);
+    must(&w, &["push", "-q", "origin", "main"]);
+    let snapshot = ok(node.snapshot(repo).await);
+
+    let mut dirs = vec![root];
+    let mut files = 0;
+    while let Some(dir) = dirs.pop() {
+        let mode = |p: &std::path::Path| ok(std::fs::metadata(p)).permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700, "{}", dir.display());
+        for entry in ok(std::fs::read_dir(&dir)) {
+            let path = ok(entry).path();
+            let kind = ok(std::fs::symlink_metadata(&path)).file_type();
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                dirs.push(path);
+            } else {
+                assert!(
+                    matches!(mode(&path), 0o600 | 0o400),
+                    "{} is {:o}",
+                    path.display(),
+                    mode(&path)
+                );
+                files += 1;
+            }
+        }
+    }
+    assert!(files >= 6, "the lock, the snapshot's files and the packs");
+    drop(snapshot);
+    drop(server);
+}
+
 /// `ref_log_in_cas_transaction`, the push half (design §5.9 req 8): a push
 /// writes one ref-log row per command, with the pusher and the request, in
 /// its commit transaction; a refused push and a push stopped before its
