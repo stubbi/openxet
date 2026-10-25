@@ -218,6 +218,14 @@ impl Repos for SqliteIndex {
         .transpose()
     }
 
+    async fn file_scope_count(&self, file: &MerkleHash) -> Result<u64, IndexError> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM file_scopes WHERE file = ?")
+            .bind(file.as_bytes())
+            .fetch_one(&self.reader)
+            .await?;
+        to_u64(count, "file scope count")
+    }
+
     async fn purge_file(&self, file: &MerkleHash) -> Result<u64, IndexError> {
         let mut tx = self.begin_write().await?;
         let removed = sqlx::query("DELETE FROM file_scopes WHERE file = ?")

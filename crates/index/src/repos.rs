@@ -149,6 +149,14 @@ pub trait Repos: Send + Sync + 'static {
         sha256: &[u8; 32],
     ) -> Result<Option<FileRecord>, IndexError>;
 
+    /// The number of scopes `file` is registered to: what
+    /// [`Repos::purge_file`] would remove now (ruling M2-R13).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn file_scope_count(&self, file: &MerkleHash) -> Result<u64, IndexError>;
+
     /// Purges `file` (ruling M2-R13): in one transaction, removes its
     /// registration from every scope and records the purge. Dedup rows are
     /// left alone: they describe xorbs, not files, and no bucket record
