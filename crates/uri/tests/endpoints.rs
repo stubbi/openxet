@@ -77,8 +77,8 @@ fn endpoints_isolate_credentials() {
     // host's own content.
     let a = XetUri::from_str("xet://a.example.org/team/corpus/data.txt").unwrap();
     let b = XetUri::from_str("xet://b.example.org:8443/team/corpus/data.txt").unwrap();
-    let to_a = endpoints.resolve(&a);
-    let to_b = endpoints.resolve(&b);
+    let to_a = endpoints.resolve(&a).unwrap();
+    let to_b = endpoints.resolve(&b).unwrap();
     assert_eq!(
         to_a.url().as_str(),
         "https://a.example.org/team/corpus/resolve/main/data.txt"
@@ -104,7 +104,9 @@ fn endpoints_isolate_credentials() {
         "xet://a.example.org:8443/team/corpus/data.txt",
         "xet://b.example.org/team/corpus/data.txt",
     ] {
-        let request = endpoints.resolve(&XetUri::from_str(other).unwrap());
+        let request = endpoints
+            .resolve(&XetUri::from_str(other).unwrap())
+            .unwrap();
         assert!(request.credential().is_none(), "{other}");
         assert_eq!(request.url().scheme(), "https", "{other}");
     }
@@ -129,8 +131,9 @@ fn endpoints_isolate_credentials() {
 #[test]
 fn redirects_never_broaden_authority() {
     let endpoints = endpoints();
-    let request =
-        endpoints.resolve(&XetUri::from_str("xet://a.example.org/team/corpus/x.bin").unwrap());
+    let request = endpoints
+        .resolve(&XetUri::from_str("xet://a.example.org/team/corpus/x.bin").unwrap())
+        .unwrap();
 
     // Same origin, relative or absolute: the credential stays, as for the
     // file gateway's redirect (ruling M2-R9).
@@ -194,7 +197,9 @@ fn unconfigured_loopback_is_plain_http_and_anonymous() {
             "http://[::1]:8080/dev/scratch",
         ),
     ] {
-        let request = endpoints.resolve(&XetUri::from_str(address).unwrap());
+        let request = endpoints
+            .resolve(&XetUri::from_str(address).unwrap())
+            .unwrap();
         assert_eq!(request.url().as_str(), url);
         assert!(request.credential().is_none());
     }
@@ -211,7 +216,9 @@ fn a_configured_endpoint_selects_transport_and_credential_by_exact_host_and_port
         .unwrap();
     endpoints.add("https://[::1]:9443", None).unwrap();
 
-    let local = endpoints.resolve(&XetUri::from_str("xet://localhost:8080/dev/scratch").unwrap());
+    let local = endpoints
+        .resolve(&XetUri::from_str("xet://localhost:8080/dev/scratch").unwrap())
+        .unwrap();
     assert_eq!(local.url().as_str(), "http://localhost:8080/dev/scratch");
     assert_eq!(
         local.credential().map(Credential::expose),
@@ -219,11 +226,14 @@ fn a_configured_endpoint_selects_transport_and_credential_by_exact_host_and_port
     );
 
     // No alias: 127.0.0.1 is not localhost.
-    let numeric = endpoints.resolve(&XetUri::from_str("xet://127.0.0.1:8080/dev/scratch").unwrap());
+    let numeric = endpoints
+        .resolve(&XetUri::from_str("xet://127.0.0.1:8080/dev/scratch").unwrap())
+        .unwrap();
     assert!(numeric.credential().is_none());
 
-    let v6 =
-        endpoints.resolve(&XetUri::from_str("xet://[0:0:0:0:0:0:0:1]:9443/dev/scratch").unwrap());
+    let v6 = endpoints
+        .resolve(&XetUri::from_str("xet://[0:0:0:0:0:0:0:1]:9443/dev/scratch").unwrap())
+        .unwrap();
     assert_eq!(v6.url().as_str(), "https://[::1]:9443/dev/scratch");
 }
 
@@ -272,10 +282,53 @@ fn endpoint_configuration_refuses_base_paths_userinfo_and_duplicates() {
 #[test]
 fn credentials_never_show_in_debug_output() {
     let endpoints = endpoints();
-    let request = endpoints.resolve(&XetUri::from_str("xet://a.example.org/team/corpus").unwrap());
+    let request = endpoints
+        .resolve(&XetUri::from_str("xet://a.example.org/team/corpus").unwrap())
+        .unwrap();
     let shown = format!("{endpoints:?} {request:?}");
     assert!(
         !shown.contains(TOKEN_A) && !shown.contains(TOKEN_B),
         "{shown}"
+    );
+}
+
+#[test]
+fn a_credential_goes_over_plain_http_only_to_loopback() {
+    let mut endpoints = Endpoints::new();
+    let err = endpoints
+        .add(
+            "http://hub.example.org:8080",
+            Some(Credential::new("plain-http-token")),
+        )
+        .unwrap_err();
+    assert_eq!(err.code.as_str(), "credential_over_http");
+    assert!(!format!("{err} {} {err:?}", err.hint).contains("plain-http-token"));
+    endpoints.add("http://hub.example.org:8080", None).unwrap();
+    for local in [
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080",
+    ] {
+        endpoints
+            .add(local, Some(Credential::new("local-dev-token")))
+            .unwrap();
+    }
+}
+
+#[test]
+fn an_ipv4_mapped_address_matches_its_endpoint() {
+    let mut endpoints = Endpoints::new();
+    endpoints
+        .add(
+            "https://[::ffff:1.2.3.4]",
+            Some(Credential::new("mapped-token")),
+        )
+        .unwrap();
+    let uri = XetUri::from_str("xet://[::ffff:1.2.3.4]/team/corpus").unwrap();
+    let request = endpoints.resolve(&uri).unwrap();
+    assert_eq!(request.url().host_str(), Some(uri.host.as_str()));
+    assert_eq!(
+        request.credential().map(Credential::expose),
+        Some("mapped-token")
     );
 }

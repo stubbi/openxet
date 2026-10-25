@@ -6,7 +6,7 @@
 use std::fmt;
 use std::net::Ipv4Addr;
 
-use url::{Host, Url};
+use url::Url;
 
 use crate::{ErrorCode, Transport, UriError, XetUri};
 
@@ -84,8 +84,9 @@ impl Endpoints {
     ///
     /// `invalid_endpoint` unless it is an `http` or `https` URL without a
     /// query or fragment; `credentials_in_uri` when it carries userinfo;
-    /// `base_path_unsupported` when it has a path; `duplicate_endpoint` when
-    /// its host and port are already configured.
+    /// `base_path_unsupported` when it has a path; `credential_over_http` for
+    /// a credential on plain HTTP to a host that isn't loopback;
+    /// `duplicate_endpoint` when its host and port are already configured.
     pub fn add(&mut self, base_url: &str, credential: Option<Credential>) -> Result<(), UriError> {
         let endpoint = endpoint(base_url, credential)?;
         if self
@@ -137,27 +138,33 @@ impl Endpoints {
     /// and port, with that endpoint's transport and credential. Without one,
     /// the request carries no credential, and goes over HTTPS, or plain HTTP
     /// to a loopback host (local development).
-    #[must_use]
-    pub fn resolve(&self, uri: &XetUri) -> Request {
+    ///
+    /// # Errors
+    ///
+    /// As [`XetUri::https`]: only for an address built by hand with an
+    /// invalid host.
+    pub fn resolve(&self, uri: &XetUri) -> Result<Request, UriError> {
         let port = uri.port.unwrap_or(443);
-        match self
-            .endpoints
-            .iter()
-            .find(|e| e.host == uri.host && e.port == port)
-        {
-            Some(endpoint) => Request {
-                url: uri.https(endpoint.transport),
-                credential: endpoint.credential.clone(),
+        Ok(
+            match self
+                .endpoints
+                .iter()
+                .find(|e| e.host == uri.host && e.port == port)
+            {
+                Some(endpoint) => Request {
+                    url: uri.https(endpoint.transport)?,
+                    credential: endpoint.credential.clone(),
+                },
+                None => Request {
+                    url: uri.https(if is_loopback(&uri.host) {
+                        Transport::Http
+                    } else {
+                        Transport::Https
+                    })?,
+                    credential: None,
+                },
             },
-            None => Request {
-                url: uri.https(if is_loopback(&uri.host) {
-                    Transport::Http
-                } else {
-                    Transport::Https
-                }),
-                credential: None,
-            },
-        }
+        )
     }
 }
 
@@ -254,12 +261,22 @@ fn endpoint(base_url: &str, credential: Option<Credential>) -> Result<Endpoint, 
     let (Some(host), Some(port)) = (url.host(), url.port_or_known_default()) else {
         return Err(invalid("it has no host"));
     };
-    // The same canonical forms the parser gives an address's host.
-    let host = match host {
-        Host::Domain(domain) => domain.to_owned(),
-        Host::Ipv4(ip) => ip.to_string(),
-        Host::Ipv6(ip) => format!("[{ip}]"),
-    };
+    // The URL library's serialization, which the parser gives an
+    // address's host too.
+    let host = host.to_string();
+    // A credential over plain HTTP crosses the network readable, except to
+    // this machine (local development).
+    if transport == Transport::Http && credential.is_some() && !is_loopback(&host) {
+        return Err(UriError::new(
+            ErrorCode::CredentialOverHttp,
+            format!(
+                "the endpoint {} is plain HTTP, which would send its credential unencrypted",
+                origin(&url)
+            ),
+            "Serve the endpoint over HTTPS, or configure it without a credential; plain HTTP \
+             carries a credential only to a loopback host (localhost, 127.0.0.1, [::1]).",
+        ));
+    }
     Ok(Endpoint {
         url,
         host,

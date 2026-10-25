@@ -26,7 +26,7 @@
     {"input": "xet://hub.example.org/team/model@versión/a.txt", "canonical": "xet://hub.example.org/team/model@versi%C3%B3n/a.txt", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "model", "revision": "versión", "path": "a.txt", "immutable": false, "https": "https://hub.example.org/team/model/resolve/versi%C3%B3n/a.txt"},
     {"input": "xet://hub.example.org/team/corpus/données/été.csv", "canonical": "xet://hub.example.org/team/corpus/donn%C3%A9es/%C3%A9t%C3%A9.csv", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "données/été.csv", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/donn%C3%A9es/%C3%A9t%C3%A9.csv"},
     {"input": "xet://hub.example.org/team/corpus/%c3%a9t%c3%a9.csv", "canonical": "xet://hub.example.org/team/corpus/%C3%A9t%C3%A9.csv", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "été.csv", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/%C3%A9t%C3%A9.csv"},
-    {"input": "xet://hub.example.org/team/corpus/e%CC%81te%CC%81.csv", "canonical": "xet://hub.example.org/team/corpus/e%CC%81te%CC%81.csv", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "e\u0301te\u0301.csv", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/e%CC%81te%CC%81.csv"},
+    {"input": "xet://hub.example.org/team/corpus/e%CC%81te%CC%81.csv", "canonical": "xet://hub.example.org/team/corpus/e%CC%81te%CC%81.csv", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "été.csv", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/e%CC%81te%CC%81.csv"},
     {"input": "xet://hub.example.org/team/corpus/%E6%95%B0%E6%8D%AE/%F0%9F%93%8A.csv", "canonical": "xet://hub.example.org/team/corpus/%E6%95%B0%E6%8D%AE/%F0%9F%93%8A.csv", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "数据/📊.csv", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/%E6%95%B0%E6%8D%AE/%F0%9F%93%8A.csv"},
     {"input": "xet://hub.example.org/team/corpus/my%20file.txt", "canonical": "xet://hub.example.org/team/corpus/my%20file.txt", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "my file.txt", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/my%20file.txt"},
     {"input": "xet://hub.example.org/team/corpus/a+b(1),c;d=e!.txt", "canonical": "xet://hub.example.org/team/corpus/a%2Bb%281%29%2Cc%3Bd%3De%21.txt", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": "a+b(1),c;d=e!.txt", "immutable": false, "https": "https://hub.example.org/team/corpus/resolve/main/a%2Bb%281%29%2Cc%3Bd%3De%21.txt"},
@@ -51,7 +51,10 @@
     {"input": "xet://openxet_store.internal.example/team/corpus", "canonical": "xet://openxet_store.internal.example/team/corpus", "host": "openxet_store.internal.example", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": null, "immutable": false, "https": "https://openxet_store.internal.example/team/corpus"},
     {"input": "xet://xn--bcher-kva.example/team/corpus", "canonical": "xet://xn--bcher-kva.example/team/corpus", "host": "xn--bcher-kva.example", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": null, "immutable": false, "https": "https://xn--bcher-kva.example/team/corpus"},
     {"input": "xet://hub.example.org/spaces/team/demo@main/app.py", "canonical": "xet://hub.example.org/spaces/team/demo@main/app.py", "host": "hub.example.org", "port": null, "kind": "space", "namespace": "team", "name": "demo", "revision": "main", "path": "app.py", "immutable": false, "https": "https://hub.example.org/spaces/team/demo/resolve/main/app.py"},
-    {"input": "xet://hub.example.org/team/refs", "canonical": "xet://hub.example.org/team/refs", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "refs", "revision": null, "path": null, "immutable": false, "https": "https://hub.example.org/team/refs"}
+    {"input": "xet://hub.example.org/team/refs", "canonical": "xet://hub.example.org/team/refs", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "team", "name": "refs", "revision": null, "path": null, "immutable": false, "https": "https://hub.example.org/team/refs"},
+    {"input": "xet://[::ffff:1.2.3.4]/team/corpus", "canonical": "xet://[::ffff:102:304]/team/corpus", "host": "[::ffff:102:304]", "port": null, "kind": "repository", "namespace": "team", "name": "corpus", "revision": null, "path": null, "immutable": false, "https": "https://[::ffff:102:304]/team/corpus"},
+    {"input": "xet://hub.example.org/Model/corpus", "canonical": "xet://hub.example.org/Model/corpus", "host": "hub.example.org", "port": null, "kind": "repository", "namespace": "Model", "name": "corpus", "revision": null, "path": null, "immutable": false, "https": "https://hub.example.org/Model/corpus"},
+    {"input": "xet://hub.example.org/datasets/te%61m/corpus", "canonical": "xet://hub.example.org/datasets/team/corpus", "host": "hub.example.org", "port": null, "kind": "dataset", "namespace": "team", "name": "corpus", "revision": null, "path": null, "immutable": false, "https": "https://hub.example.org/datasets/team/corpus"}
   ],
   "invalid": [
     {"input": "https://hub.example.org/team/corpus", "code": "not_xet_uri"},
@@ -89,6 +92,13 @@
     {"input": "xet://hub.example.org/models/team/corpus", "code": "unknown_kind"},
     {"input": "xet://hub.example.org/dataset/team/corpus", "code": "unknown_kind"},
     {"input": "xet://hub.example.org/bucket/team/logs", "code": "unknown_kind"},
+    {"input": "xet://hub.example.org/dataset%73/ns/name", "code": "unknown_kind"},
+    {"input": "xet://hub.example.org/%6Dodels/a/b", "code": "unknown_kind"},
+    {"input": "xet://hub.example.org/Datasets/ns/name", "code": "reserved_namespace"},
+    {"input": "xet://hub.example.org/MODELS/ns/name", "code": "reserved_namespace"},
+    {"input": "xet://hub.example.org/api/ns/name", "code": "reserved_namespace"},
+    {"input": "xet://hub.example.org/datasets/V1/name", "code": "reserved_namespace"},
+    {"input": "xet://hub.example.org/openapi.json/name", "code": "reserved_namespace"},
     {"input": "xet://hub.example.org/-team/corpus", "code": "invalid_namespace"},
     {"input": "xet://hub.example.org//corpus", "code": "invalid_namespace"},
     {"input": "xet://hub.example.org/team/corpus.git", "code": "invalid_name"},
@@ -124,6 +134,8 @@
     {"input": "xet://hub.example.org/team/corpus?token=secret-token", "code": "query_not_supported"},
     {"input": "xet://hub.example.org/team/corpus#readme", "code": "fragment_not_supported"},
     {"input": "xet://xethub.com/user/repo", "code": "legacy_xethub"},
-    {"input": "xet://user/repo/main/file.txt", "code": "legacy_no_host"}
+    {"input": "xet://user/repo/main/file.txt", "code": "legacy_no_host"},
+    {"input": "xet://hub.example.org:user", "code": "invalid_port"},
+    {"input": "xet://hub.example.org:a%20b/team/corpus", "code": "invalid_port"}
   ]
 }

@@ -6,7 +6,8 @@
 //! before a colon, or defaulted to `xethub.com` without one. An address
 //! that names no server is never sent to a default one (ADR 0009 item 2).
 
-use crate::parse::{self, Authority};
+use crate::host::{self, Authority};
+use crate::parse;
 use crate::{ErrorCode, UriError, XetUri};
 
 /// How an input relates to the current grammar.
@@ -82,7 +83,12 @@ fn pyxet_endpoint_form(input: &str) -> Option<(&str, &str, &str)> {
     } else {
         authority.rsplit_once(':')?
     };
-    if user.is_empty() || user.bytes().all(|b| b.is_ascii_digit()) {
+    // Only a "user" that is a namespace, followed by a repository, reads as
+    // pyxet; anything else after a colon is a malformed port.
+    let repository_follows = after
+        .strip_prefix('/')
+        .is_some_and(|rest| rest.split('/').next().is_some_and(|repo| !repo.is_empty()));
+    if user.bytes().all(|b| b.is_ascii_digit()) || !parse::is_id(user) || !repository_follows {
         return None;
     }
     Some((endpoint, user, after))
@@ -112,24 +118,20 @@ fn pyxet_translation(endpoint: &str, user: &str, after: &str) -> Result<(XetUri,
         port,
         single_label,
         ..
-    } = parse::parse_authority(endpoint, after)?;
-    if parse::is_xethub(&host) {
+    } = host::parse_authority(endpoint, after)?;
+    if host::is_xethub(&host) {
         return Err(xethub_error(&parts));
     }
     if single_label {
-        return Err(parse::host_not_qualified(&host));
+        return Err(host::host_not_qualified(&host));
     }
     let authority = match port {
         Some(port) => format!("{host}:{port}"),
         None => host,
     };
-    let Some((repo, after_repo)) = rest.split_first() else {
-        return Err(UriError::new(
-            ErrorCode::MissingRepository,
-            "this pyxet address names a user but no repository",
-            format!("Write the repository after the user: xet://{authority}/{user}/<name>."),
-        ));
-    };
+    let (repo, after_repo) = rest
+        .split_first()
+        .unwrap_or_else(|| unreachable!("pyxet_endpoint_form requires a repository"));
     // pyxet's names never contained `@`, which starts a revision here.
     if repo.contains('@') {
         return Err(UriError::new(

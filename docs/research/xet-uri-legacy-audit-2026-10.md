@@ -82,9 +82,10 @@ No percent-decoding is applied anywhere.
 `file_system.py` defines `XetFS(fsspec.spec.AbstractFileSystem)` with
 `protocol = "xet"` (line 76, commented "This allows pandas, etc. to implement
 'xet://'") and ends with `fsspec.register_implementation("xet", XetFS,
-clobber=True)` (line 722). Importing pyxet therefore replaces any `xet`
-handler already registered, without a warning; with `clobber=False`, fsspec
-would raise instead (`fsspec/registry.py`, `register_implementation`).
+clobber=True)` (line 722). `clobber=True` is fsspec's option to register a
+name that is already registered (`fsspec/registry.py`,
+`register_implementation`; without it, fsspec raises for such a name), so the
+handler for `xet` is whichever package registered it last.
 `_strip_protocol` strips `xet://` or `https://` and leading slashes.
 
 fsspec 2026.9.0 (tag commit `0f76baaae4a227b085b18e8469e6cc1792a95ade`) has no
@@ -115,7 +116,9 @@ maintainers, as remaining work; neither has happened.
    elsewhere. The parser reports the translation and refuses to apply it
    silently. The branch was a single segment in pyxet, so it is always a valid
    one-segment revision; a trailing `/` has no place in the current grammar
-   and is dropped, which the translation's note says.
+   and is dropped, which the translation's note says. The form is recognised
+   only when the text after the colon is a valid namespace and a repository
+   follows; any other non-numeric "port" is refused as a malformed port.
 3. **Ambiguity is resolved toward the named host.** A colon-less address with
    a dotted host (`xet://example.com/user/repo/branch/path`) is valid under the
    current grammar, and is read with the current meaning: only the host it
@@ -124,9 +127,8 @@ maintainers, as remaining work; neither has happened.
    is refused under the current grammar anyway (it is a local alias), so the
    two meanings can't silently diverge there.
 4. **`xethub.com` is refused by name** in every form, including subdomains: no
-   openxet deployment answers there, and accepting it would send a reader's
-   request to whoever controls that name.
-5. **fsspec coexistence is M6's.** pyxet's `clobber=True` means an openxet
-   fsspec adapter installed next to pyxet could be replaced silently by a later
-   `import pyxet`; the adapter's coexistence policy and its tests belong to
+   openxet deployment answers there.
+5. **fsspec coexistence is M6's.** With pyxet registering `xet` with
+   `clobber=True`, two packages that both register `xet` resolve by import
+   order; the openxet adapter's coexistence policy and its tests belong to
    M6-URI.

@@ -73,7 +73,7 @@ resource     = [ kind "/" ] namespace "/" name [ "@" revision ] [ "/" path ]
 kind         = "datasets" / "spaces" / "kernels" / "buckets"
 namespace    = id
 name         = id
-id           = ( ALPHA / DIGIT ) 0*95( ALPHA / DIGIT / "." / "_" / "-" )
+id           = 1*( unreserved / pct-encoded )      ; decoded: M2-R2's rule, below
 
 revision     = special-ref / rev-segment
 special-ref  = "refs/pr/" 1*DIGIT
@@ -105,9 +105,10 @@ Each rule also carries a constraint the ABNF can't express:
 | host | ASCII only: an internationalised name is written as its A-label (`xn--…`); the error names the A-label | `non_ascii_host` |
 | host | IPv6 without a zone identifier (`%25…`) and no `IPvFuture` | `invalid_host` |
 | host | not `xethub.com` or a subdomain of it | `legacy_xethub` |
-| port | 1-65535, decimal, no leading zero; a non-numeric port is a pyxet address | `invalid_port`, `legacy_pyxet_address` |
-| kind | exactly one of the four names; `models`, `model`, `dataset`, `space`, `kernel` and `bucket` as a first segment are refused, never read as a namespace | `unknown_kind` |
-| namespace, name | the `id` rule after percent-decoding (ruling M2-R2), no `..`; a name does not end in `.git` | `invalid_namespace`, `invalid_name`, `missing_repository` |
+| port | 1-65535, decimal, no leading zero. A non-numeric "port" is pyxet's explicit-endpoint form only when it is a valid namespace and a repository follows (see [Legacy forms](#legacy-forms)); anything else is a malformed port | `invalid_port`, `legacy_pyxet_address` |
+| kind | exactly one of the four names, written literally in lowercase. The first segment is matched after percent-decoding: `models`, `model`, `dataset`, `space`, `kernel` and `bucket` there are refused, never read as a namespace, and so is a percent-encoded spelling of any kind word (`dataset%73`) | `unknown_kind` |
+| namespace, name | after percent-decoding, `[A-Za-z0-9][A-Za-z0-9._-]{0,95}` with no `..` (ruling M2-R2); a name does not end in `.git`. An escaped unreserved character is accepted and written plainly in the canonical form (`%63orpus` is `corpus`) | `invalid_namespace`, `invalid_name`, `missing_repository` |
+| namespace | not reserved (ruling M2-R2), ignoring ASCII case: `models`, `datasets`, `spaces`, `kernels`, `buckets`, `api`, `v1`, `v2`, `openapi.json`, `healthz`, `readyz` | `reserved_namespace` |
 | revision | not on a bucket; not empty; a valid Git ref name or object id after decoding (below) | `revision_on_bucket`, `empty_revision`, `invalid_revision` |
 | revision | a bare `refs` followed by a path is refused: a ref with `/` is written with `%2F` | `ambiguous_revision` |
 | path | no empty segment (so no trailing `/` and no `//`), no `.` or `..` segment, no encoded `/` (`%2F`) and no NUL (`%00`) | `invalid_path` |
@@ -144,8 +145,10 @@ There is no `models/` kind. A repository is addressed by
 change. On huggingface.co, `hf://models/…` is the model view; in a
 `xet://` address the first segment `models` is refused with a hint rather
 than read as a namespace, as are the singular forms (`dataset/` and the
-rest), which `hf://` refuses too. Namespaces with those names can't be
-addressed by `xet://`; huggingface.co reserves them as well.
+rest), which `hf://` refuses too. The plural kind words, and the first
+segments of openxet's own routes, are reserved namespaces (ruling M2-R2,
+ignoring case), so no repository can take a name that an address would
+read as something else.
 
 Bucket addresses parse and format in M2 so that one parser serves every
 milestone; resolving them needs the bucket primitive, which ships in M5.
@@ -174,11 +177,10 @@ Any other `refs/…` ref is written with `%2F`; `@refs/heads/main/x` is
 refused as ambiguous rather than read as the branch `refs` and the path
 `heads/main/x`.
 
-A `@` in a repository name would be ambiguous with the revision marker,
-which is why M2-R14 writes a literal `@` as `%40`. Repository names
-can't contain `@` (M2-R2), so `%40` in a namespace or name decodes and is
-then refused as an invalid name. In a revision or path, `@` needs no
-escaping.
+Namespaces and names can't contain `@` (ruling M2-R2), so the first `@`
+in the name segment always starts the revision. A `%40` there decodes to
+`@` and is refused as an invalid name. In a revision or a path, `@` needs
+no escaping.
 
 ## Escaping and Unicode
 
@@ -194,8 +196,11 @@ escaping.
   `e` + U+0301 are different paths, because Git compares path bytes.
   Percent-decoded octets that are not UTF-8 are refused.
 - The canonical form also lowercases the scheme and the host, writes an
-  IPv6 address in its [RFC 5952](https://www.rfc-editor.org/rfc/rfc5952)
-  form, and drops port `443`, the default. Nothing else is rewritten:
+  IPv6 address as the [WHATWG URL standard](https://url.spec.whatwg.org/#concept-ipv6-serializer)
+  serializes it (the [RFC 5952](https://www.rfc-editor.org/rfc/rfc5952)
+  compression, with an IPv4-mapped address in hex: `[::ffff:1.2.3.4]` is
+  `[::ffff:102:304]`), so the host equals the HTTPS URL's, and drops port
+  `443`, the default. Nothing else is rewritten:
   the namespace, name, revision and path keep their case.
 
 Parsing is a function of the text alone. `format(parse(s))` is the
@@ -232,7 +237,9 @@ xet://localhost:8080/dev/scratch/notes.txt
 
 Loopback hosts (`localhost`, `127.0.0.0/8`, `[::1]`) are reached over
 plain HTTP unless the client is configured otherwise; every other host is
-reached over HTTPS. Such an address is meaningful only on the machine
+reached over HTTPS. An address without a port names port 443 over plain
+HTTP too: `xet://localhost/…` is `http://localhost:443/…`, so a local
+server's address carries its port. Such an address is meaningful only on the machine
 that runs the server: share an HTTPS link or a public host's address
 instead.
 
@@ -262,7 +269,9 @@ The unprefixed resolve route is the `model` view (design §6), so in M2 a
 file address without a kind resolves on repositories that carry the
 `model` label, and a file of a repository with only another label is
 addressed through that label's kind (`xet://h/datasets/…`). The unprefixed
-Git URL serves every repository whatever its labels.
+Git URL serves every repository whatever its labels. M6 revisits the
+mapping of a kind-less file address, so that it resolves whatever the
+repository's labels.
 
 ## Reverse-proxy prefixes
 
@@ -291,6 +300,9 @@ A `xet://` address never carries a credential:
   HTTP, drops it, even when the client holds a credential for the new
   host: a server can't choose which of the client's credentials to
   receive. A `Location` with userinfo is refused.
+- A credential is configured only for an HTTPS endpoint, or for a plain
+  HTTP endpoint on a loopback host (`credential_over_http` otherwise), so
+  it never crosses a network unencrypted.
 - Opening an address identifies or reads a resource. It never uploads,
   deletes or runs anything; a write needs its command's own
   authorization.
@@ -343,7 +355,7 @@ The policy, tested row by row in `crates/uri/tests/legacy.rs`
 | L11 | `xet://localhost:8080:user/repo/main/x` | pyxet explicit endpoint with a port | Translated to `xet://localhost:8080/user/repo@main/x` |
 | L12 | `xet://hub.example.org:user/repo/main/dir/` | pyxet, folder with trailing `/` | Translated to `xet://hub.example.org/user/repo@main/dir` (the `/` is dropped and the note says so) |
 | L13 | `xet://hub.example.org:user/repo` | pyxet explicit endpoint, no branch | Translated to `xet://hub.example.org/user/repo` |
-| L14 | `xet://hub.example.org:user` | pyxet, user only | Rejected, `missing_repository` |
+| L14 | `xet://hub.example.org:user` | pyxet, user only | Rejected, `invalid_port` (no repository follows, so it isn't read as pyxet) |
 | L15 | `xet://storage:user/repo/main` | pyxet with a single-label endpoint | Rejected, `host_not_qualified` |
 | L16 | `/user/repo/branch/path` | pyxet without a scheme | Rejected, `not_xet_uri` |
 | L17 | `https://xethub.com/user/repo/branch/path` | pyxet HTTPS form | Rejected, `not_xet_uri` |
@@ -353,9 +365,9 @@ The policy, tested row by row in `crates/uri/tests/legacy.rs`
 
 ### fsspec
 
-pyxet registers an fsspec filesystem for the protocol `xet` at import time
-with `clobber=True`, replacing any other `xet` handler without a warning.
-fsspec 2026.9.0 has no built-in `xet` entry. openxet's own fsspec adapter
+pyxet registers its fsspec filesystem for the protocol `xet` when it is
+imported, with `clobber=True`, fsspec's option to take over a name that is
+already registered. fsspec 2026.9.0 has no built-in `xet` entry. openxet's own fsspec adapter
 arrives in M6 and will not silently replace another installed `xet`
 handler (ADR 0009 item 5); its coexistence policy is part of M6-URI.
 

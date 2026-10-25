@@ -70,7 +70,12 @@ fn valid_vectors_parse_format_and_map() {
         assert_eq!(uri.path, v.path, "{}", v.input);
         assert_eq!(uri.is_immutable(), v.immutable, "{}", v.input);
         assert_eq!(uri.to_string(), v.canonical, "{}", v.input);
-        assert_eq!(uri.https(Transport::Https).as_str(), v.https, "{}", v.input);
+        assert_eq!(
+            uri.https(Transport::Https).unwrap().as_str(),
+            v.https,
+            "{}",
+            v.input
+        );
         assert_eq!(
             XetUri::from_str(&v.canonical).unwrap(),
             uri,
@@ -123,6 +128,7 @@ fn vectors_cover_every_kind_and_every_parse_error() {
         "non_ascii_host",
         "not_xet_uri",
         "query_not_supported",
+        "reserved_namespace",
         "revision_on_bucket",
         "unknown_kind",
     ]);
@@ -159,12 +165,12 @@ fn a_non_ascii_host_error_names_its_a_label() {
 fn http_transport_keeps_the_named_port() {
     let uri = XetUri::from_str("xet://127.0.0.1:8080/dev/scratch/notes.txt").unwrap();
     assert_eq!(
-        uri.https(Transport::Http).as_str(),
+        uri.https(Transport::Http).unwrap().as_str(),
         "http://127.0.0.1:8080/dev/scratch/resolve/main/notes.txt"
     );
     let uri = XetUri::from_str("xet://localhost/dev/scratch").unwrap();
     assert_eq!(
-        uri.https(Transport::Http).as_str(),
+        uri.https(Transport::Http).unwrap().as_str(),
         "http://localhost:443/dev/scratch"
     );
 }

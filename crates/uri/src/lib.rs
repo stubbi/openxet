@@ -13,13 +13,14 @@
 //! assert_eq!(uri.kind, Kind::Dataset);
 //! assert_eq!(uri.revision.as_deref(), Some("v2"));
 //! assert_eq!(
-//!     uri.https(Transport::Https).as_str(),
+//!     uri.https(Transport::Https)?.as_str(),
 //!     "https://hub.example.org/datasets/team/corpus/resolve/v2/train.csv",
 //! );
 //! # Ok::<(), openxet_uri::UriError>(())
 //! ```
 
 mod format;
+mod host;
 mod legacy;
 mod parse;
 mod resolve;
@@ -102,6 +103,7 @@ pub enum ErrorCode {
     MissingRepository,
     UnknownKind,
     InvalidNamespace,
+    ReservedNamespace,
     InvalidName,
     EmptyRevision,
     InvalidRevision,
@@ -116,6 +118,7 @@ pub enum ErrorCode {
     LegacyNoHost,
     LegacyPyxetAddress,
     InvalidEndpoint,
+    CredentialOverHttp,
     BasePathUnsupported,
     DuplicateEndpoint,
     InvalidRedirect,
@@ -136,6 +139,7 @@ impl ErrorCode {
             Self::MissingRepository => "missing_repository",
             Self::UnknownKind => "unknown_kind",
             Self::InvalidNamespace => "invalid_namespace",
+            Self::ReservedNamespace => "reserved_namespace",
             Self::InvalidName => "invalid_name",
             Self::EmptyRevision => "empty_revision",
             Self::InvalidRevision => "invalid_revision",
@@ -150,6 +154,7 @@ impl ErrorCode {
             Self::LegacyNoHost => "legacy_no_host",
             Self::LegacyPyxetAddress => "legacy_pyxet_address",
             Self::InvalidEndpoint => "invalid_endpoint",
+            Self::CredentialOverHttp => "credential_over_http",
             Self::BasePathUnsupported => "base_path_unsupported",
             Self::DuplicateEndpoint => "duplicate_endpoint",
             Self::InvalidRedirect => "invalid_redirect",

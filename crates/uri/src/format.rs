@@ -6,8 +6,9 @@ use std::fmt::Write as _;
 
 use url::Url;
 
+use crate::host::invalid_host;
 use crate::parse::is_convert_name;
-use crate::{Kind, Transport, XetUri};
+use crate::{Kind, Transport, UriError, XetUri};
 
 /// The revision an address without one names (ruling M2-R5), as
 /// `huggingface_hub`'s `to_url` defaults to it.
@@ -51,14 +52,14 @@ impl fmt::Display for XetUri {
 impl XetUri {
     /// The HTTPS URL of the resource on the same host and port, through
     /// the routes `huggingface_hub` uses: the repository or bucket page, a
-    /// revision's `tree`, or a file's `resolve`.
+    /// revision's `tree`, or a file's `resolve`. Without a port the URL
+    /// names port 443, over plain HTTP too.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Only for a value built by hand whose host is not a valid host;
-    /// every parsed value maps.
-    #[must_use]
-    pub fn https(&self, transport: Transport) -> Url {
+    /// `invalid_host`, only for a value built by hand whose host is not a
+    /// valid URL host; every parsed value maps.
+    pub fn https(&self, transport: Transport) -> Result<Url, UriError> {
         let scheme = match transport {
             Transport::Https => "https",
             Transport::Http => "http",
@@ -84,12 +85,7 @@ impl XetUri {
             ),
             (_, None, None) => Ok(()),
         };
-        Url::parse(&url).unwrap_or_else(|err| {
-            panic!(
-                "the address's host {:?} is not a valid URL host: {err}",
-                self.host
-            )
-        })
+        Url::parse(&url).map_err(|_| invalid_host("it doesn't form a valid HTTPS URL"))
     }
 }
 

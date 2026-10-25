@@ -76,7 +76,7 @@ const MATRIX: &[(&str, &str, Want)] = &[
     (
         "L14",
         "xet://hub.example.org:user",
-        Want::Rejected("missing_repository"),
+        Want::Rejected("invalid_port"),
     ),
     (
         "L15",

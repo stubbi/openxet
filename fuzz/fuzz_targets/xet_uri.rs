@@ -41,7 +41,7 @@ fn check(uri: &XetUri) {
     assert_eq!(&again, uri);
     assert_eq!(again.to_string(), canonical);
     for transport in [Transport::Https, Transport::Http] {
-        let url = uri.https(transport);
+        let url = uri.https(transport).expect("a parsed address maps");
         assert_eq!(url.host_str(), Some(uri.host.as_str()));
         assert!(url.username().is_empty() && url.password().is_none());
     }
