@@ -6,7 +6,7 @@ benchmark, and a speed regression fails CI.
 
 | What | Kind | Command |
 |---|---|---|
-| Reconstruction latency, design §5.8 | CI gate (Linux runner); locally, needs a quiet machine | `cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture` |
+| Reconstruction latency, design §5.8 | CI gate (Linux runner): against the base on a pull request, absolute on `main` (ruling M2-R17); locally, needs a quiet machine | `cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture` |
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 | Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
@@ -98,7 +98,74 @@ before the gate, so a log tells the two machine types apart.
 
 **Run it on a quiet machine.** With 200 samples, the p99 is the third
 slowest request, so three scheduler stalls fail it. On a busy host the
-p50s stay steady while the p99 fails: that is load, not a regression.
+p99 fails first, and on a loaded host the p50 of the unmerged full shape,
+whose answer is written on several threads, rises too: that is load, not
+a regression. Locally the test asserts p99 < 50 ms, as it always has.
+
+### How CI gates it (ruling M2-R17)
+
+A shared runner can be slow enough to miss 50 ms with nothing changed. On
+2026-10-25 the `rust` job of PR #82, which changes nothing the gate
+compiles, failed on all twelve attempts of one CI run (issue #83). The
+first three logged `unmerged full` at p50 40–48 / p99 58–68 ms on an AMD
+EPYC 7763 and an Intel Xeon 6973P-C, and the twelfth p50 39.7 / p99
+61.0 ms on an AMD EPYC 9V74, the other shapes within their usual range. A
+re-run of PR #81's merged job, which had passed at p50 30.7 / p99 34.2 ms
+hours earlier, failed the same way at the same time (p50 40.2 / p99
+58.8 ms). Ruling M1-R35 fixes a flaky gate rather than loosening it, so
+the gate now compares a pull request with its base on the same runner:
+
+- On a **pull request** the job checks out the PR's base, the base
+  branch's tip recorded in the event (`pull_request.base.sha`), and runs
+  the gate from it and then from the PR, each in a release build with
+  `OPENXET_LATENCY_GATE=measure`. Both runs use HEAD's measurement code:
+  the job copies the PR's `crates/cas/tests/latency_gate.rs` and its
+  fixture (`crates/cas/tests/fixture/large_files.rs`) over the base's
+  before building, so only the measured library comes from the base, and
+  a base from before this ruling is measured the same way. The base
+  builds in its own target directory (`target/latency-base`): in a shared
+  one, cargo's fingerprints for the workspace crates match across the two
+  checkouts, and the head step would run the base's build again. Each run
+  prints one `openxet.latency-gate.v1` JSON line per shape, such as this
+  one from the local machine:
+
+  ```json
+  {"schema":"openxet.latency-gate.v1","build":"<commit>","shape":"unmerged full","p50_ms":20.178,"p99_ms":26.571,"max_ms":28.145,"runs":200}
+  ```
+
+  `build` is `OPENXET_LATENCY_GATE_BUILD` when the test was compiled, which
+  CI sets to each checkout's commit (`null` when unset, as in a local run).
+  `scripts/check-latency-gate.py --base base.json --head head.json
+  --head-build <commit>` exits 2 when the head's `build` isn't the commit
+  CI checked out, when both runs report the same `build`, or when a line
+  carries a missing, non-numeric, negative or non-finite value. It fails a
+  shape when the PR's p99 is at or past 50 ms and more than 1.25 × the
+  base's p99, or when the PR's p50 > max(1.25 × the base's p50, the base's
+  p50 + 2 ms). A runner that can meet 50 ms on the base still holds the PR
+  to it, failing at 50 ms as the test's own assertion does; a runner too
+  slow for it holds the PR to its base, so a slowdown of more than a
+  quarter fails on any runner. The 2 ms floor matters for the merged
+  shapes, whose p50s of a few milliseconds would otherwise fail on a
+  millisecond of noise between the runs. A shape the base didn't measure
+  (a base that can't build the PR's test because it lacks an API the test
+  uses, or a new shape) is held to 50 ms alone.
+- On **`main`** the job runs the pushed commit alone and asserts
+  p99 < 50 ms, as before; a slow runner can turn it red without a
+  regression, so read its log before reverting anything. The release rig
+  (<https://github.com/stubbi/openxet/issues/55>) enforces the absolute
+  bar on every release, whatever CI's runners do.
+
+**Reading the summary.** The comparison writes the two builds' commits
+and a table to the job's summary page: each shape's base and PR p50 /
+p99, the two ratios, the p99 bar it applied, and pass or fail, followed
+by each failure with the number that broke it. Ratios near 1.00 with both
+runs over 50 ms mean a slow runner, not a regression. A p50 past its bar
+with the base steady is a regression; rerun once to rule out a load
+change between the two runs, and if it holds, find what made the answer
+slower. When the base's build or run fails, the summary says so in one
+line above the table, and the shapes it didn't measure are held to 50 ms
+alone. Run the script's tests with
+`python3 -I scripts/test_check_latency_gate.py`.
 
 ### What the gate proves, and what it doesn't
 
