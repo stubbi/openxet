@@ -49,6 +49,36 @@ pub async fn create_repo(
     private: bool,
     label: &str,
 ) -> Result<Repo, HubError> {
+    create_with(state, who, namespace, name, private, label, true).await
+}
+
+/// [`create_repo`] without the initial commit: the repository a first
+/// `git push` creates (ruling M2-R11), whose refs are the push's own. An
+/// initial commit on `main` would make the push's update of `main` a
+/// conflict.
+///
+/// # Errors
+///
+/// Those of [`create_repo`].
+pub(crate) async fn create_repo_for_push(
+    state: &HubState,
+    who: &UserPrincipal,
+    namespace: &str,
+    name: &str,
+    label: &str,
+) -> Result<Repo, HubError> {
+    create_with(state, who, namespace, name, false, label, false).await
+}
+
+async fn create_with(
+    state: &HubState,
+    who: &UserPrincipal,
+    namespace: &str,
+    name: &str,
+    private: bool,
+    label: &str,
+    with_initial_commit: bool,
+) -> Result<Repo, HubError> {
     let view = View::from_label(label).unwrap_or(View::Any);
     if !authz::allowed(state, who, Action::Create, namespace, None).await? {
         return Err(if authz::is_anonymous(who) {
@@ -126,7 +156,9 @@ pub async fn create_repo(
             }),
         })
         .await?;
-    initial_commit(state, id).await?;
+    if with_initial_commit {
+        initial_commit(state, id).await?;
+    }
     tracing::info!(repo = %id, "repository created");
     Ok(repo)
 }

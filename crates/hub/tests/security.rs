@@ -22,6 +22,10 @@ const CAS_ONLY: &str = "oxt_test_cas_only";
 /// The unknown-repository body of ruling M2-R6, byte for byte.
 const UNKNOWN_BODY: &str = r#"{"error":"Repository not found","schema":"openxet.error.v1","code":"repo_not_found","message":"Repository not found","hint":"Check the repository id and the token's access: a repository the token may not read answers exactly like one that doesn't exist."}"#;
 
+/// The same answer on the Git smart HTTP routes, as `text/plain`.
+const GIT_UNKNOWN_BODY: &str = "Repository not found\nCheck the repository id and the token's \
+     access: a repository the token may not read answers exactly like one that doesn't exist.\n";
+
 /// Alice owns `alice/*`, Bob `bob/*`; Carol may create in `alice` but not
 /// read there.
 async fn hub() -> TestHub {
@@ -60,7 +64,13 @@ fn assert_unknown(reply: &Reply, what: &str) {
         "{what}: {}",
         reply.text()
     );
-    assert_eq!(reply.text(), UNKNOWN_BODY, "{what}");
+    // The Git routes answer `text/plain`, which git shows its user; the
+    // API routes JSON (ruling M2-R6 as amended). Each is one constant.
+    let git = ["/info/refs", "/git-upload-pack", "/git-receive-pack"]
+        .iter()
+        .any(|route| what.contains(route));
+    let body = if git { GIT_UNKNOWN_BODY } else { UNKNOWN_BODY };
+    assert_eq!(reply.text(), body, "{what}");
     assert_eq!(reply.header("x-error-code"), Some("RepoNotFound"), "{what}");
     assert_eq!(
         reply.header("x-error-message"),

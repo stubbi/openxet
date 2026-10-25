@@ -4,11 +4,12 @@
 
 use std::ffi::OsStr;
 use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use gix_pack::data::output;
-use openxet_storage::{PackExt, PackName};
+use openxet_storage::{PackExt, PackName, create_private_dir_all};
 use tokio::io::AsyncWriteExt as _;
 
 use super::read::objects_err;
@@ -23,7 +24,7 @@ pub(super) fn write_pack(
     dir: &Path,
     objects: &[NewObject],
 ) -> Result<(PackFiles, u32, u64), GitError> {
-    std::fs::create_dir_all(dir).map_err(io_err("create", dir))?;
+    create_private_dir_all(dir).map_err(io_err("create", dir))?;
     let entries = objects
         .iter()
         .map(|o| {
@@ -39,7 +40,13 @@ pub(super) fn write_pack(
         GitError::InvalidHubWrite("a Hub write creates too many objects".to_owned())
     })?;
     let tmp = dir.join("incoming.pack");
-    let file = std::fs::File::create(&tmp).map_err(io_err("create", &tmp))?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(io_err("create", &tmp))?;
     let mut writer = output::bytes::FromEntriesIter::new(
         std::iter::once(Ok(entries)),
         std::io::BufWriter::new(file),

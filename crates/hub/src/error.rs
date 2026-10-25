@@ -7,7 +7,7 @@
 use std::error::Error as StdError;
 
 use axum::body::Body;
-use axum::http::header::{RETRY_AFTER, WWW_AUTHENTICATE};
+use axum::http::header::{CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::AuthzError;
@@ -193,6 +193,31 @@ pub enum HubError {
     /// `Retry-After`.
     #[error("{0}")]
     Busy(String),
+    /// A Git request of the dumb HTTP protocol, which isn't served: only
+    /// smart HTTP is (ruling M2-R11). `404`.
+    #[error(
+        "this server serves Git over smart HTTP only: info/refs needs \
+         ?service=git-upload-pack or ?service=git-receive-pack"
+    )]
+    DumbHttp,
+    /// A Git `POST` without git's own request `Content-Type`. `415`, as
+    /// `git http-backend` answers.
+    #[error("this route takes only Content-Type: {expected}")]
+    WrongContentType {
+        /// The type git sends.
+        expected: &'static str,
+    },
+    /// A push larger than `git.max_push_bytes`. `413`.
+    #[error("the push is larger than the {limit} bytes this server takes in one push")]
+    PushTooLarge {
+        /// `git.max_push_bytes`.
+        limit: u64,
+    },
+    /// R22's reachability check is over a concurrency limit for the
+    /// repository or the caller (ADR 0004 item 2). `429` with
+    /// `Retry-After`.
+    #[error("{0}")]
+    Throttled(String),
     /// A Hub endpoint openxet doesn't implement (design §6). `501`, naming
     /// it, never a confusing `404`.
     #[error("{endpoint} is not implemented by this openxet server")]
@@ -301,6 +326,28 @@ impl HubError {
                 "Fix the request as the message says and send it again; nothing was changed.",
             ),
             Self::Busy(_) => (StatusCode::SERVICE_UNAVAILABLE, "busy", RETRY_HINT),
+            Self::DumbHttp => (
+                StatusCode::NOT_FOUND,
+                "dumb_http_not_served",
+                "Clone the repository's URL with git, which asks for smart HTTP itself; \
+                 openxet serves no files under a repository's Git URL.",
+            ),
+            Self::WrongContentType { .. } => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media_type",
+                "Push and fetch with git, which sends this type; other clients must send it too.",
+            ),
+            Self::PushTooLarge { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "push_too_large",
+                "Push fewer commits at a time, or store large files with Git LFS (`git lfs \
+                 track`); the operator sets the limit as git.max_push_bytes.",
+            ),
+            Self::Throttled(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_requests",
+                RETRY_HINT,
+            ),
             Self::NotImplemented { .. } => (
                 StatusCode::NOT_IMPLEMENTED,
                 "not_implemented",
@@ -347,6 +394,22 @@ impl HubError {
 
 impl IntoResponse for HubError {
     fn into_response(self) -> Response {
+        self.render(false)
+    }
+}
+
+impl HubError {
+    /// The answer on Git's smart HTTP routes: the status and headers of
+    /// [`IntoResponse::into_response`], with the message and the hint as a
+    /// `text/plain` body, which git prints as `remote:` lines (`http.c`
+    /// `show_http_message`, git v2.39.5). JSON is for API clients (ruling
+    /// M2-R6 as amended); the unknown-repository text is as constant as
+    /// its JSON.
+    pub(crate) fn into_git_response(self) -> Response {
+        self.render(true)
+    }
+
+    fn render(self, plain: bool) -> Response {
         self.log();
         let (status, code, hint) = self.parts();
         // The unknown-repository answer is built from constants only, so it
@@ -357,13 +420,23 @@ impl IntoResponse for HubError {
             Self::InvalidCredential => INVALID_CREDENTIAL.to_owned(),
             other => other.to_string(),
         };
+        let text = plain.then(|| format!("{message}\n{hint}\n"));
         let body = HubErrorBody::new(
             ErrorBody::new(status, code, message, hint),
             self.error_code(),
         );
-        let mut response = match &self {
-            Self::NameTaken { url, .. } => with_url(body, url),
-            _ => body.into_response(),
+        let mut response = match (&self, text) {
+            (_, Some(text)) => {
+                let (parts, _) = body.into_response().into_parts();
+                let mut response = Response::from_parts(parts, Body::from(text));
+                response.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
+                response
+            }
+            (Self::NameTaken { url, .. }, None) => with_url(body, url),
+            (_, None) => body.into_response(),
         };
         let headers = response.headers_mut();
         match self {
@@ -379,7 +452,10 @@ impl IntoResponse for HubError {
                     HeaderValue::from_static(r#"Bearer realm="openxet", error="invalid_token""#),
                 );
             }
-            Self::AuthorizerUnavailable(_) | Self::Unavailable(_) | Self::Busy(_) => {
+            Self::AuthorizerUnavailable(_)
+            | Self::Unavailable(_)
+            | Self::Busy(_)
+            | Self::Throttled(_) => {
                 headers.insert(RETRY_AFTER, HeaderValue::from_static("1"));
             }
             Self::EntryNotFound {

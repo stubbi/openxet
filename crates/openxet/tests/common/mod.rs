@@ -41,14 +41,26 @@ pub struct Server {
     pub token: String,
     pub data_dir: PathBuf,
     stderr: Arc<Mutex<Vec<u8>>>,
+    stderr_done: Option<thread::JoinHandle<()>>,
 }
 
 impl Server {
     /// A server on `data_dir`, with `config` if given.
     pub fn start(data_dir: &Path, config: Option<&Path>) -> Self {
+        Self::start_with(data_dir, config, "0", &[])
+    }
+
+    /// [`Server::start`] on `port` (`0` for a free one), with `env`.
+    pub fn start_with(
+        data_dir: &Path,
+        config: Option<&Path>,
+        port: &str,
+        env: &[(&str, &str)],
+    ) -> Self {
         let mut cmd = openxet();
-        cmd.args(["serve", "--json", "--port", "0", "--data-dir"])
-            .arg(data_dir);
+        cmd.args(["serve", "--json", "--port", port, "--data-dir"])
+            .arg(data_dir)
+            .envs(env.iter().copied());
         if let Some(config) = config {
             cmd.arg("--config").arg(config);
         }
@@ -60,7 +72,7 @@ impl Server {
         let stderr = Arc::new(Mutex::new(Vec::new()));
         let mut pipe = child.stderr.take().unwrap();
         let sink = Arc::clone(&stderr);
-        thread::spawn(move || {
+        let stderr_done = thread::spawn(move || {
             let mut buf = [0u8; 8192];
             while let Ok(n) = pipe.read(&mut buf) {
                 if n == 0 {
@@ -95,6 +107,7 @@ impl Server {
                 .unwrap_or_default(),
             data_dir: data_dir.to_owned(),
             stderr,
+            stderr_done: Some(stderr_done),
         }
     }
 
@@ -106,6 +119,40 @@ impl Server {
             .env("OPENXET_TOKEN", token)
             .env("HF_XET_CACHE", cache);
         cmd
+    }
+}
+
+impl Server {
+    /// The port the server listens on.
+    pub fn port(&self) -> String {
+        self.endpoint.rsplit(':').next().unwrap().to_owned()
+    }
+
+    /// Stops the server with `SIGTERM`, asserts it exits 0, and returns
+    /// what it logged.
+    pub fn stop(mut self) -> String {
+        let pid = self.child.id().to_string();
+        assert!(
+            Command::new("kill")
+                .args(["-TERM", &pid])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let deadline = Instant::now() + PATIENCE;
+        let status = loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "openxet serve did not exit");
+            thread::sleep(Duration::from_millis(20));
+        };
+        if let Some(reader) = self.stderr_done.take() {
+            reader.join().unwrap();
+        }
+        let log = String::from_utf8_lossy(&self.stderr.lock().unwrap()).into_owned();
+        assert_eq!(status.code(), Some(0), "stderr:\n{log}");
+        log
     }
 }
 

@@ -47,6 +47,10 @@ pub const DEFAULT_HUB_COMMIT_WAIT: Duration = Duration::from_secs(30);
 /// `cache_max_bytes`'s default: 20 GiB (ruling M2-R16).
 pub const DEFAULT_CACHE_MAX_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 
+/// `max_push_bytes`'s default: 10 GiB, past which a push is a bulk
+/// transfer that belongs in Xet storage (`git lfs track`), not a Git pack.
+pub const DEFAULT_MAX_PUSH_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
 /// The Git role's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitConfig {
@@ -64,6 +68,9 @@ pub struct GitConfig {
     /// The largest blob a push may carry that isn't an LFS pointer; `None`
     /// accepts any size and only reports large ones.
     pub max_plain_blob_bytes: Option<u64>,
+    /// The largest pack one push may send, counted as git receives it,
+    /// after any HTTP compression is undone (`receive.maxInputSize`).
+    pub max_push_bytes: u64,
     /// `hub.commit_wait`: how long a Hub commit waits for the commits to
     /// its branch already running on this node; longer is refused as
     /// retryable ([`GitError::Busy`](crate::GitError::Busy)).
@@ -84,6 +91,7 @@ impl GitConfig {
             reachability: Budget::REACHABILITY,
             thin_bases: Budget::THIN_BASES,
             max_plain_blob_bytes: None,
+            max_push_bytes: DEFAULT_MAX_PUSH_BYTES,
             hub_commit_wait: DEFAULT_HUB_COMMIT_WAIT,
             hook_program: None,
         }

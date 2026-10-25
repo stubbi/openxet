@@ -194,10 +194,41 @@ The Git engine behind the Hub's commits and reads and Git smart HTTP. It
 keeps a node-local cache of packs hydrated from the bucket, and runs
 `git` 2.37 or newer from `PATH`.
 
+Git is served over smart HTTP at the Hub's URL: `{hub.public_url}/{namespace}/{name}`,
+with or without `.git`, and under `datasets/`, `spaces/` or `kernels/` for
+a repository with that label. git sends the token as the password of HTTP
+Basic (any user name), or as a `Bearer` header with
+`http.extraHeader`. The first push to a missing repository creates it,
+with the `model` label or the prefix's, when the caller may create in the
+namespace and read and write the repository: its advertisement shows an
+empty repository and creates nothing, and its upload creates it. Errors
+come as plain text, which git shows as `remote:` lines. The two `POST`
+routes take only git's request types (`application/x-git-upload-pack-request`,
+`application/x-git-receive-pack-request`) and answer anything else `415`,
+as `git http-backend` does, so a web page can't use credentials a browser
+cached for the server. The dumb HTTP protocol is not served.
+
+Every 10 seconds `serve` copies new ref changes to the bucket's ref log,
+which keeps the bucket's copy within a minute of the index (design §5.3),
+and repacks a repository holding more than 50 packs.
+
+The cache is as private as the data directory: its directories are mode
+`0700` (a root you create wider is narrowed at start), its files `0600`,
+and cached pack files `0400`.
+
+git runs as a child of `serve`, so a descriptor `serve` itself inherited
+from whatever started it without `FD_CLOEXEC` (an open log file, a
+socket) reaches every git child too. Start `serve` from a supervisor,
+such as systemd, that passes it only standard input, output and error.
+This is about the parent's descriptors; how openxet's own per-push hook
+channel is kept to its git child, and its one platform limitation, is in
+[ADR 0004 item 7](../adr/0004-git-hosting-engine.md).
+
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
 | `cache_dir` | `<data_dir>/git-cache` | a directory path | The node's Git cache: hydrated packs, per-request snapshots and the `proc-receive` hook (a link to the openxet binary). It must be on a filesystem with hard links. One process holds it at a time: a second `serve` given the same directory refuses to start, naming the key, so servers that share a data directory each need their own `cache_dir`. |
 | `cache_max_bytes` | `20GiB` | `1GiB` to `1PiB` | The cache is evicted down to this size; an evicted pack is hydrated from the bucket again when a request needs it. |
+| `max_push_bytes` | `10GiB` | `1MiB` to `1TiB` | The largest pack one `git push` may send, counted after HTTP compression is undone. A push whose `Content-Length` is larger is refused with `413` before it is read; a longer streamed push is refused by git ("pack exceeds maximum allowed size"). Store large files with Git LFS instead. |
 | `max_plain_blob_bytes` | unset | `1KiB` to `1TiB` | A pushed blob larger than this that is not a Git LFS pointer is refused, and the message names `git lfs track`. Unset, any size is accepted. |
 
 #### `[git.reachability]`
@@ -240,7 +271,8 @@ Without a configuration file, or with one that has no `[auth]` section,
 It reuses all of them on every later start, so data, the token and transfer
 URLs signed before a restart keep working. It prints the endpoint, the data
 directory, the token, ready-to-paste upload commands and the `HF_ENDPOINT`
-and `hf auth login --token …` lines for the `hf` CLI on stdout. With
+and `hf auth login --token …` lines for the `hf` CLI, and `git push` and
+`git clone` lines, on stdout. With
 `--json` it prints one line instead:
 
 ```json

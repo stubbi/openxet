@@ -6,8 +6,10 @@
 mod common;
 
 use std::future::Future as _;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::fetch::{Scenario, not_our_ref, scenario, upload, v2_fetch};
 use common::{World, ok};
@@ -273,30 +275,47 @@ async fn concurrent_walks_hold_the_slots() {
     );
 }
 
-/// The walk looks at the clock every 256 commits: with no commit limit and
-/// a 1 ms budget, the walk to the root of the long history is cut short,
-/// while the default budget reaches it. A whole walk takes tens of
-/// milliseconds on any machine (about 70 ms on an M-series laptop, debug
-/// build), so some clock check trips; without the check the walk would
-/// complete and the root pass.
+/// The walk looks at the clock every 256 commits. The check reads a clock
+/// the test drives, one millisecond further on every read, so where the
+/// 20 ms budget runs out depends only on how many times it was read: past
+/// the reads before the walk (the start, one per ref, the walk's start),
+/// within the walk to the root of the 30,000-commit history, so the
+/// in-loop check stops it. The same budget with a clock that never moves
+/// reaches the root, so nothing but that check refused it.
 #[tokio::test]
 async fn time_budget_stops_a_running_walk() {
     let world = World::new().await;
     let long = long_history(&world).await;
     let engine = world.engine().await;
     let snapshot = ok(engine.snapshot(long.repo).await);
-    let timed = Reachability::new(Budget {
+    let budget = Budget {
         max_objects: u64::MAX,
-        max_time: Duration::from_millis(1),
+        max_time: Duration::from_millis(20),
         ..Budget::REACHABILITY
-    });
+    };
+    let base = Instant::now();
+    let reads = Arc::new(AtomicU32::new(0));
+    let ticking = {
+        let reads = Arc::clone(&reads);
+        Arc::new(move || {
+            base + Duration::from_millis(u64::from(reads.fetch_add(1, Ordering::SeqCst)))
+        })
+    };
+    let timed = Reachability::with_clock(budget, ticking);
     assert_eq!(
         timed.check(&snapshot, &[long.root], "tester").await,
         Err(Refused::NotOurRef(long.root))
     );
-    let default = Reachability::new(Budget::REACHABILITY);
+    let reads = reads.load(Ordering::SeqCst);
+    let before_walk = 3;
+    let whole_walk = LONG_COMMITS / 256;
+    assert!(
+        reads > before_walk && reads < before_walk + whole_walk,
+        "{reads} clock reads: the walk must have been stopped inside its loop"
+    );
+    let frozen = Reachability::with_clock(budget, Arc::new(move || base));
     assert_eq!(
-        default.check(&snapshot, &[long.root], "tester").await,
+        frozen.check(&snapshot, &[long.root], "tester").await,
         Ok(())
     );
 }
