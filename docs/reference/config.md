@@ -181,6 +181,7 @@ the root of the same origin as the CAS.
 | `max_commit_bytes` | `64MiB` | `1MiB` to `1GiB`, and at least twice `lfs_threshold` | The largest commit body. A regular file travels base64-encoded inside it. |
 | `token_ttl` | `15m` | `1m` to `24h`, and at most `auth.max_token_lifetime` | How long the CAS tokens the Hub hands clients live. Clients refresh them before they expire. |
 | `page_size` | `1000` | `1` to `1000` | The most entries one listing page holds. A listing with more answers `Link: <…>; rel="next"`, which `huggingface_hub` follows. |
+| `gateway_idle_timeout` | `30s` | `1s` to `10m` | How long a download from the file gateway (`/v1/transfer/files/…`, where `resolve` redirects Xet files) may go without sending a byte before it is cut off and the memory it holds is released. A slow but steady client always finishes; only a stalled one is cut off. |
 | `commit_wait` | `30s` | `1s` to `10m` | How long a Hub commit waits for the commits to the same branch already running on this node. One that waits longer is refused as retryable (`503` with `Retry-After`), and `huggingface_hub` retries it. |
 
 A repository the caller may not read answers exactly as one that doesn't

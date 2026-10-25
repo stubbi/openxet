@@ -50,7 +50,7 @@ zeroize = "1.9.1"
 async-trait = "0.1.92"
 openxet-hub = { path = ".", features = ["test-support"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
-tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "time"] }
+tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "test-util", "time"] }
 
 [lints]
 workspace = true

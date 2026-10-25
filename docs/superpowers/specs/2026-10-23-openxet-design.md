@@ -1017,7 +1017,9 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   download `href`s are the same URL without `name` or `commit` and with
   no `authenticated` field, so `git-lfs` attaches the credential it holds
   for that host. A gateway body holds its plan's memory reservation until
-  it is sent, dropped or past its send deadline (M1-R40).
+  it is sent or dropped, or until it goes `hub.gateway_idle_timeout`
+  (30 s) without sending a byte, so a slow but steady client always
+  finishes and a stalled one holds nothing (M1-R40).
 
 **Errors** *(ruling M2-R6)*. A Hub error carries huggingface.co's `error`
 field and openxet's structured fields:

@@ -758,14 +758,19 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
         );
     }
     // The size, from the object header, without inflating the blob.
-    assert_eq!(ok(node.blob_size(&snap, c3, "docs/a.txt").await), 2);
+    let located = ok(node.locate_blob(&snap, c3, "docs/a.txt").await);
+    assert_eq!(located.size(), 2);
+    let Blob::Inline { bytes, .. } = ok(node.read_located(&snap, located).await) else {
+        panic!("a small file reads inline");
+    };
+    assert_eq!(&bytes[..], b"a2");
     for path in ["docs", "", "nope.txt", "docs/a.txt/x"] {
         let e = node.read_blob(&snap, c3, path).await.err();
         assert!(
             matches!(e, Some(GitError::EntryNotFound { .. })),
             "{path}: {e:?}"
         );
-        let e = node.blob_size(&snap, c3, path).await.err();
+        let e = node.locate_blob(&snap, c3, path).await.err();
         assert!(
             matches!(e, Some(GitError::EntryNotFound { .. })),
             "{path}: {e:?}"
@@ -815,6 +820,44 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
         oids,
         vec![Some(c2), Some(c1), Some(c2), Some(c3), Some(file0), None]
     );
+}
+
+#[tokio::test]
+async fn located_size_of_a_packed_delta_is_the_blob_size() {
+    // A packed delta's header holds the delta's own size; `locate_blob`
+    // must answer the blob's, so a reservation covers what is inflated.
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 3).await;
+    let src = fixture_repo(&fx);
+    let base: Vec<u8> = (0..8_000u32)
+        .flat_map(|i| format!("line {i} of a file that deltas well\n").into_bytes())
+        .collect();
+    let mut edited = base.clone();
+    edited.extend_from_slice(b"one more line\n");
+    let (a, b) = (blob(&src, &base), blob(&src, &edited));
+    let main = rev(&src, MAIN);
+    let commit = commit_tree(&src, MAIN, &[main], &[("a.txt", a), ("b.txt", b)]);
+    let out = world.dir.path().join("delta-pack");
+    let pack = pack_objects(&src, &format!("{commit}\n^{main}"), &out);
+    world
+        .commit(repo, &pack, 1_761_400_200, &[set(MAIN, Some(main), commit)])
+        .await;
+    let node = node(&world, "node").await;
+    let format = "--batch-check=%(objectname) %(deltabase)";
+    let listing = in_snapshot(&node, repo, &["cat-file", "--batch-all-objects", format]).await;
+    let ours = [a.to_string(), b.to_string()];
+    let zero = "0".repeat(40);
+    let deltas = listing
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .filter(|(oid, base)| ours.iter().any(|o| o == oid) && *base != zero)
+        .count();
+    assert_eq!(deltas, 1, "one of the two blobs is stored as a delta");
+    let snap = ok(node.snapshot(repo).await);
+    for (path, content) in [("a.txt", &base), ("b.txt", &edited)] {
+        let located = ok(node.locate_blob(&snap, commit, path).await);
+        assert_eq!(located.size(), content.len() as u64, "{path}");
+    }
 }
 
 /// `hub_commit_on_snapshot` (ADR 0004 item 6): with a superseded pack still

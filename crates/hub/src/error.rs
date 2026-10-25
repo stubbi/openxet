@@ -226,6 +226,9 @@ pub enum HubError {
         needed: u64,
         /// One answer's share of the budget.
         limit: u64,
+        /// Whether a shorter `Range` would fit: not when the file's record
+        /// alone, which every range decodes, is too large.
+        range_helps: bool,
     },
     /// A commit's `parentCommit` isn't its branch's tip (ruling M2-R7).
     /// `412`.
@@ -383,11 +386,22 @@ impl HubError {
                  `server.memory_budget`.",
             ),
             Self::MemoryBusy => (StatusCode::SERVICE_UNAVAILABLE, "memory_busy", RETRY_HINT),
-            Self::AnswerTooLarge { .. } => (
+            Self::AnswerTooLarge {
+                range_helps: true, ..
+            } => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "answer_too_large",
                 "Read the file by range, with `Range: bytes={start}-{end}`; the operator can \
                  raise `server.memory_budget`.",
+            ),
+            Self::AnswerTooLarge {
+                range_helps: false, ..
+            } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "answer_too_large",
+                "No range makes it smaller: what the server must read first is already larger \
+                 than one answer's share of its memory. The operator can raise \
+                 `server.memory_budget`.",
             ),
             Self::ParentMismatch(_) => (
                 StatusCode::PRECONDITION_FAILED,
@@ -658,7 +672,11 @@ impl From<CasError> for HubError {
     fn from(e: CasError) -> Self {
         match e {
             CasError::MemoryBusy => Self::MemoryBusy,
-            CasError::AnswerTooLarge { needed, limit } => Self::AnswerTooLarge { needed, limit },
+            CasError::AnswerTooLarge { needed, limit } => Self::AnswerTooLarge {
+                needed,
+                limit,
+                range_helps: false,
+            },
             e => Self::Internal(Box::new(e)),
         }
     }

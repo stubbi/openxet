@@ -207,6 +207,7 @@ impl TestHub {
             max_commit_bytes: HubConfig::DEFAULT_MAX_COMMIT_BYTES,
             token_ttl: HubConfig::DEFAULT_TOKEN_TTL,
             page_size: HubConfig::MAX_PAGE_SIZE,
+            gateway_idle_timeout: HubConfig::DEFAULT_GATEWAY_IDLE_TIMEOUT,
         }
     }
 

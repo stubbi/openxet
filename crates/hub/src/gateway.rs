@@ -23,12 +23,12 @@
 //! and never through `resolve`, has `"{xet hash}"`.
 //!
 //! The bytes come from the reconstruction plan `openxet_cas` plans for the
-//! reconstruction routes ([`openxet_cas::plan_file`]), whose memory is
-//! reserved from the budget shared with the CAS and held until the body is
-//! sent, dropped or past its send deadline (ruling M1-R40); they are read
-//! from the bucket's range stream and decoded chunk by chunk, so a
-//! transfer holds one stream block of at most 1 MiB and one chunk besides
-//! its fetches (ruling M1-R27, [`transfer`]).
+//! reconstruction routes ([`openxet_cas::plan_file`]); they are read from
+//! the bucket's range stream and decoded chunk by chunk, so a transfer
+//! holds its fetches, one stream block of at most 1 MiB and one chunk
+//! (ruling M1-R27, [`transfer`]). All of it is reserved from the budget
+//! shared with the CAS and held until the body is sent or dropped, or goes
+//! `hub.gateway_idle_timeout` without sending a byte (ruling M1-R40).
 //!
 //! A `Location` from `resolve` carries `commit`, so the gateway repeats the
 //! `X-Repo-Commit`, `X-Xet-Hash` and `Link` headers `huggingface_hub` reads
@@ -58,7 +58,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use openxet_auth::{Action, UserPrincipal};
-use openxet_cas::{ByteRange, Fetch, FilePlan, FilePlanError, plan_file};
+use openxet_cas::{ByteRange, CasError, Fetch, FilePlan, FilePlanError, plan_file};
 use openxet_git::Pointer;
 use openxet_index::{Oid, Repo, RepoId};
 use openxet_protocol::{hash_from_hex, hash_to_hex};
@@ -257,13 +257,8 @@ async fn serve(
         mut reserved,
     } = match plan_file(state.index.as_ref(), budget, &scope, &file, range).await {
         Ok(plan) => plan,
-        Err(FilePlanError::NotFound) => return Err(HubError::FileNotStored { file: hex }),
         Err(FilePlanError::Unsatisfiable { size }) => return Ok(unsatisfiable(out, size)),
-        Err(FilePlanError::Memory(e)) => return Err(e.into()),
-        Err(FilePlanError::Inconsistent(detail)) => {
-            return Err(HubError::Internal(detail.into()));
-        }
-        Err(FilePlanError::Index(e)) => return Err(e.into()),
+        Err(e) => return Err(plan_refused(e, hex)),
     };
     out.insert(
         CONTENT_TYPE,
@@ -280,10 +275,21 @@ async fn serve(
         None => (StatusCode::OK, size),
     };
     out.insert(CONTENT_LENGTH, HeaderValue::from(len));
-    // The transfer keeps only the fetches: the reservation shrinks to them.
+    // The transfer keeps the fetches, one stream block, one stored chunk
+    // and one decoded chunk: the reservation shrinks to the fetches and
+    // takes the working bytes besides.
     let mut fetches = plan.fetches;
     fetches.shrink_to_fit();
     reserved.shrink_to((fetches.capacity() * size_of::<Fetch>()) as u64);
+    if len > 0 {
+        reserved.merge(
+            state
+                .memory
+                .budget
+                .reserve_answer(transfer::WORKING_BYTES)
+                .await?,
+        );
+    }
     let mut transfer = Transfer::new(
         fetches,
         bucket_opener(Arc::clone(&state.bucket)),
@@ -297,8 +303,8 @@ async fn serve(
     if len > 0 {
         transfer.open_next().await?;
     }
-    let deadline = state.memory.send_deadline.for_len(len);
-    Ok((status, out, transfer::body(transfer, deadline)).into_response())
+    let idle = state.cfg.gateway_idle_timeout;
+    Ok((status, out, transfer::body(transfer, idle)).into_response())
 }
 
 /// The `name` and `commit` query parameters.
@@ -344,6 +350,32 @@ fn hub_headers(
         }
     }
     Ok(out)
+}
+
+/// The answer to a plan `plan_file` refused for the file `hex`, other than
+/// an unsatisfiable range.
+fn plan_refused(e: FilePlanError, hex: String) -> HubError {
+    match e {
+        FilePlanError::NotFound => HubError::FileNotStored { file: hex },
+        FilePlanError::Memory(CasError::AnswerTooLarge { needed, limit }) => {
+            HubError::AnswerTooLarge {
+                needed,
+                limit,
+                range_helps: true,
+            }
+        }
+        FilePlanError::RecordTooLarge { needed, limit } => HubError::AnswerTooLarge {
+            needed,
+            limit,
+            range_helps: false,
+        },
+        FilePlanError::Memory(e) => e.into(),
+        FilePlanError::Inconsistent(detail) => HubError::Internal(detail.into()),
+        FilePlanError::Index(e) => e.into(),
+        FilePlanError::Unsatisfiable { size } => HubError::Internal(
+            format!("an unsatisfiable range of a {size}-byte file reached plan_refused").into(),
+        ),
+    }
 }
 
 /// The repository with id `id` if `who` may read it; otherwise the answer

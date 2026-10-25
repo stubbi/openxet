@@ -92,6 +92,10 @@ pub struct HubConfig {
     pub token_ttl: Duration,
     /// The most entries one listing page holds (ruling M2-R8).
     pub page_size: usize,
+    /// How long a file gateway body may go without sending a byte before
+    /// it is cut off and its memory released (ruling M1-R40): a slow but
+    /// steady client always finishes, a stalled one holds nothing past it.
+    pub gateway_idle_timeout: Duration,
 }
 
 impl HubConfig {
@@ -108,6 +112,9 @@ impl HubConfig {
     /// The largest, and default, [`HubConfig::page_size`]: 1,000 (ruling
     /// M2-R8).
     pub const MAX_PAGE_SIZE: usize = 1000;
+    /// The default [`HubConfig::gateway_idle_timeout`]: 30 seconds, the
+    /// base of the CAS's send deadline.
+    pub const DEFAULT_GATEWAY_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 }
 
 /// What every Hub handler shares. Cloning is cheap.
@@ -132,7 +139,8 @@ pub struct HubState {
     /// Signs the CAS tokens the token routes hand out: the server's own
     /// key (`{data_dir}/cas-token.key`), which the CAS verifies.
     pub signer: Arc<TokenSigner>,
-    /// The memory budget and send deadline, shared with the CAS.
+    /// The memory budget, and the send deadline of a buffered answer,
+    /// shared with the CAS.
     pub memory: SharedMemory,
 }
 
@@ -143,8 +151,8 @@ pub struct HubState {
 pub struct SharedMemory {
     /// The process's memory budget: the CAS's, cloned, so the pool is one.
     pub budget: MemoryBudget,
-    /// How long a gateway body may take to send before it is cut off and
-    /// its reservation released.
+    /// How long a buffered answer, a Git blob `resolve` serves inline, may
+    /// take to send before it is cut off and its reservation released.
     pub send_deadline: SendDeadline,
 }
 

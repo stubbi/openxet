@@ -19,7 +19,7 @@ use gix::traverse::commit::simple::CommitTimeOrder;
 use openxet_index::Oid;
 
 use super::pointer::{MAX_POINTER_BYTES, parse_pointer};
-use super::{Blob, CommitInfo, Entry, EntryKind, Resolved, Revision, Signature};
+use super::{Blob, CommitInfo, Entry, EntryKind, LocatedBlob, Resolved, Revision, Signature};
 use crate::reach::{from_gix, open, peel, to_gix};
 use crate::snapshot::HEAD_REF;
 use crate::{Engine, GitError, SnapshotRepo, blocking};
@@ -100,20 +100,21 @@ impl Engine {
         .await
     }
 
-    /// The size in bytes of the file at `path` in `commit` (from
-    /// [`Engine::resolve_revision`] on the same snapshot), read from its
-    /// object header without inflating it, so a caller can reserve memory
-    /// before [`Engine::read_blob`] buffers it.
+    /// Finds the file at `path` in `commit` (from
+    /// [`Engine::resolve_revision`] on the same snapshot) and reads its size
+    /// from the object header, without inflating it, so a caller can reserve
+    /// memory before [`Engine::read_located`] buffers it. One tree walk
+    /// serves both.
     ///
     /// # Errors
     ///
     /// As [`Engine::read_blob`].
-    pub async fn blob_size(
+    pub async fn locate_blob(
         &self,
         snap: &SnapshotRepo,
         commit: Oid,
         path: &str,
-    ) -> Result<u64, GitError> {
+    ) -> Result<LocatedBlob, GitError> {
         let comps = read_components(path)
             .filter(|c| !c.is_empty())
             .ok_or_else(|| entry_not_found(path))?;
@@ -122,16 +123,36 @@ impl Engine {
         blocking(move || {
             let repo = open_snapshot(&dir)?;
             let id = find_file(&repo, commit, &comps, &path)?;
-            Ok(repo.find_header(id).map_err(objects_err)?.size())
+            let size = repo.find_header(id).map_err(objects_err)?.size();
+            Ok(LocatedBlob {
+                oid: oid_of(id)?,
+                size,
+            })
         })
         .await
     }
 
+    /// Reads the file [`Engine::locate_blob`] found in `snap`: its bytes, or
+    /// the LFS pointer it holds. The whole blob is buffered, so a caller
+    /// reserves [`LocatedBlob::size`] first (streaming large blobs is
+    /// <https://github.com/stubbi/openxet/issues/91>).
+    ///
+    /// # Errors
+    ///
+    /// [`GitError::Objects`] if the snapshot can't be read.
+    pub async fn read_located(
+        &self,
+        snap: &SnapshotRepo,
+        blob: LocatedBlob,
+    ) -> Result<Blob, GitError> {
+        let dir = snap.dir.path().to_path_buf();
+        blocking(move || read_object(&open_snapshot(&dir)?, to_gix(blob.oid))).await
+    }
+
     /// Reads the file at `path` in `commit` (from
     /// [`Engine::resolve_revision`] on the same snapshot): its bytes, or the
-    /// LFS pointer it holds. The whole blob is buffered; a caller bounds it
-    /// with [`Engine::blob_size`] first (streaming large blobs is
-    /// <https://github.com/stubbi/openxet/issues/91>).
+    /// LFS pointer it holds. The whole blob is buffered; a caller that must
+    /// bound it uses [`Engine::locate_blob`] and [`Engine::read_located`].
     ///
     /// # Errors
     ///
@@ -150,18 +171,7 @@ impl Engine {
         let path = path.to_owned();
         blocking(move || {
             let repo = open_snapshot(&dir)?;
-            let id = find_file(&repo, commit, &comps, &path)?;
-            let data = repo.find_blob(id).map_err(objects_err)?.take_data();
-            let oid = oid_of(id)?;
-            if data.len() <= MAX_POINTER_BYTES
-                && let Some(pointer) = parse_pointer(&data)
-            {
-                return Ok(Blob::Lfs { oid, pointer });
-            }
-            Ok(Blob::Inline {
-                oid,
-                bytes: Bytes::from(data),
-            })
+            read_object(&repo, find_file(&repo, commit, &comps, &path)?)
         })
         .await
     }
@@ -359,6 +369,21 @@ pub(super) fn objects_err(e: impl std::fmt::Display) -> GitError {
 
 pub(super) fn oid_of(id: impl Into<ObjectId>) -> Result<Oid, GitError> {
     from_gix(id.into()).ok_or_else(|| GitError::Corrupt("an object id is not SHA-1".to_owned()))
+}
+
+/// The blob `id`, as a [`Blob`]: an LFS pointer, or the bytes.
+fn read_object(repo: &gix::Repository, id: ObjectId) -> Result<Blob, GitError> {
+    let data = repo.find_blob(id).map_err(objects_err)?.take_data();
+    let oid = oid_of(id)?;
+    if data.len() <= MAX_POINTER_BYTES
+        && let Some(pointer) = parse_pointer(&data)
+    {
+        return Ok(Blob::Lfs { oid, pointer });
+    }
+    Ok(Blob::Inline {
+        oid,
+        bytes: Bytes::from(data),
+    })
 }
 
 /// The blob of the file at `comps` (`path` as the caller named it) in

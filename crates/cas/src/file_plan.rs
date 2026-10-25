@@ -52,10 +52,19 @@ pub enum FilePlanError {
         size: u64,
     },
     /// The memory budget refused the plan: [`CasError::MemoryBusy`] after
-    /// its wait, or [`CasError::AnswerTooLarge`] for a plan larger than one
-    /// answer's share.
+    /// its wait, or [`CasError::AnswerTooLarge`] for a plan of the range
+    /// larger than one answer's share, which a shorter range may fit.
     #[error(transparent)]
     Memory(CasError),
+    /// The file's decoded record alone, which every range reads, exceeds
+    /// one answer's share of the budget: no range fits.
+    #[error("the file's record needs about {needed} bytes; one answer may hold at most {limit}")]
+    RecordTooLarge {
+        /// The bytes the record needs.
+        needed: u64,
+        /// One answer's share of the budget.
+        limit: u64,
+    },
     /// The file's record disagrees with itself or with a chunk layout,
     /// which registration checked (ruling M1-R17): index corruption, never
     /// the caller's fault.
@@ -98,10 +107,12 @@ pub async fn plan_file(
 ) -> Result<FilePlan, FilePlanError> {
     let stored = index.term_count(&[*file], scope).await?;
     let decoded = stored.saturating_mul(DECODED_TERM_BYTES);
-    let mut reserved = budget
-        .reserve_answer(decoded)
-        .await
-        .map_err(FilePlanError::Memory)?;
+    let mut reserved = budget.reserve_answer(decoded).await.map_err(|e| match e {
+        CasError::AnswerTooLarge { needed, limit } => {
+            FilePlanError::RecordTooLarge { needed, limit }
+        }
+        e => FilePlanError::Memory(e),
+    })?;
     let (record, bytes) = index
         .file_with_bytes(file, scope)
         .await?
@@ -177,8 +188,8 @@ mod tests {
     use super::*;
     use crate::test_support;
 
-    /// An index holding a file of two terms over one xorb of four 10-byte
-    /// chunks (stored 18 bytes each), registered to `s`.
+    /// An index holding a file of four one-chunk terms over one xorb of
+    /// four 10-byte chunks (stored 18 bytes each), registered to `s`.
     async fn file(dir: &std::path::Path) -> (crate::AppState, MerkleHash) {
         let state = test_support::state(dir, vec![]).await;
         let xorb = chunk_hash(b"xorb");
@@ -200,7 +211,7 @@ mod tests {
         let record = FileRecord {
             hash: chunk_hash(b"file"),
             size: 40,
-            terms: vec![term(0, 2), term(2, 4)],
+            terms: (0..4).map(|c| term(c, c + 1)).collect(),
         };
         let hash = record.hash;
         let new = NewFile {
@@ -277,11 +288,12 @@ mod tests {
         drop(planned);
         assert_eq!(budget.available(), full);
 
-        // A budget whose answer share can't hold the decoded record.
+        // A budget whose answer share, 128 bytes, can't hold the decoded
+        // record of four terms: no range would fit either.
         let tiny = MemoryBudget::new(1024);
         assert!(matches!(
             plan_file(state.index.as_ref(), &tiny, "s", &hash, None).await,
-            Err(FilePlanError::Memory(CasError::AnswerTooLarge { .. }))
+            Err(FilePlanError::RecordTooLarge { .. })
         ));
         assert_eq!(tiny.available(), tiny.bytes());
     }

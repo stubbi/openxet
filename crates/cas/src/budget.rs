@@ -277,7 +277,7 @@ impl Reservation {
     }
 
     /// Adds `other`, from the same budget, to this reservation.
-    pub(crate) fn merge(&mut self, mut other: Reservation) {
+    pub fn merge(&mut self, mut other: Reservation) {
         debug_assert!(Arc::ptr_eq(&self.pool, &other.pool));
         self.units += std::mem::take(&mut other.units);
     }

@@ -1,10 +1,9 @@
 //! A file range read for the gateway: the plan's fetches in order, each
 //! streamed from the bucket and decoded one chunk at a time (ruling
-//! M1-R27), sent as a response body that holds the plan's memory
-//! reservation until it is sent, dropped, or overruns its send deadline
-//! (ruling M1-R40).
+//! M1-R27), sent as a response body that holds the transfer's memory
+//! reservation until it is sent, dropped, or goes idle (ruling M1-R40).
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
@@ -12,12 +11,19 @@ use futures_util::StreamExt as _;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use openxet_cas::{Fetch, Reservation};
-use openxet_protocol::{CHUNK_HEADER_BYTES, ProtocolError, decode_stored_chunk, stored_chunk_len};
-use openxet_storage::{Bucket, Key, StorageError};
-use tokio::sync::Mutex;
+use openxet_protocol::{
+    CHUNK_HEADER_BYTES, MAX_CHUNK_BYTES, ProtocolError, decode_stored_chunk, stored_chunk_len,
+};
+use openxet_storage::{Bucket, Key, STREAM_BLOCK_BYTES, StorageError};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 use crate::HubError;
+
+/// What a transfer holds besides its fetches, reserved with them: one
+/// stream block, one stored chunk (compressed, at most twice its decoded
+/// size as upload validation allows) and one decoded chunk.
+pub(super) const WORKING_BYTES: u64 = STREAM_BLOCK_BYTES as u64 + 3 * MAX_CHUNK_BYTES;
 
 /// A fetch's stored bytes, in blocks.
 pub(super) type Blocks = BoxStream<'static, Result<Bytes, StorageError>>;
@@ -177,16 +183,28 @@ fn head(bytes: &[u8]) -> [u8; CHUNK_HEADER_BYTES] {
     header
 }
 
-/// Where a body's transfer is.
-enum State {
-    Sending(Transfer),
-    Done,
-    Expired,
+/// A body's transfer and what the idle timer reads.
+struct Shared {
+    /// The transfer while it is between pieces; `None` while the stream
+    /// works on one, and once it has ended or expired.
+    slot: Option<Transfer>,
+    /// The body has ended: sent, failed or expired.
+    ended: bool,
+    /// The idle timer fired: the transfer is dropped, and the next poll
+    /// fails the body.
+    expired: bool,
+    /// When the last piece was taken, or the body made.
+    last: Instant,
 }
 
-/// The body's state and the timer that expires it.
+fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
+    shared.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The stream's side of a body: the shared state, and the timer, aborted
+/// when the body is dropped.
 struct Sending {
-    state: Arc<Mutex<State>>,
+    shared: Arc<Mutex<Shared>>,
     timer: JoinHandle<()>,
 }
 
@@ -196,55 +214,99 @@ impl Drop for Sending {
     }
 }
 
-/// `transfer` as a response body. It is dropped, its reservation, stream
-/// and block with it, when the body ends, is dropped, or `deadline`
-/// passes: a timer drops it even if the server never polls the body again,
-/// as it doesn't while the client's socket is full, and the next poll then
-/// fails the body, which closes the connection (rulings M1-R33, M1-R40).
-pub(super) fn body(transfer: Transfer, deadline: Duration) -> Body {
-    let state = Arc::new(Mutex::new(State::Sending(transfer)));
-    let timer = tokio::spawn(expire(Arc::downgrade(&state), deadline));
-    let sending = Sending { state, timer };
+/// `transfer` as a response body. The transfer, its reservation, stream
+/// and block with it, is dropped when the body ends, is dropped, or goes
+/// `idle` without a piece being taken: a client reading slowly but
+/// steadily always finishes, and one that stops reading holds nothing
+/// past `idle` (ruling M1-R40). The timer drops the transfer even when
+/// the server no longer polls the body, as it doesn't while the client's
+/// socket is full; the next poll then fails the body, which closes the
+/// connection.
+///
+/// The stream takes the transfer out of the shared state while it works on
+/// a piece, so the timer never waits on a bucket read; a read that hangs
+/// holds the transfer until the bucket's own timeout, and the body then
+/// fails.
+pub(super) fn body(transfer: Transfer, idle: Duration) -> Body {
+    let shared = Arc::new(Mutex::new(Shared {
+        slot: Some(transfer),
+        ended: false,
+        expired: false,
+        last: Instant::now(),
+    }));
+    let timer = tokio::spawn(expire(Arc::downgrade(&shared), idle));
+    let sending = Sending { shared, timer };
     let stream = futures_util::stream::unfold(sending, |sending| async move {
-        let item = {
-            let mut state = sending.state.lock().await;
-            match &mut *state {
-                State::Sending(transfer) => match transfer.piece().await {
-                    Ok(Some(piece)) => Some(Ok(piece)),
-                    Ok(None) => {
-                        *state = State::Done;
-                        None
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            file = %transfer.file,
-                            error = &e as &dyn std::error::Error,
-                            "a gateway transfer failed partway"
-                        );
-                        *state = State::Done;
-                        Some(Err(std::io::Error::other(e)))
-                    }
-                },
-                State::Done => None,
-                State::Expired => {
-                    *state = State::Done;
-                    Some(Err(std::io::Error::other("the send deadline passed")))
-                }
+        let taken = {
+            let mut state = lock(&sending.shared);
+            if state.expired && !state.ended {
+                state.ended = true;
+                drop(state);
+                let e = std::io::Error::other("the gateway body went idle past its timeout");
+                return Some((Err(e), sending));
+            }
+            state.slot.take()
+        };
+        let mut transfer = taken?;
+        let piece = transfer.piece().await;
+        let mut state = lock(&sending.shared);
+        if state.expired {
+            state.ended = true;
+            drop(state);
+            let e = std::io::Error::other("the gateway body went idle past its timeout");
+            return Some((Err(e), sending));
+        }
+        let item = match piece {
+            Ok(Some(piece)) => {
+                state.last = Instant::now();
+                state.slot = Some(transfer);
+                Ok(piece)
+            }
+            Ok(None) => {
+                state.ended = true;
+                return None;
+            }
+            Err(e) => {
+                tracing::error!(
+                    file = %transfer.file,
+                    error = &e as &dyn std::error::Error,
+                    "a gateway transfer failed partway"
+                );
+                state.ended = true;
+                Err(std::io::Error::other(e))
             }
         };
-        item.map(|item| (item, sending))
+        drop(state);
+        Some((item, sending))
     });
     Body::from_stream(stream)
 }
 
-async fn expire(state: Weak<Mutex<State>>, deadline: Duration) {
-    tokio::time::sleep(deadline).await;
-    if let Some(state) = state.upgrade() {
-        let mut state = state.lock().await;
-        if matches!(*state, State::Sending(_)) {
-            *state = State::Expired;
-            tracing::debug!("a gateway body missed its send deadline; its memory is released");
-        }
+/// Expires the body once it has gone `idle` without a piece taken.
+async fn expire(shared: Weak<Mutex<Shared>>, idle: Duration) {
+    loop {
+        let Some(shared) = shared.upgrade() else {
+            return;
+        };
+        let wake = {
+            let mut state = lock(&shared);
+            if state.ended {
+                return;
+            }
+            let wake = state.last + idle;
+            if Instant::now() >= wake {
+                state.expired = true;
+                // Dropped outside the lock.
+                let transfer = state.slot.take();
+                drop(state);
+                drop(transfer);
+                tracing::debug!("a gateway body went idle; its memory is released");
+                return;
+            }
+            wake
+        };
+        drop(shared);
+        tokio::time::sleep_until(wake).await;
     }
 }
 
@@ -347,5 +409,51 @@ mod tests {
             read_all(short).await,
             Err(TransferError::ShortPlan)
         ));
+    }
+
+    /// A body over `n` chunks of 1,000 bytes, holding a reservation from
+    /// `budget`, going idle after `idle`.
+    async fn sent(budget: &openxet_cas::MemoryBudget, n: u8, idle: Duration) -> Body {
+        let data: Vec<u8> = (0..n).flat_map(|i| chunk(&[i; 1000])).collect();
+        let t = Transfer::new(
+            vec![fetch(0)],
+            opener(vec![data], 1 << 20),
+            0,
+            u64::from(n) * 1000,
+            "f".to_owned(),
+            Some(budget.reserve_answer(4096).await.unwrap()),
+        );
+        body(t, idle)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_steady_reader_finishes() {
+        // Each piece comes 0.6 s after the last, 12 s in all, far past one
+        // idle timeout of 1 s: the body never goes idle.
+        use http_body_util::BodyExt as _;
+        let budget = openxet_cas::MemoryBudget::new(1 << 20);
+        let mut body = sent(&budget, 20, Duration::from_secs(1)).await;
+        let mut got = 0;
+        while let Some(frame) = body.frame().await {
+            got += frame.unwrap().into_data().unwrap().len();
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        }
+        assert_eq!(got, 20_000);
+        assert_eq!(budget.available(), budget.bytes());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_reader_is_cut_off_and_releases() {
+        use http_body_util::BodyExt as _;
+        let budget = openxet_cas::MemoryBudget::new(1 << 20);
+        let mut body = sent(&budget, 20, Duration::from_secs(1)).await;
+        body.frame().await.unwrap().unwrap();
+        assert!(budget.available() < budget.bytes());
+        tokio::time::sleep(Duration::from_millis(999)).await;
+        assert!(budget.available() < budget.bytes(), "not idle yet");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        assert_eq!(budget.available(), budget.bytes(), "released when idle");
+        assert!(body.frame().await.unwrap().is_err(), "then the body fails");
+        assert!(body.frame().await.is_none());
     }
 }

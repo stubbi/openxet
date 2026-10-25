@@ -80,8 +80,8 @@ pub use maintain::{
     GEOMETRIC_REPACK_PACKS, MAINTENANCE_INTERVAL, MaintenanceReport, maintain, run_maintenance,
 };
 pub use objects::{
-    Blob, CommitInfo, Entry, EntryKind, HubCommit, Ident, Op, Pointer, Resolved, Revision,
-    Signature, TagInfo, canonical_pointer, parse_pointer,
+    Blob, CommitInfo, Entry, EntryKind, HubCommit, Ident, LocatedBlob, Op, Pointer, Resolved,
+    Revision, Signature, TagInfo, canonical_pointer, parse_pointer,
 };
 #[cfg(feature = "fault-injection")]
 pub use objects::{FAULT_OMIT_BLOBS_ACTOR, HubWriteHold};

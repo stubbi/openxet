@@ -78,15 +78,16 @@ async fn resolve(
     // `read_blob` requires (ADR 0004 item 6).
     let commit = resolved.commit;
     let at = |e| HubError::at(e, &rev, Some(commit));
-    // `read_blob` buffers the whole blob, so its size, read from the object
+    // The read buffers the whole blob, so its size, read from the object
     // header, is reserved before it is inflated (ruling M1-R40); a blob
     // past one answer's share isn't served. Streaming large plain blobs is
     // <https://github.com/stubbi/openxet/issues/91>.
-    let size = state
+    let located = state
         .engine
-        .blob_size(&snap, commit, &path)
+        .locate_blob(&snap, commit, &path)
         .await
         .map_err(at)?;
+    let size = located.size();
     let reserved = state
         .memory
         .budget
@@ -102,7 +103,7 @@ async fn resolve(
         })?;
     let blob = state
         .engine
-        .read_blob(&snap, commit, &path)
+        .read_located(&snap, located)
         .await
         .map_err(at)?;
     let name = path.rsplit('/').find(|c| !c.is_empty()).unwrap_or_default();
