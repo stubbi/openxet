@@ -1,18 +1,21 @@
 //! openxet's index: which xorbs, files and shards exist, which scopes they
 //! are registered to, which tenants own which xorbs, and which xorb to offer
-//! for a dedup query.
+//! for a dedup query ([`Index`]); which repositories exist ([`Repos`]); and
+//! their refs, packs and repack leases ([`GitStore`]).
 //!
 //! The index is rebuildable: the bucket is the source of truth (design
 //! §5.3), and every row can be recomputed from stored xorbs and shards and
 //! the bucket's registration and xorb-owner records (ruling M1-R37).
 //! Nodes are stateless, so implementations must stay correct with several
 //! processes writing at once; SQLite ships now and Postgres comes behind the
-//! same [`Index`] trait in M3 (design §5.2, §5.8).
+//! same traits in M3 (design §5.2, §5.8).
 
 #![forbid(unsafe_code)]
 
+mod git;
 #[cfg(feature = "test-support")]
 mod rebuild;
+mod repos;
 mod sqlite;
 mod types;
 
@@ -20,13 +23,19 @@ use std::collections::HashMap;
 
 use openxet_protocol::MerkleHash;
 
+pub use git::{
+    CommitError, CommitTx, GitStore, Lease, Pack, PackState, RefLogRow, RefUpdate, RepackPublish,
+    Snapshot, Unplaced, UnplacedKind,
+};
 #[cfg(feature = "test-support")]
 pub use rebuild::{FileRow, RebuildError, ScopeTables, rebuild_scope_tables};
+pub use repos::{AuditEntry, Page, Repo, RepoFilter, Repos};
 #[cfg(feature = "fault-injection")]
 pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;
 pub use types::{
-    ChunkLayout, ChunkTable, FileRecord, NewFile, Registrant, Scope, Term, TermBytes, Visibility,
+    ChunkLayout, ChunkTable, FileRecord, NewFile, Oid, PackId, ParseIdError, Registrant, RepoId,
+    Scope, Term, TermBytes, Visibility,
 };
 
 /// The index's operations. Every write is idempotent: content is addressed by
@@ -295,6 +304,22 @@ pub enum IndexError {
     UnknownXorb {
         /// The first xorb found that isn't visible.
         xorb: MerkleHash,
+    },
+    /// A repository of the same `{namespace}/{name}`, ignoring ASCII case,
+    /// exists (ruling M2-R2).
+    #[error(
+        "a repository named {name} already exists (names are unique ignoring case); choose \
+         another name"
+    )]
+    NameTaken {
+        /// The `{namespace}/{name}` asked for, as written.
+        name: String,
+    },
+    /// No repository has this id: it was never created or has been deleted.
+    #[error("repository {repo} does not exist; it may have been deleted")]
+    UnknownRepo {
+        /// The id asked for.
+        repo: RepoId,
     },
     /// The caller passed data the index can't store, which is a bug in the
     /// caller.
