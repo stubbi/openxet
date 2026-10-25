@@ -55,6 +55,11 @@ pub enum CasError {
     #[error("the credential is read-only and this route writes")]
     InsufficientScope,
 
+    /// The credential is a user credential without a CAS scope (ruling
+    /// M2-R3). `403 insufficient_scope`.
+    #[error("the credential is a user token, which CAS routes don't accept")]
+    UserCredential,
+
     /// A signed transfer URL was refused. `403 forbidden`, on which `hf_xet`
     /// fetches a fresh URL (S10 "Status codes and retries").
     #[error("the signed transfer URL was refused: {0}")]
@@ -447,6 +452,13 @@ impl CasError {
                 StatusCode::FORBIDDEN,
                 "insufficient_scope",
                 "Use a write token for this scope; read tokens can only download and query.",
+            ),
+            Self::UserCredential => (
+                StatusCode::FORBIDDEN,
+                "insufficient_scope",
+                "This is a user token; get a CAS token from the Hub token route \
+                 (`GET /api/{repo_type}s/{namespace}/{name}/xet-read-token/{revision}`, or \
+                 `xet-write-token`) and send that instead.",
             ),
             Self::UrlRefused(_) => (
                 StatusCode::FORBIDDEN,

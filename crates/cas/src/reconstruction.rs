@@ -541,7 +541,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::HeaderValue;
     use axum::http::header::AUTHORIZATION;
-    use openxet_auth::{Mode, StaticToken};
+    use openxet_auth::{CasGrant, Mode, StaticToken};
     use openxet_index::{
         ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, Term, TermBytes, Visibility,
     };
@@ -694,10 +694,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
-            scope: "s".to_owned(),
-            mode: Mode::Read,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Read,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         let table_loads = Arc::clone(&CountingIndex::install(&mut state, 0).table_loads);
@@ -777,10 +780,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
-            scope: "s".to_owned(),
-            mode: Mode::Read,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Read,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         let index = CountingIndex::install(&mut state, MAX_BATCH_TERMS as u64 + 1);
@@ -817,10 +823,13 @@ mod tests {
     async fn one_file(dir: &std::path::Path) -> (AppState, Request) {
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
-            scope: "s".to_owned(),
-            mode: Mode::Read,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Read,
+                tenant: None,
+            }),
+            user: None,
         };
         let state = test_support::state(dir, vec![token]).await;
         let xorb = openxet_protocol::chunk_hash(b"xorb");
@@ -1045,10 +1054,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
-            scope: "s".to_owned(),
-            mode: Mode::Read,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Read,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.budget = crate::MemoryBudget::new(1 << 20);
@@ -1193,10 +1205,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let token = StaticToken {
             sha256: StaticToken::digest(READ),
-            scope: "s".to_owned(),
-            mode: Mode::Read,
             subject: "unit".to_owned(),
-            tenant: None,
+            cas: Some(CasGrant {
+                scope: "s".to_owned(),
+                mode: Mode::Read,
+                tenant: None,
+            }),
+            user: None,
         };
         let mut state = test_support::state(dir.path(), vec![token]).await;
         state.validate = Arc::new(Semaphore::new(8));

@@ -14,7 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use openxet_auth::{AuthError, Authenticator, Mode, PublicKey, StaticToken, UrlSigner};
+use openxet_auth::{
+    Action, AuthError, Authenticator, CasGrant, Glob, Mode, PublicKey, REPO_SCOPE_PREFIX, Rule,
+    StaticToken, UrlSigner, UserProfile,
+};
 use openxet_cas::{BodyDeadline, CasConfig, MemoryBudget};
 use openxet_index::Visibility;
 use serde::Serialize;
@@ -142,6 +145,10 @@ pub struct Config {
     pub transfer_key_explicit: bool,
     /// The configured credentials, or `None` in dev mode (no `[auth]`).
     pub auth: Option<Arc<Authenticator>>,
+    /// `[[auth.rules]]`: what user credentials may do per repository
+    /// (ruling M2-R3). Empty in dev mode, where `serve` installs the dev
+    /// rule.
+    pub rules: Vec<Rule>,
     pub max_token_lifetime: Duration,
 }
 
@@ -180,6 +187,7 @@ enum Kind {
     Int,
     StrList,
     Tokens,
+    Rules,
 }
 
 /// Every key, by section. Keep in step with `docs/reference/config.md`.
@@ -213,13 +221,18 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
         "auth",
         &[
             ("static_tokens", Kind::Tokens),
+            ("rules", Kind::Rules),
             ("jwt_public_keys", Kind::StrList),
             ("max_token_lifetime", Kind::Str),
         ],
     ),
 ];
 
-const STATIC_TOKEN_FIELDS: &[&str] = &["sha256", "scope", "mode", "subject", "tenant"];
+const STATIC_TOKEN_FIELDS: &[&str] = &[
+    "sha256", "subject", "scope", "mode", "tenant", "name", "email", "claims",
+];
+
+const RULE_FIELDS: &[&str] = &["subjects", "claims", "repos", "actions"];
 
 fn kind_of(key: &str) -> Option<Kind> {
     let (section, name) = key.split_once('.')?;
@@ -782,20 +795,23 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "CAS tokens expiring further ahead are refused. Match it to your issuer's longest \
          token; 24h is the default.",
     );
-    let auth = if c.raw.auth {
+    let (auth, rules) = if c.raw.auth {
         let tokens = static_tokens(c);
+        let rules = rules(c);
         let keys = jwt_public_keys(c);
-        match (tokens, keys, max_token_lifetime) {
+        let auth = match (tokens, keys, max_token_lifetime) {
             (Some(tokens), Some(keys), Some(max)) => authenticator(c, tokens, keys, max),
             _ => None,
-        }
+        };
+        (auth, rules)
     } else {
         c.set(
             "auth",
-            "none: dev mode, with a generated write token",
+            "none: dev mode, with a generated token for subject `dev`, who may read, write and \
+             create every repository",
             &Source::Default,
         );
-        None
+        (None, Some(Vec::new()))
     };
 
     Some(Config {
@@ -816,6 +832,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         transfer_key_file: transfer_key_file?,
         transfer_key_explicit,
         auth: if c.raw.auth { Some(auth?) } else { None },
+        rules: rules?,
         max_token_lifetime: max_token_lifetime?,
     })
 }
@@ -957,15 +974,22 @@ fn static_tokens(c: &mut Checker<'_>) -> Option<Vec<StaticToken>> {
     let summary = tokens
         .iter()
         .map(|t| {
-            let mode = if t.mode == Mode::Write {
-                "write"
-            } else {
-                "read"
-            };
-            match &t.tenant {
-                Some(tenant) => format!("{} ({}, tenant {tenant}, {mode})", t.subject, t.scope),
-                None => format!("{} ({}, {mode})", t.subject, t.scope),
+            let mut parts = Vec::new();
+            if let Some(grant) = &t.cas {
+                let mode = if grant.mode == Mode::Write {
+                    "write"
+                } else {
+                    "read"
+                };
+                parts.push(match &grant.tenant {
+                    Some(tenant) => format!("{}, tenant {tenant}, {mode}", grant.scope),
+                    None => format!("{}, {mode}", grant.scope),
+                });
             }
+            if t.user.is_some() {
+                parts.push("user".to_owned());
+            }
+            format!("{} ({})", t.subject, parts.join("; "))
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -978,6 +1002,9 @@ fn static_tokens(c: &mut Checker<'_>) -> Option<Vec<StaticToken>> {
 }
 
 /// The static token entry `at`, recording a problem for each bad field.
+/// Without `scope` it is a user credential; with one, a CAS credential,
+/// and a user credential too when it names `name`, `email` or `claims`
+/// (ruling M2-R3).
 fn static_token(
     c: &mut Checker<'_>,
     at: &str,
@@ -997,12 +1024,13 @@ fn static_token(
                 None,
                 source,
                 "is not a static token field",
-                "A static token has sha256, scope, mode and subject, and optionally tenant.",
+                "A static token has sha256 and subject; scope, mode and optionally tenant for \
+                 CAS routes; and optionally name, email and claims for the Hub.",
             );
             ok = false;
         }
     }
-    let mut field = |name: &str| match table.get(name) {
+    let mut required = |name: &str| match table.get(name) {
         Some(toml::Value::String(text)) => Some(text.clone()),
         other => {
             c.raw.problem_toml(
@@ -1015,27 +1043,7 @@ fn static_token(
             None
         }
     };
-    let (sha256, scope, mode, subject) = (
-        field("sha256"),
-        field("scope"),
-        field("mode"),
-        field("subject"),
-    );
-    let tenant = match table.get("tenant") {
-        None => Some(None),
-        Some(toml::Value::String(text)) => Some(Some(text.clone())),
-        other => {
-            c.raw.problem_toml(
-                format!("{at}.tenant"),
-                other,
-                source,
-                "must be a string when given",
-                "The tenant groups scopes for `per-tenant` dedup visibility; leave it out to use \
-                 the scope.",
-            );
-            None
-        }
-    };
+    let (sha256, subject) = (required("sha256"), required("subject"));
     let digest = sha256.as_deref().and_then(parse_sha256);
     if sha256.is_some() && digest.is_none() {
         c.raw.problem(
@@ -1046,29 +1054,442 @@ fn static_token(
             format!("Configure the token's hash, never the token itself. {STATIC_TOKEN_HINT}"),
         );
     }
-    let mode = match mode.as_deref() {
-        Some("read") => Some(Mode::Read),
-        Some("write") => Some(Mode::Write),
-        Some(other) => {
+    let cas = cas_grant(c, at, table, source);
+    let user = user_profile(c, at, table, source);
+    let token = StaticToken {
+        sha256: digest?,
+        subject: subject?,
+        cas: cas?,
+        user: match user? {
+            None if !table.contains_key("scope") => Some(UserProfile::default()),
+            user => user,
+        },
+    };
+    ok.then_some(token)
+}
+
+/// An optional string field of `table`: `Some(None)` when absent, `None`
+/// (with a problem) when not a string.
+#[allow(
+    clippy::option_option,
+    reason = "`None` is a problem, `Some(None)` a field left out"
+)]
+fn optional_string(
+    c: &mut Checker<'_>,
+    at: &str,
+    table: &toml::Table,
+    name: &str,
+    source: &Source,
+    hint: &str,
+) -> Option<Option<String>> {
+    match table.get(name) {
+        None => Some(None),
+        Some(toml::Value::String(text)) => Some(Some(text.clone())),
+        other => {
+            c.raw.problem_toml(
+                format!("{at}.{name}"),
+                other,
+                source,
+                "must be a string when given",
+                hint,
+            );
+            None
+        }
+    }
+}
+
+/// The CAS half of a static token: `scope`, `mode` and `tenant`.
+#[allow(
+    clippy::option_option,
+    reason = "`None` is a problem, `Some(None)` a user-only token"
+)]
+fn cas_grant(
+    c: &mut Checker<'_>,
+    at: &str,
+    table: &toml::Table,
+    source: &Source,
+) -> Option<Option<CasGrant>> {
+    let scope = optional_string(
+        c,
+        at,
+        table,
+        "scope",
+        source,
+        "The scope limits the token on CAS routes; leave it out for a user token.",
+    );
+    let tenant = optional_string(
+        c,
+        at,
+        table,
+        "tenant",
+        source,
+        "The tenant groups scopes for `per-tenant` dedup visibility; leave it out to use the \
+         scope.",
+    );
+    let mode = match table.get("mode") {
+        None => Some(None),
+        Some(toml::Value::String(text)) if text == "read" => Some(Some(Mode::Read)),
+        Some(toml::Value::String(text)) if text == "write" => Some(Some(Mode::Write)),
+        Some(toml::Value::String(text)) => {
             c.raw.problem(
                 format!("{at}.mode"),
-                Some(other.to_owned()),
+                Some(text.clone()),
                 source,
                 "must be `read` or `write`",
                 "`write` may upload; `read` may only download and query.",
             );
             None
         }
-        None => None,
+        other => {
+            c.raw.problem_toml(
+                format!("{at}.mode"),
+                other,
+                source,
+                "must be `read` or `write`",
+                "`write` may upload; `read` may only download and query.",
+            );
+            None
+        }
     };
-    let token = StaticToken {
-        sha256: digest?,
+    let Some(scope) = scope? else {
+        let mut ok = true;
+        for (name, given) in [
+            ("mode", table.contains_key("mode")),
+            ("tenant", table.contains_key("tenant")),
+        ] {
+            if given {
+                c.raw.problem(
+                    format!("{at}.{name}"),
+                    None,
+                    source,
+                    "is given without a scope",
+                    "Give the scope it applies to, or leave it out for a user token, which has \
+                     no scope.",
+                );
+                ok = false;
+            }
+        }
+        return ok.then_some(None);
+    };
+    // Repository scopes are minted by the Hub for repositories it resolved
+    // (M2-R2); a static token naming one would bypass the authorizer.
+    let scope = if scope.starts_with(REPO_SCOPE_PREFIX) {
+        c.raw.problem(
+            format!("{at}.scope"),
+            Some(scope),
+            source,
+            "starts with `repo:`, a prefix reserved for repositories",
+            "Pick another scope; for access to a repository, give the token no scope and \
+             grant its subject an [[auth.rules]] entry.",
+        );
+        None
+    } else {
+        Some(scope)
+    };
+    let mode = mode?;
+    if mode.is_none() {
+        c.raw.problem(
+            format!("{at}.mode"),
+            None,
+            source,
+            "is required with a scope",
+            "`write` may upload; `read` may only download and query.",
+        );
+    }
+    Some(Some(CasGrant {
         scope: scope?,
         mode: mode?,
-        subject: subject?,
         tenant: tenant?,
+    }))
+}
+
+/// The user half of a static token: `name`, `email` and `claims`; `None`
+/// inside when none is given.
+#[allow(
+    clippy::option_option,
+    reason = "`None` is a problem, `Some(None)` no user fields"
+)]
+fn user_profile(
+    c: &mut Checker<'_>,
+    at: &str,
+    table: &toml::Table,
+    source: &Source,
+) -> Option<Option<UserProfile>> {
+    let name = optional_string(
+        c,
+        at,
+        table,
+        "name",
+        source,
+        "The name whoami answers for the token; it defaults to the subject.",
+    );
+    let email = optional_string(
+        c,
+        at,
+        table,
+        "email",
+        source,
+        "The address Hub commits made with the token are authored with.",
+    );
+    let claims = match table.get("claims") {
+        None => Some(None),
+        Some(value) => string_lists(c, &format!("{at}.claims"), value, source).map(Some),
     };
-    ok.then_some(token)
+    let (name, email, claims) = (name?, email?, claims?);
+    if name.is_none() && email.is_none() && claims.is_none() {
+        return Some(None);
+    }
+    Some(Some(UserProfile {
+        name,
+        email,
+        claims: claims.unwrap_or_default(),
+    }))
+}
+
+const CLAIMS_HINT: &str = "Write claims as a table of string lists, such as \
+     `claims = { orgs = [\"acme\"], groups = [\"ml-team\"] }`.";
+
+/// A table of string lists at `at`, such as `claims`, recording a problem
+/// for each entry that isn't one.
+fn string_lists(
+    c: &mut Checker<'_>,
+    at: &str,
+    value: &toml::Value,
+    source: &Source,
+) -> Option<BTreeMap<String, Vec<String>>> {
+    let Some(table) = value.as_table() else {
+        c.raw.problem_toml(
+            at,
+            Some(value),
+            source,
+            "must be a table of string lists",
+            CLAIMS_HINT,
+        );
+        return None;
+    };
+    let mut lists = BTreeMap::new();
+    let mut ok = true;
+    for (name, entry) in table {
+        if let Some(list) = string_list(entry) {
+            lists.insert(name.clone(), list);
+        } else {
+            c.raw.problem_toml(
+                format!("{at}.{name}"),
+                Some(entry),
+                source,
+                "must be a list of strings",
+                CLAIMS_HINT,
+            );
+            ok = false;
+        }
+    }
+    ok.then_some(lists)
+}
+
+fn string_list(value: &toml::Value) -> Option<Vec<String>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|v| v.as_str().map(str::to_owned))
+        .collect()
+}
+
+const RULES_HINT: &str = "A rule is `[[auth.rules]]` with `subjects = [\"alice\"]` and/or \
+     `claims = { groups = [\"ml-team\"] }`, `repos = [\"org/*\"]` and \
+     `actions = [\"read\", \"write\", \"create\"]`. See docs/reference/config.md#rules.";
+
+/// `[[auth.rules]]` (ruling M2-R3), every entry checked field by field.
+fn rules(c: &mut Checker<'_>) -> Option<Vec<Rule>> {
+    const KEY: &str = "auth.rules";
+    let Some((value, source)) = c.raw.values.get(KEY).cloned() else {
+        c.set(KEY, "none: user tokens may do nothing", &Source::Default);
+        return Some(Vec::new());
+    };
+    let Some(entries) = value.as_array() else {
+        c.raw.problem(
+            KEY,
+            None,
+            &source,
+            "must be an array of tables, written [[auth.rules]]",
+            RULES_HINT,
+        );
+        return None;
+    };
+    let mut rules = Vec::new();
+    let mut ok = true;
+    for (index, entry) in entries.iter().enumerate() {
+        match rule(c, &format!("{KEY}[{index}]"), entry, &source) {
+            Some(rule) => rules.push(rule),
+            None => ok = false,
+        }
+    }
+    let summary = rules
+        .iter()
+        .map(|rule| {
+            let mut who: Vec<String> = rule.subjects.clone();
+            who.extend(
+                rule.claims
+                    .iter()
+                    .flat_map(|(name, values)| values.iter().map(move |v| format!("{name}:{v}"))),
+            );
+            let repos: Vec<&str> = rule.repos.iter().map(Glob::as_str).collect();
+            let actions: Vec<&str> = rule.actions.iter().map(|a| a.name()).collect();
+            format!(
+                "{} may {} {}",
+                who.join(" or "),
+                actions.join(", "),
+                repos.join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    c.set(KEY, format!("{} rule(s): {summary}", rules.len()), &source);
+    ok.then_some(rules)
+}
+
+/// The rule entry `at`, recording a problem for each bad field.
+fn rule(c: &mut Checker<'_>, at: &str, entry: &toml::Value, source: &Source) -> Option<Rule> {
+    let Some(table) = entry.as_table() else {
+        c.raw
+            .problem(at, None, source, "must be a table", RULES_HINT);
+        return None;
+    };
+    let mut ok = true;
+    for name in table.keys() {
+        if !RULE_FIELDS.contains(&name.as_str()) {
+            c.raw.problem(
+                format!("{at}.{name}"),
+                None,
+                source,
+                "is not a rule field",
+                RULES_HINT,
+            );
+            ok = false;
+        }
+    }
+    let subjects = match table.get("subjects") {
+        None => Some(Vec::new()),
+        Some(value) => rule_subjects(c, &format!("{at}.subjects"), value, source),
+    };
+    let claims = match table.get("claims") {
+        None => Some(BTreeMap::new()),
+        Some(value) => string_lists(c, &format!("{at}.claims"), value, source),
+    };
+    if let (Some(subjects), Some(claims)) = (&subjects, &claims)
+        && subjects.is_empty()
+        && claims.values().all(Vec::is_empty)
+    {
+        c.raw.problem(
+            at,
+            None,
+            source,
+            "matches nobody: it names no subject and no claim value",
+            "Give `subjects`, `claims` or both; `subjects = [\"anonymous\"]` applies it to \
+             everyone, with or without a credential.",
+        );
+        ok = false;
+    }
+    let repos = list_field(c, at, table, "repos", source, |text| {
+        Glob::new(text).map_err(|err| err.reason)
+    });
+    let actions = list_field(c, at, table, "actions", source, |text| {
+        Action::parse(text).ok_or("is not `read`, `write` or `create`")
+    });
+    let rule = Rule {
+        subjects: subjects?,
+        claims: claims?,
+        repos: repos?,
+        actions: actions?,
+    };
+    ok.then_some(rule)
+}
+
+/// A rule's `subjects` at `at`: each a subject a credential can carry, and
+/// never `*`, which subjects don't expand (ruling M2-R3). One problem names
+/// every bad entry by position.
+fn rule_subjects(
+    c: &mut Checker<'_>,
+    at: &str,
+    value: &toml::Value,
+    source: &Source,
+) -> Option<Vec<String>> {
+    let Some(subjects) = string_list(value) else {
+        c.raw.problem_toml(
+            at,
+            Some(value),
+            source,
+            "must be a list of strings",
+            RULES_HINT,
+        );
+        return None;
+    };
+    let mut wrong = Vec::new();
+    let mut star = false;
+    for (index, subject) in subjects.iter().enumerate() {
+        if subject == "*" {
+            star = true;
+            wrong.push(format!("entry {index} is `*`, which matches no subject"));
+        } else if let Err(reason) = openxet_auth::check_subject(subject) {
+            wrong.push(format!(
+                "entry {index}: {}",
+                reason.trim_start_matches("the subject ")
+            ));
+        }
+    }
+    if wrong.is_empty() {
+        return Some(subjects);
+    }
+    let hint = if star {
+        format!("Use `anonymous` for everyone, with or without a credential. {RULES_HINT}")
+    } else {
+        format!("Name each subject as the credential carries it. {RULES_HINT}")
+    };
+    c.raw.problem(at, None, source, wrong.join("; "), hint);
+    None
+}
+
+/// The required, non-empty list of strings `name` of the rule `at`, each
+/// parsed by `parse`. One problem names the field and every bad entry by
+/// position, never by value (values under `auth` are not shown).
+fn list_field<T>(
+    c: &mut Checker<'_>,
+    at: &str,
+    table: &toml::Table,
+    name: &str,
+    source: &Source,
+    parse: impl Fn(&str) -> Result<T, &'static str>,
+) -> Option<Vec<T>> {
+    let key = format!("{at}.{name}");
+    let Some(texts) = table.get(name).and_then(string_list) else {
+        c.raw.problem_toml(
+            key,
+            table.get(name),
+            source,
+            "is required and must be a list of strings",
+            RULES_HINT,
+        );
+        return None;
+    };
+    if texts.is_empty() {
+        c.raw
+            .problem(key, None, source, "must not be empty", RULES_HINT);
+        return None;
+    }
+    let mut parsed = Vec::new();
+    let mut wrong = Vec::new();
+    for (index, text) in texts.iter().enumerate() {
+        match parse(text) {
+            Ok(value) => parsed.push(value),
+            Err(reason) => wrong.push(format!("entry {index} {reason}")),
+        }
+    }
+    if wrong.is_empty() {
+        Some(parsed)
+    } else {
+        c.raw
+            .problem(key, None, source, wrong.join("; "), RULES_HINT);
+        None
+    }
 }
 
 fn parse_sha256(text: &str) -> Option<[u8; 32]> {
@@ -1161,8 +1582,9 @@ fn authenticator(
                 None,
                 &source,
                 reason,
-                "Give every static token a non-empty subject and scope, and optionally a tenant, \
-                 without control characters (scope and tenant at most 1024 bytes).",
+                "Give every static token a non-empty subject other than `anonymous`, and a scope, \
+                 a user identity or both, without control characters (scope and tenant at most \
+                 1024 bytes).",
             );
             None
         }
@@ -1382,6 +1804,218 @@ mod tests {
                 "auth.static_tokens[0].mode",
             ]
         );
+    }
+
+    fn sha() -> String {
+        "a".repeat(64)
+    }
+
+    /// Without `scope` a static token is a user credential (ruling M2-R3);
+    /// `mode` and `tenant` then have nothing to apply to.
+    #[test]
+    fn a_static_token_without_scope_is_a_user_token() {
+        let loaded = load_toml(
+            &format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"alice\"\nname = \"Alice\"\n\
+                 email = \"alice@example.com\"\nclaims = {{ orgs = [\"acme\"] }}\n",
+                sha()
+            ),
+            &[],
+        );
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let summary = &loaded
+            .settings
+            .iter()
+            .find(|s| s.key == "auth.static_tokens")
+            .unwrap()
+            .value;
+        assert!(summary.contains("alice (user)"), "{summary}");
+
+        let loaded = load_toml(
+            &format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"alice\"\nmode = \"read\"\n\
+                 tenant = \"t\"\n",
+                sha()
+            ),
+            &[],
+        );
+        assert_eq!(
+            problem_keys(&loaded),
+            ["auth.static_tokens[0].mode", "auth.static_tokens[0].tenant"]
+        );
+        let loaded = load_toml(
+            &format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"ci\"\nscope = \"s\"\n",
+                sha()
+            ),
+            &[],
+        );
+        assert_eq!(problem_keys(&loaded), ["auth.static_tokens[0].mode"]);
+        let loaded = load_toml(
+            &format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"anonymous\"\n",
+                sha()
+            ),
+            &[],
+        );
+        assert_eq!(problem_keys(&loaded), ["auth.static_tokens[0]"]);
+    }
+
+    #[test]
+    fn claims_values_are_string_lists() {
+        let entry = |claims: &str| {
+            format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"alice\"\nclaims = {claims}\n",
+                sha()
+            )
+        };
+        assert!(
+            load_toml(&entry("{ orgs = [\"a\", \"b\"], groups = [] }"), &[])
+                .problems
+                .is_empty()
+        );
+        assert_eq!(
+            problem_keys(&load_toml(&entry("{ orgs = \"acme\", groups = [1] }"), &[])),
+            [
+                "auth.static_tokens[0].claims.groups",
+                "auth.static_tokens[0].claims.orgs"
+            ]
+        );
+        assert_eq!(
+            problem_keys(&load_toml(&entry("[\"acme\"]"), &[])),
+            ["auth.static_tokens[0].claims"]
+        );
+        let loaded = load_toml(
+            &format!(
+                "[[auth.rules]]\nclaims = {{ groups = \"ml\" }}\nrepos = [\"*\"]\n\
+                 actions = [\"read\"]\n{}",
+                entry("{}")
+            ),
+            &[],
+        );
+        assert_eq!(problem_keys(&loaded), ["auth.rules[0].claims.groups"]);
+    }
+
+    /// `repo:` scopes belong to repositories (M2-R2): the Hub mints CAS
+    /// tokens for them after authorizing, so a static token may not name
+    /// one.
+    #[test]
+    fn static_token_scope_with_repo_prefix_is_a_problem() {
+        let loaded = load_toml(
+            &format!(
+                "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"ci\"\n\
+                 scope = \"repo:0192f0c4a1b27c3d8e9f00112233aabb\"\nmode = \"write\"\n",
+                sha()
+            ),
+            &[],
+        );
+        assert_eq!(problem_keys(&loaded), ["auth.static_tokens[0].scope"]);
+        let problem = &loaded.problems[0];
+        assert!(
+            problem.rule.contains("reserved for repositories"),
+            "{problem:?}"
+        );
+        assert_eq!(problem.value.as_deref(), Some(REDACTED));
+    }
+
+    #[test]
+    fn rules_are_checked_field_by_field() {
+        let token = format!(
+            "[[auth.static_tokens]]\nsha256 = \"{}\"\nsubject = \"alice\"\n",
+            sha()
+        );
+        let loaded = load_toml(
+            &format!(
+                "{token}[[auth.rules]]\nsubjects = [\"alice\"]\nrepos = [\"org/*\"]\n\
+                 actions = [\"read\", \"admin\"]\n\
+                 [[auth.rules]]\nsubjects = [\"alice\"]\nrepos = [\"org/**\"]\nactions = [\"read\"]\n\
+                 [[auth.rules]]\nrepos = [\"*\"]\nactions = [\"read\"]\n\
+                 [[auth.rules]]\nsubjects = [\"a\"]\nrepos = []\nactions = [\"read\"]\nusers = []\n"
+            ),
+            &[],
+        );
+        assert_eq!(
+            problem_keys(&loaded),
+            [
+                "auth.rules[0].actions",
+                "auth.rules[1].repos",
+                "auth.rules[2]",
+                "auth.rules[3].users",
+                "auth.rules[3].repos",
+            ]
+        );
+        assert!(
+            loaded.problems[0].rule.contains("entry 1"),
+            "{:?}",
+            loaded.problems[0]
+        );
+
+        let loaded = load_toml(
+            &format!(
+                "{token}[[auth.rules]]\nsubjects = [\"*\"]\nrepos = [\"*\"]\nactions = [\"read\"]\n\
+                 [[auth.rules]]\nsubjects = [\"\", \"a\\nb\"]\nrepos = [\"*\"]\n\
+                 actions = [\"read\"]\n"
+            ),
+            &[],
+        );
+        assert_eq!(
+            problem_keys(&loaded),
+            ["auth.rules[0].subjects", "auth.rules[1].subjects"]
+        );
+        let (star, bad) = (&loaded.problems[0], &loaded.problems[1]);
+        assert!(
+            star.hint.contains("Use `anonymous` for everyone"),
+            "{star:?}"
+        );
+        assert!(
+            bad.rule.contains("entry 0") && bad.rule.contains("entry 1"),
+            "{bad:?}"
+        );
+        assert!(
+            loaded
+                .problems
+                .iter()
+                .all(|p| p.value.is_none() || p.value.as_deref() == Some(REDACTED)),
+            "{:?}",
+            loaded.problems
+        );
+
+        let loaded = load_toml(
+            &format!(
+                "{token}[[auth.rules]]\nsubjects = [\"alice\"]\nclaims = {{ groups = [\"ml\"] }}\n\
+                 repos = [\"org/*\", \"*\"]\nactions = [\"read\", \"write\", \"create\"]\n"
+            ),
+            &[],
+        );
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let rules = loaded.config.unwrap().rules;
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].actions,
+            [Action::Read, Action::Write, Action::Create]
+        );
+        assert_eq!(rules[0].repos[0].as_str(), "org/*");
+        let summary = &loaded_setting(
+            &load_toml(
+                &format!(
+                    "{token}[[auth.rules]]\nsubjects = [\"alice\"]\nrepos = [\"org/*\"]\n\
+                     actions = [\"read\"]\n"
+                ),
+                &[],
+            ),
+            "auth.rules",
+        );
+        assert_eq!(summary, "1 rule(s): alice may read org/*");
+    }
+
+    fn loaded_setting(loaded: &Loaded, key: &str) -> String {
+        loaded
+            .settings
+            .iter()
+            .find(|s| s.key == key)
+            .unwrap()
+            .value
+            .clone()
     }
 
     /// A static token may name its tenant (ruling M1-R38); one that isn't a
