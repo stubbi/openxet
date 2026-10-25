@@ -18,6 +18,7 @@
 - [Website and interface design](design.md)
 - [Hosted waitlist operations](hosted-waitlist.md)
 - [Design](superpowers/specs/2026-10-23-openxet-design.md)
+- [M2 plan: Hub API, Git hosting and LFS](superpowers/plans/2026-10-25-m2-hub-git-lfs.md)
 - [Resource URI delivery milestones](superpowers/plans/2026-10-24-resource-uri-milestones.md)
 - [Architecture decisions]()
   - [0001: Build from scratch on xet-core](adr/0001-build-from-scratch-on-xet-core.md)
