@@ -150,7 +150,7 @@ fn redirects_never_broaden_authority() {
 
     // Another host, another port, or a downgrade to HTTP: dropped.
     for location in [
-        "https://storage.example.net/bucket/object?X-Amz-Signature=abc",
+        "https://storage.example.net/bucket/object?X-Amz-Signature=REDACTED",
         "https://a.example.org:8443/other",
         "http://a.example.org/other",
         "https://evil.example/a.example.org",
