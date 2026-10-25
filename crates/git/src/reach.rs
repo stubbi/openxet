@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use gix::ObjectId;
@@ -81,6 +81,25 @@ pub struct Reachability {
     budget: Budget,
     per_repo: Arc<Limiter<RepoId>>,
     per_principal: Arc<Limiter<String>>,
+    clock: Clock,
+}
+
+/// What the walk reads the time from: the monotonic clock, or in tests a
+/// clock they drive ([`Reachability::with_clock`]), so the time budget's
+/// checks are pinned without depending on how fast the machine walks.
+#[derive(Clone)]
+struct Clock(Arc<dyn Fn() -> Instant + Send + Sync>);
+
+impl Clock {
+    fn now(&self) -> Instant {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for Clock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Clock")
+    }
 }
 
 impl Reachability {
@@ -91,6 +110,19 @@ impl Reachability {
             budget,
             per_repo: Arc::new(Limiter::new(budget.max_concurrent_per_repo)),
             per_principal: Arc::new(Limiter::new(budget.max_concurrent_per_principal)),
+            clock: Clock(Arc::new(Instant::now)),
+        }
+    }
+
+    /// A check with `budget` that reads the time from `now` instead of the
+    /// monotonic clock: a test drives it to pin where the time budget
+    /// stops a walk. Only with the test-only `fault-injection` feature.
+    #[cfg(feature = "fault-injection")]
+    #[must_use]
+    pub fn with_clock(budget: Budget, now: Arc<dyn Fn() -> Instant + Send + Sync>) -> Self {
+        Self {
+            clock: Clock(now),
+            ..Self::new(budget)
         }
     }
 
@@ -114,7 +146,7 @@ impl Reachability {
         if wants.iter().all(|w| tips.contains(w)) {
             return Ok(());
         }
-        let started = Instant::now();
+        let started = self.clock.now();
         let _repo_slot = self
             .per_repo
             .try_acquire(snapshot.repo)
@@ -126,13 +158,18 @@ impl Reachability {
         let dir = snapshot.dir.path().to_path_buf();
         let refs: Vec<Oid> = snapshot.refs.iter().map(|(_, oid)| *oid).collect();
         let wants = wants.to_vec();
-        let budget = self.budget;
+        let deadline = Deadline {
+            clock: self.clock.clone(),
+            started,
+            max: self.budget.max_time,
+        };
+        let max_objects = self.budget.max_objects;
         // gix's repository handle stays on the one blocking thread.
         blocking(move || {
-            let Some(plan) = classify(&dir, &refs, wants, budget, started)? else {
+            let Some(plan) = classify(&dir, &refs, wants, &deadline)? else {
                 return Ok(());
             };
-            plan.walk(budget, started)
+            plan.walk(max_objects, &deadline)
         })
         .await
     }
@@ -171,6 +208,19 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
+/// The time budget of one check, measured from its start.
+struct Deadline {
+    clock: Clock,
+    started: Instant,
+    max: Duration,
+}
+
+impl Deadline {
+    fn passed(&self) -> bool {
+        self.clock.now().saturating_duration_since(self.started) >= self.max
+    }
+}
+
 /// The commit wants left for the walk, in request order, and where it
 /// starts.
 struct Walk {
@@ -185,8 +235,7 @@ fn classify(
     dir: &Path,
     refs: &[Oid],
     wants: Vec<Oid>,
-    budget: Budget,
-    started: Instant,
+    deadline: &Deadline,
 ) -> Result<Option<Walk>, Refused> {
     let first_off_tip = wants
         .iter()
@@ -206,7 +255,7 @@ fn classify(
         }
         fast.extend(chain);
         // Peeling many refs counts against the time budget too.
-        if started.elapsed() >= budget.max_time {
+        if deadline.passed() {
             return Err(Refused::NotOurRef(first_off_tip));
         }
     }
@@ -234,7 +283,7 @@ fn classify(
 impl Walk {
     /// One breadth-first walk from the tips until every pending want is
     /// found or the budget is spent.
-    fn walk(self, budget: Budget, started: Instant) -> Result<(), Refused> {
+    fn walk(self, max_objects: u64, deadline: &Deadline) -> Result<(), Refused> {
         let mut pending: HashSet<ObjectId> = self.pending.iter().map(|w| to_gix(*w)).collect();
         let refuse = |pending: &HashSet<ObjectId>| {
             let first = self
@@ -244,7 +293,7 @@ impl Walk {
                 .copied();
             Refused::NotOurRef(first.unwrap_or(Oid([0; 20])))
         };
-        if budget.max_objects == 0 || started.elapsed() >= budget.max_time {
+        if max_objects == 0 || deadline.passed() {
             return Err(refuse(&pending));
         }
         let commits = self
@@ -272,8 +321,7 @@ impl Walk {
             if pending.remove(&id) && pending.is_empty() {
                 return Ok(());
             }
-            if visited >= budget.max_objects
-                || (visited.is_multiple_of(CLOCK_EVERY) && started.elapsed() >= budget.max_time)
+            if visited >= max_objects || (visited.is_multiple_of(CLOCK_EVERY) && deadline.passed())
             {
                 break;
             }
