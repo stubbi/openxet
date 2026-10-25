@@ -194,10 +194,10 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(crates/(protocol|auth|cas|index|storage)/|fuzz/|Cargo\.lock$)'; then
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(crates/(protocol|auth|cas|index|storage|uri)/|fuzz/|Cargo\.lock$)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No change to a fuzzed crate (protocol, auth, cas, index, storage), fuzz/ or Cargo.lock; skipping."
+            echo "No change to a fuzzed crate (protocol, auth, cas, index, storage, uri), fuzz/ or Cargo.lock; skipping."
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.changed.outputs.run == 'true'
@@ -235,7 +235,7 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         run: |
           for target in xorb_upload xorb_chunks upload_shard verify_shard \
-            cas_token transfer_url reconstruction_range; do
+            cas_token transfer_url reconstruction_range xet_uri; do
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=60
           done
 

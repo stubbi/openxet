@@ -71,3 +71,17 @@ for range in 'bytes=0-99' 'bytes=100-' 'bytes=-10' 'bytes=-0' 'bytes=5-1' \
   'BYTES = 1-2' 'bytes=0-99,200-299' 'items=0-1' $'bytes=0-1\nbytes=2-3'; do
   printf "$size%s" "$range" > "corpus/reconstruction_range/$(printf '%s' "$range" | b64url)"
 done
+
+# The xet:// parser's seeds are the specification's golden vectors
+# (crates/uri/testdata/vectors.json, the single copy), one input per file,
+# valid and malformed, legacy forms included.
+mkdir -p corpus/xet_uri
+python3 -I - ../crates/uri/testdata/vectors.json corpus/xet_uri <<'PY'
+import json
+import pathlib
+import sys
+
+vectors = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+for i, vector in enumerate(vectors["valid"] + vectors["invalid"]):
+    (pathlib.Path(sys.argv[2]) / f"vector-{i:03}").write_text(vector["input"], encoding="utf-8")
+PY

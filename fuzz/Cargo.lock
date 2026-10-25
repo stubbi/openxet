@@ -1455,6 +1455,7 @@ dependencies = [
  "openxet-auth",
  "openxet-cas",
  "openxet-protocol",
+ "openxet-uri",
  "url",
 ]
 
@@ -1507,6 +1508,14 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "openxet-uri"
+version = "0.0.0"
+dependencies = [
+ "thiserror",
+ "url",
 ]
 
 [[package]]
