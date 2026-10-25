@@ -4,12 +4,12 @@
 //!
 //! - A file stored in Git answers `200` inline with its blob's `ETag`,
 //!   `X-Repo-Commit` and huggingface.co's `Content-Disposition`, ranges
-//!   included (S4 G3–G9).
+//!   included (S4 G3 to G9).
 //! - A Xet file answers `302` to the file gateway ([`crate::gateway`],
 //!   ruling M2-R9) with the headers `huggingface_hub` reads: `X-Repo-Commit`,
 //!   `X-Linked-Size`, `X-Linked-ETag`, `X-Xet-Hash` and the `xet-auth` and
-//!   `xet-reconstruction-info` links (`file_download.py` lines 1669–1689,
-//!   `utils/_xet.py` lines 50–82, `huggingface_hub` 2.2.0). All are
+//!   `xet-reconstruction-info` links (`file_download.py` lines 1669 to 1689,
+//!   `utils/_xet.py` lines 50 to 82, `huggingface_hub` 2.2.0). All are
 //!   absolute URLs on the server's own origin (S3 lesson 3).
 //! - A path that names no file answers `EntryNotFound` with `X-Repo-Commit`,
 //!   which the client caches the miss under (`file_download.py` line 1773).

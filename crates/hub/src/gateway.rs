@@ -33,7 +33,7 @@
 //! A `Location` from `resolve` carries `commit`, so the gateway repeats the
 //! `X-Repo-Commit`, `X-Xet-Hash` and `Link` headers `huggingface_hub` reads
 //! from where a same-origin redirect lands (`utils/_http.py` lines
-//! 763–782 and `file_download.py` lines 1669–1689, `huggingface_hub`
+//! 763 to 782 and `file_download.py` lines 1669 to 1689, `huggingface_hub`
 //! 2.2.0). That `X-Repo-Commit` is informational: the caller chose it, the
 //! gateway checks only that it is a commit id, and it is never
 //! authoritative. The `Link`'s `xet-auth` route goes through the first Hub

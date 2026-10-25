@@ -111,7 +111,7 @@ async fn assert_whole(router: &Router, url: &str, content: &[u8], etag: &str) {
 /// debug build decodes the reference file's 63 MB in about a second.
 const LONGEST_RANGE: u64 = 1 << 20;
 
-/// Checks S4's list (G1–G9) on the gateway URL `url` of a file holding
+/// Checks S4's list (G1 to G9) on the gateway URL `url` of a file holding
 /// `content`, whose `ETag` is `etag`, at the byte offsets in `edges` and
 /// next to them. Of a file larger than [`LONGEST_RANGE`] it reads ranges
 /// up to that long, and the whole file once.
