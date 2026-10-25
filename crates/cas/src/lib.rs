@@ -24,6 +24,7 @@ mod budget;
 mod deadline;
 mod dedup;
 mod error;
+mod file_plan;
 mod health;
 mod misc;
 mod path;
@@ -53,12 +54,14 @@ pub use auth::{ReadAccess, WriteAccess};
 pub use budget::MemoryBudget;
 pub use deadline::SendDeadline;
 pub use error::CasError;
+pub use file_plan::{FilePlan, FilePlanError, plan_file};
 pub use health::starting_router;
 pub use misc::TELEMETRY_BODY_LIMIT;
 #[cfg(feature = "test-support")]
 pub use openxet_http::Endpoint;
 pub use openxet_http::{BodyDeadline, Clock, RequestId, SystemClock, X_REQUEST_ID};
-pub use reconstruction::{MAX_BATCH_FILES, MAX_BATCH_TERMS};
+pub use plan::{Fetch, Plan, PlannedTerm};
+pub use reconstruction::{ByteRange, MAX_BATCH_FILES, MAX_BATCH_TERMS, requested_range};
 
 /// The CAS's configuration.
 #[derive(Debug, Clone)]
