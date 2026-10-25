@@ -80,9 +80,19 @@ pub async fn create_repo(
         .put_replace(meta.key(), meta.to_bytes())
         .await?;
     if let Err(err) = state.index.create_repo(&repo).await {
-        // The record reached the bucket but the repository won't exist:
-        // tombstone it, so a reindex from the bucket never creates it.
-        tombstone(state, &repo).await;
+        // The record reached the bucket; if the row didn't, tombstone the
+        // record so a reindex never creates the repository. Only once a
+        // read shows the row absent: a commit whose acknowledgement was
+        // lost has a live row, which a tombstone would hide from reindex.
+        match state.index.repo_by_id(id).await {
+            Ok(None) => tombstone(state, &repo, "failed create").await,
+            Ok(Some(_)) => {}
+            Err(e) => tracing::error!(
+                repo = %id,
+                error = &e as &dyn std::error::Error,
+                "could not check a failed create's index row; its metadata record stays live"
+            ),
+        }
         return Err(match err {
             IndexError::NameTaken { .. } => {
                 match state.index.repo_by_name(namespace, name).await? {
@@ -127,11 +137,11 @@ pub(crate) fn meta_of(repo: &Repo, deleted_at: Option<u64>) -> Result<RepoMeta, 
     })
 }
 
-/// Tombstones the record of a create that won't take effect, best effort:
-/// the create already fails, and a record left live is what `reindex`
-/// meets as a duplicate name or an orphan, so a failure here is logged for
-/// the operator rather than answered.
-async fn tombstone(state: &HubState, repo: &Repo) {
+/// Tombstones `repo`'s record, best effort: the caller's outcome is
+/// already decided, and a record left live is what `reindex` meets as a
+/// duplicate name or an orphan, so a failure here is logged for the
+/// operator rather than answered. `why` names the case in the log.
+async fn tombstone(state: &HubState, repo: &Repo, why: &'static str) {
     let written = match meta_of(repo, Some(state.clock.now())) {
         Ok(meta) => state
             .bucket
@@ -144,7 +154,8 @@ async fn tombstone(state: &HubState, repo: &Repo) {
         tracing::error!(
             repo = %repo.id,
             error = &err as &dyn std::error::Error,
-            "could not tombstone the metadata record of a failed create"
+            why,
+            "could not tombstone a repository's metadata record"
         );
     }
 }
@@ -289,6 +300,12 @@ async fn delete(
     if !state.index.delete_repo(repo.id).await? {
         return Err(HubError::UnknownRepo);
     }
+    // A label change that read the row before it went may have written its
+    // live record over the tombstone, and won its swap while the row still
+    // existed. Writing the tombstone again closes that gap: a label writer
+    // landing after this point finds no row, loses its swap and tombstones
+    // the record itself (`labels::restore`).
+    tombstone(&state, repo, "deleted repository").await;
     state
         .index
         .audit(&AuditEntry {

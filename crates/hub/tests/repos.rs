@@ -13,7 +13,7 @@ use common::HookBucket;
 use openxet_auth::Action;
 use openxet_auth::RulesAuthorizer;
 use openxet_hub::test_support::{
-    ALL, PUBLIC_URL, TestHub, assert_read_keys, fixture, fixture_json, rule, user_token,
+    ALL, BEARER, PUBLIC_URL, TestHub, assert_read_keys, fixture, fixture_json, rule, user_token,
 };
 use openxet_index::{Repo, RepoId, Repos, SqliteIndex};
 use openxet_storage::{Bucket, RepoMeta};
@@ -427,7 +427,9 @@ async fn delete_tombstones_the_bucket_record_first() {
                     .repo_by_name(&meta.namespace, &meta.name)
                     .await
                     .unwrap();
-                *seen.lock().unwrap() = Some(row.is_some());
+                // The first tombstone; the delete writes a second one
+                // after the row is gone.
+                seen.lock().unwrap().get_or_insert(row.is_some());
             }
         })
     }));
@@ -569,4 +571,57 @@ async fn control_bodies_are_small() {
     let reply = create(&hub, ALICE, &body).await;
     assert_eq!(reply.status, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(reply.json()["code"], "payload_too_large");
+}
+
+/// A label change that read the row before a delete removed it writes its
+/// live record over the delete's tombstone and wins its swap; the delete's
+/// second tombstone write, after the row is gone, leaves the record
+/// tombstoned, so a reindex never brings the repository back.
+#[tokio::test]
+async fn label_change_racing_a_delete_leaves_the_record_tombstoned() {
+    let (hub, bucket) = hooked(vec![rule(&["alice"], &["alice/*"], ALL)]).await;
+    hub.create(ALICE, "alice", "m", None).await;
+    let index = SqliteIndex::open(&hub.index_path()).await.unwrap();
+    let id = index.repo_by_name("alice", "m").await.unwrap().unwrap().id;
+    let router = hub.router.clone();
+    let fired = Arc::new(Mutex::new(false));
+    let label_status = Arc::new(Mutex::new(None));
+    let status = Arc::clone(&label_status);
+    bucket.set_hook(Arc::new(move |meta: RepoMeta| {
+        let (router, fired, status) = (router.clone(), Arc::clone(&fired), Arc::clone(&status));
+        Box::pin(async move {
+            if meta.deleted_at.is_none() || std::mem::replace(&mut *fired.lock().unwrap(), true) {
+                return;
+            }
+            // At the delete's first tombstone write: a label change runs to
+            // completion while the row still exists.
+            let request = axum::http::Request::put("/api/openxet/v1/repos/alice/m/labels/dataset")
+                .header("authorization", format!("{BEARER} {ALICE}"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = tower::ServiceExt::oneshot(router, request).await.unwrap();
+            *status.lock().unwrap() = Some(response.status());
+        })
+    }));
+    let reply = hub
+        .call(
+            Method::DELETE,
+            "/api/repos/delete",
+            Some(ALICE),
+            Some(&json!({"name": "m", "organization": "alice"})),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(*label_status.lock().unwrap(), Some(StatusCode::OK));
+    let written = bucket.replaced();
+    // Tombstone, the label change's live record, the second tombstone.
+    assert!(
+        written
+            .iter()
+            .any(|m| m.deleted_at.is_none() && m.labels.contains(&"dataset".to_owned())),
+        "{written:?}"
+    );
+    let stored = bucket.meta(&id.to_string()).await;
+    assert!(stored.deleted_at.is_some(), "{stored:?}");
+    assert!(index.repo_by_id(id).await.unwrap().is_none());
 }

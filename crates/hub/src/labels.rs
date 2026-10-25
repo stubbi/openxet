@@ -194,18 +194,37 @@ fn labels_changed(repo: &Repo) -> HubError {
     }
 }
 
+/// How often [`restore`] rewrites the record while the row keeps moving.
+const RESTORE_ATTEMPTS: usize = 3;
+
 /// Puts back the record a lost compare-and-swap overwrote: the row as the
 /// index now has it, or a tombstone if the repository was deleted
-/// meanwhile, so the bucket never keeps a change the index refused.
+/// meanwhile, so the bucket never keeps a change the index refused. The
+/// row is read again after each write, and the record rewritten while it
+/// differs, up to [`RESTORE_ATTEMPTS`] times; a writer that keeps changing
+/// it rewrites the record itself.
 async fn restore(state: &HubState, attempted: &Repo) -> Result<(), HubError> {
-    let meta = match state.index.repo_by_id(attempted.id).await? {
-        Some(current) => meta_of(&current, None)?,
-        None => meta_of(attempted, Some(state.clock.now()))?,
-    };
-    state
-        .bucket
-        .put_replace(meta.key(), meta.to_bytes())
-        .await?;
+    let mut row = state.index.repo_by_id(attempted.id).await?;
+    for _ in 0..RESTORE_ATTEMPTS {
+        let meta = match &row {
+            Some(current) => meta_of(current, None)?,
+            None => meta_of(attempted, Some(state.clock.now()))?,
+        };
+        state
+            .bucket
+            .put_replace(meta.key(), meta.to_bytes())
+            .await?;
+        let now = state.index.repo_by_id(attempted.id).await?;
+        let settled = match (&row, &now) {
+            (Some(written), Some(current)) => written.labels == current.labels,
+            (None, None) => true,
+            _ => false,
+        };
+        if settled {
+            break;
+        }
+        row = now;
+    }
     Ok(())
 }
 

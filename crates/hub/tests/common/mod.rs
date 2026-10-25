@@ -22,7 +22,8 @@ pub type HookFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub type MetaHook = Arc<dyn Fn(RepoMeta) -> HookFuture + Send + Sync>;
 
 /// A local bucket that records every repository metadata record written
-/// and runs a hook before writing it.
+/// and runs a hook right after writing it, before the caller goes on: the
+/// moment another writer would interleave.
 pub struct HookBucket {
     inner: LocalBucket,
     hook: Mutex<Option<MetaHook>>,
@@ -40,7 +41,7 @@ impl HookBucket {
         })
     }
 
-    /// Runs `hook` before each later metadata write.
+    /// Runs `hook` after each later metadata write.
     pub fn set_hook(&self, hook: MetaHook) {
         *self.hook.lock().unwrap() = Some(hook);
     }
@@ -87,11 +88,12 @@ impl Bucket for HookBucket {
     async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
         let meta = RepoMeta::from_bytes(&key, &bytes).unwrap();
         self.replaced.lock().unwrap().push(meta.clone());
+        self.inner.put_replace(key, bytes).await?;
         let hook = self.hook.lock().unwrap().clone();
         if let Some(hook) = hook {
             hook(meta).await;
         }
-        self.inner.put_replace(key, bytes).await
+        Ok(())
     }
     async fn put_stream(&self, key: Key, body: BodyStream, len: u64) -> Result<(), StorageError> {
         self.inner.put_stream(key, body, len).await
