@@ -16,7 +16,8 @@
 //!   write what the second attempt got to `<file>`
 //!
 //! `openxet-git-test-hook list-fds` prints the descriptors it holds, one
-//! `<fd> <kind>` line each, for the channel-privacy test, and
+//! `<fd> <kind>` line each, after a `hook <read>,<write>` line when
+//! `OPENXET_HOOK_FD` is set, for the channel-privacy test, and
 //! `openxet-git-test-hook exchange` sends one request with the token from
 //! its environment and prints the reply lines, or `error …`.
 
@@ -136,6 +137,9 @@ fn exchange() {
 
 fn list_fds() {
     let mut out = io::stdout().lock();
+    if let Ok(fds) = std::env::var(openxet_git::hook::HOOK_FD_ENV) {
+        let _ = writeln!(out, "hook {fds}");
+    }
     for fd in 0..1024 {
         let Ok(meta) = std::fs::metadata(format!("/dev/fd/{fd}")) else {
             continue;

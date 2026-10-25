@@ -6,6 +6,7 @@
 mod common;
 mod push_support;
 
+use std::collections::BTreeMap;
 use std::process::Stdio;
 
 use openxet_git::HookServer;
@@ -35,14 +36,33 @@ fn context() -> HookContext {
     }
 }
 
-/// The descriptors above stdio that a child of `cmd` holds.
-async fn child_fds(mut cmd: tokio::process::Command) -> Vec<String> {
+/// What a `list-fds` child reported: its open descriptors by number and
+/// kind, and the hook channel it was told about, if any.
+#[derive(Debug, Default)]
+struct Fds {
+    open: BTreeMap<u32, String>,
+    hook: Option<(u32, u32)>,
+}
+
+async fn child_fds(mut cmd: tokio::process::Command) -> Fds {
     let out = ok(cmd.stdin(Stdio::null()).output().await);
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| !matches!(l.split(' ').next(), Some("0" | "1" | "2")))
-        .map(|l| l.split(' ').nth(1).unwrap_or_default().to_owned())
-        .collect()
+    let mut fds = Fds::default();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+        if key == "hook" {
+            let (r, w) = value.split_once(',').unwrap_or_default();
+            fds.hook = Some((ok(r.parse()), ok(w.parse())));
+        } else {
+            fds.open.insert(ok(key.parse()), value.to_owned());
+        }
+    }
+    fds
+}
+
+fn list_fds() -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(TEST_HOOK);
+    cmd.arg("list-fds");
+    cmd
 }
 
 fn ok_reply(name: &str) -> HookReply {
@@ -52,26 +72,56 @@ fn ok_reply(name: &str) -> HookReply {
     }
 }
 
+/// Only the attached child holds the channel, as two pipes.
+async fn channel_reaches_only_the_attached_child() {
+    // Children compare by descriptor number against a sibling spawned
+    // without the channel, before and at the same time as the attached
+    // child: whatever this test process itself inherited without
+    // `FD_CLOEXEC` (CI runners hand down pipes of their own) reaches every
+    // child alike, and the channel's two descriptors must reach the
+    // attached child only.
+    let mut server = ok(HookServer::new(context()));
+    let mut attached = list_fds();
+    server.attach(&mut attached);
+    let before = child_fds(list_fds()).await;
+    let (attached, during) = tokio::join!(child_fds(attached), child_fds(list_fds()));
+    let (read, write) = attached
+        .hook
+        .unwrap_or_else(|| panic!("the attached child is told the channel: {attached:?}"));
+    assert_eq!(
+        attached.open.get(&read).map(String::as_str),
+        Some("fifo"),
+        "{attached:?}"
+    );
+    assert_eq!(
+        attached.open.get(&write).map(String::as_str),
+        Some("fifo"),
+        "{attached:?}"
+    );
+    for sibling in [&before, &during] {
+        assert_eq!(sibling.hook, None);
+        assert!(
+            !sibling.open.contains_key(&read) && !sibling.open.contains_key(&write),
+            "no other child inherits the channel: {sibling:?}"
+        );
+        let mut expected = sibling.open.clone();
+        expected.insert(read, "fifo".to_owned());
+        expected.insert(write, "fifo".to_owned());
+        assert_eq!(
+            attached.open, expected,
+            "the channel is all the attached child gets extra"
+        );
+    }
+    drop(server);
+}
+
 /// `hook_channel_private` (ADR 0004): the channel is two inherited pipes
 /// with no path and no listener; only the receive-pack child gets them
 /// without `FD_CLOEXEC`; a missing, wrong, reused or expired token is
 /// rejected.
 #[tokio::test(flavor = "multi_thread")]
 async fn hook_channel_private() {
-    // Only the attached child holds the channel, as two pipes.
-    let mut server = ok(HookServer::new(context()));
-    let mut attached = tokio::process::Command::new(TEST_HOOK);
-    attached.arg("list-fds");
-    server.attach(&mut attached);
-    let mut sibling = tokio::process::Command::new(TEST_HOOK);
-    sibling.arg("list-fds");
-    assert_eq!(
-        child_fds(sibling).await,
-        Vec::<String>::new(),
-        "no other child inherits it"
-    );
-    assert_eq!(child_fds(attached).await, vec!["fifo", "fifo"]);
-    drop(server);
+    channel_reaches_only_the_attached_child().await;
 
     // The right token is answered once.
     let mut server = ok(HookServer::new(context()));
