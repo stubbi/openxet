@@ -413,10 +413,13 @@ def test_version_floor_recorded():
 
 def test_fresh_cache_edit_bytes_recorded(openxet_server, clients, tmp_path, record_measurement):
     # Design §1a: a 1 MiB edit in the middle of a 100 MiB file, re-uploaded
-    # by stock hf_xet with an empty cache. Recorded, not asserted, here: the
-    # bound (at most 2 MiB) is asserted with the openxet client, on the same
-    # client core, by `fresh_cache_edit_dedups_against_the_server` in
-    # crates/openxet/tests/transfer_cmd.rs.
+    # by stock hf_xet with an empty cache. The bound (at most 2 MiB) is
+    # asserted with the openxet client, on the same client core, by
+    # `fresh_cache_edit_dedups_against_the_server` in
+    # crates/openxet/tests/transfer_cmd.rs. The seeded input makes the bytes
+    # deterministic per client version, so for the version the website
+    # quotes they must equal site/measurements.json: a change fails here
+    # until the fixture and the pages agree (site/test_measurements.py).
     size, edit = 100 * MiB, MiB
     original = write_noise(tmp_path / "original.bin", size, 12)
     edited = tmp_path / "edited.bin"
@@ -429,11 +432,14 @@ def test_fresh_cache_edit_bytes_recorded(openxet_server, clients, tmp_path, reco
     mark = openxet_server.mark()
     [info] = clients.hf_xet_upload(openxet_server, [edited])
     openxet_server.settle()
-    record_measurement(
-        "xorb bytes sent for a 1 MiB edit of 100 MiB, fresh cache",
-        openxet_server.xorb_bytes_accepted(mark),
-        "B",
-    )
+    sent = openxet_server.xorb_bytes_accepted(mark)
+    record_measurement("xorb bytes sent for a 1 MiB edit of 100 MiB, fresh cache", sent, "B")
+    quoted = json.loads((Path(__file__).parents[2] / "site/measurements.json").read_text())["edit_upload"]
+    if importlib.metadata.version("hf_xet") == quoted["client_version"]:
+        assert sent == quoted["bytes"], (
+            f"{sent:,} B sent, but the website quotes {quoted['bytes']:,} B: "
+            "update site/measurements.json and the pages that quote it"
+        )
 
     dest = tmp_path / "edited.out"
     clients.hf_xet_download(openxet_server, dest, info)

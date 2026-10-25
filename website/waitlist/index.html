@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join the hosted waitlist · openxet</title>
-<meta name="description" content="Get an email when hosted openxet is ready to try. No account or payment required. Remove your request at any time using your private link.">
+<title>Join the hosted waitlist · OpenXet</title>
+<meta name="description" content="Get an email when hosted OpenXet is ready to try. No account or payment required. Remove your request at any time using your private link.">
 <meta name="color-scheme" content="light dark">
 <meta name="referrer" content="strict-origin">
 <meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)">
@@ -14,12 +14,12 @@
 <link rel="stylesheet" href="/assets/site.css">
 <link rel="stylesheet" href="/assets/pages.css">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="openxet">
-<meta property="og:title" content="Join the hosted waitlist · openxet">
-<meta property="og:description" content="Get an email when hosted openxet is ready to try. No account or payment required. Remove your request at any time using your private link.">
+<meta property="og:site_name" content="OpenXet">
+<meta property="og:title" content="Join the hosted waitlist · OpenXet">
+<meta property="og:description" content="Get an email when hosted OpenXet is ready to try. No account or payment required. Remove your request at any time using your private link.">
 <meta property="og:url" content="https://openxet.com/waitlist/">
 <meta property="og:image" content="https://openxet.com/og.png">
-<meta property="og:image:alt" content="openxet: Large files. Lighter uploads.">
+<meta property="og:image:alt" content="OpenXet: Git for large files. Only the changes upload. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an OpenXet server.">
 <meta name="twitter:card" content="summary_large_image">
 <script type="module" src="/assets/site.mjs"></script>
 <script type="module" src="/assets/waitlist.mjs"></script>
@@ -28,22 +28,28 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="brand" href="/" aria-label="openxet home">
+      <a class="brand" href="/" aria-label="OpenXet home">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>
-        openxet
+        OpenXet
       </a>
       <nav class="site-nav" aria-label="Main navigation">
-        <a href="/#how-it-works">How it works</a>
-        <a href="/#hosting">Hosting</a>
+        <a href="/#repositories">Repositories</a>
+        <a href="/#buckets">Buckets</a>
+        <a href="/#self-hosting">Self-hosting</a>
+        <a href="/#platforms">Platforms</a>
+        <a href="/#agents">Agents</a>
         <a href="/docs/">Docs</a>
         <a href="https://github.com/stubbi/openxet">GitHub</a>
       </nav>
-      <a class="button button-primary header-action" href="/waitlist/">Join the waitlist</a>
+      <a class="button button-secondary header-action" href="/waitlist/">Start on openxet.com</a>
       <details class="mobile-menu">
         <summary aria-label="Navigation menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
         <nav aria-label="Mobile navigation">
-          <a href="/#how-it-works">How it works</a>
-          <a href="/#hosting">Hosting</a>
+          <a href="/#repositories">Repositories</a>
+          <a href="/#buckets">Buckets</a>
+          <a href="/#self-hosting">Self-hosting</a>
+          <a href="/#platforms">Platforms</a>
+          <a href="/#agents">Agents</a>
           <a href="/docs/">Docs</a>
           <a href="https://github.com/stubbi/openxet">GitHub</a>
         </nav>
@@ -55,9 +61,9 @@
 <main id="main">
 <div class="wrap waitlist-layout">
   <div class="page-intro">
-    <p class="page-label">Hosted openxet · coming soon</p>
+    <p class="page-label">Hosted OpenXet · coming soon</p>
     <h1>Less uploading.<br>Nothing to run.</h1>
-    <p class="lead">Get an email when hosted openxet is ready to try. Bring your large files; we’ll take care of the storage service.</p>
+    <p class="lead">Get an email when hosted OpenXet is ready to try. Bring your large files; we’ll take care of the storage service.</p>
     <p class="small-note">Want to try the open-source server now?<br><a href="/docs/quickstart-storage-only.html">Run the storage-only quickstart.</a></p>
   </div>
   <div class="waitlist-panel">
@@ -67,13 +73,13 @@
       <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" inputmode="email" spellcheck="false" autocapitalize="none" maxlength="254" required aria-describedby="privacy-note"></div>
       <div class="bot-field" aria-hidden="true"><label for="website">Leave this field empty</label><input id="website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
       <button class="button button-primary" type="submit">Join the waitlist</button>
-      <p class="privacy-note" id="privacy-note">By joining, you ask openxet to email you when hosting is ready. You’ll receive a private link here to remove your request. <a href="/privacy/">How we use your email.</a></p>
+      <p class="privacy-note" id="privacy-note">By joining, you ask OpenXet to email you when hosting is ready. You’ll receive a private link here to remove your request. <a href="/privacy/">How we use your email.</a></p>
       <p class="form-status" id="form-status" role="status" aria-live="polite" tabindex="-1"></p>
       <noscript><p class="small-note">Submitting opens our secure waitlist service, where you’ll receive confirmation and your removal link.</p></noscript>
     </form>
     <div id="waitlist-confirmation" hidden>
       <h2 tabindex="-1">Your request is saved.</h2>
-      <p>We’ll email you when hosted openxet is ready to try. You haven’t created an account, and there’s nothing else to do.</p>
+      <p>We’ll email you when hosted OpenXet is ready to try. You haven’t created an account, and there’s nothing else to do.</p>
       <p><a id="removal-link">Your private removal link</a></p>
       <button id="copy-removal-link" class="button button-secondary" type="button" hidden>Copy private link</button>
       <div class="field" id="removal-copy-fallback" hidden><label for="removal-copy">Private removal link</label><input id="removal-copy" type="text" readonly autocomplete="off"></div>
@@ -86,7 +92,7 @@
 </main>
   <footer class="site-footer">
     <div class="wrap footer-inner">
-      <div><a class="brand" href="/" aria-label="openxet home"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>openxet</a><p>Open-source storage for large files.<br>Apache 2.0 · Independent of Hugging Face.</p></div>
+      <div><a class="brand" href="/" aria-label="OpenXet home"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>OpenXet</a><p>Open-source storage for large files.<br>Apache 2.0 · Independent of Hugging Face.</p></div>
       <nav class="footer-links" aria-label="Footer navigation"><a href="/docs/">Documentation</a><a href="https://github.com/stubbi/openxet">GitHub</a><a href="/about/">About &amp; contribute</a><a href="https://github.com/stubbi/openxet/security/policy">Report a security issue</a><a href="/privacy/">Privacy</a><a href="/llms.txt">llms.txt</a></nav>
     </div>
   </footer>

@@ -2,7 +2,7 @@
 
 <!-- description: The shared visual language, content rules, components, user journeys and quality standards for the openxet website, documentation and interfaces. -->
 
-Version 2 · 2026-10-24 · Applies to openxet.com, its documentation, hosted
+Version 3 · 2026-10-25 · Applies to openxet.com, its documentation, hosted
 onboarding, and the optional self-service UI. This is the canonical design
 reference for humans and coding agents. The product design and accepted ADRs
 remain authoritative for capabilities, architecture and security.
@@ -19,7 +19,8 @@ until an intentional revision replaces them; no existing page, logo or layout
 is protected from a better-supported design. Preserve working URLs or plan
 their migration. Current reference docs and verified behavior establish what
 works; the product design and ADRs establish approved targets and architecture.
-This file never turns a target into an available feature.
+This file never turns a target into an available feature. The landing page's launch framing is an owner's ruling
+(see availability below), not an availability claim made here.
 
 <span id="overview"></span>
 
@@ -44,7 +45,17 @@ The first **aha** is “I can keep the whole file while uploading less.” It mu
 be visible above or immediately below the fold, require no account, and work
 as a still diagram. Show both the complete file and the smaller set to upload;
 color alone does not explain what crosses the network. A technical explanation
-is available one click deeper.
+is available one click deeper. Where a measurement exists, show it instead of
+an illustration: the proof strip links each figure to its method, and “How it works” puts a measured, to-scale
+bar pair under the illustrative comparison.
+
+Anchor the opener on what the visitor already knows: Git. The H1 (“Git for
+large files. Only the changes upload.”) answers “what is it, and why do I
+care?”, and its second half is the contrast with Git LFS; the pill carries
+the brand and open source, and the subhead names repositories, buckets,
+`git push` and `hf upload`. Keep the page generic: models
+and datasets are examples beside logs, tables, source and archives
+([S14](docs/research/S14-landing-messaging.md)).
 
 The differentiated long-term proposition is Xet storage with a choice of
 operator and an inspectable, shared open-source implementation. Explain that
@@ -59,7 +70,7 @@ short route to exact contracts. Both should reach the same truth.
 
 | Stakeholder | Question the site must answer | Evidence / destination | Next action |
 |---|---|---|---|
-| Newcomer | What does it do, in words I know? | Hero + file-version diagram | Understand the example |
+| Newcomer | What does it do, in words I know? | Hero, proof strip, “How it works” comparison | Understand the example |
 | Researcher, engineer, data practitioner | Will it fit how I upload and download? | Tool compatibility + tested quickstart | Try a supported workflow |
 | Self-hoster / operator | Can I install, maintain and recover it? | Configuration, backends, upgrades, recovery, benchmarks | Run the storage-only quickstart today |
 | Platform builder / aqora | Can I fit this into my product and permissions? | APIs, authorization seams, tenancy, optional UI | Read integration and architecture references |
@@ -122,10 +133,24 @@ information architecture of every openxet interface.
 The user requested a page designed for the final hosted product, with sign-up
 disabled and a real waitlist now. Express the intended product coherently,
 then state availability next to the action. Do not make every section a roadmap.
+**Owner's ruling, 2026-10-25: the landing page is written as if the full
+planned product (design §12) has launched.** The owner chose this over
+availability badges. Limits that stay: no invented numbers or command output,
+no logos, customers or testimonials, and every call to action lands on what
+works today. Sections about features without a measured run show commands or
+diagrams only. Docs, `llms.txt` run steps and agent-facing material stay
+strictly factual about what runs, because agents execute them. Other pages
+(waitlist, privacy, about) keep their factual availability.
+
+**Button hierarchy (coordinator ruling, owner may override):** the one filled
+button is **Get started**, which lands on the self-hosted quickstart, the path
+that works today. **Start on openxet.com** is outlined, in the header and
+beside the primary, and lands on the hosted waitlist form until sign-up
+launches.
 
 | State | Primary action | Identity / pricing | Technical truth |
 |---|---|---|---|
-| **Current: waitlist** | Join the waitlist → `/waitlist/` | No active hosted sign-up, sign-in or checkout; no invented prices | M1 storage-only server/client works; Hub/Git and hosted service remain planned |
+| **Current: waitlist** | Get started → quickstart (filled). Start on openxet.com → `/waitlist/` (outlined, in the header and beside the primary) | No active hosted sign-up, sign-in or checkout; no invented prices | M1 storage-only server/client works; Hub/Git and hosted service remain planned; the landing page is written as launched (ruling above) |
 | Hosted launch | Start free → `https://app.openxet.com/signup` | External identity provider; published limits, pricing and terms | Enable only after the real onboarding and stock-client tests pass |
 | Returning hosted user | Sign in → `https://app.openxet.com/signin` | Same external identity and granted scopes | Return to the user's selected workspace |
 | Service problem | Status and recovery action | Preserve inputs and authentication context safely | Never imply a successful write before acknowledgement |
@@ -173,17 +198,20 @@ claim stock clients accept the scheme or that openxet owns the Xet protocol.
 
 ### Information architecture
 
-Current navigation: **How it works · Hosting · Docs · GitHub · Join the waitlist**.
+Current navigation: **Repositories · Buckets · Self-hosting · Platforms · Agents · Docs · GitHub · Start on openxet.com** (outlined). Below 1088px the links move into the menu.
 Keep it short. On mobile, show the brand and waitlist action with a keyboard
 accessible disclosure for the remaining links; do not hide essential paths.
 
 | Destination | Job | Search intent | Present implementation |
 |---|---|---|---|
 | `/` | Explain value, demonstrate reuse, route the visitor | open-source large-file storage; Xet storage | Homepage |
+| `/#use-cases` | Set expectations for any file type | what deduplication saves | Measured pairs from S12, zeros included |
+| `/#compatibility` | Why not S3, Git LFS or the Hub; which clients and backends work | hf_xet self-hosted server | Fan-out with status pills |
 | `/#how-it-works` | Make the mechanism understandable | how file deduplication works | Explanation and example; preserve old `#dedup` links |
 | `/#hosting` | Choose who operates the storage | hosted or self-hosted Xet | Hosted and own-infrastructure paths; preserve `#hosted` |
 | `/#integrate` | Fit storage into another product | Xet storage API integration | Separate integration path, current API and token references |
-| `/#review` | Judge maturity and operating boundaries | openxet security / operation | Current stage, configuration, tests, benchmarks and maintainer links |
+| `/#security` | Check each security boundary against its test | openxet security | Four cards naming M1 tests; preserve `#review` |
+| `/#agents` | Hand the same task to an agent | openxet agent / JSON CLI | Captured `--json` output and error with hint; preserve `#roadmap` |
 | `/waitlist/` | Save a request for hosted launch contact | openxet early access | One-field form + privacy + confirmed receipt |
 | `/docs/` | Accomplish a real task | openxet documentation | mdBook, current commands and compatibility |
 | `/about/` | Establish who builds it and how to participate | openxet project / contact | Maintainer, source, governance, feedback and disclosure links |
@@ -198,34 +226,33 @@ review and related next step; use the editorial backlog in the research note.
 
 ### Homepage sequence and working copy
 
-| Section | Question answered | Content / behavior |
+Hugging Face Storage's rhythm, generically: a centred hero that fits the
+first screen at 1440×900 with its proof strip, seven framed two-column rows,
+a slim security band and three tiles
+([S14](docs/research/S14-landing-messaging.md#iteration-3-the-release-candidate)).
+
+| Section | Job | Content |
 |---|---|---|
-| Hero | What is this? | **Large files. Lighter uploads.** Supporting text names storage and explains reuse. Hosted waitlist status sits beside CTA. |
-| File-version illustration | Why should I care? | Show stored and edited files, then isolate the new data to upload. Preserve the complete-file mental model. |
-| Explanation | How does it work? | Three real steps: split into parts, recognize existing parts, upload new parts. Explain “chunks” after “parts.” |
-| Hosting, then integration | Who operates it? How does it fit my product? | Two hosting choices, each with operator/location/status/action. Separate API and platform-token path; hosted integration remains unpromised until specified. |
-| First task and handoff | How will I use it? | Upload, download, verify and observe reuse in the tested storage workflow. Share the same recipe as Markdown. Separate planned Hub/Git/MCP. |
-| Evidence | Does it meet my requirements? | State maturity, link operating/data behavior, permission tests, reproducible measurements, source, changes and maintainers. |
-| Practical questions | Is this right for me? | Workloads, variable savings, independence from Hugging Face, release status and pricing availability. |
-| Final action | What now? | Repeat the waitlist action; offer a direct self-host quickstart. |
+| Hero | What is it, why care, is it real | Pill **OpenXet · open source · Apache 2.0**; H1 **Git for large files. Only the changes upload.**; subhead naming repositories, buckets, `git push`, `hf upload`, the Git LFS contrast, self-host or openxet.com; Get started (filled), Start on openxet.com (outlined); proof strip of four measured figures as the bottom edge. No hero visual |
+| Repositories (blue) | Do my tools work? | Commands only: `git clone`, `git push`, `hf upload`, `openxet label add` against an OpenXet endpoint |
+| Xet (amber) | Why is it better than LFS or S3? | Toggle above whole-file 8 / 8 against Xet 1 / 8, then the measured pair to scale (100 MiB against 1.09 MiB) naming its CI test |
+| Use cases (green) | Will it help my files? | S12's measured pairs, zeros included |
+| Buckets (lilac) | Where do checkpoints and logs go? | `hf buckets create`, `hf sync`, and a key list with labels and no sizes |
+| Self-hosting (slate) | Does it fit our stack and rules? | Identity, stateless nodes, storage backends as a stack diagram |
+| Platforms (peach) | Can I embed it under my brand? | Four-step flow: token, upload, authorizer, metering |
+| Agents (blue) | Can my agent use it safely? | A captured `openxet.error.v1` with its hint, then the corrected command |
+| Security band | Is it safe? | Four cells, each linking its named test |
+| Get started | Next action per persona | Run it yourself · OpenXet Cloud · Build it into your platform |
 
-Desktop composition:
-
-```text
-openxet          How it works  Hosting  Docs  GitHub     [Join the waitlist]
-
-Large files.                    Previous file  [A][B][C][D][E][F][G][H]
-Lighter uploads.                Updated file   [A][B][I+][D][E][F][G][H]
-Plain explanation.              New data to upload [I+]
-[Join the waitlist] [See how]    7 parts reused · 1 new part to upload
-Hosted service coming soon.
-
-                 explanation → hosting / integration → first task
-                 → evidence → practical questions → next action
-```
-
-On mobile: headline → explanation → actions/status → illustration → remaining
-sections. Avoid forcing a large artwork above the reason to use the product.
+Row grammar: left cell has a pill tag, a benefit H2 (sentence case, with a
+full stop), at most two sentences and three check bullets; right cell is a
+panel in the row's hue with one visual. Both cells share one top padding, so
+every pill sits the same distance below its hairline. Rows share the frame's
+rails (the same 75 rem edge as the header and footer) and stack below 960px
+with the visual after the copy. **One measurement everywhere:** the landing
+page, social image and `llms.txt` quote the edit upload only from
+`site/measurements.json`; `site/test_measurements.py` and the compat test it
+names keep them equal.
 
 <span id="personality"></span>
 
@@ -243,15 +270,21 @@ and the complete strip remains the file the person works with. Reuse this
 grammar in relevant diagrams and future transfer results, never as decoration
 on unrelated screens. Real results show actual bytes, not toy part counts.
 
-The lowercase wordmark and four-part symbol are retained because they are
-compact and connect to the composition of a file. They may be replaced when
+The wordmark is **OpenXet** (owner's ruling, 2026-10-25): the brand is
+written OpenXet everywhere it names the product, and lowercase `openxet`
+stays only for identifiers (the command, crates, `OPENXET_*`, paths, schema
+ids, the openxet.com domain and URLs). With two capitals, the wordmark's
+tracking opens from -0.04em to -0.03em so “nX” does not crowd. The four-part
+symbol is retained because it is compact and connects to the composition of a
+file. They may be replaced when
 a candidate improves recognition, small-size legibility and product fit.
 Compare candidates on those criteria, not novelty or attachment to old work.
 Do not borrow Hugging Face's visual identity; credit its Xet protocol.
 
 A dark terminal-led direction and a dense infrastructure blueprint would
-privilege experienced operators at the first encounter. Keep their useful
-technical detail deeper in the experience. Validate the chosen direction with
+privilege experienced operators at the first encounter. Light terminal cards
+in the page's own tokens are allowed below the hero copy and inside sections,
+as evidence of a real run; never as the page's identity or above the headline. Validate the chosen direction with
 the comprehension and navigation experiments below; revise it if it fails.
 
 ## Colors
@@ -259,6 +292,27 @@ the comprehension and navigation experiments below; revise it if it fails.
 Use semantic CSS variables, never ad hoc colors in a component. These are the
 normative values. Functional colors carry stable meanings; new/changed data is
 amber, interaction is blue, success is green, failure is red.
+
+Row panels take one hue each, light and dark, so sections keep an identity at
+scroll speed; elevation in dark mode runs frame < panel < card.
+
+```yaml
+panels:
+  card: "#FFFFFF"
+  blue: "#EEF2FF"
+  amber: "#FFF8E6"
+  green: "#EDF8F2"
+  lilac: "#F4F0FD"
+  slate: "#F0F3F8"
+  peach: "#FFF2EB"
+  dark-card: "#263A5E"
+  dark-blue: "#213357"
+  dark-amber: "#2E3349"
+  dark-green: "#1F3647"
+  dark-lilac: "#2A3158"
+  dark-slate: "#223249"
+  dark-peach: "#30334A"
+```
 
 ```yaml
 colors:
@@ -301,7 +355,7 @@ colors must preserve control boundaries and the changed-part labels.
 
 | Role | Family | Size / line height | Weight / tracking |
 |---|---|---|---|
-| Wordmark | Manrope | 24px / 1.1 | 750 / -0.04em |
+| Wordmark | Manrope | 24px / 1.1 | 750 / -0.03em |
 | Hero | Manrope | clamp(44px, 5.4vw, 76px) / 1.04 | 650 / -0.045em |
 | Section heading | Manrope | clamp(30px, 3.5vw, 44px) / 1.15 | 650 / -0.035em |
 | Component heading | Manrope | 22px / 1.25 | 650 / -0.02em |
@@ -358,8 +412,9 @@ does not cover headings or focused controls.
 ## Elevation & Depth
 
 Default surfaces have no shadow. Use a 1px separator for ordinary groupings.
-The hero's file workspace can use `0 16px 48px rgb(20 34 56 / 7%)`; this is the
-single elevated object. Dialogs, when needed in the future app, use
+The landing page has no elevated object; panels and cards separate by hue
+and border. A future hero visual may use `0 16px 48px rgb(20 34 56 / 7%)` as
+the single elevated object. Dialogs, when needed in the future app, use
 `0 16px 48px rgb(20 34 56 / 18%)`. No glow, glass blur, background particles,
 floating decorative panels or scroll parallax. Do not apply hover elevation
 to something that is not clickable.
@@ -375,7 +430,7 @@ rounded:
 ```
 
 File parts use 4–6px corners. Controls use 8px corners. Rounded pills are only
-for short status labels. Use a consistent 20px icon box, 1.75px stroke and
+for short status labels and section tags. Use a consistent 20px icon box, 1.75px stroke and
 round joins. Icons accompany meaningful text unless their accessible name is
 unambiguous. Inline SVG and CSS diagrams are preferred over decorative raster
 images. Provide a 1200×630 social image matching the current page and status.
@@ -398,18 +453,39 @@ happening. Never disable a form just because the user has not entered data;
 validate on submit. Disable only during an in-flight duplicate action.
 
 Use `<a>` to navigate and `<button>` to act. No nested interactive card links.
-One primary action per decision. “Join the waitlist” consistently names the
-current hosted action; never alternate with “Get started” or “Start free.”
+One primary action per decision, and at most one filled button in any
+screenful: the header action is outlined. On the landing page “Start on
+openxet.com” names the hosted action and “Get started” the self-hosted
+quickstart; the waitlist page itself keeps “Join the waitlist”.
+
+### Terminal card
+
+A light card in the page's tokens: a bar with three muted dots and a label,
+the transcript in IBM Plex Mono, and a caption. Output is **captured from a
+real run, never composed**; a card for a feature without a measured run shows
+commands only and says so. Mark what was edited (comments added, tables omitted,
+hashes shortened), state the date, build and machine, and link how to
+re-capture it ([S14](docs/research/S14-landing-messaging.md#re-capturing-the-terminal-transcripts)).
+Prompts and comments are muted and not selectable; one key result may be
+highlighted in primary. Lines wrap rather than hide a result on narrow
+screens. Static; no typing animation.
+
+### Proof strip
+
+Four measured figures in equal cells forming the bottom edge of the hero, in
+the first screen at 1440×900, each a link to its method. Figure, label and link sit on a three-row grid so links align
+across cells. Use one unit system per figure and never repeat a figure
+elsewhere in the hero.
 
 ### File-version demonstration
 
-The current example uses eight labeled parts: enough to show substantial reuse,
-few enough to compare on a phone. This count is an illustration choice, not a
-brand requirement or protocol fact. The initial state shows seven reused parts
-and one new part, with that new part alone in a **New data to upload** tray.
-“Small edit”, “Same file” and “All new” buttons confirm the idea; interaction
-is optional. The same-file tray says there is no new file data; the all-new
-tray contains every part. Keep the complete updated file visible in all states.
+Shown in “How it works”. A whole-file upload (S3 PUT, Git LFS) sends 8 / 8
+parts; the Xet upload beside it sends only the changed ones. Eight parts are
+enough to show substantial reuse and few enough to compare on a phone; the
+count is an illustration choice, not a protocol fact. “Small edit”, “Same
+file” and “All new” buttons change the Xet row; the whole-file row stays
+8 / 8 by design. Under it, one measured bar pair, to scale, makes the real
+size of the saving visible.
 
 Keep equal toy parts explicitly illustrative. Real chunks vary in length;
 file formats, edits, compression, client caches and metadata affect transfer.
@@ -417,8 +493,7 @@ Do not claim a 1-byte edit always transfers one byte, imply every training
 checkpoint mostly repeats, or present a toy percentage as a benchmark.
 Use “parts reused” and “new parts to upload” rather than a fake live speed.
 
-New parts carry a plus mark or “new” label and a distinct border as well as
-amber fill. Unchanged parts keep matching labels in both rows. Announce a
+Sent parts carry a plus mark and a dashed border as well as amber fill. Announce a
 short result in a polite live region after user interaction. No automatic
 loop, blinking cursor or moving text. Static HTML explains the default state
 when scripts fail. Reduced motion removes transitions.
@@ -681,6 +756,39 @@ need user research rather than pretending no further improvement is possible.
   future resource addresses (ADR 0009). M2-URI and M6-URI schedule the grammar,
   compatibility checks and client/UI delivery. HTTPS links and current examples
   stay in place until support ships; no visual identity or runtime changes here.
+- 2026-10-25, v3 messaging (iteration 1): the owner found the opener,
+  order and hero visual weak and the alignment off. A teardown of 19
+  landing pages and a visitor model ([S14](docs/research/S14-landing-messaging.md))
+  showed the page answered “what is dedup?” before “what is this, and does
+  it work with my tools?”, and asked for a waitlist before any proof.
+  Changed: opener anchored on Xet and the stock client; hero visual is now
+  a measured, to-scale upload trace (the toy example moved to “How it
+  works”); compatibility and measured numbers come before the hosting
+  choice; the working quickstart is the primary action while hosting is a
+  waitlist; one-column section intros and a shared centre line fix the
+  misaligned grid edges. Tokens, type and palette unchanged. Evidence:
+  screenshots at 375, 768, 1024, 1440 and 1920 px in light and dark were
+  reviewed before and after; attach them to the PR. Comprehension still
+  needs participant tests.
+- 2026-10-25, v3 iteration 2: the owner asked to be closer to Hugging Face
+  Storage's page, generically. Adopted its structure: a centred hero, one
+  framed two-column grid with a pill, H2, two sentences, three checks and one
+  visual per row, and light terminal cards. Retired the hero trace (it failed
+  the three-second test) for a captured terminal card plus a proof strip.
+  Added use cases (S12 pairs, zeros included), a compatibility fan-out, a
+  security section and a three-door closing. Button hierarchy: one filled
+  button per screen; the header waitlist is outlined. Pills now also serve as
+  section tags. Tokens, type and palette unchanged. Evidence: screenshots at
+  375, 768, 1024, 1440 and 1920 px in light and dark were reviewed; attach
+  them to the PR.
+- 2026-10-25, v3 iteration 3 (release candidate): owner's rulings — the
+  brand is OpenXet; the landing page is written as launched (limits above);
+  the Git analogy as opener. Hero fits the first screen with its proof strip
+  and has no visual; rows reshaped to Repositories, Xet, Use cases, Buckets,
+  Self-hosting, Platforms, Agents, a security band and tiles; per-row panel
+  hues and a dark elevation fix; rows top-aligned; one measurement backed by
+  `site/measurements.json`. Wordmark tracking -0.03em. Screenshots at 375 to
+  1920 px, light and dark, reviewed; attach them to the PR.
 - Future changes append date, reason, impacted tokens/components, evidence and
   migration scope here. Avoid duplicating the token definitions in prose elsewhere.
 

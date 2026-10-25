@@ -1,5 +1,9 @@
 # Quickstart: storage only
 
+What runs today: the OpenXet storage server with Hugging Face's `hf_xet`
+client and the `openxet` command line. `git push`, `hf upload` and buckets
+arrive with the Hub API; this page is the path that works now.
+
 Run openxet's Xet storage server (the CAS) on your machine, then move a
 file through it with Hugging Face's own `hf_xet` and with the `openxet`
 command line. This is the storage layer on its own, the way a platform
