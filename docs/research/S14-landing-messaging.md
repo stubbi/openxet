@@ -1,9 +1,10 @@
 # S14: Landing page messaging, order and hero
 
-<!-- description: Teardown of 19 comparable landing pages, a visitor model by scroll depth, and the resulting section order, opener and hero visual for openxet.com. -->
+<!-- description: Teardown of 19 comparable landing pages and of Hugging Face Storage, a visitor model, the section order, opener and hero for openxet.com, and how to re-capture its terminal transcripts. -->
 
-Date: 2026-10-25. Baseline: `website/index.html` at `22e0908`. This is
-iteration 1 of several; an independent critic reviews it next. The
+Date: 2026-10-25. Baseline: `website/index.html` at `22e0908`. Iteration
+2 comes first below; iteration 1's research and reasoning follow as
+history, and an independent critic reviews each iteration. The
 canonical decisions land in [the design system](../design.md); this page
 keeps the evidence and the reasoning behind them.
 
@@ -12,7 +13,159 @@ order of arguments, the opener, the hero visual and the visual alignment
 need work. Which assumptions does a visitor have at which point, where
 does the page answer each, and what is each section for?
 
-## What was wrong with the page
+## Iteration 2: closer to Hugging Face Storage, generic
+
+Date: 2026-10-25. Inputs: the owner's direction ("we must be closer to
+https://huggingface.co/storage but not so close to models etc but more
+generic … they know what they did there"), an independent critique of
+iteration 1, and the coordinator's rulings. Iteration 1's analysis below
+is kept as history; where it conflicts with this section, this section
+wins.
+
+### What the Hugging Face Storage page does
+
+Studied in headless Chromium at 1440 px on 2026-10-25:
+
+- **Centred hero**, no side visual: product name as the H1 with the
+  second half in accent colour, a two-line subhead, two pill CTAs, then a
+  logo strip as the bottom edge of the first screen.
+- **One framed two-column grid** with visible vertical rails for every
+  section. Left cell: a pill tag, a benefit H2, two sentences, three
+  check bullets. Right cell: a softly tinted panel with exactly one
+  product visual.
+- **One concrete visual per claim:** a light terminal card
+  (`hf buckets create`, `hf sync` with "62% deduplicated" and a progress
+  bar), "8 / 8 chunks uploaded" against "1 / 8", price bars against S3,
+  a folder list, a bucket fanning out to clouds, a globe, an agent
+  terminal, then four security cards and three closing tiles.
+
+The rhythm is the design: every section shares the same two edges and
+centre line, so the page reads as one system.
+
+### What changed, and why
+
+| Iteration 1 | Iteration 2 | Why |
+|---|---|---|
+| Split hero, H1 "Upload only what changed. Keep it where you choose." | Centred hero: pill **Open-source Xet storage · Apache 2.0**, H1 **Large-file storage that uploads only what changed.** | The category must be visible in the first screen (ruling 2); "Keep it where you choose" was vague and only half true |
+| Hero visual: to-scale trace bars | A **captured terminal card** of a real run, then a **proof strip** of four measured figures | HF's strongest visual is a light terminal; the bars failed the 3-second test (a 6 px sliver on an empty track) |
+| Five different section layouts | **One framed 2-column grid**: pill, H2, two sentences, three checks; tinted visual panel | Owner direction; fixes the alignment complaints at the root |
+| Compatibility table second, dedup third | **How it works** second, as 8 / 8 against 1 / 8 with the measured bar pair | HF's order works: the comparison *is* the value proposition |
+| Generic only in one FAQ answer | **Use cases** from S12's measured pairs, zeros included | Generic, not ML-only (ruling 4); honesty about 0% earns trust |
+| Compatibility table | **One store, every client** fan-out with status pills; names repositories and buckets (ADR 0010) and backends as planned | Answers "why not S3, Git LFS or the Hub?" in its first sentence |
+| Security as one sentence | **Security** section: four cards, each naming its M1 test | The strongest fact for self-hosters was buried |
+| Integration sub-row | A front door in the final tiles: **Build it into your platform** | The platform persona is named first in AGENTS.md |
+| "Run it locally"; filled header waitlist | **Run the 2-minute quickstart** (filled); header waitlist outline | One filled primary per screen; the label sets the expectation and is measured (1 min 43 s) |
+
+### Opener, tested against "what is it, and why do I care?"
+
+| Candidate (pill above, where used) | What is it? (3 s) | Why care? (3 s) | Verdict |
+|---|---|---|---|
+| **Large-file storage that uploads only what changed.** (pill: Open-source Xet storage) | Yes: storage for large files; the pill adds open source and Xet | Yes: smaller uploads | **Picked** |
+| Open-source Xet storage (critique's H1) | Yes, if you know Xet | Only in the subhead | Strong for HF-aware visitors, empty for everyone else |
+| Send the change, not the file. | Only from the pill | Yes | Punchy, but "send where?" needs the pill and subhead |
+| Every version. A sliver of the upload. | No | Yes | Memorable, fails "what" |
+| Xet storage, on your own servers. | Yes | Only for those who know Xet | Leaves out hosting |
+| Your `hf upload`. Your storage. | Yes | Yes | Not true until the Hub API ships (M2); re-test then |
+
+### Section order, one job each (iteration 2)
+
+| # | Section | Its one job |
+|---|---|---|
+| 1 | Hero: pill, H1, subhead, CTAs, terminal card, proof strip | What it is, why it matters, proof it works, first action |
+| 2 | How it works (`#how-it-works`, `#dedup`) | Show the saving: 8 / 8 against 1 / 8, then the measured pair to scale |
+| 3 | Use cases (`#use-cases`) | Set honest expectations for any file type, zeros included |
+| 4 | Compatibility (`#compatibility`) | Why not S3, Git LFS or the Hub; which clients and backends work today |
+| 5 | Security (`#security`, `#review`) | Let a reviewer check each boundary against its named test |
+| 6 | Hosting (`#hosting`, `#hosted`) | Choose who runs it; same build, same format |
+| 7 | Agents (`#agents`, `#roadmap`) | Show the machine interface on captured output, including an error with its hint |
+| 8 | FAQ | The catches: affiliation, `hf upload` today, savings, leaving |
+| 9 | Get started (`#integrate`) | Three doors: quickstart, platform, waitlist |
+
+### Re-capturing the terminal transcripts
+
+Both terminal cards are captured, not composed. On 2026-10-25 they came
+from the `openxet` debug binary built from commit `b1394d1` (an M2
+branch; `serve`, `upload` and `download` behave as in M1), on an Apple M3
+with macOS 15.6.1. The cards show only commands that exist today, with
+comments added, file tables omitted and hashes shortened. Random data
+moves chunk boundaries, so each run sends 1.1 to 1.2 MiB; the recorded
+compat measurement (1,141,116 bytes) is the figure the page quotes
+elsewhere.
+
+```bash
+openxet serve --data-dir openxet-data --port 0 > serve.out 2> serve.log &
+export OPENXET_ENDPOINT=$(grep -o 'http://127.0.0.1:[0-9]*' serve.out | head -1)
+export OPENXET_TOKEN=$(cat openxet-data/dev-token)
+export HF_XET_CACHE=$PWD/home-cache
+head -c 104857600 /dev/urandom > data.bin
+openxet upload data.bin
+python3 -I -c "import os; f = open('data.bin', 'r+b'); f.seek(50 << 20); f.write(os.urandom(1 << 20))"
+openxet upload data.bin --cache-dir ./empty-cache
+openxet download "$(openxet upload data.bin --cache-dir ./empty-cache --json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["files"][0]["hash"])')" --output restored.bin --cache-dir ./another-empty-cache
+cmp data.bin restored.bin && echo identical
+# agent card: one more 1 MiB edit at offset 10 MiB, then
+openxet upload data.bin --json
+OPENXET_TOKEN=oxt_expired openxet upload data.bin --json
+```
+
+Output of that run, verbatim, before shortening:
+
+```text
+Uploaded 100.0 MiB of 100.0 MiB (0% deduplicated).
+Uploaded 1.2 MiB of 100.0 MiB (98% deduplicated).
+Downloaded aab0307f0b73a12ca5e9508d6d857970fdf02544f3e9fc8ed7a28716c46a46a4 to restored.bin (100.0 MiB).
+identical
+{"schema":"openxet.upload.v1","files":[{"path":"data.bin","hash":"7a49591d90711a87b0f930ebea1db29babe225140af835e8606a6793ce0c215a","size":104857600,"sha256":"72731ae06ddeacf1fea2fc7a17b04194111f31d7458ea2aeb2ac359eff0e6386"}],"bytes_uploaded":1125507,"bytes_deduplicated":103732093}
+{"schema":"openxet.error.v1","code":"unauthorized","message":"http://127.0.0.1:58241 refused the token (401 Unauthorized)","hint":"Check that OPENXET_TOKEN is a token for this server, not revoked or expired. A dev server prints its token on startup and keeps it in <data dir>/dev-token."}
+```
+
+The error exits with status 1, as [exit codes](../reference/exit-codes.md)
+documents. A CI job that re-captures these into a fixture is a candidate
+follow-up, so the cards can't drift.
+
+### Alignment fixes in iteration 2
+
+All eleven items of the critique's pixel list:
+
+1. Hero tops misaligned: the hero is centred, single column.
+2. Trace row baselines: the trace is retired.
+3. Ragged right edge at 768 px: every visual fills its row's panel.
+4. Uneven column bottoms in How it works: rows are one grid; both cells
+   stretch to the row height and centre their content.
+5. Proof label baselines: the strip uses a three-row grid per cell
+   (figure, label, link), so links align.
+6. Integration links on no column: the integration row is gone; the
+   platform has a tile.
+7. Band rhythm: every row is white copy beside a tinted panel.
+8. Empty FAQ column: the FAQ is a row like the others, its heading
+   centred against the questions.
+9. Mobile route row: retired with the trace.
+10. Card border peeking above the 375 px fold: on phones the proof strip
+    follows the CTAs, so the first screen ends in proof, then the
+    terminal.
+11. Final heading inset: the final section is centred with full-width
+    tiles inside the frame.
+
+Also: the header's brand, the frame's rails and the footer share one
+75 rem edge; long test names break only at underscores; terminal lines
+wrap instead of hiding the result on narrow screens.
+
+### Open questions for critic 3
+
+- **Length.** Nine sections against HF's ten; is Use cases or FAQ the
+  one to fold?
+- **Terminal on phones.** It wraps to about 30 lines at 375 px. Show a
+  shorter variant on phones, or move it below the proof strip as now?
+- **Hero H1** "Large-file storage that uploads only what changed." Does
+  "Large-file storage" read as generic enough for logs and backups?
+- **Captured from an M2-branch build.** The behaviour shown is M1's, but a
+  re-capture from a release build would be cleaner.
+- **llms.txt** gained an agent decision block; moving ADRs and research
+  under "Optional" needs a generator change and is not done.
+
+## Iteration 1
+
+### What was wrong with the page
 
 Read top to bottom, the previous page said:
 
@@ -34,7 +187,7 @@ to) and the proof (measured bytes) both arrived after the visitor had
 been asked to join a waitlist. The page answered "what is dedup?" first,
 a question most arriving visitors do not have.
 
-## Research: 19 landing pages
+### Research: 19 landing pages
 
 Accessed 2026-10-25 with WebFetch, and `curl` where pages render
 client-side. XetHub and Oxen through the Wayback Machine (captures
@@ -65,7 +218,7 @@ Observations describe the pages, not their conversion.
 | [uv](https://docs.astral.sh/uv/) | "uv" / "An extremely fast Python package and project manager, written in Rust." | **Benchmark chart with method** → highlights ("replace pip…") → install → "the pip interface: drop-in" | Benchmark first, captioned with its workload | The install command | Benchmark chart | A measured claim with its method, first; then the commands you already know |
 | [ollama.com](https://ollama.com) | "Ollama is the most popular way to build with open models." / "…locally or in the cloud." | Logos → three usage stats | Stars in nav; usage numbers | "Get started" | None | Local vs cloud as one phrase; a superlative needs numbers we don't have |
 
-### Patterns that hold for an open-source server with a hosted option
+#### Patterns that hold for an open-source server with a hosted option
 
 1. **Anchor the opener on something the visitor already knows.** Postgres
    (Supabase, Neon), SQLite (Turso), S3 (Tigris, R2), pip (uv), Git
@@ -87,7 +240,7 @@ Observations describe the pages, not their conversion.
 7. **Honest labels build trust** (PostHog's "Illustrative demo", Zed's
    scoped beta banner, uv's captioned workload).
 
-## Visitor model
+### Visitor model
 
 Who arrives, from where, and what they bring.
 
@@ -116,7 +269,7 @@ What each assumes and doubts as they scroll, and where the page answers:
 | | What's the catch? | Before you decide (FAQ) | HF affiliation, `hf upload` status, savings with measured ranges including ~0%, leaving, pricing |
 | End | What now? | Final invitation | Run it locally (primary), join the waitlist (secondary) |
 
-## Section order, one job each
+### Section order, one job each
 
 | # | Section | Its one job | Changed from |
 |---|---|---|---|
@@ -132,7 +285,7 @@ What each assumes and doubts as they scroll, and where the page answers:
 Old anchors `#dedup`, `#hosted`, `#integrate`, `#review` and `#roadmap`
 keep working.
 
-## Opener alternatives
+### Opener alternatives
 
 | # | Headline | For | Against |
 |---|---|---|---|
@@ -149,7 +302,7 @@ storage server") and the lead (names Hugging Face's `hf_xet`,
 HF's name in the headline. **When `hf upload` works against openxet (M2),
 re-test D**: the stock `hf` CLI is the strongest anchor there is.
 
-## Hero visual
+### Hero visual
 
 **It must make obvious in three seconds:** a tool I already know
 (Hugging Face's client) talks to a server I run, and only a sliver of a
@@ -182,7 +335,7 @@ and the single elevated object.
 | Architecture diagram (client, server, bucket, index) | Answers an operator's later question, not the first one |
 | A `hf upload` terminal | Not true until M2 |
 
-## Alignment fixes in iteration 1
+### Alignment fixes in iteration 1
 
 From screenshots of the previous page at 375–1920 px:
 
@@ -200,7 +353,7 @@ From screenshots of the previous page at 375–1920 px:
 - Proof links next to their paragraph squeezed it at 1024 px; they now
   sit below it.
 
-## Open questions for the next iteration
+### Open questions for the next iteration
 
 - **Primary hero action.** This iteration makes "Run it locally" primary
   and the waitlist secondary (the header keeps "Join the waitlist"). That
