@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>openxet — open-source storage for large files</title>
-  <meta name="description" content="Keep whole files. Upload only new parts. openxet is open-source Xet storage for models, datasets and more. Try the storage server or join the hosted waitlist.">
+  <title>openxet — the open-source Xet storage server</title>
+  <meta name="description" content="Upload only what changed, to storage you choose. openxet is an open-source server for the Xet protocol; Hugging Face’s hf_xet client works with it unmodified. Run it locally or join the hosted waitlist.">
   <link rel="canonical" href="https://openxet.com/">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="openxet">
   <meta property="og:url" content="https://openxet.com/">
-  <meta property="og:title" content="openxet — Large files. Lighter uploads.">
-  <meta property="og:description" content="Open-source storage that reuses the parts of a file it already has. Hosted service coming soon; the storage-only server is ready to try.">
+  <meta property="og:title" content="openxet — Upload only what changed. Keep it where you choose.">
+  <meta property="og:description" content="The open-source Xet storage server. Hugging Face’s hf_xet client works with it unmodified and sends only new chunks. Self-host today; hosted service coming soon.">
   <meta property="og:image" content="https://openxet.com/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="openxet: Large files. Lighter uploads. An illustrative file reuses seven parts and uploads one new part. Hosted service coming soon.">
+  <meta property="og:image:alt" content="openxet: Upload only what changed. Keep it where you choose. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.14 MB to an openxet server. Self-host today; hosted coming soon.">
   <meta name="twitter:card" content="summary_large_image">
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"openxet","url":"https://openxet.com/","codeRepository":"https://github.com/stubbi/openxet","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source server and client for the Xet protocol. The storage-only server and command line are available from source; the hosted service is coming soon."}
@@ -37,6 +37,7 @@
         openxet
       </a>
       <nav class="site-nav" aria-label="Main navigation">
+        <a href="#compatibility">Compatibility</a>
         <a href="#how-it-works">How it works</a>
         <a href="#hosting">Hosting</a>
         <a href="/docs/">Docs</a>
@@ -46,6 +47,7 @@
       <details class="mobile-menu">
         <summary aria-label="Navigation menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
         <nav aria-label="Mobile navigation">
+          <a href="#compatibility">Compatibility</a>
           <a href="#how-it-works">How it works</a>
           <a href="#hosting">Hosting</a>
           <a href="/docs/">Docs</a>
@@ -58,156 +60,201 @@
   <main id="main">
     <section class="wrap hero" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <p class="category">Open-source storage for large files</p>
-        <h1 id="hero-title">Large files.<br><span>Lighter uploads.</span></h1>
-        <p class="lead">A new version doesn’t have to mean another full upload. openxet stores your files and reuses the parts it already has.</p>
+        <p class="category">Open-source Xet storage server</p>
+        <h1 id="hero-title"><span class="h1-line">Upload only what changed.</span> <span class="h1-line h1-accent">Keep it where you choose.</span></h1>
+        <p class="lead">openxet is an open-source server for Xet, the storage protocol Hugging Face built for large files. Hugging Face’s own <code>hf_xet</code> client works with it unmodified and sends only the chunks your server doesn’t have yet.</p>
         <div class="actions">
-          <a class="button button-primary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a>
-          <a class="button button-secondary" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
+          <a class="button button-primary" href="/docs/quickstart-storage-only.html">Run it locally <span aria-hidden="true">→</span></a>
+          <a class="button button-secondary" href="/waitlist/">Join the hosted waitlist <span aria-hidden="true">↗</span></a>
         </div>
-        <p class="availability">Hosted service coming soon.<br><a href="/docs/quickstart-storage-only.html">Try the storage-only server today.</a></p>
+        <p class="availability">Apache 2.0 · Self-host today · Hosted service coming soon</p>
       </div>
 
-      <figure class="file-example" data-file-example>
-        <figcaption class="example-heading">
-          <span>What changes between uploads</span>
-          <span class="example-kind">Illustrative example</span>
-        </figcaption>
-        <div class="file-comparison" aria-hidden="true">
-          <div class="file-label"><span>Already stored</span><span>8 parts</span></div>
-          <div class="file-parts previous-parts">
-            <span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span><span>H</span>
-          </div>
-          <div class="comparison-guide"><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span></div>
-          <div class="file-label"><span>Your next version</span><span>8 parts</span></div>
-          <div class="file-parts updated-parts">
-            <span data-updated-part>A</span><span data-updated-part>B</span><span class="is-new" data-updated-part>I+</span><span data-updated-part>D</span><span data-updated-part>E</span><span data-updated-part>F</span><span data-updated-part>G</span><span data-updated-part>H</span>
-          </div>
-          <div class="file-legend"><span><i></i> Reused</span><span><i class="new-key">+</i> New</span></div>
-          <div class="transfer-tray">
-            <p class="transfer-label">New data to upload</p>
-            <div class="file-parts transfer-parts" data-upload-tray><span class="is-new">I+</span></div>
-          </div>
+      <figure class="trace" aria-labelledby="trace-title">
+        <div class="trace-route">
+          <p class="trace-end"><span class="trace-role">Client</span><code>hf_xet</code><span class="trace-note">Hugging Face’s, unmodified</span></p>
+          <span class="trace-wire" aria-hidden="true"><i></i></span>
+          <p class="trace-end"><span class="trace-role">Server</span><code>openxet serve</code><span class="trace-note">On your machine</span></p>
         </div>
-        <div class="example-answer" aria-live="polite" aria-atomic="true">
-          <p class="example-result" data-example-result>7 parts reused · 1 new part to upload</p>
-          <p data-example-explanation>Your file stays whole. Only the new part needs uploading.</p>
-        </div>
-        <div class="example-controls" role="group" aria-label="Choose a file example" data-example-controls hidden>
-          <button type="button" data-scenario="small" aria-pressed="true">Small edit</button>
-          <button type="button" data-scenario="same" aria-pressed="false">Same file</button>
-          <button type="button" data-scenario="new" aria-pressed="false">All new</button>
-        </div>
-        <p class="example-caveat">Eight equal parts make the idea visible. Real parts vary in size; savings depend on the file and the edit.</p>
+        <p class="trace-title" id="trace-title">Re-uploading a file after a 1&nbsp;MiB edit</p>
+        <dl class="trace-rows">
+          <div class="trace-row">
+            <dt>Edited file</dt><dd class="trace-value">100 MiB</dd>
+            <dd class="trace-bar" aria-hidden="true"><span class="bar-whole"></span><span class="bar-edit"></span></dd>
+          </div>
+          <div class="trace-row is-sent">
+            <dt>Sent to the server</dt><dd class="trace-value">1.14 MB</dd>
+            <dd class="trace-bar trace-bar-empty" aria-hidden="true"><span class="bar-sent"></span></dd>
+          </div>
+          <div class="trace-row">
+            <dt>Downloaded back</dt><dd class="trace-value">100 MiB</dd>
+            <dd class="trace-bar" aria-hidden="true"><span class="bar-whole"></span><span class="bar-edit is-stored"></span></dd>
+          </div>
+        </dl>
+        <figcaption class="trace-caption">Measured, not illustrated: 1,141,116 bytes of chunk data for a 100&nbsp;MiB file of random bytes with 1&nbsp;MiB rewritten in the middle, sent by stock <code>hf_xet</code> 1.7.0 with an empty cache. The download is byte-identical. Bars to scale. <a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1">How it was measured</a></figcaption>
       </figure>
     </section>
 
-    <section class="wrap section how-section" id="how-it-works" aria-labelledby="how-title">
-      <span class="anchor-alias" id="dedup" aria-hidden="true"></span>
+    <section class="wrap section compat-section" id="compatibility" aria-labelledby="compat-title">
       <div class="section-intro">
-        <h2 id="how-title">Keep the whole file.<br>Send what’s new.</h2>
-        <p>When you change a dataset, update a model or rebuild an artifact, some of its contents may stay the same. openxet gives those parts a second use.</p>
+        <h2 id="compat-title">Keep the client you already use.</h2>
+        <p>openxet speaks the Xet protocol byte for byte, built on the same open-source crates as Hugging Face’s client. On every change, CI runs the released <code>hf_xet</code> against a real openxet server. Here is what that covers today, and what comes next.</p>
       </div>
-      <ol class="process">
-        <li><span class="step-number" aria-hidden="true">1</span><h3>Find the parts</h3><p>The upload tool splits your file into small pieces, called chunks, and identifies each one by its contents.</p></li>
-        <li><span class="step-number" aria-hidden="true">2</span><h3>Reuse what’s there</h3><p>It checks which chunks are already stored. Matching chunks can be reused, even across different files.</p></li>
-        <li><span class="step-number" aria-hidden="true">3</span><h3>Upload the new pieces</h3><p>Only new chunks need uploading. When you download, the pieces come back together as your complete file.</p></li>
-      </ol>
-      <p class="section-note">This is <strong>deduplication</strong>, using the Xet protocol developed by Hugging Face. <a href="https://huggingface.co/docs/xet/index">Read how Xet works <span aria-hidden="true">↗</span></a></p>
+      <div class="compat-table" role="region" aria-labelledby="compat-title" tabindex="0">
+        <table>
+          <thead><tr><th scope="col">Tool</th><th scope="col">What you can do</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>hf_xet</code> 1.7.0 and newer</th><td>Upload and download, sending only chunks your server doesn’t already store</td><td><span class="status status-available">Available</span></td></tr>
+            <tr><th scope="row"><code>openxet</code> command line</th><td>Serve, upload and download, with <code>--json</code> output and stable exit codes</td><td><span class="status status-available">Available</span></td></tr>
+            <tr><th scope="row"><code>hf</code> and <code>huggingface_hub</code></th><td>Next milestone: <code>hf upload</code>, <code>hf download</code> and the Hub API, pointed at your server</td><td><span class="status">Planned</span></td></tr>
+            <tr><th scope="row"><code>git-xet</code> and Git LFS</th><td>Next milestone: Git repositories that keep their large files in openxet</td><td><span class="status">Planned</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="section-note">Every check, with the client versions and the test behind it: <a href="/docs/competitive-matrix.html">the compatibility record</a>.</p>
+    </section>
+
+    <section class="section how-section" id="how-it-works" aria-labelledby="how-title">
+      <span class="anchor-alias" id="dedup" aria-hidden="true"></span>
+      <div class="wrap">
+        <div class="section-intro">
+          <h2 id="how-title">Why the second upload is small.</h2>
+          <p>A new version of a large file often repeats most of the old one. Xet finds those repeated parts and gives them a second use. The file you work with stays whole.</p>
+        </div>
+        <div class="how-grid">
+          <ol class="process">
+            <li><span class="step-number" aria-hidden="true">1</span><div><h3>Split by content</h3><p>The client cuts your file into chunks of about 64&nbsp;KiB at boundaries set by the content itself, so an edit only moves the chunks around it.</p></div></li>
+            <li><span class="step-number" aria-hidden="true">2</span><div><h3>Ask what’s stored</h3><p>It asks your server which chunks it already has, from any earlier file, not just the last version.</p></div></li>
+            <li><span class="step-number" aria-hidden="true">3</span><div><h3>Send the rest</h3><p>Only new chunks travel. A download puts the chunks back together into your complete file.</p></div></li>
+          </ol>
+
+          <figure class="file-example" data-file-example>
+            <figcaption class="example-heading">
+              <span>Try the idea</span>
+              <span class="example-kind">Illustrative, eight equal parts</span>
+            </figcaption>
+            <div class="file-comparison" aria-hidden="true">
+              <div class="file-label"><span>Already stored</span><span>8 parts</span></div>
+              <div class="file-parts previous-parts">
+                <span>A</span><span>B</span><span>C</span><span>D</span><span>E</span><span>F</span><span>G</span><span>H</span>
+              </div>
+              <div class="file-label file-label-next"><span>Your next version</span><span>8 parts</span></div>
+              <div class="file-parts updated-parts">
+                <span data-updated-part>A</span><span data-updated-part>B</span><span class="is-new" data-updated-part>I+</span><span data-updated-part>D</span><span data-updated-part>E</span><span data-updated-part>F</span><span data-updated-part>G</span><span data-updated-part>H</span>
+              </div>
+              <div class="transfer-tray">
+                <p class="transfer-label">New data to upload</p>
+                <div class="file-parts transfer-parts" data-upload-tray><span class="is-new">I+</span></div>
+              </div>
+            </div>
+            <div class="example-answer" aria-live="polite" aria-atomic="true">
+              <p class="example-result" data-example-result>7 parts reused · 1 new part to upload</p>
+              <p data-example-explanation>Your file stays whole. Only the new part needs uploading.</p>
+            </div>
+            <div class="example-controls" role="group" aria-label="Choose a file example" data-example-controls hidden>
+              <button type="button" data-scenario="small" aria-pressed="true">Small edit</button>
+              <button type="button" data-scenario="same" aria-pressed="false">Same file</button>
+              <button type="button" data-scenario="new" aria-pressed="false">All new</button>
+            </div>
+          </figure>
+        </div>
+        <p class="section-note">This is <strong>deduplication</strong>, as specified by Hugging Face’s Xet protocol. Savings depend on how much your versions share. <a href="https://huggingface.co/docs/xet/index">Read the Xet specification <span aria-hidden="true">↗</span></a></p>
+      </div>
+    </section>
+
+    <section class="wrap section proof-section" id="review" aria-labelledby="proof-title">
+      <div class="section-intro">
+        <h2 id="proof-title">Numbers you can rerun.</h2>
+        <p>openxet is at the storage-only stage, with no packaged release yet. These are the numbers so far, each linked to the machine, versions and command behind it, so you can run them yourself.</p>
+      </div>
+      <ul class="proof-grid">
+        <li><p class="proof-figure">1.14&nbsp;MB</p><p class="proof-label">sent after a 1&nbsp;MiB edit to a 100&nbsp;MiB file</p><p class="proof-context">Stock <code>hf_xet</code> 1.7.0, empty client cache</p><a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1">Compatibility record <span aria-hidden="true">→</span></a></li>
+        <li><p class="proof-figure">437 / 716&nbsp;MB/s</p><p class="proof-label">upload / download of a 1&nbsp;GiB file</p><p class="proof-context">Medians of three local runs, Apple M3 laptop</p><a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1">Compatibility record <span aria-hidden="true">→</span></a></li>
+        <li><p class="proof-figure">0.28%</p><p class="proof-label">storage overhead on 1&nbsp;GiB of new data</p><p class="proof-context">Chunk data, metadata and index together</p><a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1">Compatibility record <span aria-hidden="true">→</span></a></li>
+        <li><p class="proof-figure">1&nbsp;min&nbsp;43&nbsp;s</p><p class="proof-label">from install to first upload</p><p class="proof-context">Self-hosted, built from source with an empty cache</p><a href="/docs/quickstart-storage-only.html">Quickstart <span aria-hidden="true">→</span></a></li>
+      </ul>
+      <div class="proof-more">
+        <p>Each security requirement has a named test, acknowledged writes survive a killed server, and the quickstart’s steps run in CI on every change.</p>
+        <div class="reference-links"><a href="/docs/reference/security-tests.html">Security tests <span aria-hidden="true">→</span></a><a href="/docs/reference/benchmarks.html">Benchmarks <span aria-hidden="true">→</span></a><a href="/docs/reference/config.html">Server configuration <span aria-hidden="true">→</span></a><a href="https://github.com/stubbi/openxet">Source on GitHub <span aria-hidden="true">↗</span></a></div>
+      </div>
     </section>
 
     <section class="hosting-section" id="hosting" aria-labelledby="hosting-title">
       <span class="anchor-alias" id="hosted" aria-hidden="true"></span>
       <div class="wrap section">
         <div class="section-intro">
-          <h2 id="hosting-title">Choose who runs<br>your storage.</h2>
-          <p>openxet brings the Xet protocol to storage you can operate yourself or use as a service. The hosted service will run the same open-source code.</p>
+          <h2 id="hosting-title">Your infrastructure, or ours.</h2>
+          <p>Both run the same open-source code and the same protocol as Hugging Face, so files stay readable by the stock client wherever they live. You choose who operates the server.</p>
         </div>
         <div class="hosting-choices">
           <article class="hosting-choice hosting-featured">
-            <p class="choice-status">Coming soon</p>
-            <h3>Hosted by openxet</h3>
-            <p>Store your files without operating a storage server. We’ll run the service, so you can get on with your work.</p>
-            <dl><dt>Operated by</dt><dd>openxet</dd><dt>Data lives in</dt><dd>The hosted service</dd></dl>
-            <p class="choice-detail">Hosting locations, limits and pricing will be published before launch.</p>
-            <a class="button button-primary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a>
+            <p class="choice-status">Available from source</p>
+            <h3>On your infrastructure</h3>
+            <p>Run one binary where your data has to stay. Start on a laptop, inspect every line, keep the data under your control.</p>
+            <dl><dt>Operated by</dt><dd>You or your team</dd><dt>Data lives in</dt><dd>A directory you choose, on local disk today</dd></dl>
+            <p class="choice-detail">1 min 43 s from install to first upload, measured with an empty build cache. Object-store backends are planned.</p>
+            <a class="button button-primary" href="/docs/quickstart-storage-only.html">Run the quickstart <span aria-hidden="true">→</span></a>
           </article>
           <article class="hosting-choice">
-            <p class="choice-status">Storage-only preview available</p>
-            <h3>On your infrastructure</h3>
-            <p>Run the storage server where you need it. Start locally, inspect the code and keep the data under your control.</p>
-            <dl><dt>Operated by</dt><dd>You or your team</dd><dt>Data lives in</dt><dd>Your storage directory today</dd></dl>
-            <p class="choice-detail">The current preview uses local disk and SQLite. Build it from source to try it.</p>
-            <a class="button button-secondary" href="/docs/quickstart-storage-only.html">Run the quickstart <span aria-hidden="true">→</span></a>
+            <p class="choice-status">Coming soon</p>
+            <h3>Hosted by openxet</h3>
+            <p>The same server, run for you on openxet.com from the released open-source build. Nothing to operate.</p>
+            <dl><dt>Operated by</dt><dd>openxet</dd><dt>Data lives in</dt><dd>The hosted service</dd></dl>
+            <p class="choice-detail">Hosting locations, limits and pricing will be published before launch.</p>
+            <a class="button button-secondary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a>
           </article>
         </div>
         <div class="integration-path" id="integrate">
-          <div><h3>Building storage into your product?</h3><p>Keep your own interface and authorization decisions. Today, your platform can call an openxet installation’s storage API and issue scoped tokens. Hosted integration will depend on the service’s published capabilities at launch.</p></div>
-          <div class="reference-links"><a href="/docs/reference/routes.html">Explore the storage API <span aria-hidden="true">→</span></a><a href="/docs/reference/config.html#cas-tokens">Platform-signed tokens <span aria-hidden="true">→</span></a></div>
+          <div><h3>Building storage into your own product?</h3><p>Keep your own names, permissions and interface. Your platform calls the storage API of an openxet installation and signs scoped tokens for its users. Hosted integration will depend on the service’s published capabilities at launch.</p></div>
+          <div class="reference-links"><a href="/docs/reference/routes.html">Storage API <span aria-hidden="true">→</span></a><a href="/docs/reference/config.html#cas-tokens">Platform-signed tokens <span aria-hidden="true">→</span></a></div>
         </div>
       </div>
     </section>
 
-    <section class="wrap section tools-section" id="roadmap" aria-labelledby="tools-title">
-      <div class="section-intro">
-        <h2 id="tools-title">Try an upload.<br>Verify the result.</h2>
-        <p>Start with the tested storage-only workflow. The broader Hugging Face toolchain is the next step, as the Hub and Git layers arrive.</p>
-      </div>
-      <div class="tools-grid">
-        <div>
-          <h3>What works today</h3>
-          <p>The first milestone, M1, is complete. You can serve, upload and download files with <code>openxet</code>, or use Hugging Face’s <code>hf_xet</code> client, version 1.7.0 or newer.</p>
-          <a href="/docs/quickstart-storage-only.html">Follow the tested quickstart <span aria-hidden="true">→</span></a>
-          <p class="next-task">It uploads a test file, downloads it and checks that the contents match. Uploading the same file again then shows reuse in the actual result.</p>
-          <div class="planned-note"><strong>Next: Hub and Git compatibility.</strong><p><code>hf upload</code>, <code>huggingface_hub</code>, Git and LFS workflows are planned. Hosted accounts and MCP are also still ahead.</p><a href="/docs/superpowers/specs/2026-10-23-openxet-design.html">Read the product plan</a></div>
+    <section class="wrap section agents-section" id="roadmap" aria-labelledby="agents-title">
+      <span class="anchor-alias" id="agents" aria-hidden="true"></span>
+      <div class="agents-grid">
+        <div class="agents-copy">
+          <h2 id="agents-title">Same task, by hand or by an agent.</h2>
+          <p>Readable output when you work in a terminal. Add <code>--json</code> and every command returns one versioned object; failures carry a stable code, an exit status and a hint for the next step.</p>
+          <p>To hand the task over, share the <a href="/docs/quickstart-storage-only.md">quickstart as Markdown</a> with the goal “upload the test file, download it and verify the contents”. Authorize credentials separately; they never belong in the handoff.</p>
+          <div class="reference-links"><a href="/docs/reference/cli.html">CLI reference</a><a href="/docs/reference/exit-codes.html">Errors and exit codes</a><a href="/llms.txt">llms.txt</a></div>
         </div>
-        <div class="agent-workflow">
-          <h3>Hand the same task to an agent</h3>
-          <p>Use readable terminal output when you’re working by hand. Add <code>--json</code> when a script or agent needs a stable result.</p>
-          <div class="code-example">
-            <p>Shell · after the quickstart setup</p>
-            <pre aria-label="Upload command with JSON output" tabindex="0"><code>openxet upload model.bin --json</code></pre>
-          </div>
-          <p class="code-context">With the server running and your endpoint and token set, this returns a versioned JSON result with file hashes and uploaded bytes. Errors include a code and a hint for what to do next.</p>
-          <p class="code-context">Share the <a href="/docs/quickstart-storage-only.md">quickstart as Markdown</a> with the goal: upload the test file, download it and verify the contents. Keep credentials out of the handoff; authorize access separately.</p>
-          <div class="reference-links"><a href="/docs/reference/cli.html">CLI reference</a><a href="/docs/reference/exit-codes.html">Errors and exit codes</a><a href="/llms.txt">More agent references</a></div>
+        <div class="code-example">
+          <p>Shell · output from the tested quickstart, abbreviated</p>
+          <pre aria-label="openxet commands and their output" tabindex="0"><code><span class="prompt">$</span> openxet upload model.bin
+<span class="out">Uploaded 0 B of 4.0 MiB (100% deduplicated).</span>
+
+<span class="prompt">$</span> openxet download "$HASH" --output model.openxet --json
+<span class="out">{"schema":"openxet.download.v1",
+ "hash":"e8e4019d55c5…2a91",
+ "path":"model.openxet","size":4194304}</span></code></pre>
         </div>
       </div>
     </section>
 
-    <section class="evidence-section" id="review" aria-labelledby="evidence-title">
-      <div class="wrap section">
-        <div class="section-intro">
-          <h2 id="evidence-title">Check it against<br>your requirements.</h2>
-          <p>openxet is at the storage-only stage, with no packaged release yet. Review what exists today before deciding whether it fits your work.</p>
+    <section class="section questions-section" aria-labelledby="questions-title">
+      <div class="wrap questions-layout">
+        <div class="questions-heading"><h2 id="questions-title">Before you decide.</h2><p>Looking for a technical detail?<br><a href="/docs/">Start with the documentation.</a></p></div>
+        <div class="questions">
+          <details><summary><span>Is openxet part of Hugging Face?</span></summary><div><p>No. openxet is an independent open-source project that implements the Xet protocol published by Hugging Face. It is not affiliated with or endorsed by Hugging Face.</p></div></details>
+          <details><summary><span>Can I use <code>hf upload</code> or Git with it today?</span></summary><div><p>Not yet. Today <code>hf_xet</code> and the <code>openxet</code> command line upload and download directly against the storage server. The Hub API, <code>hf upload</code>, <code>huggingface_hub</code>, Git and LFS are the next milestone, in development now. <a href="/docs/changelog.html">Follow the changelog.</a></p></div></details>
+          <details><summary><span>How much will I save?</span></summary><div><p>That depends on how much your versions share. In our measurements an appended log’s second version reused about 90% of its bytes, while two consecutive dense training checkpoints reused almost nothing, because every weight changes. Compressed and encrypted files deduplicate poorly. <a href="/docs/research/S12-s3-api-and-dedup-economics.html">Read the measurements.</a></p></div></details>
+          <details><summary><span>Is it only for AI models?</span></summary><div><p>No. openxet stores any large file. Models and datasets are common examples; logs, uncompressed archives and other versioned files fit too.</p></div></details>
+          <details><summary><span>What if I want to leave?</span></summary><div><p>Self-hosted, your files sit in the standard Xet format in a directory you own, and the code is Apache 2.0, so you can keep running it without us. Export terms for hosted openxet will be published before launch.</p></div></details>
+          <details><summary><span>What will the hosted service cost?</span></summary><div><p>Pricing, limits and hosting locations will be published before launch. <a href="/waitlist/">Join the waitlist</a> for one email when hosted openxet is ready to try. Joining does not create an account or require payment.</p></div></details>
         </div>
-        <div class="evidence-list">
-          <article><h3>Data and operation</h3><p>See where the current server stores data, how it starts and stops, and how to handle stale client caches.</p><a href="/docs/reference/config.html">Review server configuration <span aria-hidden="true">→</span></a></article>
-          <article><h3>Access and verification</h3><p>Review scoped credentials, signed transfer URLs and the tests that enforce the implemented security boundaries.</p><a href="/docs/reference/security-tests.html">Inspect the security tests <span aria-hidden="true">→</span></a></article>
-          <article><h3>Measured performance</h3><p>Read the workload and machine behind each benchmark, with commands to reproduce the results.</p><a href="/docs/reference/benchmarks.html">Read the benchmarks <span aria-hidden="true">→</span></a></article>
-        </div>
-        <p class="section-note">The Rust server and client are <a href="https://github.com/stubbi/openxet">Apache 2.0 source</a>. Follow <a href="/docs/changelog.html">what has changed</a>, or <a href="/about/">meet the maintainer and report a problem</a>.</p>
-      </div>
-    </section>
-
-    <section class="wrap section questions-section" aria-labelledby="questions-title">
-      <div class="questions-heading"><h2 id="questions-title">A few practical<br>questions.</h2><p>Looking for a technical detail?<br><a href="/docs/">Start with the documentation.</a></p></div>
-      <div class="questions">
-        <details><summary>Is this only for AI models?</summary><div><p>No. openxet stores large files. Models and datasets are common examples, but build artifacts and other versioned files fit too. The benefit depends on how much content your uploads share.</p></div></details>
-        <details><summary>How much will I save?</summary><div><p>That depends on the files. If many chunks already exist in storage, less new data needs uploading. If everything is new, all those chunks need uploading. Compression, file formats and local caches also affect the result.</p><p>The diagram above explains reuse; it is not a benchmark or a prediction of your bill.</p></div></details>
-        <details><summary>Is openxet part of Hugging Face?</summary><div><p>No. openxet is an independent open-source project implementing the Xet protocol developed by Hugging Face. It is not affiliated with or endorsed by Hugging Face.</p></div></details>
-        <details><summary>Can I use it today?</summary><div><p>You can build the storage-only server and client from source and follow the <a href="/docs/quickstart-storage-only.html">tested quickstart</a>. There is no packaged release yet. The Hub and Git layers and hosted service are planned.</p></div></details>
-        <details><summary>What will the hosted service cost?</summary><div><p>Pricing, limits and hosting locations will be published before launch. <a href="/waitlist/">Join the waitlist</a> if you’d like an email when hosted openxet is ready to try. Joining does not create an account or require payment.</p></div></details>
       </div>
     </section>
 
     <section class="wrap final-section" aria-labelledby="final-title">
       <div class="final-invitation">
-        <div><p class="category">Hosted service coming soon</p><h2 id="final-title">Hear when hosting<br>is ready.</h2><p>We’ll email you when hosted openxet is ready to try.</p></div>
-        <div class="final-actions"><a class="button button-primary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a><a href="/docs/quickstart-storage-only.html">Prefer to run it yourself? Try the quickstart.</a></div>
+        <div><h2 id="final-title">Try it in two minutes, or hear when hosting opens.</h2><p>The quickstart builds the server, uploads a file with <code>hf_xet</code>, downloads it and shows the reuse. The waitlist emails you once hosting is ready to try.</p></div>
+        <div class="final-actions"><a class="button button-primary" href="/docs/quickstart-storage-only.html">Run it locally <span aria-hidden="true">→</span></a><a class="button button-secondary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a></div>
       </div>
     </section>
   </main>
+
 
   <footer class="site-footer">
     <div class="wrap footer-inner">

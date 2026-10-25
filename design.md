@@ -2,7 +2,7 @@
 
 <!-- description: The shared visual language, content rules, components, user journeys and quality standards for the openxet website, documentation and interfaces. -->
 
-Version 2 · 2026-10-24 · Applies to openxet.com, its documentation, hosted
+Version 3 · 2026-10-25 · Applies to openxet.com, its documentation, hosted
 onboarding, and the optional self-service UI. This is the canonical design
 reference for humans and coding agents. The product design and accepted ADRs
 remain authoritative for capabilities, architecture and security.
@@ -44,7 +44,13 @@ The first **aha** is “I can keep the whole file while uploading less.” It mu
 be visible above or immediately below the fold, require no account, and work
 as a still diagram. Show both the complete file and the smaller set to upload;
 color alone does not explain what crosses the network. A technical explanation
-is available one click deeper.
+is available one click deeper. Where a measurement exists, show it instead of
+an illustration: the hero's upload trace is a real, to-scale result.
+
+Anchor the opener on what the visitor already knows. Name the category (an
+open-source Xet storage server) and the stock client that works with it in
+the first glance; teach the mechanism after that, for those who need it
+([S14](docs/research/S14-landing-messaging.md)).
 
 The differentiated long-term proposition is Xet storage with a choice of
 operator and an inspectable, shared open-source implementation. Explain that
@@ -59,7 +65,7 @@ short route to exact contracts. Both should reach the same truth.
 
 | Stakeholder | Question the site must answer | Evidence / destination | Next action |
 |---|---|---|---|
-| Newcomer | What does it do, in words I know? | Hero + file-version diagram | Understand the example |
+| Newcomer | What does it do, in words I know? | Hero + measured upload trace; “How it works” example | Understand the example |
 | Researcher, engineer, data practitioner | Will it fit how I upload and download? | Tool compatibility + tested quickstart | Try a supported workflow |
 | Self-hoster / operator | Can I install, maintain and recover it? | Configuration, backends, upgrades, recovery, benchmarks | Run the storage-only quickstart today |
 | Platform builder / aqora | Can I fit this into my product and permissions? | APIs, authorization seams, tenancy, optional UI | Read integration and architecture references |
@@ -122,10 +128,14 @@ information architecture of every openxet interface.
 The user requested a page designed for the final hosted product, with sign-up
 disabled and a real waitlist now. Express the intended product coherently,
 then state availability next to the action. Do not make every section a roadmap.
+While hosting is a waitlist, the page's primary action is the path that works
+today (the self-hosted quickstart), so no visitor's first click is a dead end;
+the waitlist stays in the header and beside it. Swap them when hosted sign-up
+launches.
 
 | State | Primary action | Identity / pricing | Technical truth |
 |---|---|---|---|
-| **Current: waitlist** | Join the waitlist → `/waitlist/` | No active hosted sign-up, sign-in or checkout; no invented prices | M1 storage-only server/client works; Hub/Git and hosted service remain planned |
+| **Current: waitlist** | Header: Join the waitlist → `/waitlist/`. Hero and final section: Run it locally → quickstart (primary), Join the waitlist (secondary) | No active hosted sign-up, sign-in or checkout; no invented prices | M1 storage-only server/client works; Hub/Git and hosted service remain planned |
 | Hosted launch | Start free → `https://app.openxet.com/signup` | External identity provider; published limits, pricing and terms | Enable only after the real onboarding and stock-client tests pass |
 | Returning hosted user | Sign in → `https://app.openxet.com/signin` | Same external identity and granted scopes | Return to the user's selected workspace |
 | Service problem | Status and recovery action | Preserve inputs and authentication context safely | Never imply a successful write before acknowledgement |
@@ -173,17 +183,19 @@ claim stock clients accept the scheme or that openxet owns the Xet protocol.
 
 ### Information architecture
 
-Current navigation: **How it works · Hosting · Docs · GitHub · Join the waitlist**.
+Current navigation: **Compatibility · How it works · Hosting · Docs · GitHub · Join the waitlist**.
 Keep it short. On mobile, show the brand and waitlist action with a keyboard
 accessible disclosure for the remaining links; do not hide essential paths.
 
 | Destination | Job | Search intent | Present implementation |
 |---|---|---|---|
 | `/` | Explain value, demonstrate reuse, route the visitor | open-source large-file storage; Xet storage | Homepage |
+| `/#compatibility` | Say which stock clients work today and which are next | hf_xet self-hosted server | Per-tool status table |
 | `/#how-it-works` | Make the mechanism understandable | how file deduplication works | Explanation and example; preserve old `#dedup` links |
 | `/#hosting` | Choose who operates the storage | hosted or self-hosted Xet | Hosted and own-infrastructure paths; preserve `#hosted` |
 | `/#integrate` | Fit storage into another product | Xet storage API integration | Separate integration path, current API and token references |
-| `/#review` | Judge maturity and operating boundaries | openxet security / operation | Current stage, configuration, tests, benchmarks and maintainer links |
+| `/#review` | Judge maturity and operating boundaries | openxet benchmarks / security | Current stage, four measured figures with methods, security tests, source |
+| `/#agents` | Hand the same task to an agent | openxet agent / JSON CLI | Real quickstart output, error contract, Markdown handoff; preserve `#roadmap` |
 | `/waitlist/` | Save a request for hosted launch contact | openxet early access | One-field form + privacy + confirmed receipt |
 | `/docs/` | Accomplish a real task | openxet documentation | mdBook, current commands and compatibility |
 | `/about/` | Establish who builds it and how to participate | openxet project / contact | Maintainer, source, governance, feedback and disclosure links |
@@ -198,34 +210,41 @@ review and related next step; use the editorial backlog in the research note.
 
 ### Homepage sequence and working copy
 
+Each section has one job and answers the question a visitor has at that
+scroll depth ([S14](docs/research/S14-landing-messaging.md) has the visitor
+model and the research behind the order).
+
 | Section | Question answered | Content / behavior |
 |---|---|---|
-| Hero | What is this? | **Large files. Lighter uploads.** Supporting text names storage and explains reuse. Hosted waitlist status sits beside CTA. |
-| File-version illustration | Why should I care? | Show stored and edited files, then isolate the new data to upload. Preserve the complete-file mental model. |
-| Explanation | How does it work? | Three real steps: split into parts, recognize existing parts, upload new parts. Explain “chunks” after “parts.” |
-| Hosting, then integration | Who operates it? How does it fit my product? | Two hosting choices, each with operator/location/status/action. Separate API and platform-token path; hosted integration remains unpromised until specified. |
-| First task and handoff | How will I use it? | Upload, download, verify and observe reuse in the tested storage workflow. Share the same recipe as Markdown. Separate planned Hub/Git/MCP. |
-| Evidence | Does it meet my requirements? | State maturity, link operating/data behavior, permission tests, reproducible measurements, source, changes and maintainers. |
-| Practical questions | Is this right for me? | Workloads, variable savings, independence from Hugging Face, release status and pricing availability. |
-| Final action | What now? | Repeat the waitlist action; offer a direct self-host quickstart. |
+| Hero | What is this? Is it for me? | Category **Open-source Xet storage server**. H1 **Upload only what changed. Keep it where you choose.** Lead names Hugging Face’s `hf_xet`, unmodified. Run it locally (primary), Join the hosted waitlist (secondary); one status line. |
+| Upload trace (hero visual) | Does it really work, and is the saving real? | Stock `hf_xet` → `openxet serve`; to-scale bars of one measured re-upload (100 MiB file, 1 MiB edit, 1.14 MB sent, downloaded back whole); exact bytes and method linked. |
+| Compatibility | Does it work with my tools? | Per-tool table: Available or Planned, in text; CI runs the released client. |
+| How it works | Why is the second upload small? | Three steps beside the interactive eight-part example. Explain “chunks” in plain words; savings vary. |
+| Numbers you can rerun | Is it trustworthy and maintained? | Four measured figures, each with machine/version context and a link to its method; security tests, crash safety, source. |
+| Your infrastructure, or ours | Self-host or hosted? Lock-in? | Self-host card first and featured (available); hosted card (coming soon); same open-source code. Integration row below. |
+| Same task, by hand or by an agent | Can my agent do this? | Real quickstart output, `--json`, error contract, Markdown handoff. |
+| Before you decide | What’s the catch? | Hugging Face affiliation, `hf upload` status, measured savings range (including ~0%), leaving, pricing. |
+| Final invitation | What now? | Run it locally and Join the waitlist side by side. |
 
 Desktop composition:
 
 ```text
-openxet          How it works  Hosting  Docs  GitHub     [Join the waitlist]
+openxet   Compatibility  How it works  Hosting  Docs  GitHub  [Join the waitlist]
 
-Large files.                    Previous file  [A][B][C][D][E][F][G][H]
-Lighter uploads.                Updated file   [A][B][I+][D][E][F][G][H]
-Plain explanation.              New data to upload [I+]
-[Join the waitlist] [See how]    7 parts reused · 1 new part to upload
-Hosted service coming soon.
+Open-source Xet storage server       CLIENT hf_xet  - - -[+]- - ->  SERVER openxet serve
+Upload only what changed.            Edited file         [=========|=========] 100 MiB
+Keep it where you choose.            Sent to the server  [|                  ] 1.14 MB
+Lead naming hf_xet, unmodified.      Downloaded back     [=========|=========] 100 MiB
+[Run it locally] [Join the waitlist] Measured … bars to scale. How it was measured
 
-                 explanation → hosting / integration → first task
-                 → evidence → practical questions → next action
+  compatibility → how it works → numbers → hosting / integration
+  → agents → questions → final invitation
 ```
 
-On mobile: headline → explanation → actions/status → illustration → remaining
-sections. Avoid forcing a large artwork above the reason to use the product.
+Every two-column layout (hero, how it works, hosting, agents, questions)
+splits on the same centre line; section intros are one column on the
+content's left edge. On mobile: headline → lead → stacked full-width
+actions → trace → remaining sections.
 
 <span id="personality"></span>
 
@@ -358,7 +377,7 @@ does not cover headings or focused controls.
 ## Elevation & Depth
 
 Default surfaces have no shadow. Use a 1px separator for ordinary groupings.
-The hero's file workspace can use `0 16px 48px rgb(20 34 56 / 7%)`; this is the
+The hero's upload trace can use `0 16px 48px rgb(20 34 56 / 7%)`; this is the
 single elevated object. Dialogs, when needed in the future app, use
 `0 16px 48px rgb(20 34 56 / 18%)`. No glow, glass blur, background particles,
 floating decorative panels or scroll parallax. Do not apply hover elevation
@@ -401,9 +420,21 @@ Use `<a>` to navigate and `<button>` to act. No nested interactive card links.
 One primary action per decision. “Join the waitlist” consistently names the
 current hosted action; never alternate with “Get started” or “Start free.”
 
+### Measured upload trace
+
+The hero's visual shows one real measurement, never an illustration. A route
+row names the stock client and the server; three bars (edited file, sent,
+downloaded back) are drawn to scale from the recorded bytes, with the changed
+region amber at its true position and the sent bar an empty dashed track
+holding only the amber sliver. A caption gives the exact byte count, the
+client version and cache state, says “bars to scale”, and links the method.
+Update the numbers only from a recorded run, and change HTML, the social
+image and the caption together. A 4px minimum width keeps a sliver visible;
+nothing else is rounded up. Static; no motion.
+
 ### File-version demonstration
 
-The current example uses eight labeled parts: enough to show substantial reuse,
+Shown in “How it works”, not the hero. The current example uses eight labeled parts: enough to show substantial reuse,
 few enough to compare on a phone. This count is an illustration choice, not a
 brand requirement or protocol fact. The initial state shows seven reused parts
 and one new part, with that new part alone in a **New data to upload** tray.
@@ -681,6 +712,20 @@ need user research rather than pretending no further improvement is possible.
   future resource addresses (ADR 0009). M2-URI and M6-URI schedule the grammar,
   compatibility checks and client/UI delivery. HTTPS links and current examples
   stay in place until support ships; no visual identity or runtime changes here.
+- 2026-10-25, v3 messaging (iteration 1): the owner found the opener,
+  order and hero visual weak and the alignment off. A teardown of 19
+  landing pages and a visitor model ([S14](docs/research/S14-landing-messaging.md))
+  showed the page answered “what is dedup?” before “what is this, and does
+  it work with my tools?”, and asked for a waitlist before any proof.
+  Changed: opener anchored on Xet and the stock client; hero visual is now
+  a measured, to-scale upload trace (the toy example moved to “How it
+  works”); compatibility and measured numbers come before the hosting
+  choice; the working quickstart is the primary action while hosting is a
+  waitlist; one-column section intros and a shared centre line fix the
+  misaligned grid edges. Tokens, type and palette unchanged. Evidence:
+  screenshots at 375, 768, 1024, 1440 and 1920 px in light and dark were
+  reviewed before and after; attach them to the PR. Comprehension still
+  needs participant tests.
 - Future changes append date, reason, impacted tokens/components, evidence and
   migration scope here. Avoid duplicating the token definitions in prose elsewhere.
 
