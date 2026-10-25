@@ -61,7 +61,7 @@ class SiteOutput(unittest.TestCase):
             "# Summary\n\n[OpenXet docs](README.md)\n\n# User\n\n- [Commands](reference/cli.md)\n",
             encoding="utf-8",
         )
-        self.write("docs/index.html", DOC_HTML)
+        self.write("docs/index.html", DOC_HTML.replace("Reference - OpenXet docs", "OpenXet docs - OpenXet docs"))
         self.write("docs/index.md", "# OpenXet docs\n\nStart a storage server and transfer a file.\n")
         self.write("docs/reference/cli.html", DOC_HTML)
         self.write("docs/reference/cli.md", '# Commands\n\n<!-- description: Use "--json" & inspect <errors> safely. -->\n')
@@ -97,6 +97,19 @@ class SiteOutput(unittest.TestCase):
         self.assertIn("const sample = '<meta name=\"description\" content=\"leave this alone\">';", html)
         self.assertIn('<p>Use <code>--json</code>.</p>', html)
         self.assertEqual(len(doc.tags("errors")), 0)
+
+    def test_docs_home_title_is_the_book_title_alone(self):
+        doc = self.generated("docs/index.html")
+        html = (self.public / "docs/index.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count("<title>"), 1)
+        self.assertIn("<title>OpenXet docs</title>", html)
+        self.assertEqual(doc.tags("meta", property="og:title")[0]["content"], "OpenXet docs")
+        page = (self.public / "docs/reference/cli.html").read_text(encoding="utf-8")
+        self.assertIn("<title>Reference - OpenXet docs</title>", page)
+        self.assertEqual(self.generated("docs/reference/cli.html").tags("meta", property="og:title")[0]["content"],
+                         "Commands · OpenXet docs")
+        self.generate()
+        self.assertIn("<title>OpenXet docs</title>", (self.public / "docs/index.html").read_text(encoding="utf-8"))
 
     def test_sitemap_includes_marketing_canonicals_but_not_noindex_or_duplicate_index_urls(self):
         doc = self.generated("docs/index.html")
