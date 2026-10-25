@@ -178,7 +178,7 @@ async fn create_keeps_the_first_object() {
     let key = Key::registration("s", "t", h("shard"));
     let tasks: Vec<_> = (0..16u8)
         .map(|i| {
-            let b = Arc::clone(&bucket);
+            let (b, key) = (Arc::clone(&bucket), key.clone());
             tokio::spawn(async move {
                 let bytes = Bytes::from(vec![i; 10 + usize::from(i)]);
                 (b.create(&key, bytes.clone()).await.unwrap(), bytes)

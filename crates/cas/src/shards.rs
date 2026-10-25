@@ -612,6 +612,35 @@ mod tests {
         async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
             self.inner.size(key).await
         }
+
+        async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+            self.inner.put_replace(key, bytes).await
+        }
+
+        async fn put_stream(
+            &self,
+            key: Key,
+            body: openxet_storage::BodyStream,
+            len: u64,
+        ) -> Result<(), StorageError> {
+            self.inner.put_stream(key, body, len).await
+        }
+
+        async fn get_to_file(&self, key: Key, path: &std::path::Path) -> Result<u64, StorageError> {
+            self.inner.get_to_file(key, path).await
+        }
+
+        async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
+            self.inner.last_modified(key).await
+        }
+
+        async fn list_under(
+            &self,
+            repo: openxet_storage::RepoIdHex,
+            kind: openxet_storage::KeyKind,
+        ) -> Result<Vec<Key>, StorageError> {
+            self.inner.list_under(repo, kind).await
+        }
     }
 
     /// A writer of `scope` naming no tenant.
