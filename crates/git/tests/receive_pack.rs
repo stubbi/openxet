@@ -517,3 +517,30 @@ async fn plain_large_blob_refused_above_limit() {
     let rows = pack_rows(&world, repo).await;
     assert_eq!(rows.len(), 1, "nothing published: {rows:?}");
 }
+
+/// Review Focus 3: however low `git.max_plain_blob_bytes` is set, it never
+/// refuses an LFS pointer, which is under 1024 bytes (git-lfs spec).
+#[tokio::test(flavor = "multi_thread")]
+async fn plain_blob_limit_never_refuses_lfs_pointers() {
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 10).await;
+    let mut cfg = config(&world, "node");
+    cfg.max_plain_blob_bytes = Some(10);
+    let node = engine(&world, cfg).await;
+    let server = Server::start(vec![node]).await;
+    let client = clone(&fixture_repo(&fx), &server.url(0, repo), &[]);
+    let w = work(&client);
+    let pointer = format!(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 123456789\n",
+        "4d".repeat(32)
+    );
+    let tip = commit(&w, "pointer", &[("model.safetensors", pointer.as_bytes())]);
+    must(&w, &["push", "-q", "origin", "main"]);
+    assert_eq!(db_ref(&world, repo, "refs/heads/main").await, Some(tip));
+
+    commit(&w, "plain", &[("plain.bin", &text(9, 50))]);
+    let run = client_git(&w, &["push", "origin", "main"]);
+    assert!(!run.success);
+    assert!(run.stderr.contains("plain.bin is"), "{}", run.stderr);
+    assert_eq!(db_ref(&world, repo, "refs/heads/main").await, Some(tip));
+}

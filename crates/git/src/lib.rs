@@ -30,6 +30,7 @@ mod process;
 mod publish;
 mod reach;
 mod receive;
+mod request;
 mod snapshot;
 mod store;
 mod thin;
@@ -53,6 +54,8 @@ pub use publish::{FAULT_AFTER_COMMIT_ACTOR, FAULT_AFTER_UPLOAD_ACTOR};
 pub use publish::{PackFiles, Publication, PublishError, Publisher};
 pub use reach::{Reachability, Refused};
 pub use receive::{LARGE_BLOB_REPORT_BYTES, WriterRuleCounts};
+#[cfg(feature = "fuzzing")]
+pub use request::{PackStats, RequestParser};
 pub use snapshot::SnapshotRepo;
 pub use store::Eviction;
 pub use thin::{

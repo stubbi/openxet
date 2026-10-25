@@ -742,8 +742,10 @@ pub struct Publisher { .. }   // insert_pack(pending) → put_stream → GitStor
   created at `Engine::start`. The hook reads git's proc-receive protocol
   on stdin, forwards commands and the quarantine pack path over
   `OPENXET_HOOK_FD` with `OPENXET_HOOK_TOKEN`, and relays `ok`/`ng`.
-  Branch policy in M2: fast-forward required unless the push is forced
-  (`+ref`), and `main` can't be deleted.
+  Branch policy in M2: an update's old value must equal the snapshot's
+  ref (the stale-update fence); a non-fast-forward update is accepted,
+  since a forced push (`+ref`) can't be told apart on the wire; `main`
+  can't be deleted. Branch protection is a later feature.
 - [ ] **Step 4: Run.** Expected: PASS.
 - [ ] **Step 5: Commit** as `feat(git): receive-pack through the hardened proc-receive hook and the fenced commit transaction`.
 

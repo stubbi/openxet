@@ -37,10 +37,12 @@ pub const MISSING_OBJECTS: &str = "missing necessary objects";
 /// `git push --no-thin` (git v2.39.5 `transport-helper.c` lists
 /// `TRANS_OPT_THIN` among the helper's unsupported options, and
 /// `remote-curl` always passes `--thin` to `send-pack`), so the hint names
-/// what does stop thin bases there: no delta search (`pack.window=0`).
+/// what stops new thin deltas there: no delta search (`pack.window=0`). A
+/// delta already stored in the client's packs can still be reused, so such
+/// a push may stay refused, never accepted wrongly.
 pub const THIN_HINT: &str = "hint: the server could not use the delta bases this thin pack \
                              relies on; fetch, then push again with `git -c pack.window=0 push`, \
-                             which sends complete objects (over HTTP git ignores --no-thin)";
+                             which computes no new deltas (over HTTP git ignores --no-thin)";
 
 /// The most tree lookups the fast paths make for one push; past it, the
 /// remaining objects go to the walk.
@@ -508,6 +510,11 @@ async fn fast_paths(
 
 /// One walk of every object reachable from the snapshot's refs, under
 /// `budget`, until each of `remaining` is found.
+///
+/// It enforces only the walk's own object and time budget. Sharing R22's
+/// per-repository and per-principal concurrency limits (ADR 0004 item 3),
+/// which live in R22's limiter, is
+/// <https://github.com/stubbi/openxet/issues/79>.
 async fn walk(
     snapshot: &SnapshotRepo,
     tips: &[Oid],

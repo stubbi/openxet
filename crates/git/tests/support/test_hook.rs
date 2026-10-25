@@ -7,6 +7,7 @@
 //! - `extra <line>`: add a request line, such as one naming a repository
 //! - `pack <path>`: report this pack path instead of the real ones; a path
 //!   starting with `./` is joined to the hook's directory unresolved
+//! - `no-pack`: report no pack path
 //! - `symlink <name> <target>`: first create `<name>` in the hook's
 //!   directory (the request's snapshot) as a symlink to `<target>`
 //! - `old <oid>`: relay every command with this old value
@@ -76,6 +77,7 @@ fn run(mode: &str) -> io::Result<()> {
                 };
                 packs = vec![path];
             }
+            "no-pack" => packs.clear(),
             "symlink" => {
                 let (name, target) = value.split_once(' ').unwrap_or((value, ""));
                 std::os::unix::fs::symlink(target, name)?;

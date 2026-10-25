@@ -197,7 +197,9 @@ async fn hook_cannot_choose_repo() {
 }
 
 /// `hook_pack_path_confined` (ADR 0004): a reported pack path outside the
-/// request's snapshot is refused, including symlink and `..` escapes.
+/// request's snapshot is refused, including symlink and `..` escapes; the
+/// parent finds the push's pack itself, so a hook that reports none
+/// changes nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn hook_pack_path_confined() {
     let world = World::new().await;
@@ -242,6 +244,16 @@ async fn hook_pack_path_confined() {
         assert_eq!(after.refs, before.refs, "{mode}");
         assert_eq!(after.packs, before.packs, "{mode}");
     }
+
+    set_mode(&world, "no-pack");
+    let tip = must(&w, &["rev-parse", "HEAD"]);
+    must(&w, &["push", "-q", "origin", "main"]);
+    assert_eq!(
+        db_ref(&world, repo, "refs/heads/main")
+            .await
+            .map(|o| o.to_string()),
+        Some(tip.trim().to_owned())
+    );
 }
 
 /// `hook_policy_rechecked` (ADR 0004): openxet refuses a deletion of

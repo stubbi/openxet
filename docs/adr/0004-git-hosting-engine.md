@@ -12,7 +12,10 @@
   item 7's hook channel is a pair of pipes, not a socketpair; item 3's
   thin-pack hint is `git -c pack.window=0 push`, because git ignores
   `--no-thin` over smart HTTP; item 1's `core.alternateRefsCommand=true`
-  is written so that it runs without `PATH`
+  is written so that it runs without `PATH`; item 3's policy re-check
+  fences stale updates by the old value and accepts non-fast-forward
+  updates, since a forced push can't be told apart on the wire, and
+  `main` can't be deleted (branch protection is a later feature)
 
 ## Context
 
@@ -240,7 +243,14 @@ results below are **observed**.
    - The hook hands the commands and the new pack path to the parent
      openxet process. openxet then:
      1. validates the request (item 7)
-     2. re-checks fast-forward and branch policy itself
+     2. re-checks the commands and branch policy itself: each command's
+        old value must equal the ref's value in the snapshot, which fences
+        a stale update (a client checks fast-forward against that old
+        value, so a non-forced push is a fast-forward of the server's
+        ref); a non-fast-forward update is accepted, because a forced
+        push (`+ref`) can't be told apart from one on the wire, as with
+        git's own default `receive.denyNonFastForwards=false`; `main`
+        can't be deleted. Branch protection is a later feature.
      3. applies the writer reachability rule below
      4. inserts the pack row as `pending`, then uploads `.pack` and `.idx`
         to the bucket. The row comes first, so the bucket never holds a
@@ -310,8 +320,12 @@ results below are **observed**.
           `transport-helper.c` lists `TRANS_OPT_THIN` among the options a
           remote helper never receives, and `remote-curl` always passes
           `--thin` to `send-pack` (observed with `GIT_TRACE`). Without a
-          delta search (`pack.window=0`) pack-objects makes no thin
-          deltas.
+          delta search (`pack.window=0`) pack-objects computes no new
+          deltas, and in the stale-client test, whose new objects were
+          loose, the retry sent no thin bases. It can still reuse a delta
+          already stored in the client's packs against a base it believes
+          the server has, so the hint is not a guarantee; such a push
+          stays refused, never accepted wrongly.
        - Stock git takes its default thin-pack bases from the edge
          commits' trees at the same path (source:
          `builtin/pack-objects.c`, `show_edge` → `add_preferred_base`,
@@ -921,8 +935,10 @@ results below are **observed**.
   - `hook_pack_path_confined`: pack paths outside the request's snapshot
     or quarantine directory are rejected, including symlink and `..`
     escapes.
-  - `hook_policy_rechecked`: a non-fast-forward or a protected-branch
-    update is refused by openxet even if the hook reports it as allowed.
+  - `hook_policy_rechecked`: openxet refuses, whatever the hook relays,
+    an update whose old value isn't the ref's value in the snapshot (a
+    stale update), a deletion of `main`, and a non-commit on a branch; a
+    forced non-fast-forward update whose old value matches is accepted.
   - `git_env_sanitised`:
     - an injected `GIT_PROTOCOL` value other than `version=N` is
       dropped

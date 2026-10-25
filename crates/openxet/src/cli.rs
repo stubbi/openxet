@@ -101,9 +101,6 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         }
     };
 
-    if matches!(cli.command, Command::ProcReceive) {
-        return crate::hook_cmd::run();
-    }
     let output = Output::from_json_flag(cli.json);
     let result = match &cli.command {
         Command::Version => output

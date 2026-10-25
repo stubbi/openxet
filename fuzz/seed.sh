@@ -103,3 +103,46 @@ oid=0123456789abcdef0123456789abcdef01234567
 { pkt command=object-info; printf 0001; pkt size; pkt "oid $oid"; printf 0000; } \
   > corpus/pkt_line/v2-object-info
 printf '0003fff1zzzz' > corpus/pkt_line/bad-length
+
+# A receive-pack request and a hook request are written here: pkt-lines of
+# commands, then a pack header (receive_request, byte 0 the chunk size), and
+# the hook's token, pack and command lines (hook_request, with the token
+# the target checks against).
+mkdir -p corpus/receive_request corpus/hook_request
+rawpkt() { printf '%04x%s' $((${#1} + 4)) "$1"; }
+zero=0000000000000000000000000000000000000000
+oid=1111111111111111111111111111111111111111
+{
+  caps='report-status side-band-64k'
+  printf '\007%04x' $((97 + 1 + ${#caps} + 4))
+  printf '%s %s refs/heads/main\000%s' "$zero" "$oid" "$caps"
+  printf '0000PACK\000\000\000\002\000\000\000\003'
+  head -c 64 /dev/zero
+} > corpus/receive_request/push
+{
+  caps='report-status push-options'
+  printf '\001%04x' $((97 + 1 + ${#caps} + 4))
+  printf '%s %s refs/heads/main\000%s' "$zero" "$oid" "$caps"
+  printf '0000'
+  rawpkt 'an option'
+  printf '0000PACK\000\000\000\002\000\000\000\001'
+} > corpus/receive_request/push-options
+{
+  printf '\003'
+  rawpkt "shallow $oid"
+  rawpkt "$oid $zero refs/heads/old"
+  printf '0000'
+} > corpus/receive_request/delete
+token=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+{
+  rawpkt "token $token"
+  rawpkt "pack /cache/snapshots/x/objects/pack/pack-$oid.pack"
+  rawpkt "command $zero $oid refs/heads/main"
+  rawpkt "repo 0192f3a4b5c67d8e9fa0b1c2d3e4f5a6"
+  printf '0000'
+} > corpus/hook_request/push
+{
+  rawpkt "token $token"
+  rawpkt "command $oid $zero refs/heads/old"
+  printf '0000'
+} > corpus/hook_request/delete

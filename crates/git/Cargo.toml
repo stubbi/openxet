@@ -13,6 +13,10 @@ repository.workspace = true
 # as a crashed node would (ADR 0004, `publish_then_cas_survives_faults`).
 # Never enable it in a shipped build.
 fault-injection = []
+# Fuzz-only: `RequestParser` and `hook::parse_hook_request`, the parsers of
+# untrusted push bytes, for the targets in `fuzz/`. Never enable it in a
+# shipped build.
+fuzzing = []
 # Test-only: builds `openxet-git-test-hook`, the proc-receive hook the tests
 # install in place of the `openxet` binary, which can forge what it relays.
 test-hook = []
@@ -51,6 +55,11 @@ futures-util = "0.3.34"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["http1", "server"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
+# Enables the test-only features for this crate's own tests. Cargo unifies
+# features across the workspace, so any workspace build that includes these
+# tests (`cargo test`/`nextest --workspace`, `clippy --all-targets`) compiles
+# openxet-git with `fault-injection` and `test-hook`; a release or plain
+# `cargo build` doesn't.
 openxet-git = { path = ".", features = ["fault-injection", "test-hook"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "time"] }

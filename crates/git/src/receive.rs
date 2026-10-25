@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -29,8 +30,11 @@ use tokio_util::io::ReaderStream;
 
 use crate::hook::{HookCommand, HookContext, HookReply, HookRequest, HookServer, confine};
 use crate::publish::{PackFiles, Publication, PublishError, Publisher};
+use crate::request::{PackStats, RequestParser};
 use crate::thin::{self, Proof, SentObjects, WriterRefused, analyse, classify_sent};
-use crate::{Engine, GitConfig, GitError, ResponseStream, SnapshotRepo, git_command, io_err};
+use crate::{
+    Engine, GitConfig, GitError, ResponseStream, SnapshotRepo, blocking, git_command, io_err,
+};
 
 /// The branch that can't be deleted (M2 policy).
 const PROTECTED_BRANCH: &str = "refs/heads/main";
@@ -39,6 +43,10 @@ const PROTECTED_BRANCH: &str = "refs/heads/main";
 /// the push output with a `git lfs track` suggestion (Review Focus 3). An
 /// LFS pointer is under 1 KiB, so any blob this large is file content.
 pub const LARGE_BLOB_REPORT_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The largest LFS pointer file: "Pointer files must be less than 1024
+/// bytes in size" (git-lfs `docs/spec.md`).
+const LFS_POINTER_MAX_BYTES: u64 = 1023;
 
 /// git's reason for the other refs of an atomic push that failed
 /// (`builtin/receive-pack.c`, git v2.39.5). A push is one commit
@@ -190,15 +198,6 @@ impl Stream for Response {
     }
 }
 
-/// What openxet learns about the client's pack while streaming it to git.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PackStats {
-    /// The object count in the client's pack header, if a pack came.
-    pub(crate) header_count: Option<u32>,
-    /// The client's pack length, header to trailer.
-    pub(crate) pack_bytes: u64,
-}
-
 /// Streams `body` into receive-pack, measuring the client's pack on the way
 /// (ADR 0004 item 3: openxet is the transport, so it counts the client's
 /// bytes), and sends what it measured once the body ends.
@@ -227,116 +226,6 @@ async fn feed(
 
 async fn next_chunk(body: &mut BodyStream) -> Option<io::Result<Bytes>> {
     std::future::poll_fn(|cx| body.as_mut().poll_next(cx)).await
-}
-
-/// An incremental parser of a receive-pack request (gitprotocol-pack(5),
-/// "Reference Update Request and Packfile Transfer"): pkt-lines of shallow
-/// lines and commands up to a flush, push options up to a flush when the
-/// first command asks for them, then the raw pack.
-#[derive(Debug, Default)]
-pub(crate) struct RequestParser {
-    state: ParseState,
-    buf: Vec<u8>,
-    push_options: bool,
-    first_command_seen: bool,
-    pack_bytes: u64,
-    header: Vec<u8>,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-enum ParseState {
-    #[default]
-    Commands,
-    PushOptions,
-    Pack,
-    Malformed,
-}
-
-impl RequestParser {
-    pub(crate) fn push(&mut self, mut data: &[u8]) {
-        while !data.is_empty() {
-            match self.state {
-                ParseState::Malformed => return,
-                ParseState::Pack => {
-                    let need = 12usize.saturating_sub(self.header.len()).min(data.len());
-                    self.header.extend_from_slice(&data[..need]);
-                    self.pack_bytes += data.len() as u64;
-                    return;
-                }
-                ParseState::Commands | ParseState::PushOptions => {
-                    let want = if self.buf.len() < 4 {
-                        4 - self.buf.len()
-                    } else {
-                        self.pkt_len()
-                            .map_or(0, |n| n.saturating_sub(self.buf.len()))
-                    };
-                    let take = want.min(data.len());
-                    self.buf.extend_from_slice(&data[..take]);
-                    data = &data[take..];
-                    self.advance();
-                }
-            }
-        }
-    }
-
-    fn pkt_len(&self) -> Option<usize> {
-        let text = std::str::from_utf8(self.buf.get(..4)?).ok()?;
-        usize::from_str_radix(text, 16).ok()
-    }
-
-    fn advance(&mut self) {
-        if self.buf.len() < 4 {
-            return;
-        }
-        match self.pkt_len() {
-            Some(0) => {
-                self.buf.clear();
-                self.state = match self.state {
-                    ParseState::Commands if self.push_options => ParseState::PushOptions,
-                    _ => ParseState::Pack,
-                };
-            }
-            Some(n) if (5..=65520).contains(&n) => {
-                if self.buf.len() == n {
-                    if self.state == ParseState::Commands && !self.first_command_seen {
-                        let line = &self.buf[4..];
-                        if !line.starts_with(b"shallow ") {
-                            self.first_command_seen = true;
-                            if let Some(nul) = line.iter().position(|b| *b == 0) {
-                                self.push_options = line[nul + 1..]
-                                    .split(|b| *b == b' ' || *b == b'\n')
-                                    .any(|cap| cap == b"push-options");
-                            }
-                        }
-                    }
-                    self.buf.clear();
-                }
-            }
-            _ => self.state = ParseState::Malformed,
-        }
-    }
-
-    pub(crate) fn finish(self) -> PackStats {
-        let header_count = (self.state == ParseState::Pack
-            && self.header.len() == 12
-            && self.header.starts_with(b"PACK"))
-        .then(|| {
-            u32::from_be_bytes([
-                self.header[8],
-                self.header[9],
-                self.header[10],
-                self.header[11],
-            ])
-        });
-        PackStats {
-            header_count,
-            pack_bytes: if header_count.is_some() {
-                self.pack_bytes
-            } else {
-                0
-            },
-        }
-    }
 }
 
 /// One push's handler, run when the hook relays the commands.
@@ -421,22 +310,22 @@ impl Receive {
             .ok()
             .and_then(Result::ok)
             .ok_or_else(|| Refusal::all("the push's request ended early; push again"))?;
-        let pack = self.new_pack(&request.packs, stats)?;
+        let pack = self.new_pack(request.packs.clone(), stats).await?;
         let sent = match &pack {
             Some(files) => {
                 let idx = files.path(PackExt::Idx);
                 let (bytes, count) = (stats.pack_bytes, stats.header_count.unwrap_or(0));
-                classify_sent(&idx, bytes, count).map_err(|e| internal(&e))?
+                blocking(move || classify_sent(&idx, bytes, count))
+                    .await
+                    .map_err(|e| internal(&e))?
             }
             None => SentObjects::default(),
         };
         let new_tips: Vec<Oid> = updates.iter().filter_map(|u| u.new).collect();
-        let large_bytes = self
-            .config
-            .max_plain_blob_bytes
-            .map_or(LARGE_BLOB_REPORT_BYTES, |max| {
-                LARGE_BLOB_REPORT_BYTES.min(max.saturating_add(1))
-            });
+        let max_plain = self.max_plain_blob_bytes();
+        let large_bytes = max_plain.map_or(LARGE_BLOB_REPORT_BYTES, |max| {
+            LARGE_BLOB_REPORT_BYTES.min(max.saturating_add(1))
+        });
         let analysis = match analyse(
             &self.snapshot,
             &new_tips,
@@ -458,7 +347,7 @@ impl Receive {
         let mut over_limit = Vec::new();
         for blob in &analysis.large_blobs {
             let text = large_blob_message(&blob.path, blob.size);
-            match self.config.max_plain_blob_bytes {
+            match max_plain {
                 Some(max) if blob.size > max => over_limit.push(format!(
                     "{text} This server refuses files over {} outside Git LFS.",
                     human_size(max)
@@ -593,43 +482,47 @@ impl Receive {
             .collect())
     }
 
-    /// The push's own pack among what the hook reported: inside the
-    /// snapshot after resolving symlinks and `..` (receive-pack's
-    /// quarantine is inside it too), named like a pack, not one of the
-    /// snapshot's committed packs, and at most one. A client pack with
-    /// objects must have one; receive-pack keeps every pushed pack
-    /// (`receive.unpackLimit=1`).
-    fn new_pack(
+    /// `git.max_plain_blob_bytes`, floored below at the largest LFS
+    /// pointer, so that no limit can refuse a pointer: "Pointer files must
+    /// be less than 1024 bytes in size" (git-lfs `docs/spec.md`).
+    fn max_plain_blob_bytes(&self) -> Option<u64> {
+        self.config
+            .max_plain_blob_bytes
+            .map(|max| max.max(LFS_POINTER_MAX_BYTES))
+    }
+
+    /// The push's own pack: the one pack in the snapshot's `objects/pack`
+    /// that holds the `.keep` file `index-pack --keep` leaves until the push
+    /// ends and isn't one of the snapshot's committed packs. receive-pack
+    /// migrates its quarantine there before it runs the hook, and keeps
+    /// every pushed pack (`receive.unpackLimit=1`), so a client pack with
+    /// objects must have exactly one. openxet finds it itself; each path the
+    /// hook reported must still resolve, symlinks and `..` included, inside
+    /// the snapshot and name that pack (ADR 0004 item 7), as defence in
+    /// depth.
+    async fn new_pack(
         &self,
-        reported: &[std::path::PathBuf],
+        reported: Vec<PathBuf>,
         stats: PackStats,
     ) -> Result<Option<PackFiles>, Refusal> {
-        let committed: HashSet<&str> = self
-            .snapshot
-            .packs
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect();
-        let mut found = Vec::new();
-        for path in reported {
-            let Some(resolved) = confine(path, self.snapshot.dir.path()) else {
-                return Err(Refusal::all("the hook reported a pack outside this push"));
-            };
-            let name = resolved
-                .file_name()
-                .and_then(|n| n.to_str())
-                .and_then(|n| n.strip_suffix(".pack"))
-                .and_then(|n| PackName::parse(n).ok());
-            let (Some(name), Some(dir)) = (name, resolved.parent()) else {
-                return Err(Refusal::all("the hook reported a pack outside this push"));
-            };
-            if committed.contains(name.as_str()) {
-                continue;
-            }
-            found.push(PackFiles {
-                dir: dir.to_path_buf(),
-                name,
-            });
+        let root = self.snapshot.dir.path().to_path_buf();
+        let committed: HashSet<String> =
+            self.snapshot.packs.iter().map(|p| p.name.clone()).collect();
+        let (mut found, all_named) = blocking(move || {
+            let found = kept_packs(&root.join("objects/pack"), &committed)?;
+            let ours: Vec<PathBuf> = found
+                .iter()
+                .filter_map(|f| std::fs::canonicalize(f.path(PackExt::Pack)).ok())
+                .collect();
+            let all_named = reported
+                .iter()
+                .all(|p| confine(p, &root).is_some_and(|c| ours.contains(&c)));
+            Ok((found, all_named))
+        })
+        .await
+        .map_err(|e| internal(&e))?;
+        if !all_named {
+            return Err(Refusal::all("the hook reported a pack outside this push"));
         }
         let expected = stats.header_count.is_some_and(|n| n > 0);
         match (found.len(), expected) {
@@ -640,6 +533,29 @@ impl Receive {
             )),
         }
     }
+}
+
+/// The packs in `dir` with a `.keep` file, other than `committed`.
+fn kept_packs(dir: &Path, committed: &HashSet<String>) -> Result<Vec<PackFiles>, GitError> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(io_err("list", dir))? {
+        let path = entry.map_err(io_err("list", dir))?.path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".keep"))
+            .and_then(|n| PackName::parse(n).ok());
+        if let Some(name) = name
+            && !committed.contains(name.as_str())
+            && path.with_extension("pack").is_file()
+        {
+            found.push(PackFiles {
+                dir: dir.to_path_buf(),
+                name,
+            });
+        }
+    }
+    Ok(found)
 }
 
 fn internal(e: &dyn std::fmt::Display) -> Refusal {
@@ -706,50 +622,7 @@ fn has_lock_suffix(component: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestParser, human_size, valid_ref_name};
-
-    fn pkt(payload: &[u8]) -> Vec<u8> {
-        let mut out = format!("{:04x}", payload.len() + 4).into_bytes();
-        out.extend_from_slice(payload);
-        out
-    }
-
-    #[test]
-    fn parser_measures_the_pack_across_chunks() {
-        let zero = "0".repeat(40);
-        let a = "a".repeat(40);
-        let mut req =
-            pkt(format!("{zero} {a} refs/heads/main\0report-status push-options").as_bytes());
-        req.extend_from_slice(b"0000");
-        req.extend(pkt(b"an option"));
-        req.extend_from_slice(b"0000");
-        let mut pack = b"PACK\0\0\0\x02\0\0\0\x07".to_vec();
-        pack.extend_from_slice(&[9; 100]);
-        req.extend_from_slice(&pack);
-        for split in [1, 3, 7, 4096] {
-            let mut p = RequestParser::default();
-            for chunk in req.chunks(split) {
-                p.push(chunk);
-            }
-            let stats = p.finish();
-            assert_eq!(stats.header_count, Some(7), "split {split}");
-            assert_eq!(stats.pack_bytes, pack.len() as u64, "split {split}");
-        }
-    }
-
-    #[test]
-    fn parser_without_pack_or_malformed() {
-        let zero = "0".repeat(40);
-        let a = "a".repeat(40);
-        let mut req = pkt(format!("{a} {zero} refs/heads/x\0report-status").as_bytes());
-        req.extend_from_slice(b"0000");
-        let mut p = RequestParser::default();
-        p.push(&req);
-        assert_eq!(p.finish().header_count, None);
-        let mut p = RequestParser::default();
-        p.push(b"zzzzPACK\0\0\0\x02\0\0\0\x01");
-        assert_eq!(p.finish().header_count, None);
-    }
+    use super::{human_size, valid_ref_name};
 
     #[test]
     fn ref_names() {
