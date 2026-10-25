@@ -8,18 +8,25 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytes = "1.12.1"
+futures-core = "0.3.34"
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+# The R22 reachability walk and object lookups only; gix never serves the
+# wire (ADR 0004 item 6).
+gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
 openxet-index = { path = "../index", version = "0.0.0" }
 openxet-storage = { path = "../storage", version = "0.0.0" }
 tempfile = "3.27.0"
 thiserror = "2"
-tokio = { version = "1.54.1", features = ["process", "rt", "sync"] }
+tokio = { version = "1.54.1", features = ["io-util", "process", "rt", "sync"] }
 tracing = "0.1.44"
 uuid = { version = "1.29.0", features = ["v4"] }
 
 [dev-dependencies]
-bytes = "1.12.1"
+axum = "0.8.9"
+flate2 = "1.1.10"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
-tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true

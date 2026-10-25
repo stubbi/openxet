@@ -85,3 +85,21 @@ vectors = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 for i, vector in enumerate(vectors["valid"] + vectors["invalid"]):
     (pathlib.Path(sys.argv[2]) / f"vector-{i:03}").write_text(vector["input"], encoding="utf-8")
 PY
+
+# pkt-line requests as git sends them: a v2 ls-refs and fetch, a v0 want
+# section with capabilities and haves, a v2 command openxet refuses, and a
+# bad length.
+mkdir -p corpus/pkt_line
+pkt() { printf '%04x%s\n' $((${#1} + 5)) "$1"; }
+oid=0123456789abcdef0123456789abcdef01234567
+{ pkt command=ls-refs; pkt agent=git/2.39.5; pkt object-format=sha1; printf 0001
+  pkt peel; pkt symrefs; pkt unborn; pkt 'ref-prefix HEAD'; pkt 'ref-prefix refs/heads/'
+  printf 0000; } > corpus/pkt_line/v2-ls-refs
+{ pkt command=fetch; pkt object-format=sha1; printf 0001; pkt thin-pack; pkt ofs-delta
+  pkt "want $oid"; pkt "have $oid"; pkt done; printf 0000; } > corpus/pkt_line/v2-fetch
+{ pkt "want $oid multi_ack_detailed side-band-64k thin-pack ofs-delta agent=git/2.39.5"
+  pkt "want $oid"; pkt 'deepen 1'; printf 0000; pkt "have $oid"; pkt done; } \
+  > corpus/pkt_line/v0-wants
+{ pkt command=object-info; printf 0001; pkt size; pkt "oid $oid"; printf 0000; } \
+  > corpus/pkt_line/v2-object-info
+printf '0003fff1zzzz' > corpus/pkt_line/bad-length

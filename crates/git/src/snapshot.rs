@@ -11,7 +11,7 @@ use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use openxet_index::{Oid, Pack};
+use openxet_index::{Oid, Pack, RepoId};
 use openxet_storage::{MidxExt, PackExt, PackName};
 use tempfile::TempDir;
 
@@ -19,15 +19,17 @@ use crate::process::{PINNED_CONFIG, ProcessEnv};
 use crate::store::midx_file;
 use crate::{GitError, io_err};
 
-/// The branch `HEAD` names (Task 7 resolves it the same way until a
-/// repository can store another default branch).
-const HEAD_REF: &str = "refs/heads/main";
+/// The branch `HEAD` names, in the snapshot and in `ls-refs`, until a
+/// repository can store another default branch.
+pub(crate) const HEAD_REF: &str = "refs/heads/main";
 
 /// One request's view of a repository: a bare repository in `dir`, removed
 /// when this is dropped. Requests already in flight keep their links when
 /// packs are superseded or evicted (ADR 0004 item 4).
 #[derive(Debug)]
 pub struct SnapshotRepo {
+    /// The repository it is a snapshot of.
+    pub repo: RepoId,
     /// The repository directory, under `{cache_dir}/snapshots/{uuid}`.
     pub dir: TempDir,
     /// Every ref and its target, ordered by name, as `packed-refs` holds
