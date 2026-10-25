@@ -170,7 +170,14 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
         vec![openxet_cas::mounted(cas), openxet_hub::mounted(hub)],
         body_deadline,
     ));
-    tokio::spawn(openxet_git::run_maintenance(engine, lease_holder()));
+    let maintenance = tokio::spawn(openxet_git::run_maintenance(engine, lease_holder()));
+    // Stopped at the shutdown signal, so a pass never holds the exit past
+    // `server.shutdown_grace`; aborting it is safe (`run_maintenance`).
+    let mut stopping = stop.clone();
+    tokio::spawn(async move {
+        let _ = stopping.wait_for(|stopped| *stopped).await;
+        maintenance.abort();
+    });
     let endpoint = public_url.as_str().trim_end_matches('/').to_owned();
     tracing::info!(
         %endpoint,
@@ -640,7 +647,7 @@ impl HumanDisplay for Ready<'_> {
              \n  hf auth login --token {token}\n\
              \nPush and clone with git; the first push creates the repository (user name: any, \
              password: the token):\
-             \n  git push {hub}/{DEV_SUBJECT}/my-model main\
+             \n  git push {hub}/{DEV_SUBJECT}/my-model HEAD:main\
              \n  git clone {hub}/{DEV_SUBJECT}/my-model\n\
              \nDev mode accepts only this token. To configure credentials, see \
              docs/reference/config.md.\

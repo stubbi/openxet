@@ -306,9 +306,19 @@ async fn clone_push_fetch_over_http() {
     );
 }
 
-/// Reads the human banner of a server started with `extra` up to its
-/// `Stop with` line, then stops it.
-fn banner(data_dir: &Path, extra: &[&str]) -> String {
+/// A server started without `--json`, killed on drop.
+struct Bannered(std::process::Child);
+
+impl Drop for Bannered {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts a server with `extra` and reads its human banner up to its
+/// `Stop with` line; the server keeps running until the guard drops.
+fn banner(data_dir: &Path, extra: &[&str]) -> (Bannered, String) {
     let mut child = openxet()
         .args(["serve", "--port", "0", "--data-dir"])
         .arg(data_dir)
@@ -318,10 +328,12 @@ fn banner(data_dir: &Path, extra: &[&str]) -> String {
         .spawn()
         .unwrap();
     let stdout = BufReader::new(child.stdout.take().unwrap());
+    let server = Bannered(child);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut banner = String::new();
-        for line in stdout.lines() {
+        let mut lines = stdout.lines();
+        for line in lines.by_ref() {
             let Ok(line) = line else { break };
             banner.push_str(&line);
             banner.push('\n');
@@ -330,22 +342,23 @@ fn banner(data_dir: &Path, extra: &[&str]) -> String {
             }
         }
         let _ = tx.send(banner);
+        // Keep reading, so the server never blocks on a full pipe.
+        for _ in lines {}
     });
     let banner = rx.recv_timeout(PATIENCE).unwrap_or_default();
-    let _ = child.kill();
-    let _ = child.wait();
-    banner
+    (server, banner)
 }
 
 /// `banner_lists_hub_and_git_lines`: the dev-mode banner prints the
 /// `HF_ENDPOINT` and `hf auth login` lines and git commands that run as
-/// printed, the first push creating the repository; the configured banner
-/// names the Git URL form.
+/// printed from a repository `git init` made on its default branch, the
+/// first push creating the repository; the configured banner names the Git
+/// URL form.
 #[tokio::test]
 async fn banner_lists_hub_and_git_lines() {
     let dir = TempDir::new().unwrap();
     let data = dir.path().join("data");
-    let text = banner(&data, &[]);
+    let (server, text) = banner(&data, &[]);
     let token = std::fs::read_to_string(data.join("dev-token"))
         .unwrap()
         .trim()
@@ -356,28 +369,46 @@ async fn banner_lists_hub_and_git_lines() {
         .unwrap()
         .trim()
         .to_owned();
+    let push = format!("  git push {endpoint}/dev/my-model HEAD:main\n");
+    let clone = format!("  git clone {endpoint}/dev/my-model\n");
     for line in [
         format!("  export HF_ENDPOINT={endpoint}\n"),
         format!("  hf auth login --token {token}\n"),
-        format!("  git push {endpoint}/dev/my-model main\n"),
-        format!("  git clone {endpoint}/dev/my-model\n"),
+        push.clone(),
+        clone.clone(),
     ] {
         assert!(text.contains(&line), "{line:?} missing from:\n{text}");
     }
     assert!(text.contains("password: the token"), "{text}");
 
-    // The printed git commands work as printed, on the same data, with the
-    // token as the password.
-    let port = endpoint.rsplit(':').next().unwrap();
-    let server = Server::start_with(&data, None, port, &[]);
+    // The printed git commands run as printed, the token given as the
+    // password when git asks, from a repository on `master`, the default
+    // branch of `git init` without `init.defaultBranch`.
     let src = dir.path().join("src");
-    local_repo(&src, &[("model.txt", b"weights\n")]);
-    let with_token =
-        |command: &str| command.replacen("http://", &format!("http://dev:{token}@"), 1);
-    let push = with_token(&format!("{endpoint}/dev/my-model"));
-    must(&src, &["push", "-q", push.as_str(), "main"], &[]);
-    let clone = with_token(&format!("{endpoint}/dev/my-model"));
-    must(dir.path(), &["clone", "-q", clone.as_str()], &[]);
+    std::fs::create_dir_all(&src).unwrap();
+    must(
+        &src,
+        &["-c", "init.defaultBranch=master", "init", "-q"],
+        &[],
+    );
+    commit(&src, "weights", &[("model.txt", b"weights\n")]);
+    let store = dir.path().join("git-credentials");
+    std::fs::write(
+        &store,
+        format!(
+            "{}\n",
+            endpoint.replacen("http://", &format!("http://dev:{token}@"), 1)
+        ),
+    )
+    .unwrap();
+    let helper = format!("credential.helper=store --file={}", store.display());
+    let run_printed = |cwd: &Path, line: &str| {
+        let words: Vec<&str> = line.split_whitespace().skip(1).collect();
+        let args: Vec<&str> = ["-c", helper.as_str()].into_iter().chain(words).collect();
+        must(cwd, &args, &[]);
+    };
+    run_printed(&src, &push);
+    run_printed(dir.path(), &clone);
     assert_eq!(
         std::fs::read(dir.path().join("my-model/model.txt")).unwrap(),
         b"weights\n"
@@ -392,7 +423,7 @@ async fn banner_lists_hub_and_git_lines() {
         format!("[[auth.static_tokens]]\nsha256 = \"{digest}\"\nsubject = \"ci\"\n"),
     )
     .unwrap();
-    let text = banner(
+    let (_server, text) = banner(
         &dir.path().join("configured"),
         &["--config", config.to_str().unwrap()],
     );

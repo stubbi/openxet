@@ -276,6 +276,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("cache_dir", Kind::Str),
             ("cache_max_bytes", Kind::Str),
             ("max_plain_blob_bytes", Kind::Str),
+            ("max_push_bytes", Kind::Str),
             ("reachability.max_commits", Kind::Int),
             ("reachability.max_ms", Kind::Int),
             ("reachability.max_concurrent_per_repo", Kind::Int),
@@ -1085,6 +1086,14 @@ fn git(c: &mut Checker<'_>, data_dir: Option<&Path>) -> Option<GitConfig> {
         c.set("git.max_plain_blob_bytes", "unset", &Source::Default);
         Some(None)
     };
+    let max_push_bytes = c.size(
+        "git.max_push_bytes",
+        openxet_git::DEFAULT_MAX_PUSH_BYTES,
+        (1 << 20, 1 << 40),
+        "The largest pack one git push may send, after HTTP compression is undone; a larger \
+         push is refused. Store large files with Git LFS (`git lfs track`) instead. 10GiB is \
+         the default.",
+    );
     let reach = Budget::REACHABILITY;
     let thin = Budget::THIN_BASES;
     let max_commits = budget_int(
@@ -1135,6 +1144,7 @@ fn git(c: &mut Checker<'_>, data_dir: Option<&Path>) -> Option<GitConfig> {
     let mut git = GitConfig::new(cache_dir?);
     git.cache_max_bytes = cache_max_bytes?;
     git.max_plain_blob_bytes = max_plain_blob_bytes?;
+    git.max_push_bytes = max_push_bytes?;
     git.reachability = Budget {
         max_objects: max_commits?,
         max_time: Duration::from_millis(reach_ms?),
@@ -1985,6 +1995,21 @@ mod tests {
 
     fn problem_keys(loaded: &Loaded) -> Vec<&str> {
         loaded.problems.iter().map(|p| p.key.as_str()).collect()
+    }
+
+    /// `git.max_push_bytes` defaults to 10 GiB, takes a size, and refuses
+    /// one below 1 MiB.
+    #[test]
+    fn max_push_bytes_is_a_bounded_size() {
+        let config = load(None, env(&[]), &Overrides::default()).config.unwrap();
+        assert_eq!(
+            config.git.max_push_bytes,
+            openxet_git::DEFAULT_MAX_PUSH_BYTES
+        );
+        let loaded = load_toml("[git]\nmax_push_bytes = \"2GiB\"\n", &[]);
+        assert_eq!(loaded.config.unwrap().git.max_push_bytes, 2 << 30);
+        let loaded = load_toml("", &[("OPENXET_GIT__MAX_PUSH_BYTES", "512KiB")]);
+        assert_eq!(problem_keys(&loaded), ["git.max_push_bytes"]);
     }
 
     #[test]
