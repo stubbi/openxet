@@ -1,13 +1,14 @@
-//! The SQLite implementation of [`Repos`].
-
-use std::collections::HashSet;
+//! The SQLite implementation of [`Repos`]. A write of one statement
+//! (`create_repo`, `set_labels`, `audit`) runs without an explicit
+//! transaction, since a single SQLite statement is atomic; writes of
+//! several take `BEGIN IMMEDIATE`.
 
 use openxet_protocol::MerkleHash;
 use sqlx::Row as _;
 use sqlx::sqlite::SqliteRow;
 
-use super::{HASHES_PER_QUERY, SqliteIndex, to_i64, to_u64, with_placeholders};
-use crate::types::{decode_chunk_table, decode_terms, hash_from};
+use super::{SqliteIndex, to_i64, to_u64};
+use crate::types::{decode_terms, hash_from};
 use crate::{AuditEntry, FileRecord, IndexError, Page, Repo, RepoFilter, RepoId, Repos};
 
 const REPO_COLUMNS: &str = "id, namespace, name, private, labels, created_at, full_repack_gen";
@@ -118,8 +119,8 @@ impl Repos for SqliteIndex {
             }
             None => (None, None),
         };
-        // `json_each` is SQLite's; Postgres reads the same JSON array with
-        // `jsonb_array_elements_text`.
+        // `json_each` is SQLite's; the Postgres implementation of M3 reads the
+        // same JSON array with `jsonb_array_elements_text`.
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {REPO_COLUMNS}, name_key FROM repos r \
              WHERE (? IS NULL OR name_key > ?) \
@@ -208,65 +209,6 @@ impl Repos for SqliteIndex {
 
     async fn purge_file(&self, file: &MerkleHash) -> Result<u64, IndexError> {
         let mut tx = self.begin_write().await?;
-        let term_lists: Vec<Vec<u8>> =
-            sqlx::query_scalar("SELECT terms FROM file_scopes WHERE file = ?")
-                .bind(file.as_bytes())
-                .fetch_all(&mut *tx)
-                .await?;
-        // Every (chunk, xorb) the file's reconstructions name, in any scope:
-        // its first chunk's candidate and the eligible chunks of its xorbs.
-        let mut ranges: Vec<(MerkleHash, u32, u32)> = Vec::new();
-        for terms in &term_lists {
-            for t in decode_terms(terms)? {
-                ranges.push((t.xorb, t.chunk_start, t.chunk_end));
-            }
-        }
-        let xorbs: Vec<MerkleHash> = {
-            let mut seen = HashSet::new();
-            ranges
-                .iter()
-                .map(|r| r.0)
-                .filter(|x| seen.insert(*x))
-                .collect()
-        };
-        let mut candidates: HashSet<(MerkleHash, MerkleHash)> = HashSet::new();
-        for batch in xorbs.chunks(HASHES_PER_QUERY) {
-            let mut query = sqlx::query(with_placeholders(
-                "SELECT hash, chunk_count, chunk_table FROM xorbs WHERE hash IN (",
-                "?",
-                batch.len(),
-                ")",
-            ));
-            for xorb in batch {
-                query = query.bind(xorb.as_bytes());
-            }
-            for row in query.fetch_all(&mut *tx).await? {
-                let xorb = hash_from(row.try_get::<&[u8], _>(0)?)?;
-                let count = usize::try_from(row.try_get::<i64, _>(1)?)
-                    .map_err(|_| IndexError::Corrupt("a negative chunk count".to_owned()))?;
-                let table = decode_chunk_table(row.try_get::<&[u8], _>(2)?, count)?;
-                for &(_, start, end) in ranges.iter().filter(|r| r.0 == xorb) {
-                    let chunks =
-                        table
-                            .hashes
-                            .get(start as usize..end as usize)
-                            .ok_or_else(|| {
-                                IndexError::Corrupt(format!(
-                                    "file {file} names chunks {start}..{end} of xorb {xorb}, which \
-                                 has {count}"
-                                ))
-                            })?;
-                    candidates.extend(chunks.iter().map(|(chunk, _)| (*chunk, xorb)));
-                }
-            }
-        }
-        for (chunk, xorb) in &candidates {
-            sqlx::query("DELETE FROM dedup WHERE chunk = ? AND xorb = ?")
-                .bind(chunk.as_bytes())
-                .bind(xorb.as_bytes())
-                .execute(&mut *tx)
-                .await?;
-        }
         let removed = sqlx::query("DELETE FROM file_scopes WHERE file = ?")
             .bind(file.as_bytes())
             .execute(&mut *tx)

@@ -1,7 +1,7 @@
 //! The SQLite implementation of [`GitStore`]. Every transaction that checks
 //! a row and then writes starts with `BEGIN IMMEDIATE`, so the check holds
 //! until it commits; on Postgres (M3) the same checks take their rows `FOR
-//! UPDATE`.
+//! UPDATE`. `mark_pack` is one guarded statement, atomic on its own.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -367,6 +367,12 @@ impl GitStore for SqliteIndex {
     }
 
     async fn publish_repack(&self, p: RepackPublish<'_>) -> Result<(), CommitError> {
+        if p.ref_log_high_water.is_some() && p.outputs.is_empty() {
+            return Err(IndexError::InvalidInput(
+                "a full repack publishes at least one pack".to_owned(),
+            )
+            .into());
+        }
         let epoch = to_i64(p.epoch, "lease epoch")?;
         let high_water = p
             .ref_log_high_water

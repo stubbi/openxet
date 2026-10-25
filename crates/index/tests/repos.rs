@@ -5,10 +5,11 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use openxet_index::{
-    AuditEntry, ChunkTable, FileRecord, Index, IndexError, NewFile, Page, Registrant, Repo,
-    RepoFilter, RepoId, Repos, SqliteIndex, Term, Visibility,
+    AuditEntry, ChunkTable, FileRecord, HubIndex, Index, IndexError, NewFile, Page, Registrant,
+    Repo, RepoFilter, RepoId, Repos, SqliteIndex, Term, Visibility,
 };
 use openxet_protocol::{MerkleHash, chunk_hash};
 use tempfile::TempDir;
@@ -318,8 +319,17 @@ async fn file_by_sha256_is_per_scope() {
     );
 }
 
+/// Every chunk of `t`'s dedup answer, in order.
+async fn dedup_answers(index: &SqliteIndex, t: &ChunkTable) -> Vec<Option<MerkleHash>> {
+    let mut out = Vec::new();
+    for (chunk, _) in t.hashes.iter() {
+        out.push(ok(index.dedup_xorb(chunk, "t", Visibility::Global).await));
+    }
+    out
+}
+
 #[tokio::test]
-async fn purge_removes_every_scope_row_and_dedup_candidates() {
+async fn purge_removes_every_scope_row() {
     let dir = ok(TempDir::new());
     let (index, path) = open(&dir).await;
     let (xorb, t) = put(&index, "secret", 6, "t").await;
@@ -328,35 +338,29 @@ async fn purge_removes_every_scope_row_and_dedup_candidates() {
     let other = file("other", other_xorb, &other_t, 0, 3);
     register(&index, "s1", std::slice::from_ref(&secret), "repo:a", 1).await;
     register(&index, "s2", &[secret.clone(), other.clone()], "repo:b", 2).await;
+    let dedup_before = (
+        dedup_answers(&index, &t).await,
+        dedup_answers(&index, &other_t).await,
+    );
+    assert!(dedup_before.0.iter().all(|x| *x == Some(xorb)));
 
     assert_eq!(ok(index.purge_file(&secret.record.hash).await), 2);
 
     for scope in ["repo:a", "repo:b"] {
         assert_eq!(ok(index.file(&secret.record.hash, scope).await), None);
     }
-    // No upload dedups against the purged chunks any more; the xorb's
-    // other chunks and other files are untouched.
-    for (i, (chunk, _)) in t.hashes.iter().enumerate() {
-        let expected = if (1..4).contains(&i) {
-            None
-        } else {
-            Some(xorb)
-        };
-        assert_eq!(
-            ok(index.dedup_xorb(chunk, "t", Visibility::Global).await),
-            expected,
-            "chunk {i}"
-        );
-    }
     assert_eq!(
         ok(index.file(&other.record.hash, "repo:b").await),
         Some(other.record)
     );
+    // Dedup rows describe xorbs, not files, and a rebuild from the bucket
+    // restores them, so purge leaves them as they were.
     assert_eq!(
-        ok(index
-            .dedup_xorb(&other_t.hashes[0].0, "t", Visibility::Global)
-            .await),
-        Some(other_xorb)
+        (
+            dedup_answers(&index, &t).await,
+            dedup_answers(&index, &other_t).await
+        ),
+        dedup_before
     );
 
     // Recorded, and repeating it removes nothing more.
@@ -366,6 +370,18 @@ async fn purge_removes_every_scope_row_and_dedup_candidates() {
         .fetch_all(&pool)
         .await);
     assert_eq!(purged, vec![secret.record.hash.as_bytes().to_vec()]);
+}
+
+/// Later tasks hold the index as one trait object.
+#[tokio::test]
+async fn sqlite_index_is_a_hub_index() {
+    let dir = ok(TempDir::new());
+    let (index, _) = open(&dir).await;
+    let hub: Arc<dyn HubIndex> = Arc::new(index);
+    let r = repo("org", "model", &["model"]);
+    ok(hub.create_repo(&r).await);
+    assert_eq!(ok(hub.snapshot(r.id).await).full_repack_gen, 0);
+    assert_eq!(ok(hub.file(&h("absent"), "repo:x").await), None);
 }
 
 /// `audit_log`'s `(seq, actor, action, repo, detail, at)`.

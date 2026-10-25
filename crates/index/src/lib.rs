@@ -250,6 +250,12 @@ pub trait Index: Send + Sync + 'static {
     ) -> Result<Option<Vec<MerkleHash>>, IndexError>;
 }
 
+/// Everything the Hub layer reads and writes, as one trait object
+/// (`Arc<dyn HubIndex>`): a trait object names one non-auto trait.
+pub trait HubIndex: Index + Repos + GitStore {}
+
+impl<T: Index + Repos + GitStore> HubIndex for T {}
+
 /// Errors from the index. Messages name no credentials or secrets; scopes
 /// and hashes are not secret.
 ///

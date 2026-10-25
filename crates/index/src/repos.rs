@@ -44,7 +44,8 @@ pub struct Page<T> {
     /// The entries, in listing order.
     pub items: Vec<T>,
     /// The cursor that continues the listing after the last entry, or
-    /// `None` if no entry follows. Opaque: pass it back as it is.
+    /// `None` if no entry follows. Opaque: pass it back as it is. The Hub
+    /// base64url-encodes it into its `cursor` parameter (ruling M2-R8).
     pub next: Option<String>,
 }
 
@@ -139,16 +140,16 @@ pub trait Repos: Send + Sync + 'static {
     ) -> Result<Option<FileRecord>, IndexError>;
 
     /// Purges `file` (ruling M2-R13): in one transaction, removes its
-    /// registration from every scope and the dedup candidates of every
-    /// chunk its reconstructions name, so no upload dedups against it, and
-    /// records the purge. The caller has written the bucket's purge record
-    /// first and writes the audit row after. Returns the number of scopes
-    /// it was removed from.
+    /// registration from every scope and records the purge. Dedup rows are
+    /// left alone: they describe xorbs, not files, and no bucket record
+    /// mirrors their deletion, so removing them would make the index
+    /// diverge from a rebuild. The caller has written the bucket's purge
+    /// record first and writes the audit row after. Returns the number of
+    /// scopes it was removed from.
     ///
     /// # Errors
     ///
-    /// [`IndexError::Database`] if the write fails, or
-    /// [`IndexError::Corrupt`]; nothing is changed.
+    /// [`IndexError::Database`] if the write fails; nothing is changed.
     async fn purge_file(&self, file: &MerkleHash) -> Result<u64, IndexError>;
 
     /// Appends `entry` to the audit log. Rows are never changed or deleted.

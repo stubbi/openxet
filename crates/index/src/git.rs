@@ -338,7 +338,8 @@ pub trait GitStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// [`CommitError::Fenced`], [`CommitError::PackNotPending`], and
-    /// [`CommitError::Database`].
+    /// [`CommitError::Database`], which carries
+    /// [`IndexError::InvalidInput`] for a full repack without outputs.
     async fn publish_repack(&self, p: RepackPublish<'_>) -> Result<(), CommitError>;
 
     /// The repository's unplaced entries, oldest first.

@@ -1,5 +1,6 @@
 -- Repositories and their Git data (ADR 0004, rulings M2-R2, M2-R12,
--- M2-R13). Ids are the 16 raw bytes of a UUIDv7, OIDs the 20 raw bytes of a
+-- M2-R13). SQLite only: the Postgres migrations of M3 are written
+-- separately. Ids are the 16 raw bytes of a UUIDv7, OIDs the 20 raw bytes of a
 -- SHA-1. Times are Unix seconds unless named otherwise.
 --
 -- Repository metadata, labels and purges are bucket records first and

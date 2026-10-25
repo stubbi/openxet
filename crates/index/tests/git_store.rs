@@ -521,6 +521,24 @@ async fn publish_repack_rejects_stale_epoch_and_advanced_ref_log() {
     assert_eq!(unchanged.full_repack_gen, 0);
     assert_eq!(unchanged.packs.len(), 3);
 
+    // A full repack must publish something: an empty one would bump the
+    // generation and fence every writer for nothing.
+    let latest = ok(index.ref_log_since(repo, 0).await)
+        .last()
+        .map_or(0, |r| r.seq);
+    match index
+        .publish_repack(RepackPublish {
+            outputs: &[],
+            ref_log_high_water: Some(latest),
+            ..geometric
+        })
+        .await
+    {
+        Err(CommitError::Database(IndexError::InvalidInput(_))) => {}
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+    assert_eq!(ok(index.snapshot(repo).await), unchanged);
+
     // A geometric repack takes neither fence, only the lease: it publishes.
     ok(index.publish_repack(geometric).await);
     let after = ok(index.snapshot(repo).await);
@@ -594,6 +612,90 @@ async fn unplaced_rows_persist_and_clear_by_coverage() {
     // Another repository's entries are its own.
     assert_eq!(ok(index.unplaced(other).await), rows[4..]);
     assert_eq!(ok(index.clear_unplaced(repo, &[]).await), 0);
+}
+
+#[tokio::test]
+async fn delete_repo_hands_packs_to_gc() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "doomed").await;
+    let keep = new_repo(&index, "kept").await;
+    let committed = push(&index, repo, None, 1).await;
+    let kept_pack = push(&index, keep, None, 1).await;
+    let still_pending = pending(repo, "in-flight");
+    ok(index.insert_pack(&still_pending).await);
+    let recovered = PackId::generate();
+    ok(index
+        .acquire_lease(repo, "node-a", Duration::from_mins(1))
+        .await)
+    .unwrap_or_else(|| panic!("lease"));
+    ok(index
+        .record_unplaced(&[Unplaced {
+            repo,
+            kind: UnplacedKind::Commit(oid(7)),
+            pack: committed.id,
+            found_at: 1,
+        }])
+        .await);
+    let pool = ok(sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("index.sqlite").display()
+    ))
+    .await);
+    // reindex is the only writer of recovered packs (ADR 0004 item 4).
+    ok(sqlx::query(
+        "INSERT INTO packs (id, repo, name, state, created_at, bytes) \
+         VALUES (?, ?, 'recovered', 'recovered', 1, 1)",
+    )
+    .bind(&recovered.0[..])
+    .bind(&repo.0[..])
+    .execute(&pool)
+    .await);
+    let log_before = ok(index.ref_log_since(repo, 0).await);
+
+    assert!(ok(index.delete_repo(repo).await));
+
+    let states: Vec<(Vec<u8>, String, Option<i64>)> = ok(sqlx::query_as(
+        "SELECT id, state, superseded_at FROM packs WHERE repo = ?",
+    )
+    .bind(&repo.0[..])
+    .fetch_all(&pool)
+    .await);
+    let state_of = |id: PackId| {
+        states
+            .iter()
+            .find(|(row, _, _)| row[..] == id.0[..])
+            .map(|(_, state, at)| (state.as_str(), at.is_some()))
+    };
+    assert_eq!(state_of(committed.id), Some(("superseded", true)));
+    assert_eq!(state_of(recovered), Some(("lost", false)));
+    assert_eq!(state_of(still_pending.id), Some(("pending", false)));
+    // The in-flight writer can no longer commit its pack.
+    let main = [update("refs/heads/main", Some(1), Some(2))];
+    match index
+        .commit(tx(repo, &main, Some(still_pending.id), 0))
+        .await
+    {
+        Err(CommitError::Database(IndexError::UnknownRepo { repo: r })) => assert_eq!(r, repo),
+        other => panic!("expected UnknownRepo, got {other:?}"),
+    }
+    for table in ["refs", "repo_leases", "reindex_unplaced"] {
+        let count: i64 = ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {table} WHERE repo = ?"
+        )))
+        .bind(&repo.0[..])
+        .fetch_one(&pool)
+        .await);
+        assert_eq!(count, 0, "{table}");
+    }
+    // The ref log stays for GC's keep window (ADR 0004 item 3).
+    assert_eq!(ok(index.ref_log_since(repo, 0).await), log_before);
+    // Other repositories are untouched.
+    assert_eq!(ok(index.snapshot(keep).await).packs, vec![kept_pack]);
+
+    assert!(!ok(index.delete_repo(repo).await));
+    let again = new_repo(&index, "doomed").await;
+    assert_ne!(again, repo);
 }
 
 /// S9's "Concurrent pushes to one branch": each round, 8 writers on two
