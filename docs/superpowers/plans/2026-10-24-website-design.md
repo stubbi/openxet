@@ -59,7 +59,7 @@ The product architecture and ADRs retain precedence over presentation.
 - [x] Have an independent builder check the design; resolve material gaps.
 - [x] Publish root design through a docs include, without maintaining two copies.
 
-## Task 2: First release — documentation foundations
+## Task 2: Documentation foundations (first release)
 
 **Files:** `scripts/generate-site-index.py`, focused tests under `site/`,
 `site/llms-template.txt`, `docs/README.md`, `scripts/build-site.sh`,
@@ -96,7 +96,7 @@ database stays private. A receipt capability supports cancelling a request.
   access as required by the user's public waitlist, and verify one synthetic
   signup and cancellation. No launch emails are sent during this task.
 
-## Task 4: Second release — homepage and working waitlist
+## Task 4: Homepage and working waitlist (second release)
 
 **Files:** `website/index.html`, `website/assets/`, `website/waitlist/`,
 `website/privacy/`, `website/about/`, `website/404.html`, docs theme styles.
@@ -171,7 +171,7 @@ Do not alter mdBook script ordering based on structural scan hints alone. The
 head TOC registration and inline sidebar initialization are order-dependent;
 measure cold mobile loading and sidebar/search interactions before that work.
 
-## Recorded release checks — 2026-10-24
+## Recorded release checks, 2026-10-24
 
 <!-- release-verification: 270ccd84bb9740ae5346fb059b0e256ff4df6e61 -->
 

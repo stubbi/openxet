@@ -68,7 +68,7 @@ had no exact entry for `hf`, `xet`, `ox` or `openxet` when checked (451 rows).
 Absence does not establish that a name is unused or available without conflicts;
 `xet` above is a concrete counterexample. The name is now chosen; specify its
 semantics, evaluate legacy use and seek registration under
-[RFC 7595 §§4–7](https://www.rfc-editor.org/rfc/rfc7595.html#section-4).
+[RFC 7595 §§4 to 7](https://www.rfc-editor.org/rfc/rfc7595.html#section-4).
 
 ## Compatibility and endpoint rules to settle before implementation
 

@@ -50,7 +50,7 @@ That includes whether they can bind a range.
 **Inferred from xet-core v1.7.0 source, not observed:**
 - On a 403, the client refreshes before it sleeps
   (`remote_client.rs:633-638`).
-- It then sleeps a pre-jitter 3, 9, 27, 81 and 243 s for attempts 1–5.
+- It then sleeps a pre-jitter 3, 9, 27, 81 and 243 s for attempts 1 to 5.
   Each sleep is capped at `retry_max_duration`, 6 min, and jitter only
   shortens it (`retry_wrapper.rs:272`, `485-497`; `client.rs` retry
   defaults).

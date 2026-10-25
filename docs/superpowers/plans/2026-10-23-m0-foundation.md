@@ -7,7 +7,7 @@
 - CI and governance
 - golden protocol tests against HF's reference files
 - a real-client compatibility harness
-- answers to spikes S1–S9, recorded as research notes, ADRs and captured
+- answers to spikes S1 to S9, recorded as research notes, ADRs and captured
   fixtures
 
 **Architecture:**
@@ -34,7 +34,7 @@
 - ADR `docs/adr/0001-build-from-scratch-on-xet-core.md`
 - lessons list in `docs/competitive-matrix.md`
 
-**Scope note:** the design spans M0–M7. Each milestone gets its own plan,
+**Scope note:** the design spans M0 to M7. Each milestone gets its own plan,
 written when the previous one lands, because spike results (this plan) and
 real code change what the later plans must say. The final task of this plan
 writes the M1 plan.
@@ -576,7 +576,7 @@ token only in the local env and as a GitHub Actions secret
     list by grepping `huggingface_hub` 2.2.0 source for each field, with
     `file:line`.
   - Status codes and error bodies the client handles.
-  - Explicit notes for the competitive-matrix lessons 1–3, 7 and 12.
+  - Explicit notes for the competitive-matrix lessons 1 to 3, 7 and 12.
 - [ ] **Step 4: Commit via PR**
   Commit message: `docs(hub): capture Hub API shapes from huggingface.co (S3)`
 

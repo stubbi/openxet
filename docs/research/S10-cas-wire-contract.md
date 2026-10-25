@@ -498,17 +498,17 @@ Retry policy for every CAS call (`retry_wrapper.rs`, defaults in
 
 | Status or failure | Default | Exceptions |
 |---|---|---|
-| `2xx` | success | — |
-| `5xx` except `501` | retry | — |
+| `2xx` | success | none |
+| `5xx` except `501` | retry | none |
 | `501` | final (`:219`) | v2 reconstruction and v2 shards: fall back to v1 |
 | `408`, `429` | retry | `429` on `/v1/chunks`: final, treated as no dedup |
 | `404` | final | v2 reconstruction and shards: fall back to v1. `/v1/chunks`: no dedup. Grants (`@1.8.0-dev0`): use `POST /v1/xorbs` |
 | `416` | final | reconstruction: end of file |
 | `403` | final | data URLs: refresh URL and retry |
 | `400`, `401`, other `4xx` | final | `/v1/chunks`: no dedup |
-| timeout, connect error, truncated body | retry | — |
-| JSON decode error on a `2xx` | retry | — |
-| redirect, builder, other body errors | final | — |
+| timeout, connect error, truncated body | retry | none |
+| JSON decode error on a `2xx` | retry | none |
+| redirect, builder, other body errors | final | none |
 
 `404` means "this route doesn't exist here" on `/v2/*` and on the grant
 route, so OpenXet's `404` there must mean exactly that. "File not found"
@@ -530,7 +530,7 @@ back on `/v2/*`, but fails the upload on the grant route, so OpenXet uses
 | `401` | refresh the token | no reaction; refresh by clock only | honour `exp` exactly |
 | Data fetch | one multi-range request per entry | one single-range request per descriptor by default | one range per entry (ADR 0002) |
 | `Accept-Encoding` | clients SHOULD send gzip or zstd | sends none | compress only when asked |
-| Footer bytes 24–72 and 168–192 | reserved | lookup-table offsets and byte counts (`shard_format.rs:103-131`) | write them with upstream's serializers |
+| Footer bytes 24 to 72 and 168 to 192 | reserved | lookup-table offsets and byte counts (`shard_format.rs:103-131`) | write them with upstream's serializers |
 | Empty file reconstruction | `416` when `start >= size` | `416` and `200` with no terms both work | `416` with a `Range`, `200` with no terms without one |
 
 ## Our client core: `xet-data` 1.7.0

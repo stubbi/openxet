@@ -353,7 +353,7 @@ docs/  T21 (plus each task's reference pages)
   no-`git-xet` upload answer (M2-R10). §12 M2: link this plan. §17: one
   row per ruling.
 - [ ] **Step 3: Security map.** Replace each M2 `pending` row with the file
-  this plan assigns (Tasks 7–15), keeping the rows the checker expects; the
+  this plan assigns (Tasks 7 to 15), keeping the rows the checker expects; the
   checker tolerates files that don't exist yet only for `pending`, so
   mark them `pending (M2, <file>)` and let each task drop the `pending`.
   Check `python3 -I scripts/check-security-tests-map.py --help` for the
@@ -817,7 +817,7 @@ impl Engine {
     pub async fn read_blob(&self, snap: &SnapshotRepo, commit: Oid, path: &str) -> Result<Blob, GitError>;   // Blob { oid, bytes } or Pointer
     pub async fn log(&self, snap: &SnapshotRepo, from: Oid, cursor: Option<Oid>, limit: usize) -> Result<Vec<CommitInfo>, GitError>;
     pub async fn last_commit_for_paths(&self, snap: &SnapshotRepo, commit: Oid, paths: &[&str]) -> Result<Vec<Option<CommitInfo>>, GitError>;   // for expand=true
-    pub async fn hub_commit(&self, repo: RepoId, who: &UserPrincipal, req: HubCommit<'_>) -> Result<Oid, GitError>;   // ADR 0004 item 6 steps 1–6, retried 3× on Fenced/RefMismatch
+    pub async fn hub_commit(&self, repo: RepoId, who: &UserPrincipal, req: HubCommit<'_>) -> Result<Oid, GitError>;   // ADR 0004 item 6 steps 1 to 6, retried 3× on Fenced/RefMismatch
     pub async fn hub_ref_write(&self, repo: RepoId, who: &UserPrincipal, update: RefUpdate, tag: Option<TagInfo>) -> Result<(), GitError>;   // create/update/delete with the writer rule; annotated tags built with gix
 }
 pub struct HubCommit<'a> { pub branch: &'a str, pub parent: Option<Oid>, pub summary: &'a str, pub description: &'a str, pub ops: Vec<Op> }
@@ -883,7 +883,7 @@ pub async fn create_repo(state: &HubState, who: &UserPrincipal, ns: &str, name: 
   - `repos.rs`: `create_answers_s3_shape` (fixture `04`), `create_409_carries_url`
     (fixtures `05`, `06`), `create_in_foreign_namespace_403_names_namespace`
     (fixture `08`, text from S3 lesson 12), `delete_is_text_ok_and_404_shape`
-    (fixtures `91`–`93`), `untyped_create_adds_model_label`,
+    (fixtures `91` to `93`), `untyped_create_adds_model_label`,
     `names_validated` (each M2-R2 rule → `400` with the rule in the hint),
     `name_taken_case_insensitively_409`.
   - `views.rs`: `typed_listing_filters_by_label`,
@@ -941,9 +941,9 @@ pub async fn create_repo(state: &HubState, who: &UserPrincipal, ns: &str, name: 
     repository), `commit_parent_mismatch_412`, `commit_limits_enforced`,
     `commit_ndjson_accepts_python_separators`, `readme_commit_posts_validate_yaml_first`
     (fixture `09-…-01`, the stub answer), `branch_and_tag_shapes`
-    (fixtures `11`–`13`, `30`, `31`; `409` text for an existing branch),
+    (fixtures `11` to `13`, `30`, `31`; `409` text for an existing branch),
     `tag_target_is_the_annotated_tag_object` (fixture `14`).
-  - `read.rs`: `tree_shapes` (fixtures `16`–`19`; `lfs` and `xetHash`
+  - `read.rs`: `tree_shapes` (fixtures `16` to `19`; `lfs` and `xetHash`
     fields; `EntryNotFound` with the S3 text), `tree_expand_last_commit`
     (fixture `17`), `tree_path_edges` (Review Focus 4), `paths_info_omits_missing`
     (fixture `20`), `commits_newest_first_with_total` (fixture `21`),

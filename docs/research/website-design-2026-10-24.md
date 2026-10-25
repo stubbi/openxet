@@ -186,7 +186,7 @@ These are browser checks, not a completed assistive-technology or user study.
 Cross-browser and physical-device testing, field Core Web Vitals, and first-time
 participant comprehension remain follow-up evidence needs.
 
-## Published homepage and waitlist verification — 2026-10-24
+## Published homepage and waitlist verification, 2026-10-24
 
 <!-- release-verification: 270ccd84bb9740ae5346fb059b0e256ff4df6e61 -->
 

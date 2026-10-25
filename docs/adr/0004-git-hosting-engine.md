@@ -66,7 +66,7 @@ results below are **observed**.
   | in-process gix prototype | 2.86 s | 178 MB | 6.5 s |
 
   A 100-commit fetch cost git 45 ms CPU and 33 MB, and gix 284 ms and
-  216 MB. git without bitmaps needed 1.2–1.6 s CPU for the full clone.
+  216 MB. git without bitmaps needed 1.2 to 1.6 s CPU for the full clone.
 - **Pushes.**
   - A one-commit push cost git about 120 ms CPU, all of it spawned
     processes. gix cost 13 ms.
@@ -89,16 +89,16 @@ results below are **observed**.
   - git served through `objects/info/alternates` into the node cache,
     including that cache's single-pack bitmap: 178 ms CPU, the same as
     local. A MIDX bitmap through alternates was not tested.
-  - A cold node hydrated 80 MB of packs from MinIO in 0.4–0.6 s.
+  - A cold node hydrated 80 MB of packs from MinIO in 0.4 to 0.6 s.
   - A geometric repack with a MIDX bitmap took 0.7 s for 19 packs, and
     left the base pack untouched.
 - **Reachability (source).** git's v2 `parse_want` accepts any object in
-  the odb, alternates included. git 2.37–2.44 also advertises and serves
+  the odb, alternates included. git 2.37 to 2.44 also advertises and serves
   the v2 `object-info` command unconditionally, which returns the size of
   any OID in the odb. Reachability is therefore OpenXet's job (item 2).
 - **Alternatives (source).**
   - JGit DFS fits the storage model best, but needs a JVM sidecar (start-up
-    alone 1.6–2.0 s CPU, about 77 MB, observed), and the DFS API is
+    alone 1.6 to 2.0 s CPU, about 77 MB, observed), and the DFS API is
     `internal`.
   - go-git v6 serves upload-pack and receive-pack only in beta, with no
     bitmaps and no thin packs.
@@ -167,7 +167,7 @@ results below are **observed**.
      - **What git ≥ 2.37 serves by default** (source: git `serve.c`, the
        `capabilities[]` table, at tags v2.37.0 to v2.51.0):
        - `ls-refs` and `fetch`, always
-       - `object-info` in 2.37–2.44, always (`.advertise =
+       - `object-info` in 2.37 to 2.44, always (`.advertise =
          always_advertise`). It answers the size of any OID in the odb,
          with no reachability check: an existence and size oracle for
          unreachable objects. From 2.45 it is gated by
@@ -182,11 +182,11 @@ results below are **observed**.
      - git's `parse_command` dies with "invalid command" for a command
        whose advertise check is false, in every version from 2.37 to
        2.51. So on 2.45+ the pinned config also blocks `object-info`
-       inside git, but on 2.37–2.44 only OpenXet's allowlist does.
+       inside git, but on 2.37 to 2.44 only OpenXet's allowlist does.
    - **Why.** git's v2 `parse_want` only checks that the object exists in
      the odb. It does not check reachability, so
      `allowAnySHA1InWant=false` does not protect v2 (source: git v2.39.5
-     `upload-pack.c`, `parse_want`, lines 1413–1442). This is git's
+     `upload-pack.c`, `parse_want`, lines 1413 to 1442). This is git's
      documented design, not a defect: its fetch protocol is not meant to
      keep unshared objects from a peer (git `transfer-data-leaks.adoc`,
      SECURITY), so access control on git reads is OpenXet's job.
@@ -1202,7 +1202,7 @@ results below are **observed**.
   cost.
 - **JGit with DFS as a sidecar.** Closest to the storage model, with
   bucket-backed packs, a block cache and reftable. It loses on "one
-  binary" (design §5.1, §9): a JVM runtime with about 77 MB and 1.6–2.0 s
+  binary" (design §5.1, §9): a JVM runtime with about 77 MB and 1.6 to 2.0 s
   CPU just to start, and an `internal` storage API with no stability
   promise.
 - **go-git v6 as a sidecar.** Server support is beta (2026-10-04), with no

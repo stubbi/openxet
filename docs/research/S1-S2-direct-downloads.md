@@ -113,7 +113,7 @@ Fetch-entry shapes (`STUB_MODE`):
 
 | mode | terms | fetch entries per xorb | ranges per entry |
 |---|---|---|---|
-| a1 | 1 (chunks 0–796) | 1 | 1 (bytes 0–14737812), as huggingface.co returns it |
+| a1 | 1 (chunks 0 to 796) | 1 | 1 (bytes 0 to 14737812), as huggingface.co returns it |
 | a4 | 4 | 4 | 1 each |
 | b  | 4 | 2 | 2 non-adjacent each (pieces 0+2, 1+3) |
 | v1 | 4 | `/v2` → 404; `/v1` `fetch_info` with 4 entries | 1 each |
@@ -140,7 +140,7 @@ named in each row is that variant's log.
 | **c** https/https, `SSL_CERT_FILE` (Linux) | https | https | ✅ | (`linux-https-https-ca.jsonl`) |
 | **d** URLs expire before first use, fresh on refresh (expiry 20 s, first answer delayed 25 s) | http | http | ✅ in 31.3 s | 4× 403 → 1 reconstruction refresh → 4× 206 (`d-expired-once.jsonl`) |
 | **d** every URL already expired (expiry 1 s, every answer delayed 3 s) | http | http | ❌ after 165.9 s | 22 GETs → 403, 16 refreshes |
-| **d** URL expires mid-transfer (curl, not `hf_xet`) | – | – | ✅ | 5 s URL; transfer throttled to 1.5 MB/s → 206, all 14737813 bytes in 9.6 s |
+| **d** URL expires mid-transfer (curl, not `hf_xet`) | n/a | n/a | ✅ | 5 s URL; transfer throttled to 1.5 MB/s → 206, all 14737813 bytes in 9.6 s |
 
 Verbatim errors:
 
@@ -189,7 +189,7 @@ only the first answer delayed. It also failed, because the refreshed URLs
 expired too (observed). The reasons, from source and measurement:
 - On a 403, `hf_xet` refreshes **before** it sleeps
   (`remote_client.rs:633-638`). It then sleeps a pre-jitter 3, 9, 27, 81
-  and 243 s for attempts 1–5, each capped at `retry_max_duration` (6 min).
+  and 243 s for attempts 1 to 5, each capped at `retry_max_duration` (6 min).
   Jitter only shortens a sleep (`retry_wrapper.rs:272`, `485-497`; the
   upstream test `test_exponential_retry_strategy` pins 3/9/27/81/243 s).
 - The VM clock ran about 2 s ahead of the host (measured).

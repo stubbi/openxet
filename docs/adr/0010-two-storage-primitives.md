@@ -51,7 +51,7 @@ recorded by S3 (`compat/fixtures/hub/`):
   (fixtures `05-create-model-exists-conflict` and
   `06-create-model-exist-ok`). `create_repo(exist_ok=True)` swallows a
   `409` and returns `RepoUrl` from the body's `url`; with
-  `exist_ok=False` it raises (`hf_api.py` lines 4703–4723).
+  `exist_ok=False` it raises (`hf_api.py` lines 4703 to 4723).
 - Storage Buckets have their own API: `/api/buckets/{namespace}/{name}`
   for create, info and settings, `/api/buckets/{id}/tree`,
   `/paths-info` and `/batch`, downloads from
@@ -76,7 +76,7 @@ and then that labels are generic, not a fixed set.
 3. **Labels are generic.** Repositories and buckets carry free-form,
    owner-defined labels: none, one or several, such as `model`,
    `dataset`, `checkpoint` or `eval-logs`.
-   - A label is a lowercase slug (`a`–`z`, `0`–`9` and `-`) of at most
+   - A label is a lowercase slug (`a` to `z`, `0` to `9` and `-`) of at most
      64 bytes, and an object carries at most 32.
    - Labels can be added and removed at any time, through OpenXet's own
      API and CLI, each change with an audit entry. They never change the
@@ -104,7 +104,7 @@ and then that labels are generic, not a fixed set.
        `foo/bar` exists without the `dataset` label; add it with
        `openxet label add foo/bar dataset` (or the label API), or choose
        another name. `hf_raise_for_status` appends both to the raised
-       error's text (`utils/_http.py`, `_format`, lines 1035–1101: it
+       error's text (`utils/_http.py`, `_format`, lines 1035 to 1101: it
        reads `X-Error-Message` and the JSON `error`, deduplicates them and
        adds them after its own "Repository Not Found" text), so the hint
        reaches the user of `hf` and `huggingface_hub`.
@@ -129,7 +129,7 @@ and then that labels are generic, not a fixed set.
    `409`; for a caller who can't read the existing repository it carries
    no labels. Its `url` is the requested view's own URL
    (`{public_url}/{type prefix}{namespace}/{name}`), which `RepoUrl`
-   parses (`hf_api.py` lines 545–571).
+   parses (`hf_api.py` lines 545 to 571).
    An importer or mirror (design §10.6) that meets two Hub repositories
    of different types under one name maps the second to `{name}-{type}`
    and reports the mapping.

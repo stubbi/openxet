@@ -1,4 +1,4 @@
-# OpenXet — Design
+# OpenXet design
 
 <!-- description: The approved design: scope, architecture, security requirements, milestones and the hosted service, and the source of truth for what OpenXet builds. -->
 
@@ -937,7 +937,7 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
     `create_repo(exist_ok=True)` returns `RepoUrl(d["url"],
     endpoint=…)` (`hf_api.py` line 4723), and `RepoUrl` parses it with
     `parse_hf_uri` against the client's endpoint, raising `HfUriError`
-    on a URL it can't parse (`hf_api.py` lines 545–571); `hf upload`
+    on a URL it can't parse (`hf_api.py` lines 545 to 571); `hf upload`
     then uses its `repo_id`. So `public_url` must be the endpoint
     clients use.
 - Labels are changed through OpenXet's own API and CLI, never the Hub
@@ -1386,8 +1386,8 @@ The two storage primitives of §1
 
 **Labels**, on repositories and buckets alike, are free-form and
 owner-defined: none, one or several, such as `model`, `dataset`,
-`checkpoint` or `eval-logs`. A label is a lowercase slug (`a`–`z`,
-`0`–`9` and `-`) of at most 64 bytes, at most 32 per object. Labels are
+`checkpoint` or `eval-logs`. A label is a lowercase slug (`a` to `z`,
+`0` to `9` and `-`) of at most 64 bytes, at most 32 per object. Labels are
 added and removed through OpenXet's API and CLI, each change with an
 audit entry, and reach the object store before the change is
 acknowledged, so `reindex` restores them. They never change the address
@@ -1691,7 +1691,7 @@ lives elsewhere and OpenXet is only its LFS store; both modes are supported.
     follow-up, some honest thin pushes can be refused (ADR 0004 item 3);
     the refusal hints `git -c pack.window=0 push`, which sends no thin
     bases (over smart HTTP git ignores `--no-thin`).
-  - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
+  - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37 to 2.44
     serves `object-info` for any object, so OpenXet refuses it, along
     with `bundle-uri` and unknown commands.
   - Each request reads refs and its pack set in one database snapshot,
@@ -1761,18 +1761,18 @@ own UI and leave this role off.
 
 ## 11. Spikes (verify, don't assume)
 
-S1–S11 are answered: S1–S9 in M0, S10 and S11 for M1. S12 and S13 are
+S1 to S11 are answered: S1 to S9 in M0, S10 and S11 for M1. S12 and S13 are
 open: their measurements are a record, and their recommendations await
 the owner's decision. Each note records versions, method and what was
 observed versus inferred.
 
 - **S1** *(answered: yes, on MinIO;
-  [S1–S2](../../research/S1-S2-direct-downloads.md), ADR 0002)*: `hf_xet`
+  [S1 and S2](../../research/S1-S2-direct-downloads.md), ADR 0002)*: `hf_xet`
   downloads correctly when v2 reconstruction returns native S3 presigned
   URLs with one range per fetch entry.
 - **S2** *(answered: `http://` works for Hub, CAS and store; a private CA
   works via `SSL_CERT_FILE` on Linux but not for `hf_xet` on macOS;
-  [S1–S2](../../research/S1-S2-direct-downloads.md))*: `hf_xet` and
+  [S1 and S2](../../research/S1-S2-direct-downloads.md))*: `hf_xet` and
   `huggingface_hub` accept `http://` CAS and Hub endpoints for local dev, or
   what TLS setup the quickstart needs.
 - **S3** *(answered: 99 exchanges captured as fixtures in
@@ -1862,7 +1862,7 @@ as the "oldest" leg of the suite. M0 did not pin them. The M1 plan sets
 
 ## 12. Milestones (v1 = all of them)
 
-Release cut *(decided by the user)*: build straight through M0–M7 to `1.0`,
+Release cut *(decided by the user)*: build M0 through M7 straight to `1.0`,
 with no pause between milestones to wait for outside feedback. Real-world
 feedback takes time to arrive, so waiting on it would only stall the work.
 Until `1.0`, the compatibility suite, benchmarks and the measured
@@ -1875,7 +1875,7 @@ release of the open-source build: it runs the released build (§15).
 
 - **M0:**
   - repo, `AGENTS.md`, CI skeleton, ADR template
-  - spikes S1–S9
+  - spikes S1 to S9
 - **M1:** CAS core on SQLite with local disk and static tokens.
   - Storage-only mode passes `hf_xet` upload and download, plus the golden
     vectors.
@@ -2069,8 +2069,8 @@ schedule the specification, compatibility audit and client delivery.
 ## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
 
 openxet.com is a first-class product, not an afterthought. "Perfect" is
-measured by the same anti-goals as the open-source project: fast, effortless,
-and listening. Detailed design is its own brainstorming round (pricing, legal,
+measured by the same anti-goals as the open-source project: fast, little
+effort for the user, and acting on feedback. Detailed design is its own brainstorming round (pricing, legal,
 operations): spike S13 (draft PR #59) proposes it, and M8 (§12) delivers
 it once the owner approves pricing and positioning. These requirements are fixed now because they shape the core:
 

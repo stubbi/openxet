@@ -12,7 +12,7 @@
 
 ## Answer
 
-Yes. Everything the server needs from the M0–M2 plans is public in 1.7.0.
+Yes. Everything the server needs from the M0 to M2 plans is public in 1.7.0.
 Nothing has to be reimplemented, so this spike proposes no ADR 0002.
 
 The costs are a heavy transitive graph (`xet-runtime`), sync-only parsers

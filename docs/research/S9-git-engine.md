@@ -29,12 +29,12 @@
 - Hardware: Apple M3 (8 cores), 16 GiB RAM, macOS 15 (Darwin 24.6.0, arm64).
   MinIO ran in Docker in a dedicated colima VM (2 vCPU, 2 GiB), reached
   through colima's port forward.
-  - **The host was shared and heavily loaded:** the load average was 24–31
+  - **The host was shared and heavily loaded:** the load average was 24 to 31
     on 8 cores for the whole run, from other workloads.
   - Wall-clock numbers are therefore noisy, by more than 3x between
     identical runs.
   - Per-request CPU time and peak RSS were far more stable, typically
-    within 15–25%, with the outliers shown as ranges. They are the basis
+    within 15 to 25%, with the outliers shown as ranges. They are the basis
     of the comparison. Every table states which numbers are which.
 - Labels: **observed** means measured or run here. **Source** means read in
   code or docs, with a link or path. **Inferred** means reasoned from the
@@ -54,7 +54,7 @@ decision.
   - It ships no upload-pack, receive-pack, server transport or push.
   - Its pack generator does no delta compression and has no reachability
     bitmaps.
-  - The maintainer closed three server-side PRs in 2025–2026 and asked
+  - The maintainer closed three server-side PRs in 2025 to 2026 and asked
     that server work live in forks (see "gitoxide").
   - A gix server would be OpenXet's to write and maintain: negotiation,
     shallow, filter, sideband, report-status, push options, atomic pushes,
@@ -67,7 +67,7 @@ decision.
   - An incremental fetch of 100 commits cost git 45 ms CPU and 33 MB.
     gix cost 284 ms and 216 MB.
   - Most of git's lead comes from reachability bitmaps: without them git
-    needed 1.2–1.6 s. git also reuses deltas verbatim, and gix-pack 0.77
+    needed 1.2 to 1.6 s. git also reuses deltas verbatim, and gix-pack 0.77
     can only copy deltas that already exist in the source pack.
 - **Pushes are cheaper in-process, but the gap is cheap to close
   (observed).**
@@ -104,7 +104,7 @@ decision.
   inferred).**
   - A push publishes its pack and index to the bucket and registers it in
     the database before the ref CAS. A cold node downloads the registered
-    packs: 80 MB took 0.4–0.6 s.
+    packs: 80 MB took 0.4 to 0.6 s.
   - Each request runs on a throwaway snapshot repo. The prototype used
     `packed-refs` from the database and `objects/info/alternates` to the
     node cache. The post-review design links exactly the request's
@@ -168,7 +168,7 @@ with one of three engines, behind the same storage layer:
     local HTTP call. The server publishes the pack, runs the CAS, writes
     the ref log and answers `ok` or `ng <reason>`.
     - A first version had the hook publish to S3 itself. Building a fresh
-      S3 client per push cost 130–210 ms (observed), so the delegation
+      S3 client per push cost 130 to 210 ms (observed), so the delegation
       stayed.
 - **`gix` engine (candidate 1).** Everything is in-process:
   - protocol v2 capability advertisement, `ls-refs` from the database, and
@@ -285,14 +285,14 @@ and discarding the pack.
 |---|---|---|---|---|---|
 | Full clone | git (bitmap) | 498 / 373 | **178** | **89** | 72.75 MB |
 | Full clone | gix | 6,529 / 5,296 | 2,859 | 178 | 76.93 MB |
-| Full clone | git, `pack.useBitmaps=false` (4 runs) | 7,003–14,027 | 1,200–1,620 | 216 | 72.75 MB |
+| Full clone | git, `pack.useBitmaps=false` (4 runs) | 7,003 to 14,027 | 1,200 to 1,620 | 216 | 72.75 MB |
 | Fetch 100 commits (thin) | git | 127 / 96 | **45** | **33** | 1.72 MB |
 | Fetch 100 commits (thin) | gix | 688 / 538 | 284 | 216 | 1.76 MB |
 
 gix phase timings for a full clone (observed, from the server log):
-- commit walk: 0.65–1.35 s
-- object counting: 4.1–5.9 s
-- entry generation and write: 3.5–16.4 s, depending on load
+- commit walk: 0.65 to 1.35 s
+- object counting: 4.1 to 5.9 s
+- entry generation and write: 3.5 to 16.4 s, depending on load
 
 ### Server only: git, go-git and JGit over stdio on `tf10k` (observed, 3 runs, medians)
 
@@ -304,9 +304,9 @@ RSS cover the whole server process tree. Wall time includes the client's
 
 | Request | Engine | Server CPU s | Peak RSS MB | Server wall s | Bytes in client pack |
 |---|---|---|---|---|---|
-| Full clone | git 2.39.5 | **0.17** (0.13–0.19) | **76** | 7.1 (6.2–8.8) | 72,735,829 |
-| Full clone | JGit 7.8 (includes 1.6–2.0 s JVM start-up) | 2.73 (2.29–5.56) | 180 | 4.6 (4.0–5.1) | 72,735,829 (identical: pack reuse) |
-| Full clone | go-git v6.0.0-beta.1 | 116.7 (108–140) | 654 | 209 (135–382) | 71,403,722 (recomputed deltas) |
+| Full clone | git 2.39.5 | **0.17** (0.13 to 0.19) | **76** | 7.1 (6.2 to 8.8) | 72,735,829 |
+| Full clone | JGit 7.8 (includes 1.6 to 2.0 s JVM start-up) | 2.73 (2.29 to 5.56) | 180 | 4.6 (4.0 to 5.1) | 72,735,829 (identical: pack reuse) |
+| Full clone | go-git v6.0.0-beta.1 | 116.7 (108 to 140) | 654 | 209 (135 to 382) | 71,403,722 (recomputed deltas) |
 | Fetch 100 commits | git | **0.03** | **32** | 0.16 | n/a (see below) |
 | Fetch 100 commits | JGit (includes JVM start-up) | 2.18 | 177 | 1.2 | n/a |
 | Fetch 100 commits | go-git | 7.42 | 232 | 9.9 | n/a |
@@ -315,9 +315,9 @@ RSS cover the whole server process tree. Wall time includes the client's
 - Fetch sizes aren't comparable here: each run's client base pack is
   rewritten by its own `gc`. The HTTP server-only table above has git's
   fetch size.
-- **JGit:** subtracting its measured JVM start-up (1.6–2.0 s CPU, about
-  77 MB) leaves roughly 0.7–1.1 s for a full clone and 0.2–0.5 s for a
-  fetch in a warm sidecar (inferred). That is 4–6x git's CPU and twice its
+- **JGit:** subtracting its measured JVM start-up (1.6 to 2.0 s CPU, about
+  77 MB) leaves roughly 0.7 to 1.1 s for a full clone and 0.2 to 0.5 s for a
+  fetch in a warm sidecar (inferred). That is 4 to 6x git's CPU and twice its
   memory, but in the same class.
 - **go-git** recomputes every delta and has no bitmaps. It is 700x git's
   CPU for a clone and not viable as a server for repos of this size.
@@ -333,10 +333,10 @@ above. The CPU and RSS columns are the comparison.
 | Operation | git: client ms | git: server CPU ms | git: peak RSS MB (server / child) | gix: client ms | gix: server CPU ms | gix: peak RSS MB |
 |---|---|---|---|---|---|---|
 | Clone, cold node (hydrates 80 MB first) | 3,687 | 271 | 176 / 85 | 60,250 | 3,368 | 180 |
-| Clone, warm node | 6,415 (2,742–8,783) | 185 | 23 / 85 | 32,848 (21,532–73,826) | 3,264 | 175 |
-| Fetch 100 commits | 661 | 83 | 17 / 32 | 7,249 (799–8,830) | 333 | 219 |
+| Clone, warm node | 6,415 (2,742 to 8,783) | 185 | 23 / 85 | 32,848 (21,532 to 73,826) | 3,264 | 175 |
+| Fetch 100 commits | 661 | 83 | 17 / 32 | 7,249 (799 to 8,830) | 333 | 219 |
 | No-op fetch | 168 | 38 | 16 / 5 | 83 | 0.9 | 16 |
-| Push 1 commit | 1,000 (277–1,588) | 120 | 17 / 26 | 460 | 13 | 17 |
+| Push 1 commit | 1,000 (277 to 1,588) | 120 | 17 / 26 | 460 | 13 | 17 |
 | Push whole history (218,574 objects) to empty repo | 43,129 | 6,301 | 231 / 129 | 62,155 | 7,388 | 239 |
 
 The H1+ hybrid on `tf10k` (git for `fetch` and receive-pack; capabilities
@@ -346,9 +346,9 @@ and `ls-refs` in-process; 3 runs, medians, same conditions):
 
 | Operation | client ms | server CPU ms | peak RSS MB (server / child) |
 |---|---|---|---|
-| Clone, cold node (hydrates 80 MB in 13 packs: 0.6–1.3 s) | 8,485 | 307 | 173 / 79 |
+| Clone, cold node (hydrates 80 MB in 13 packs: 0.6 to 1.3 s) | 8,485 | 307 | 173 / 79 |
 | Clone, warm node | 6,436 | 169 | 20 / 79 |
-| Fetch 100 commits | 1,554 (604–1,960) | 47 | 16 / 33 |
+| Fetch 100 commits | 1,554 (604 to 1,960) | 47 | 16 / 33 |
 | No-op fetch | 136 | **1.1** (git engine: 38) | 15 / 4 |
 | Push 1 commit | 226 | 102 | 17 / 27 |
 | Push whole history to empty repo | 17,337 | 5,804 | 235 / 187 |
@@ -413,11 +413,11 @@ database and bucket. The repo is the LFS-pointer history.
 
 | Operation | Result |
 |---|---|
-| Cold node, `tf10k`: download 80.2 MB (1 pack + idx + bitmap) | 385–573 ms. 3.9–7.9 s while the gix benchmark loaded the host and MinIO's 2-vCPU VM. |
-| Cold node, `lfs`: 0.63 MB in 15–21 packs | 86–644 ms |
+| Cold node, `tf10k`: download 80.2 MB (1 pack + idx + bitmap) | 385 to 573 ms. 3.9 to 7.9 s while the gix benchmark loaded the host and MinIO's 2-vCPU VM. |
+| Cold node, `lfs`: 0.63 MB in 15 to 21 packs | 86 to 644 ms |
 | Full `git repack -adb` of 19 packs (`tf10k` after the benchmark pushes) | 1.13 s wall, 1.10 s CPU, 281 MB peak RSS (all child processes counted) |
 | `git repack --geometric=2 -d --write-midx --write-bitmap-index`, same input | 0.69 s wall, 0.62 s CPU, 243 MB peak RSS. The 72.7 MB base pack is untouched. 18 small packs merge into one 5 KB pack, plus a 7.0 MB `multi-pack-index` and a 1.3 MB MIDX bitmap; those three files are what goes back to the bucket. |
-| Full clone served through `objects/info/alternates` with the bitmap in the alternate | 178 ms CPU, the same as a local bitmap. Without bitmaps it took 1.2–1.6 s, so the alternate's bitmap is used. |
+| Full clone served through `objects/info/alternates` with the bitmap in the alternate | 178 ms CPU, the same as a local bitmap. Without bitmaps it took 1.2 to 1.6 s, so the alternate's bitmap is used. |
 
 ## Bucket-backed packs and stateless nodes
 
@@ -585,7 +585,7 @@ These came out of the review rounds after the spike. They are binding
 through ADR 0004.
 
 1. **Upload-pack serves any object in the odb (source).**
-   - git v2.39.5 `upload-pack.c`, `parse_want` (lines 1413–1442), only
+   - git v2.39.5 `upload-pack.c`, `parse_want` (lines 1413 to 1442), only
      checks that the wanted object parses. Objects from alternates
      count.
    - The v0/v1 `allowAnySHA1InWant` and `allowReachableSHA1InWant`
@@ -635,7 +635,7 @@ through ADR 0004.
      enforces reachability.
    - **v2 command allowlist (source: git `serve.c`, tags v2.37.0 to
      v2.51.0).**
-     - git 2.37–2.44 advertises and serves `object-info` unconditionally
+     - git 2.37 to 2.44 advertises and serves `object-info` unconditionally
        (`always_advertise`). It returns the size of any OID in the odb,
        with no reachability check.
      - From 2.45, `object-info` is gated by `transfer.advertiseObjectInfo`
@@ -665,7 +665,7 @@ through ADR 0004.
        low-entropy content can be confirmed this way.
      - a refused push may reveal, by stage or timing, whether a named
        object exists. This is existence only.
-2. **Pack states** (inferred). See "Bucket-backed packs", items 1–3.
+2. **Pack states** (inferred). See "Bucket-backed packs", items 1 to 3.
    - `pending`, then `committed` in the CAS transaction, and only while
      the row is still `pending`
    - `lost`, on a failed CAS
@@ -713,7 +713,7 @@ Columns per the task brief. Each cell says how it is known.
 | **1. gix 0.90 in-process** | No upload-pack, receive-pack, server transport or push. Pack indexing yes; pack generation without delta compression or bitmaps (source, table above). | Full clone 16x and fetch 6x git's server CPU; server wall ratios were similar but are indicative only. Push faster (observed). | 16x CPU and 2x RSS on clone; 9x less CPU on small pushes (observed). | Correct: 60/60 rounds (observed), because CAS is in the database. | Good: in-process odb over the node cache. Repack would need delta compression we would write (source, inferred). | MIT/Apache-2.0: none. | Best: pure Rust, in-process. | Active, about 1 human maintainer. Server work is explicitly kept out of upstream (source). |
 | **2. git binary** (`upload-pack` / `receive-pack --stateless-rpc` on a snapshot repo) | Everything: v0/v1/v2, shallow, partial clone, bitmaps, MIDX, `fsckObjects`, `proc-receive`, quarantine (source: git docs). | Fastest reads; push about 0.2 s server wall (observed). | Lowest on reads: 178 ms / 89 MB for a full clone (observed). About 120 ms CPU per small push, all spawns (observed). | Correct: 60/60 rounds through `proc-receive` (observed). | Good: the prototype used alternates to the node cache, with packs published by OpenXet (observed). Production links committed pack sets (ADR 0004). | GPL-2.0-only, run as a separate program. Images ship git unmodified from a distro package with its source available (source, inferred). | A runtime dependency: OpenXet spawns `git`. Needs git ≥ 2.37: 2.29 for `proc-receive`, 2.34 for MIDX bitmaps and 2.37 for cruft packs (source: RelNotes). | The reference implementation, with a broad maintainer base. Gitea, Soft Serve and Gitaly all spawn it (source, rows 6 and 9). |
 | **3. libgit2 / `git2` 0.21** | No server transports. Every `upload-pack` hit in libgit2 is a client transport (`src/libgit2/transports/*`). Has `git_packbuilder` (delta), `git_indexer`, custom `odb_backend.h` and `refdb_backend.h` (source, libgit2 1.9.7). | Not measured: a server would have to be written on top, as with gix. | Not measured. | Would depend on our code. | Custom odb/refdb backends map onto a bucket and DB, but pack-level object access through a custom odb is slow (inferred). | GPL-2.0 with linking exception: static linking allowed (source: `COPYING`). | C dependency through `git2`; no protocol layer. | Mature; effectively one core maintainer (ethomson 276 commits in the last year, next contributor 26; source). |
-| **4. JGit with DFS** | Complete server: `UploadPack` (v2), `ReceivePack`, bitmaps, reftable. `internal.storage.dfs` (`DfsObjDatabase`, `DfsReftableDatabase`, `DfsGarbageCollector`, `DfsPackCompactor`, `DfsMidxWriter`) is built for packs on a distributed store (source, JGit 7.8). Google's hosted Gerrit is widely reported to run on it (inferred; not re-verified here). | See the stdio table. JVM start-up alone is 1.6–2.0 s CPU and about 77 MB (observed). | As above. | `DfsReftableDatabase` gives atomic batch ref updates; we would plug our DB in (source, inferred). | Best design fit: DFS **is** bucket-backed packs with a block cache and stateless servers. The package is `internal`, with no API stability promise (source). | EDL-1.0 (BSD-3-style): none. | A JVM sidecar: second runtime, process, memory floor and deployable. Breaks "one binary" (design §5.1). | Mature (Eclipse, Gerrit, Google); a small core (msohn 289, ifradeo 125, davido 47 commits in a year, source). |
+| **4. JGit with DFS** | Complete server: `UploadPack` (v2), `ReceivePack`, bitmaps, reftable. `internal.storage.dfs` (`DfsObjDatabase`, `DfsReftableDatabase`, `DfsGarbageCollector`, `DfsPackCompactor`, `DfsMidxWriter`) is built for packs on a distributed store (source, JGit 7.8). Google's hosted Gerrit is widely reported to run on it (inferred; not re-verified here). | See the stdio table. JVM start-up alone is 1.6 to 2.0 s CPU and about 77 MB (observed). | As above. | `DfsReftableDatabase` gives atomic batch ref updates; we would plug our DB in (source, inferred). | Best design fit: DFS **is** bucket-backed packs with a block cache and stateless servers. The package is `internal`, with no API stability promise (source). | EDL-1.0 (BSD-3-style): none. | A JVM sidecar: second runtime, process, memory floor and deployable. Breaks "one binary" (design §5.1). | Mature (Eclipse, Gerrit, Google); a small core (msohn 289, ifradeo 125, davido 47 commits in a year, source). |
 | **5. go-git v6** | `v6.0.0-beta.1` (2026-10-04) has server-side `UploadPack` (v0/v1/v2) and `ReceivePack` and a smart-HTTP `backend`. TODOs on `main` in `plumbing/transport/upload_pack.go`: thin-pack and shallow-file unsupported. No bitmaps (no `bitmap` file in the tree). Storage via the `storage.Storer` interface (source). | See the stdio table. | As above. | Would depend on our code. | `Storer` could be backed by bucket and DB, but per-object access through it is slow (inferred). | Apache-2.0: none. | A Go sidecar. | v5 stable; v6 is beta. pjbgf 558, hiddeco 237 commits in a year (source). |
 | **6. Gitaly** | A gRPC service around the git binary (`git cat-file --batch`, a pack-objects cache wrapping `git pack-objects`), source: GitLab docs. | Not measured: it is git underneath. | git's, plus a Go service. | Its own: Praefect with PostgreSQL. | Poor: repos live on local disks (`storage` path), not object storage. HA through Praefect replication (source: README, docs). | MIT. | A Go service plus Praefect and PostgreSQL. | Mature, GitLab staff. **Use as a reference architecture:** git binary, a pack-objects cache, and service-owned replication. |
 | **7. Mononoke (Sapling)** | `eden/mononoke/servers/git/git_server`: protocol v2 `fetch`, `ls_refs`, `push` in Rust, built on `gix-pack` 0.74, `gix-object` and `gix-hash`, with S3 and SQLite backends (source). | Not measured. | Not measured. | Its own bookmarks service. | Built for blobstore-backed storage, but the OSS build "omits some functions" and has no configuration docs (source: README). | **GPL-2.0-or-later**: can't be linked into Apache-2.0 OpenXet; a sidecar would be its own GPL deployable. | A huge Rust monorepo: Buck/autocargo, Thrift omitted in OSS. | Meta-maintained, but not for external use. **Use as a reference:** it proves a gix-primitives server over object storage is possible at scale, with a large team. |

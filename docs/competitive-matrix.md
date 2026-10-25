@@ -138,25 +138,25 @@ which contains every other Taytay branch (`dedup-*`, `multi-client-tests`,
 `git-lfs-bridge`, `signed-xorb-urls`). Native `go build` (Go 1.27.1).
 Clients: `huggingface_hub` 2.2.0, `hf_xet` 1.7.0, git 2.39.5, `git-lfs`
 3.5.1, `git-xet` 0.2.1. Taytay was re-run on checks 5, 8 and 10, with spot
-checks of 2, 6 and 9; "–" means not re-run.
+checks of 2, 6 and 9; the other checks read "not re-run".
 
 | Check | guilt main | Taytay | Evidence |
 |---|---|---|---|
-| Setup | PARTIAL | – | 51 s build, first `hf upload` ~2.5 min after clone. A folder with `README.md` fails (`/api/validate-yaml` is a plain-text 404). The README's description of `HF_TOKEN` doesn't match the server's behaviour |
+| Setup | PARTIAL | not re-run | 51 s build, first `hf upload` ~2.5 min after clone. A folder with `README.md` fails (`/api/validate-yaml` is a plain-text 404). The README's description of `HF_TOKEN` doesn't match the server's behaviour |
 | `hf auth whoami` | FAIL | FAIL | `404 Not Found` on `/api/whoami-v2` |
-| `hf upload` over Xet | PASS | – | Server log: 5 xorb POSTs, then `/v1/shards` after a `/v2/shards` 404 |
-| `hf download` and `resolve` headers | PARTIAL | – | sha256 matches. HEAD returns 200 with `X-Xet-Hash`, `X-Repo-Commit`, `X-Linked-Size`, `X-Linked-Etag`, but no `xet-auth` link; plain GET is `501 direct GET not supported` |
+| `hf upload` over Xet | PASS | not re-run | Server log: 5 xorb POSTs, then `/v1/shards` after a `/v2/shards` 404 |
+| `hf download` and `resolve` headers | PARTIAL | not re-run | sha256 matches. HEAD returns 200 with `X-Xet-Hash`, `X-Repo-Commit`, `X-Linked-Size`, `X-Linked-Etag`, but no `xet-auth` link; plain GET is `501 direct GET not supported` |
 | Downloads with no extra headers | PARTIAL | PASS | Main: stock `hf_xet` downloads with no extra headers with auth off; with auth on, every transfer gets 401. Taytay: a full `hf` round trip works with auth on, with no extra headers |
 | Range | FAIL | FAIL | `resolve` with Range is 501; a 1000-byte reconstruction range returns ~67 MB |
-| Dedup, same machine | PASS | – | A 1 MB edit sends one 1,046,210 B xorb; an identical copy sends 0 xorbs |
+| Dedup, same machine | PASS | not re-run | A 1 MB edit sends one 1,046,210 B xorb; an identical copy sends 0 xorbs |
 | Dedup, second machine (bytes sent) | FAIL | PASS | Main: every `/v1/chunks/default/<h>` is `400 unsupported chunk-dedup prefix`; 300,037,856 B re-sent. Taytay: answers on `default`; 1,130,754 B sent for the 1 MB edit |
 | Python API | FAIL | FAIL | `list_repo_tree` and branch upload pass; `paths-info`, refs, commits, tag, `model_info` and download at an older SHA 404. A new branch starts empty instead of from main; `create_commit` with a delete answers 200 but the file stays |
 | Git | FAIL | PARTIAL | Main: the LFS batch answers `{"transfer":"xet"}` with no actions even to plain `git-lfs`, so `git push` exits 0 having uploaded nothing (silent data loss); pull fails. Taytay: `git-xet` push of 300 MB and `git-lfs` pull, sha256 match, exactly `X-Xet-Cas-Url`, `X-Xet-Access-Token`, `X-Xet-Token-Expiration` (epoch), absolute `href`; plain `git-lfs` push gets a clear `422 … install git-xet` |
-| 1 GiB incompressible | PASS | – | Accepted, no 413 |
-| SIGKILL | FAIL | – | Mid-upload kill recovers on retry. Acknowledged commits are lost after SIGKILL within the 1-minute snapshot window (`tree` is `[]`) |
+| 1 GiB incompressible | PASS | not re-run | Accepted, no 413 |
+| SIGKILL | FAIL | not re-run | Mid-upload kill recovers on retry. Acknowledged commits are lost after SIGKILL within the 1-minute snapshot window (`tree` is `[]`) |
 | Integrity tool | N/A | N/A | None |
-| Storage overhead | PARTIAL | – | +7% over unique data (L13 allows ≤ 5%), all from the failed cross-machine dedup re-sending the file; ~0 on one machine; no per-chunk copies |
-| Throughput (1 GiB, local) | PASS | – | Upload ~50 MB/s, download ~182 MB/s, peak RSS 55 MiB |
+| Storage overhead | PARTIAL | not re-run | +7% over unique data (L13 allows ≤ 5%), all from the failed cross-machine dedup re-sending the file; ~0 on one machine; no per-chunk copies |
+| Throughput (1 GiB, local) | PASS | not re-run | Upload ~50 MB/s, download ~182 MB/s, peak RSS 55 MiB |
 | Code | Info | Info | Go reimplementation with one dependency; reference tests replay 3 captured `hf_xet` binaries; 686 tests pass; the real-`hf` integration test skips without pipenv |
 | Maintenance | Single-maintainer | Single-maintainer | guilt: 16 commits, 1 author, last push 2026-09-16. Taytay: 7 PRs open inside the fork, last push 2026-09-16 |
 
@@ -188,7 +188,7 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 |---|---|---|---|---|---|
 | 1 Setup from README (L14) | FAIL | PARTIAL | FAIL | PARTIAL | NOT RUN |
 | 2 `whoami` (L2) | FAIL | N/A | PASS | FAIL | FAIL |
-| 3 `hf upload` uses Xet (L1, L16–L18) | FAIL | FAIL (`hf_xet` 1.7.0) | FAIL | PASS | NOT RUN |
+| 3 `hf upload` uses Xet (L1, L16 to L18) | FAIL | FAIL (`hf_xet` 1.7.0) | FAIL | PASS | NOT RUN |
 | 4 `hf download`, `resolve` headers (L3) | FAIL | N/A | PARTIAL | PARTIAL | NOT RUN |
 | 5 Downloads with no extra headers (L4, function only) | FAIL | PASS | FAIL | PARTIAL | PASS |
 | 6 Range (L5) | FAIL | FAIL | FAIL | FAIL | FAIL |
@@ -227,7 +227,7 @@ each figure below; the others cite the test that asserts them.
 |---|---|---|
 | 1 Setup from README (L14) | PARTIAL (storage only; `hf upload` via the Hub API in M2) | README → [quickstart](quickstart-storage-only.md): 1 min 43 s from `cargo install` with an empty Cargo cache to the first upload with `hf_xet` (99 s build, 3 s `pip install hf_xet`, 0.5 s for the walkthrough), measured by hand. CI runs the walkthrough on every PR. L14's `hf upload` of a ≥ 1 GiB file needs the Hub API |
 | 2 `whoami` (L2) | M2 | No Hub API yet |
-| 3 `hf upload` uses Xet (L1, L16–L18) | M2 | Stock `hf_xet` uploads over Xet already (checks 5–8, 11); `hf upload` needs the Hub API |
+| 3 `hf upload` uses Xet (L1, L16 to L18) | M2 | Stock `hf_xet` uploads over Xet already (checks 5 to 8, 11); `hf upload` needs the Hub API |
 | 4 `hf download`, `resolve` headers (L3) | M2 | No Hub API yet |
 | 5 Downloads with no extra headers (L4, function only) | PASS | `hf_xet` 1.7.0 downloads with auth on and no extra headers: every data URL is signed for one byte range (`compat/tests/test_storage_only.py`) |
 | 6 Range (L5) | PASS (reconstruction) | A 1000-byte range in the middle of the 1 GiB file plans one or two chunks: 13,743 to 131,080 bytes to fetch over three runs. A 300 MiB download is planned in two or more ranged blocks (`test_range_and_empty_file`). Range on `resolve`: M2 |

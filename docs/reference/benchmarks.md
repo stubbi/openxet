@@ -54,10 +54,10 @@ p50 / p99 in ms:
 
 | Shape | Start (local) | Before threads (CI Linux) | All writers (CI Linux) | All writers (CI macOS) | Half the free permits (CI Linux, slow runner) | Now (local) | Now (CI Linux, 10 runs) |
 |---|---|---|---|---|---|---|---|
-| unmerged full | 246 / 679 | 66.2 / 73.6 | 24.8 / 28.2 | 57.5 / 90.3 | 43.7 / 53.1 | 17.4 / 20.4 | **14.4–26.8 / 16.4–29.6** |
-| unmerged range | 74 / 486 | 25.3 / 59.8 | 14.7 / 23.8 | 31.1 / 70.3 | 21.5 / 40.3 | 7.6 / 15.4 | **5.4–9.2 / 12.3–22.6** |
-| merged full | 50 / 93 | 19.7 / 25.9 | 13.2 / 15.7 | 23.7 / 32.8 | 19.3 / 26.2 | 6.5 / 8.6 | **4.0–7.8 / 4.3–8.8** |
-| merged range | 14 / 42 | 7.7 / 18.7 | 5.2 / 12.6 | 10.1 / 23.0 | 7.9 / 19.6 | 4.2 / 7.0 | **2.6–4.4 / 3.9–7.0** |
+| unmerged full | 246 / 679 | 66.2 / 73.6 | 24.8 / 28.2 | 57.5 / 90.3 | 43.7 / 53.1 | 17.4 / 20.4 | **14.4 to 26.8 / 16.4 to 29.6** |
+| unmerged range | 74 / 486 | 25.3 / 59.8 | 14.7 / 23.8 | 31.1 / 70.3 | 21.5 / 40.3 | 7.6 / 15.4 | **5.4 to 9.2 / 12.3 to 22.6** |
+| merged full | 50 / 93 | 19.7 / 25.9 | 13.2 / 15.7 | 23.7 / 32.8 | 19.3 / 26.2 | 6.5 / 8.6 | **4.0 to 7.8 / 4.3 to 8.8** |
+| merged range | 14 / 42 | 7.7 / 18.7 | 5.2 / 12.6 | 10.1 / 23.0 | 7.9 / 19.6 | 4.2 / 7.0 | **2.6 to 4.4 / 3.9 to 7.0** |
 
 - "Start" is the gate against the code before this work.
 - "Before threads" is CI with every change up to the writer threads, so
@@ -107,7 +107,7 @@ a regression. Locally the test asserts p99 < 50 ms, as it always has.
 A shared runner can be slow enough to miss 50 ms with nothing changed. On
 2026-10-25 the `rust` job of PR #82, which changes nothing the gate
 compiles, failed on all twelve attempts of one CI run (issue #83). The
-first three logged `unmerged full` at p50 40–48 / p99 58–68 ms on an AMD
+first three logged `unmerged full` at p50 40 to 48 / p99 58 to 68 ms on an AMD
 EPYC 7763 and an Intel Xeon 6973P-C, and the twelfth p50 39.7 / p99
 61.0 ms on an AMD EPYC 9V74, the other shapes within their usual range. A
 re-run of PR #81's merged job, which had passed at p50 30.7 / p99 34.2 ms
@@ -286,7 +286,7 @@ SQLite index on the local SSD, with the semaphore at each size:
 |---|---|---|---|---|---|---|---|---|
 | Shards/s, before `fullfsync` (Task 16, quieter host) | 151 | 193 | 172 | 196 | 220 | 202 | 217 | 219 |
 | Shards/s, before `fullfsync` (rerun, load 7 to 25) | 52 | 61 | 48 | 95 | 111 | 115 | 119 | 126 |
-| Shards/s, with `fullfsync` (same load) | 18–57 | 51–61 | 58–66 | 59–62 | 72–73 | 67–77 | 79–85 | 78–87 |
+| Shards/s, with `fullfsync` (same load) | 18 to 57 | 51 to 61 | 58 to 66 | 59 to 62 | 72 to 73 | 67 to 77 | 79 to 85 | 78 to 87 |
 | Shards/s, also writing the registration record and taking its number (M1-R37; load 13 to 17) | 48 | 47 | 59 | 68 | 70 | 72 | 64 | 59 |
 
 The two rows taken under load ran back to back, minutes apart, with only
@@ -326,13 +326,13 @@ pragma:
 
 | | Sequential, per pair | Sequential pairs/s | Concurrent pairs/s |
 |---|---|---|---|
-| `synchronous=FULL` | 0.38–0.43 ms | 2,319–2,610 | 2,421–2,563 |
-| plus `fullfsync=ON` | 8.5–15 ms | 66–118 | 71–119 |
+| `synchronous=FULL` | 0.38 to 0.43 ms | 2,319 to 2,610 | 2,421 to 2,563 |
+| plus `fullfsync=ON` | 8.5 to 15 ms | 66 to 118 | 71 to 119 |
 
 One further round with the pragma took 73 ms per pair while another build
-saturated the disk. Each durable index commit costs about 4–7 ms more
-with `F_FULLFSYNC`, and whole shard commits fall from about 115–126 to
-about 70–87 per second (table above). Durability of an acknowledged write
+saturated the disk. Each durable index commit costs about 4 to 7 ms more
+with `F_FULLFSYNC`, and whole shard commits fall from about 115 to 126 to
+about 70 to 87 per second (table above). Durability of an acknowledged write
 (design §5.9 req 7) comes first.
 
 ## Memory bounds

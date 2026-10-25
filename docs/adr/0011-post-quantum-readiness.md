@@ -85,7 +85,7 @@ adequate. Changing them would also break protocol exactness
 2. **SSH.** M4's SSH server offers `mlkem768x25519-sha256` first, then
    `curve25519-sha256`. `russh` 0.64.1 supports this; if M4 chooses it,
    its order is pinned explicitly. Whether to add
-   `sntrup761x25519-sha512` for OpenSSH 9.0–9.8 clients is decided in the
+   `sntrup761x25519-sha512` for OpenSSH 9.0 to 9.8 clients is decided in the
    M4 plan (issue #67, M4).
 3. **Tokens stay Ed25519 for now, with agile verification.** Each key in
    the key set is bound to one `alg`. A token is accepted only if its

@@ -2,7 +2,7 @@
 
 <!-- description: What a pull-through mirror of huggingface.co must serve, and how it ingests upstream data. -->
 
-- Date: 2026-10-23. Probes ran 07:05–07:10 UTC; legal texts were fetched
+- Date: 2026-10-23. Probes ran 07:05 to 07:10 UTC; legal texts were fetched
   at 07:07 UTC.
 - Clients: `huggingface_hub` 2.2.0 and `hf_xet` 1.7.0, the versions pinned
   in `compat/`. Source citations are to the installed `huggingface_hub`
@@ -95,7 +95,7 @@ Probed with a stdlib Python client against the public dataset
 | `user_id` in URLs | `public` for anonymous tokens; the **token owner's user id** for the private repo. |
 | `xip` | `xip` enforcement was not tested. |
 | Bytes | The CDN range for the reference CSV is byte-identical to the first 14737813 bytes of `testdata/xet-spec-reference/eea25d6e….xorb`. `reference_file_hash_matches` (`crates/protocol/tests/reference_files.rs`) recomputes `118a5332…`, the `X-Xet-Hash`, from those chunks. |
-| Shared xorbs | The private 10528-byte file uses chunks 0–1 (bytes 0–1727) of a 22598282-byte xorb. `gpt2/model.safetensors` has 9 terms over 9 xorbs, one range per URL. |
+| Shared xorbs | The private 10528-byte file uses chunks 0 to 1 (bytes 0 to 1727) of a 22598282-byte xorb. `gpt2/model.safetensors` has 9 terms over 9 xorbs, one range per URL. |
 | `HEAD /v1/files/{hash}` | `200`, `Content-Length` = file size |
 | `GET /v2/file-chunk-hashes/{hash}` | Needs `X-Range-Dirty`. With `bytes=1000000-1999999`: `200 {totalChunks, fileSize, windows:[{dirtyByteRange:[987576,2327521]}], hashRanges:[2 subtrees], gapVerification:[]}`. |
 | `GET /v1/chunks/default-merkledb/{hash}` with a read token | `404` |

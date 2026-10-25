@@ -520,7 +520,7 @@ Fixture: `03-whoami-cli--01-…`.
 | Status | Body / headers seen | Client behaviour (source) |
 |---|---|---|
 | 3xx | `Location` | Never raised (`utils/_http.py:868`). Followed for on-Hub targets (`utils/_http.py:776`). |
-| 400 | — | `BadRequestError`, naming the endpoint (`utils/_http.py:955`) |
+| 400 | none | `BadRequestError`, naming the endpoint (`utils/_http.py:955`) |
 | 401 | `{"error":"Invalid username or password."}`, `WWW-Authenticate: Bearer realm=…` | `RepositoryNotFoundError` on repo URLs (`utils/_http.py:933`) |
 | 403 | `{"error":"You don't have the rights …"}`, `X-Error-Message` | `HfHubHTTPError` `"403 Forbidden: <X-Error-Message>."` (`utils/_http.py:961`) |
 | 404 | `X-Error-Code: RepoNotFound` / `RevisionNotFound` / `EntryNotFound` | Typed errors (`utils/_http.py:880-933`) |
