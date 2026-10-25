@@ -2,16 +2,134 @@
 
 <!-- description: Teardown of 19 comparable landing pages and of Hugging Face Storage, a visitor model, the section order, opener and hero for openxet.com, and how to re-capture its terminal transcripts. -->
 
-Date: 2026-10-25. Baseline: `website/index.html` at `22e0908`. Iteration
-2 comes first below; iteration 1's research and reasoning follow as
-history, and an independent critic reviews each iteration. The
-canonical decisions land in [the design system](../design.md); this page
-keeps the evidence and the reasoning behind them.
+Date: 2026-10-25. Baseline: `website/index.html` at `22e0908`. The newest
+iteration comes first; earlier iterations follow as history, and an
+independent critic reviews each iteration. The canonical decisions land
+in [the design system](../design.md); this page keeps the evidence and the
+reasoning behind them.
 
 The owner's brief: the design language stays, but the messaging, the
 order of arguments, the opener, the hero visual and the visual alignment
 need work. Which assumptions does a visitor have at which point, where
 does the page answer each, and what is each section for?
+
+## Iteration 3: the release candidate
+
+Date: 2026-10-25. Inputs: a third independent critique and three owner
+rulings. Where this section conflicts with iterations 1 and 2 below, this
+section wins.
+
+### Owner rulings
+
+- **Brand:** OpenXet everywhere the page names the product; lowercase
+  `openxet` only for identifiers (the command, crates, `OPENXET_*`, paths,
+  schema ids, the domain and URLs).
+- **Written as launched:** the page describes the full planned product
+  (design §12) as available. Limits that stay: no invented numbers or
+  output, no logos or testimonials, and every call to action lands on what
+  works (the quickstart; the waitlist form for hosting). Recorded in
+  design.md and AGENTS.md.
+- **The Git analogy** for the opener.
+
+### Opener
+
+Tested against “what is it, and why do I care?”; line counts measured in
+Chromium with the page's fonts.
+
+| H1 | 1440 px | 375 px | Verdict |
+|---|---|---|---|
+| **Git for large files. Only the changes upload.** | 2 lines | 3 lines | **Picked.** The analogy says what it is; the second half is the contrast with Git LFS, which answers “why not LFS?” before it's asked |
+| Git for large files and datasets. Only the changes upload. | 2 lines | 4 lines | Fails the 2-line test at 375 px and tilts the page back to ML. “Datasets” moved to the subhead |
+| Git for big files and datasets. Only the changes upload. | 2 lines | 4 lines | Same |
+| Git for large files and big datasets. (no second line) | – | – | Pure analogy: reads as a Git LFS host, the confusion the contrast avoids |
+
+Pill: **OpenXet · open source · Apache 2.0** (the brand is in the first
+screen; HF keeps its name in the H1, a new name can't do that job).
+Subhead: “OpenXet is open-source Xet storage for large files and datasets,
+in repositories and buckets. `git push` and `hf upload` send only the chunks
+your server doesn't have, not the whole file as Git LFS does. Run it
+yourself or on openxet.com.”
+
+### Hero
+
+The whole hero fits the first screen at 1440×900, proof strip included (it
+ends at y ≈ 706). The long transcript is gone. A compact command card was
+allowed, but the first row (Repositories) shows the same commands one
+scroll below, so the hero has no visual, as on huggingface.co/storage; the
+proof strip takes the logo strip's place. CTAs: **Get started** (filled,
+the quickstart) and **Start on openxet.com** (outlined, the waitlist form).
+
+### One measurement everywhere
+
+The page quoted four figures for one experiment (1.2 MiB, 1.1 MiB, 1.09 MiB
+and 1,125,507 bytes). It now quotes only **1.09 MiB (1,141,116 bytes, stock
+`hf_xet` 1.7.0, empty cache)**, from `site/measurements.json`:
+
+- `compat/tests/test_storage_only.py::test_fresh_cache_edit_bytes_recorded`
+  asserts the bytes equal the fixture whenever the installed `hf_xet` is the
+  fixture's version. The input is seeded, so the figure is deterministic:
+  re-run on 2026-10-25 it gave 1,141,116 bytes again.
+- `site/test_measurements.py`, run by `scripts/build-site.sh`, checks that
+  the display matches the bytes, that the named test exists, that every
+  `x.xx MiB` on the landing page, the other pages, the social image and the
+  `llms.txt` template is the fixture's, and that the landing page names the
+  test.
+- The agent panel shows a captured `download --json` error and its
+  correction, so it carries no second transfer figure.
+
+### Sections
+
+Seven rows, a security band and tiles (the critique's map): Repositories,
+Xet, Use cases, Buckets, Self-hosting, Platforms, Agents. Compatibility,
+Hosting and FAQ rows are gone: clients are in Repositories, backends in
+Self-hosting, hosting in the hero and tiles, savings in Use cases. Rows for
+features without a measured run (Repositories, Buckets, Self-hosting,
+Platforms) show commands or diagrams only, no output. Each row's panel has
+its own hue; in dark mode elevation runs frame < panel < card (panel to
+frame about 1.2:1, borders about 1.4:1 against panels).
+
+### Pixel items from critique 3
+
+1. Proof strip off the first screen: now its bottom edge.
+2. Four numbers: one fixture (above).
+3. Rows centred, so pills floated 81–125 px below hairlines: both cells
+   share one top padding; every pill sits 56 px below its hairline at 1440 px.
+4. Dark panels invisible, inverted elevation: new panel and card tokens.
+5. and 6. Hero terminal and the python line: removed.
+7. The floating “vs”: removed; the two cards stack directly.
+8. The toggle between visual and legend: moved above the cards, the legend
+   under them.
+9. Test names wrapping mid-word: smaller chips that break only at
+   underscores.
+10. Compatibility contradicting its panel: row removed.
+11. Empty FAQ column: row removed.
+12. `0.0.0` in the terminal bar: bars now read “terminal”.
+13. Status line under the CTAs: removed.
+14. Tinted first tile: tiles are equal, each with an icon.
+
+### `llms.txt`
+
+Its run steps stay factual (agents execute them) and now say that the
+website describes the full product while the steps are what runs today. The
+generator moves the Project part (design, ADRs, research, plans) under
+`## Optional`, with a test. The `# openxet` heading belongs to the brand
+rename in `site/`.
+
+### Recommended quickstart line
+
+The quickstart (owned by the brand rename) should open with: “What runs
+today: the OpenXet storage server with Hugging Face's `hf_xet` client and the
+`openxet` command line. `git push`, `hf upload` and buckets arrive with the
+Hub API; this page is the path that works now.”
+
+### Open questions for review
+
+- “Start on openxet.com” lands on a waitlist form. It is the ruling's
+  allowed destination, but the label promises more than the page delivers.
+- The Repositories and Buckets commands are shown as working; the
+  quickstart line above is what keeps “Get started” from being a dead end.
+- Re-capture Repositories with real `git push` and `hf upload` output the
+  day M2 merges, and Buckets the day buckets do.
 
 ## Iteration 2: closer to Hugging Face Storage, generic
 

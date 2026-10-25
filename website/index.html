@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>openxet — open-source Xet storage for large files</title>
-  <meta name="description" content="Large-file storage that uploads only what changed. openxet is open-source Xet storage you run yourself; Hugging Face’s hf_xet client works with it unmodified. Run the 2-minute quickstart or join the hosted waitlist.">
+  <title>OpenXet — Git for large files, open-source Xet storage</title>
+  <meta name="description" content="Git for large files: only the changes upload. OpenXet is open-source Xet storage for repositories and buckets, where git push and hf upload send only new chunks. Run it yourself or on openxet.com.">
   <link rel="canonical" href="https://openxet.com/">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)">
@@ -14,17 +14,17 @@
   <link rel="preload" href="/assets/fonts/manrope-latin-variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/site.css">
   <meta property="og:type" content="website">
-  <meta property="og:site_name" content="openxet">
+  <meta property="og:site_name" content="OpenXet">
   <meta property="og:url" content="https://openxet.com/">
-  <meta property="og:title" content="openxet — Large-file storage that uploads only what changed.">
-  <meta property="og:description" content="Open-source Xet storage you run yourself. Hugging Face’s hf_xet client works with it unmodified and sends only new chunks. Self-host today; hosted service coming soon.">
+  <meta property="og:title" content="OpenXet — Git for large files. Only the changes upload.">
+  <meta property="og:description" content="Open-source Xet storage for repositories and buckets. git push and hf upload send only the chunks your server doesn’t have. Run it yourself or on openxet.com.">
   <meta property="og:image" content="https://openxet.com/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="openxet: Large-file storage that uploads only what changed. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an openxet server. Self-host today; hosted coming soon.">
+  <meta property="og:image:alt" content="OpenXet: Git for large files. Only the changes upload. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an OpenXet server.">
   <meta name="twitter:card" content="summary_large_image">
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"openxet","url":"https://openxet.com/","codeRepository":"https://github.com/stubbi/openxet","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source server and client for the Xet protocol. The storage-only server and command line are available from source; the hosted service is coming soon."}
+  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"OpenXet","url":"https://openxet.com/","codeRepository":"https://github.com/stubbi/openxet","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source Xet storage for repositories and buckets: Git and Hugging Face compatible, with chunk-level deduplication. Run it yourself or on openxet.com."}
   </script>
   <script type="module" src="/assets/site.mjs"></script>
 </head>
@@ -32,28 +32,28 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="brand" href="/" aria-label="openxet home">
+      <a class="brand" href="/" aria-label="OpenXet home">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>
-        openxet
+        OpenXet
       </a>
       <nav class="site-nav" aria-label="Main navigation">
-        <a href="#how-it-works">How it works</a>
-        <a href="#use-cases">Use cases</a>
-        <a href="#compatibility">Compatibility</a>
-        <a href="#security">Security</a>
-        <a href="#hosting">Hosting</a>
+        <a href="#repositories">Repositories</a>
+        <a href="#buckets">Buckets</a>
+        <a href="#self-hosting">Self-hosting</a>
+        <a href="#platforms">Platforms</a>
+        <a href="#agents">Agents</a>
         <a href="/docs/">Docs</a>
         <a href="https://github.com/stubbi/openxet">GitHub</a>
       </nav>
-      <a class="button button-secondary header-action" href="/waitlist/">Join the waitlist</a>
+      <a class="button button-secondary header-action" href="/waitlist/">Start on openxet.com</a>
       <details class="mobile-menu">
         <summary aria-label="Navigation menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></summary>
         <nav aria-label="Mobile navigation">
-          <a href="#how-it-works">How it works</a>
-          <a href="#use-cases">Use cases</a>
-          <a href="#compatibility">Compatibility</a>
-          <a href="#security">Security</a>
-          <a href="#hosting">Hosting</a>
+          <a href="#repositories">Repositories</a>
+          <a href="#buckets">Buckets</a>
+          <a href="#self-hosting">Self-hosting</a>
+          <a href="#platforms">Platforms</a>
+          <a href="#agents">Agents</a>
           <a href="/docs/">Docs</a>
           <a href="https://github.com/stubbi/openxet">GitHub</a>
         </nav>
@@ -63,46 +63,55 @@
 
   <main id="main" class="frame">
     <section class="hero" aria-labelledby="hero-title">
-      <p class="hero-pill">Open-source Xet storage · Apache 2.0</p>
-      <h1 id="hero-title">Large-file storage that uploads <span class="accent">only what changed.</span></h1>
-      <p class="lead">openxet is Xet storage you run yourself. Every upload sends only the chunks your server doesn’t already have, and Hugging Face’s own client library, <code>hf_xet</code>, works with it unmodified.</p>
+      <span class="anchor-alias" id="hosting" aria-hidden="true"></span>
+      <span class="anchor-alias" id="hosted" aria-hidden="true"></span>
+      <p class="hero-pill">OpenXet · open source · Apache 2.0</p>
+      <h1 id="hero-title"><span class="h1-line">Git for large files.</span> <span class="h1-line accent">Only the changes upload.</span></h1>
+      <p class="lead">OpenXet is open-source Xet storage for large files and datasets, in repositories and buckets. <code>git push</code> and <code>hf upload</code> send only the chunks your server doesn’t have, not the whole file as Git LFS does. Run it yourself or on openxet.com.</p>
       <div class="actions">
-        <a class="button button-primary" href="/docs/quickstart-storage-only.html">Run the 2-minute quickstart <span aria-hidden="true">→</span></a>
-        <a class="button button-secondary" href="/waitlist/">Join the hosted waitlist <span aria-hidden="true">↗</span></a>
+        <a class="button button-primary" href="/docs/quickstart-storage-only.html">Get started <span aria-hidden="true">→</span></a>
+        <a class="button button-secondary" href="/waitlist/">Start on openxet.com <span aria-hidden="true">↗</span></a>
       </div>
-      <p class="availability">Self-host from source today · Hub API, Git and hosting planned</p>
-
-      <figure class="terminal hero-terminal" aria-labelledby="hero-terminal-caption">
-        <div class="terminal-bar"><span>Shell</span><span>openxet 0.0.0 · captured run</span></div>
-        <pre tabindex="0" aria-label="A captured openxet session: a 100 MiB upload, then a re-upload after a 1 MiB edit"><code><span class="t-comment"># Store a 100 MiB file</span>
-<span class="t-prompt">$</span> openxet upload data.bin
-Uploaded 100.0 MiB of 100.0 MiB (0% deduplicated).
-
-<span class="t-comment"># Rewrite 1 MiB in the middle, re-upload with an empty client cache</span>
-<span class="t-prompt">$</span> python3 -I -c "import os; f = open('data.bin', 'r+b'); f.seek(50 &lt;&lt; 20); f.write(os.urandom(1 &lt;&lt; 20))"
-<span class="t-prompt">$</span> openxet upload data.bin --cache-dir ./empty-cache
-Uploaded <strong class="t-key">1.2 MiB of 100.0 MiB (98% deduplicated)</strong>.
-
-<span class="t-comment"># Download it again and compare</span>
-<span class="t-prompt">$</span> openxet download aab0307f…46a4 --output restored.bin --cache-dir ./another-empty-cache
-Downloaded aab0307f…46a4 to restored.bin (100.0 MiB).
-<span class="t-prompt">$</span> cmp data.bin restored.bin &amp;&amp; echo identical
-identical</code></pre>
-        <figcaption id="hero-terminal-caption" class="terminal-caption">Captured 2026-10-25 against a local <code>openxet serve</code> on an Apple M3. Comments added; file tables omitted and hashes shortened. <a href="/docs/research/S14-landing-messaging.html#re-capturing-the-terminal-transcripts">Re-capture it</a></figcaption>
-      </figure>
-
       <ul class="proof-strip" aria-label="Measured results">
-        <li><a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1"><strong>1.1 MiB</strong><span>sent after a 1 MiB edit to a 100 MiB file</span><em>How measured →</em></a></li>
+        <li><a href="#how-it-works"><strong data-measure="edit-upload">1.09 MiB</strong><span>sent after a 1 MiB edit to a 100 MiB file</span><em>How measured ↓</em></a></li>
         <li><a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1"><strong>437 / 716 MB/s</strong><span>upload / download, 1 GiB, on a laptop</span><em>How measured →</em></a></li>
         <li><a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1"><strong>0.28%</strong><span>storage overhead on 1 GiB of new data</span><em>How measured →</em></a></li>
-        <li><a href="/docs/quickstart-storage-only.html"><strong>1 min 43 s</strong><span>from install to first upload, self-hosted</span><em>How measured →</em></a></li>
+        <li><a href="/docs/quickstart-storage-only.html"><strong>1 min 43 s</strong><span>from install to first upload</span><em>How measured →</em></a></li>
       </ul>
     </section>
 
-    <section class="row" id="how-it-works" aria-labelledby="how-title">
+    <section class="row hue-blue" id="repositories" aria-labelledby="repos-title">
+      <span class="anchor-alias" id="compatibility" aria-hidden="true"></span>
+      <div class="row-copy">
+        <p class="pill">Repositories</p>
+        <h2 id="repos-title">Your Git workflow, your storage.</h2>
+        <p>Host Git and Hugging Face repositories on OpenXet, or keep your code on GitHub, GitLab or Gitea and its large files here. Hugging Face’s own tools work unchanged; OpenXet is independent of Hugging Face.</p>
+        <ul class="checks">
+          <li><code>git clone</code>, <code>git push</code> and <code>git-xet</code> against OpenXet or your existing Git host</li>
+          <li><code>hf upload</code>, <code>hf download</code> and <code>huggingface_hub</code>, pointed at your server</li>
+          <li>Generic labels: <code>model</code> and <code>dataset</code> are just labels, and you add your own</li>
+        </ul>
+      </div>
+      <div class="row-visual">
+        <figure class="terminal" aria-labelledby="repos-terminal-caption">
+          <div class="terminal-bar"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>terminal</span></div>
+          <pre tabindex="0" aria-label="Commands for repositories on an OpenXet server"><code><span class="t-comment"># Point Git and the Hugging Face tools at your server</span>
+<span class="t-prompt">$</span> export HF_ENDPOINT=https://xet.example.com
+<span class="t-prompt">$</span> git clone https://xet.example.com/acme/weights
+<span class="t-prompt">$</span> git push origin main
+
+<span class="t-comment"># The same repository through the Hub API</span>
+<span class="t-prompt">$</span> hf upload acme/weights ./model.safetensors
+<span class="t-prompt">$</span> openxet label add acme/weights checkpoint</code></pre>
+          <figcaption id="repos-terminal-caption" class="terminal-caption">Commands only. Measured transfers are in <a href="#how-it-works">How it works</a>.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="row hue-amber" id="how-it-works" aria-labelledby="how-title">
       <span class="anchor-alias" id="dedup" aria-hidden="true"></span>
       <div class="row-copy">
-        <p class="pill">How it works</p>
+        <p class="pill">Xet</p>
         <h2 id="how-title">An edit costs the edit, not the file.</h2>
         <p>Xet cuts each file into chunks of about 64&nbsp;KiB, at boundaries set by the content. Before an upload, the client asks your server which chunks it already has and sends only the rest.</p>
         <ul class="checks">
@@ -113,36 +122,35 @@ identical</code></pre>
       </div>
       <div class="row-visual">
         <figure class="compare" data-file-example>
-          <div class="compare-card">
-            <p class="compare-label">Whole-file upload <span>S3 PUT, Git LFS</span></p>
-            <div class="file-parts whole-parts" aria-hidden="true"><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span></div>
-            <p class="compare-count">8 / 8 parts sent</p>
-          </div>
-          <p class="compare-vs" aria-hidden="true">vs</p>
-          <div class="compare-card is-xet">
-            <p class="compare-label">Xet upload <span>openxet</span></p>
-            <div class="file-parts" aria-hidden="true">
-              <span data-updated-part></span><span data-updated-part></span><span class="is-new" data-updated-part></span><span data-updated-part></span><span data-updated-part></span><span data-updated-part></span><span data-updated-part></span><span data-updated-part></span>
-            </div>
-            <p class="compare-count" aria-live="polite" data-example-result>1 / 8 parts sent</p>
-          </div>
           <div class="example-controls" role="group" aria-label="Choose a file example" data-example-controls hidden>
             <button type="button" data-scenario="small" aria-pressed="true">Small edit</button>
             <button type="button" data-scenario="same" aria-pressed="false">Same file</button>
             <button type="button" data-scenario="new" aria-pressed="false">All new</button>
           </div>
+          <div class="compare-card">
+            <p class="compare-label">Whole-file upload <span>S3 PUT, Git LFS</span></p>
+            <div class="file-parts whole-parts" aria-hidden="true"><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span><span class="is-new"></span></div>
+            <p class="compare-count">8 / 8 parts sent</p>
+          </div>
+          <div class="compare-card is-xet">
+            <p class="compare-label">Xet upload <span>OpenXet</span></p>
+            <div class="file-parts" aria-hidden="true">
+              <span data-updated-part></span><span data-updated-part></span><span class="is-new" data-updated-part></span><span data-updated-part></span><span data-updated-part></span><span data-updated-part></span><span data-updated-part></span><span data-updated-part></span>
+            </div>
+            <p class="compare-count" aria-live="polite" data-example-result>1 / 8 parts sent</p>
+          </div>
           <figcaption class="compare-key"><span><i class="key-stored"></i> Already stored</span><span><i class="key-new"></i> Sent</span><span>Illustrative: real chunks vary in size</span></figcaption>
           <div class="measured">
             <p class="measured-title">Measured: 1&nbsp;MiB edit to a 100&nbsp;MiB file, empty client cache</p>
             <div class="measured-row"><span>Whole-file re-upload</span><span class="measured-bar"><i style="width: 100%"></i></span><span>100 MiB</span></div>
-            <div class="measured-row"><span>openxet, stock <code>hf_xet</code></span><span class="measured-bar"><i style="width: 1.09%"></i></span><span>1.09 MiB</span></div>
-            <p class="measured-note">To scale. 1,141,116 bytes of chunk data, <code>hf_xet</code> 1.7.0. <a href="/docs/competitive-matrix.html#2026-10-24-openxet-at-m1">Method</a></p>
+            <div class="measured-row"><span>OpenXet, stock <code>hf_xet</code></span><span class="measured-bar"><i style="width: 1.09%"></i></span><span data-measure="edit-upload">1.09 MiB</span></div>
+            <p class="measured-note">To scale. <span data-measure="edit-upload-bytes">1,141,116</span> bytes of chunk data sent by <code>hf_xet</code> 1.7.0, asserted in CI by <a href="https://github.com/stubbi/openxet/blob/main/compat/tests/test_storage_only.py"><code>test_fresh_cache_edit_bytes_recorded</code></a>.</p>
           </div>
         </figure>
       </div>
     </section>
 
-    <section class="row" id="use-cases" aria-labelledby="use-title">
+    <section class="row hue-green" id="use-cases" aria-labelledby="use-title">
       <div class="row-copy">
         <p class="pill">Use cases</p>
         <h2 id="use-title">What your files actually share.</h2>
@@ -167,151 +175,132 @@ identical</code></pre>
       </div>
     </section>
 
-    <section class="row" id="compatibility" aria-labelledby="compat-title">
+    <section class="row hue-lilac" id="buckets" aria-labelledby="buckets-title">
       <div class="row-copy">
-        <p class="pill">Compatibility</p>
-        <h2 id="compat-title">One store, every client.</h2>
-        <p>S3 and Git LFS send every version whole. The Hugging Face Hub deduplicates, but only on Hugging Face’s servers. openxet is Xet storage you run, and the stock client talks to it unchanged.</p>
+        <p class="pill">Buckets</p>
+        <h2 id="buckets-title">Buckets for what isn’t versioned.</h2>
+        <p>Checkpoints, logs and agent outputs change too often for commits. Put them in a bucket: mutable keys, the same deduplication, and no Git history to carry.</p>
         <ul class="checks">
-          <li>Files are standard Xet: the stock client reads back what openxet stores</li>
-          <li>Your platform signs scoped tokens for its users and calls the storage API</li>
-          <li>Apache 2.0 and a data directory you own: leave whenever you like</li>
+          <li>Mutable keys, last writer wins, with optional object versioning</li>
+          <li>The same chunk-level deduplication as repositories</li>
+          <li>Labels like <code>checkpoint</code> and <code>eval-logs</code> on buckets and repositories alike</li>
         </ul>
       </div>
       <div class="row-visual">
-        <figure class="fanout" aria-label="Clients and storage backends with their status">
-          <div class="fanout-store">
-            <p><strong>openxet serve</strong><code>./openxet-data</code></p>
-            <ul class="fanout-backends">
-              <li>Local disk <span class="status status-available">Available</span></li>
-              <li>S3, GCS, Azure <span class="status">Planned</span></li>
+        <figure class="bucket" aria-label="Keys in an example bucket, with their labels">
+          <div class="terminal">
+            <div class="terminal-bar"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>terminal</span></div>
+            <pre tabindex="0" aria-label="Commands for buckets"><code><span class="t-prompt">$</span> hf buckets create acme/runs
+<span class="t-prompt">$</span> hf sync checkpoints hf://buckets/acme/runs/checkpoints</code></pre>
+          </div>
+          <div class="bucket-card">
+            <p class="bucket-name"><strong>acme/runs</strong><span>bucket</span></p>
+            <ul>
+              <li><code>checkpoints/step-1000/</code><span class="tag">checkpoint</span></li>
+              <li><code>checkpoints/step-2000/</code><span class="tag">checkpoint</span></li>
+              <li><code>eval/2026-10-25.jsonl</code><span class="tag">eval-logs</span></li>
+              <li><code>agents/run-42/report.md</code><span class="tag">agent-output</span></li>
             </ul>
           </div>
-          <p class="fanout-arrow" aria-hidden="true">serves</p>
-          <ul class="fanout-clients">
-            <li><span class="client-name"><code>hf_xet</code></span><span>Hugging Face’s client</span><span class="status status-available">Available</span></li>
-            <li><span class="client-name"><code>openxet</code></span><span>command line</span><span class="status status-available">Available</span></li>
-            <li><span class="client-name">Your platform</span><span>storage API, signed tokens</span><span class="status status-available">Available</span></li>
-            <li class="is-planned"><span class="client-name"><code>hf</code>, <code>huggingface_hub</code></span><span>Hub API</span><span class="status">Planned</span></li>
-            <li class="is-planned"><span class="client-name"><code>git-xet</code>, Git LFS</span><span>Git repositories</span><span class="status">Planned</span></li>
-            <li class="is-planned"><span class="client-name">Repositories and buckets</span><span>versioned and mutable storage</span><span class="status">Planned</span></li>
-          </ul>
-          <figcaption><a href="/docs/competitive-matrix.html">Every check, with versions and tests</a></figcaption>
         </figure>
       </div>
     </section>
 
-    <section class="row" id="security" aria-labelledby="security-title">
-      <span class="anchor-alias" id="review" aria-hidden="true"></span>
+    <section class="row hue-slate" id="self-hosting" aria-labelledby="infra-title">
       <div class="row-copy">
-        <p class="pill">Security</p>
-        <h2 id="security-title">Security you can check, test by test.</h2>
-        <p>Each security requirement in the design has a named test that runs in CI. These are the ones that apply to the storage server today.</p>
+        <p class="pill">Self-hosting</p>
+        <h2 id="infra-title">Your cloud, your identity.</h2>
+        <p>One binary on the storage and sign-in you already run. Nodes keep no state, so you scale by adding them, and your object-store bucket stays the source of truth.</p>
         <ul class="checks">
-          <li>No telemetry unless the operator opts in</li>
-          <li>Credentials are never echoed in responses or written to logs</li>
-          <li>Report a weakness privately through the <a href="https://github.com/stubbi/openxet/security/policy">security policy</a></li>
+          <li>S3, GCS, Azure, MinIO or local disk, with Postgres or SQLite as a rebuildable index</li>
+          <li>Sign-in through your OIDC provider or webhook; OpenXet never owns users</li>
+          <li>Audit log, data residency and full export: leave whenever you like</li>
         </ul>
       </div>
       <div class="row-visual">
-        <ul class="security-cards">
-          <li><h3>Verified before stored</h3><p>Uploads are checked against the stored chunks before any file is registered.</p><code>shard_<wbr>with_<wbr>missing_<wbr>xorb_<wbr>rejected</code></li>
-          <li><h3>Dedup without leaks</h3><p>Answers are HMAC-keyed, never raw hashes; tenants can be isolated.</p><code>dedup_<wbr>response_<wbr>hmac_<wbr>keyed</code></li>
-          <li><h3>No anonymous reads</h3><p>Reads need a credential, and every transfer URL is signed for one byte range.</p><code>signed_<wbr>url_<wbr>bound_<wbr>to_<wbr>range</code></li>
-          <li><h3>Writes survive a crash</h3><p>An acknowledged upload is still there after the server is killed.</p><code>acked_<wbr>write_<wbr>survives_<wbr>sigkill</code></li>
-        </ul>
-        <p class="row-visual-note"><a href="/docs/reference/security-tests.html">All requirements and their tests</a></p>
+        <figure class="stack" aria-label="An OpenXet deployment: identity above, nodes in the middle, storage below">
+          <div class="stack-layer"><p class="stack-label">Your identity</p><ul><li>OIDC</li><li>SSO</li><li>Webhook</li></ul></div>
+          <p class="stack-arrow" aria-hidden="true">↓</p>
+          <div class="stack-layer is-core"><p class="stack-label">OpenXet nodes</p><ul><li>Stateless</li><li>Hub API</li><li>Git</li><li>Xet CAS</li></ul></div>
+          <p class="stack-arrow" aria-hidden="true">↓</p>
+          <div class="stack-layer"><p class="stack-label">Your storage</p><ul><li>S3</li><li>GCS</li><li>Azure</li><li>MinIO</li><li>Local disk</li></ul></div>
+        </figure>
       </div>
     </section>
 
-    <section class="row" id="hosting" aria-labelledby="hosting-title">
-      <span class="anchor-alias" id="hosted" aria-hidden="true"></span>
+    <section class="row hue-peach" id="platforms" aria-labelledby="platforms-title">
+      <span class="anchor-alias" id="integrate" aria-hidden="true"></span>
       <div class="row-copy">
-        <p class="pill">Hosting</p>
-        <h2 id="hosting-title">Your infrastructure, or ours.</h2>
-        <p>Both run the same open-source build and speak the same protocol, so your files stay readable by the stock client wherever they live.</p>
+        <p class="pill">Platforms</p>
+        <h2 id="platforms-title">Storage inside your product.</h2>
+        <p>Embed OpenXet under your own names, permissions and interface. Your users never see it; your product decides who may read and write.</p>
         <ul class="checks">
-          <li>Self-hosted: one binary, no licence fee, local disk today</li>
-          <li>Hosted: nothing to operate; pricing published before launch</li>
-          <li>Either way, the same Xet format and the same open code</li>
+          <li>Your permissions, enforced through the authorizer webhook</li>
+          <li>Scoped, signed tokens per user, repository or bucket</li>
+          <li>Per-tenant metering for your own billing</li>
         </ul>
       </div>
       <div class="row-visual">
-        <div class="hosting-cards">
-          <article class="hosting-card is-featured">
-            <p class="status status-available">Available</p>
-            <h3>On your infrastructure</h3>
-            <p>Build from source and run it where your data has to stay.</p>
-            <a class="button button-primary" href="/docs/quickstart-storage-only.html">Run the 2-minute quickstart <span aria-hidden="true">→</span></a>
-          </article>
-          <article class="hosting-card">
-            <p class="status">Coming soon</p>
-            <h3>Hosted by openxet</h3>
-            <p>The released build, run for you on openxet.com.</p>
-            <a class="button button-secondary" href="/waitlist/">Join the waitlist <span aria-hidden="true">↗</span></a>
-          </article>
-        </div>
+        <ol class="flow" aria-label="How a platform embeds OpenXet">
+          <li><span class="flow-step">1</span><p><strong>Your app</strong>signs a scoped token for a user</p></li>
+          <li><span class="flow-step">2</span><p><strong>The user’s client</strong>uploads with that token</p></li>
+          <li><span class="flow-step">3</span><p><strong>OpenXet</strong>asks your authorizer, then stores the chunks</p></li>
+          <li><span class="flow-step">4</span><p><strong>Your billing</strong>reads per-tenant metering</p></li>
+        </ol>
       </div>
     </section>
 
-    <section class="row" id="agents" aria-labelledby="agents-title">
+    <section class="row hue-blue" id="agents" aria-labelledby="agents-title">
       <span class="anchor-alias" id="roadmap" aria-hidden="true"></span>
       <div class="row-copy">
         <p class="pill">Agents</p>
         <h2 id="agents-title">Your agent can drive it too.</h2>
-        <p>Readable output for people, one JSON object per command for scripts and agents. Hand over the <a href="/docs/quickstart-storage-only.md">quickstart as Markdown</a> and authorize credentials separately.</p>
+        <p>Every command speaks JSON, every error names the next step, and an MCP server exposes the same operations. Agents act with tokens narrower than yours.</p>
         <ul class="checks">
-          <li><code>--json</code> on every command, with a versioned schema</li>
-          <li>Stable exit codes; every error carries a code and a next-step hint</li>
-          <li>Markdown docs and <a href="/llms.txt">llms.txt</a>; an MCP server is planned</li>
+          <li><code>openxet mcp</code>, and <code>--json</code> with versioned schemas on every command</li>
+          <li>Delegated tokens narrower than yours; approval gates for destructive actions</li>
+          <li>Every action audited as agent on behalf of a person</li>
         </ul>
       </div>
       <div class="row-visual">
         <figure class="terminal" aria-labelledby="agent-terminal-caption">
-          <div class="terminal-bar"><span>Shell</span><span>--json</span></div>
-          <pre tabindex="0" aria-label="A captured openxet session with JSON output and a JSON error"><code><span class="t-comment"># after another 1 MiB edit</span>
-<span class="t-prompt">$</span> openxet upload data.bin --json
-{"schema":"openxet.upload.v1",
- "files":[{"path":"data.bin","hash":"7a49591d…215a",
-           "size":104857600,"sha256":"72731ae0…6386"}],
- <strong class="t-key">"bytes_uploaded":1125507,"bytes_deduplicated":103732093</strong>}
-
-<span class="t-prompt">$</span> OPENXET_TOKEN=oxt_expired openxet upload data.bin --json
-{"schema":"openxet.error.v1","code":"unauthorized",
- "message":"http://127.0.0.1:58241 refused the token (401 Unauthorized)",
- "hint":"Check that OPENXET_TOKEN is a token for this server, not revoked or expired. …"}
-<span class="t-comment"># exit status 1</span></code></pre>
-          <figcaption id="agent-terminal-caption" class="terminal-caption">Captured 2026-10-25; JSON wrapped, hashes and the hint shortened. <a href="/docs/reference/exit-codes.html">Error codes and exit statuses</a></figcaption>
+          <div class="terminal-bar"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>terminal</span></div>
+          <pre tabindex="0" aria-label="A captured OpenXet session: a JSON error with a hint, then the corrected command"><code><span class="t-prompt">$</span> openxet download 7a49591d…215a --output restored.bin --json
+{"schema":"openxet.error.v1","code":"output_exists",
+ "message":"restored.bin exists; nothing was downloaded",
+ <strong class="t-key">"hint":"Pass `--force` to replace it, or choose another `--output` path."</strong>}
+<span class="t-comment"># exit status 2</span>
+<span class="t-prompt">$</span> openxet download 7a49591d…215a --output restored2.bin --json
+{"schema":"openxet.download.v1","hash":"7a49591d…215a",
+ "path":"restored2.bin","size":104857600}</code></pre>
+          <figcaption id="agent-terminal-caption" class="terminal-caption">Captured 2026-10-25; JSON wrapped and hashes shortened. <a href="/docs/reference/exit-codes.html">Error codes and exit statuses</a></figcaption>
         </figure>
       </div>
     </section>
 
-    <section class="row row-faq" aria-labelledby="questions-title">
-      <div class="row-copy">
-        <p class="pill">FAQ</p>
-        <h2 id="questions-title">Before you decide.</h2>
-        <p>Looking for a technical detail? <a href="/docs/">Start with the documentation.</a></p>
+    <section class="security-band" id="security" aria-labelledby="security-title">
+      <span class="anchor-alias" id="review" aria-hidden="true"></span>
+      <div class="security-head">
+        <h2 id="security-title">Security you can check, test by test.</h2>
+        <p>Each requirement has a named test that runs in CI. No telemetry unless the operator opts in.</p>
       </div>
-      <div class="row-visual">
-        <div class="questions">
-          <details><summary><span>Is openxet part of Hugging Face?</span></summary><div><p>No. openxet is an independent open-source project that implements the Xet protocol published by Hugging Face. It is not affiliated with or endorsed by Hugging Face.</p></div></details>
-          <details><summary><span>Can I use <code>hf upload</code> or Git with it today?</span></summary><div><p>Not yet. Today <code>hf_xet</code> and the <code>openxet</code> command line upload and download against the storage server. The Hub API, <code>hf upload</code>, <code>huggingface_hub</code>, Git and LFS are the next milestone, in development now. <a href="/docs/changelog.html">Follow the changelog</a> or watch the repository on <a href="https://github.com/stubbi/openxet">GitHub</a>.</p></div></details>
-          <details><summary><span>How much will I save?</span></summary><div><p>As much as your versions share. Appended logs reuse most of the last version; compressed archives and consecutive training checkpoints reuse almost nothing. See <a href="#use-cases">the measured pairs above</a> and test with your own files using the quickstart.</p></div></details>
-          <details><summary><span>What if I want to leave?</span></summary><div><p>Self-hosted, your files sit in the standard Xet format in a directory you own, and the code is Apache 2.0, so you can keep running it without us. Export terms for hosted openxet will be published before launch.</p></div></details>
-        </div>
-      </div>
+      <ul class="security-cells">
+        <li><h3>Verified before stored</h3><p>Uploads are checked against stored chunks before any file is registered.</p><a class="test-chip" href="/docs/reference/security-tests.html">shard_with_<wbr>missing_<wbr>xorb_<wbr>rejected</a></li>
+        <li><h3>Dedup without leaks</h3><p>Answers are HMAC-keyed, never raw hashes; tenants can be isolated.</p><a class="test-chip" href="/docs/reference/security-tests.html">dedup_<wbr>response_<wbr>hmac_<wbr>keyed</a></li>
+        <li><h3>No anonymous reads</h3><p>Every transfer URL is signed for one byte range and one scope.</p><a class="test-chip" href="/docs/reference/security-tests.html">signed_<wbr>url_<wbr>bound_<wbr>to_<wbr>range</a></li>
+        <li><h3>Writes survive a crash</h3><p>An acknowledged upload is still there after the server is killed.</p><a class="test-chip" href="/docs/reference/security-tests.html">acked_<wbr>write_<wbr>survives_<wbr>sigkill</a></li>
+      </ul>
     </section>
 
-    <section class="get-started" id="integrate" aria-labelledby="final-title">
-      <span class="anchor-alias" id="get-started" aria-hidden="true"></span>
+    <section class="get-started" id="get-started" aria-labelledby="final-title">
       <div class="get-started-head">
-        <h2 id="final-title">Get started with openxet</h2>
-        <p>Run it on your machine, build it into your product, or hear when hosting opens.</p>
+        <h2 id="final-title">Get started with OpenXet</h2>
+        <p>Run it yourself, use it on openxet.com, or build it into your product.</p>
       </div>
       <ul class="start-tiles">
-        <li><a href="/docs/quickstart-storage-only.html"><strong>Run the 2-minute quickstart</strong><span>Build from source, upload with <code>hf_xet</code>, download and compare. 1 min 43 s, measured.</span><em>Quickstart →</em></a></li>
-        <li><a href="/docs/reference/config.html#cas-tokens"><strong>Build it into your platform</strong><span>Keep your names and permissions: sign scoped tokens for your users and call the storage API.</span><em>Platform-signed tokens →</em></a></li>
-        <li><a href="/waitlist/"><strong>Join the hosted waitlist</strong><span>One email when hosted openxet is ready to try. No account, no payment.</span><em>Waitlist ↗</em></a></li>
+        <li><a href="/docs/quickstart-storage-only.html"><span class="tile-icon" aria-hidden="true">›_</span><strong>Run it yourself</strong><span>Build from source, upload with <code>hf_xet</code>, download and compare. 1 min 43 s, measured.</span><em>Quickstart →</em></a></li>
+        <li><a href="/waitlist/"><span class="tile-icon" aria-hidden="true">☁</span><strong>OpenXet Cloud</strong><span>The released open-source build, run for you on openxet.com.</span><em>Start on openxet.com ↗</em></a></li>
+        <li><a href="/docs/reference/config.html#cas-tokens"><span class="tile-icon" aria-hidden="true">⧉</span><strong>Build it into your platform</strong><span>Your names and permissions: sign scoped tokens for your users and call the storage API.</span><em>Platform tokens →</em></a></li>
       </ul>
     </section>
   </main>
@@ -319,7 +308,7 @@ identical</code></pre>
 
   <footer class="site-footer">
     <div class="wrap footer-inner">
-      <div><a class="brand" href="/" aria-label="openxet home"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>openxet</a><p>Open-source storage for large files.<br>Apache 2.0 · Independent of Hugging Face.</p></div>
+      <div><a class="brand" href="/" aria-label="OpenXet home"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="13" y="2" width="9" height="9" rx="1.5"/><rect class="brand-soft" x="2" y="13" width="9" height="9" rx="1.5"/><rect class="brand-accent" x="13" y="13" width="9" height="9" rx="1.5"/></svg>OpenXet</a><p>Open-source Xet storage for large files.<br>Apache 2.0 · Independent of Hugging Face.</p></div>
       <nav class="footer-links" aria-label="Footer navigation"><a href="/docs/">Documentation</a><a href="https://github.com/stubbi/openxet">GitHub</a><a href="/about/">About &amp; contribute</a><a href="https://github.com/stubbi/openxet/security/policy">Report a security issue</a><a href="/privacy/">Privacy</a><a href="/llms.txt">llms.txt</a></nav>
     </div>
   </footer>

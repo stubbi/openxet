@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
-  <title id="title">openxet — Large-file storage that uploads only what changed.</title>
-  <desc id="description">The open-source Xet storage server. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an openxet server. Self-host today; hosted service coming soon.</desc>
+  <title id="title">OpenXet — Git for large files. Only the changes upload.</title>
+  <desc id="description">Open-source Xet storage for repositories and buckets. Measured: after a 1 MiB edit to a 100 MiB file, stock hf_xet sent 1.09 MiB to an OpenXet server. Run it yourself or on openxet.com.</desc>
   <!-- Fonts: Manrope 650/750, IBM Plex Sans 400/500, IBM Plex Mono 400.
        Render with the official fonts and Fontconfig setup in assets/README.md. -->
   <style>
@@ -19,13 +19,13 @@
     <rect x="2" y="13" width="9" height="9" rx="1.5" fill="#304bce" opacity=".55"/>
     <rect x="13" y="13" width="9" height="9" rx="1.5" fill="#f5cf6b"/>
   </g>
-  <text x="117" y="87" class="display wordmark" font-size="36" letter-spacing="-1.4" fill="#142238">openxet</text>
+  <text x="117" y="87" class="display wordmark" font-size="36" letter-spacing="-0.7" fill="#142238">OpenXet</text>
   <text x="64" y="165" class="body" font-size="23" fill="#526079">Open-source Xet storage · Apache 2.0</text>
   <g class="display" font-size="54" letter-spacing="-2.2">
-    <text x="60" y="262" fill="#142238">Large-file storage</text>
-    <text x="60" y="328" fill="#142238">that uploads</text>
-    <text x="60" y="394" fill="#304bce">only what</text>
-    <text x="60" y="460" fill="#304bce">changed.</text>
+    <text x="60" y="262" fill="#142238">Git for</text>
+    <text x="60" y="328" fill="#142238">large files.</text>
+    <text x="60" y="394" fill="#304bce">Only the changes</text>
+    <text x="60" y="460" fill="#304bce">upload.</text>
   </g>
   <text x="64" y="566" class="body" font-size="22" font-weight="500" fill="#142238">openxet.com</text>
 
@@ -36,11 +36,11 @@
   </g>
   <g class="mono" font-size="20" fill="#142238">
     <text x="672" y="184">hf_xet</text>
-    <text x="1104" y="184" text-anchor="end">openxet serve</text>
+    <text x="1104" y="184" text-anchor="end" style="font-family: Manrope, sans-serif; font-weight: 750; letter-spacing: -0.4px">OpenXet</text>
   </g>
-  <path d="M770 178H930" fill="none" stroke="#77859c" stroke-width="2" stroke-dasharray="6 4"/>
-  <path d="M930 172l9 6-9 6z" fill="#77859c"/>
-  <rect x="843" y="170" width="16" height="16" rx="3" class="new"/>
+  <path d="M770 178H990" fill="none" stroke="#77859c" stroke-width="2" stroke-dasharray="6 4"/>
+  <path d="M990 172l9 6-9 6z" fill="#77859c"/>
+  <rect x="872" y="170" width="16" height="16" rx="3" class="new"/>
   <path d="M672 214H1104" fill="none" stroke="#d3dbea"/>
   <g class="body" font-size="20" fill="#142238">
     <text x="672" y="258">Edited file</text>
@@ -59,5 +59,5 @@
   <rect x="672" y="452" width="432" height="28" rx="5" class="stored"/>
   <rect x="886" y="452" width="5" height="28" class="new"/>
   <text x="672" y="518" class="body" font-size="16" fill="#526079">Measured with stock hf_xet 1.7.0. Bars to scale.</text>
-  <text x="640" y="580" class="body" font-size="21" fill="#526079">Self-host today · Hosted coming soon</text>
+  <text x="640" y="580" class="body" font-size="21" fill="#526079">Run it yourself or on openxet.com</text>
 </svg>
