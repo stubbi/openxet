@@ -1012,6 +1012,35 @@ impl Bucket for CountingBucket {
     async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
         self.inner.size(key).await
     }
+
+    async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.inner.put_replace(key, bytes).await
+    }
+
+    async fn put_stream(
+        &self,
+        key: Key,
+        body: openxet_storage::BodyStream,
+        len: u64,
+    ) -> Result<(), StorageError> {
+        self.inner.put_stream(key, body, len).await
+    }
+
+    async fn get_to_file(&self, key: Key, path: &std::path::Path) -> Result<u64, StorageError> {
+        self.inner.get_to_file(key, path).await
+    }
+
+    async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
+        self.inner.last_modified(key).await
+    }
+
+    async fn list_under(
+        &self,
+        repo: openxet_storage::RepoIdHex,
+        kind: openxet_storage::KeyKind,
+    ) -> Result<Vec<Key>, StorageError> {
+        self.inner.list_under(repo, kind).await
+    }
 }
 
 /// A stream whose `poll_next` is `poll`.
@@ -1065,7 +1094,7 @@ impl Bucket for FailingBucket {
 
     async fn get_range(&self, key: &Key, _: u64, _: u64) -> Result<Bytes, StorageError> {
         Err(StorageError::NotFound {
-            key: Box::new(*key),
+            key: Box::new(key.clone()),
         })
     }
 
@@ -1076,11 +1105,40 @@ impl Bucket for FailingBucket {
         _: u64,
     ) -> Result<RangeStream, StorageError> {
         Err(StorageError::NotFound {
-            key: Box::new(*key),
+            key: Box::new(key.clone()),
         })
     }
 
     async fn size(&self, _: &Key) -> Result<Option<u64>, StorageError> {
         Ok(None)
+    }
+
+    async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.put(&key, bytes).await
+    }
+
+    async fn put_stream(
+        &self,
+        key: Key,
+        _: openxet_storage::BodyStream,
+        _: u64,
+    ) -> Result<(), StorageError> {
+        self.put(&key, Bytes::new()).await
+    }
+
+    async fn get_to_file(&self, key: Key, _: &std::path::Path) -> Result<u64, StorageError> {
+        Err(StorageError::NotFound { key: Box::new(key) })
+    }
+
+    async fn last_modified(&self, _: Key) -> Result<Option<u64>, StorageError> {
+        Ok(None)
+    }
+
+    async fn list_under(
+        &self,
+        _: openxet_storage::RepoIdHex,
+        _: KeyKind,
+    ) -> Result<Vec<Key>, StorageError> {
+        Ok(Vec::new())
     }
 }

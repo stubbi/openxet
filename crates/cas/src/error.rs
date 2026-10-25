@@ -1012,7 +1012,9 @@ mod tests {
             .finish();
 
         let error = tracing::subscriber::with_default(subscriber, || {
-            CasError::from(StorageError::NotFound { key: Box::new(key) })
+            CasError::from(StorageError::NotFound {
+                key: Box::new(key.clone()),
+            })
         });
 
         let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
