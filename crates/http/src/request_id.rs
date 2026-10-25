@@ -1,3 +1,5 @@
+//! Request ids, and the tracing span that records one per request.
+
 use std::fmt;
 
 use axum::extract::{MatchedPath, Request};
@@ -29,10 +31,12 @@ impl fmt::Display for RequestId {
     }
 }
 
-/// Assigns the request's id: in the request's extensions for the span and
-/// handlers, and in the response's `X-Request-Id`, replacing any a handler
-/// set.
-pub(crate) async fn assign(mut request: Request, next: Next) -> Response {
+/// Middleware (`axum::middleware::from_fn`) assigning the request's id: in
+/// the request's extensions for the span and handlers, and in the
+/// response's `X-Request-Id`, replacing any a handler set. [`crate::compose`]
+/// applies it; a router built before the server's parts exist, such as the
+/// CAS's starting router, applies it itself.
+pub async fn assign(mut request: Request, next: Next) -> Response {
     let id = RequestId::new();
     request.extensions_mut().insert(id);
     let mut response = next.run(request).await;
@@ -42,7 +46,7 @@ pub(crate) async fn assign(mut request: Request, next: Next) -> Response {
     response
 }
 
-/// The request's tracing span: the request id, the method and the matched
+/// The request's tracing span (`TraceLayer::make_span_with`): the request id, the method and the matched
 /// route template (`MatchedPath`, e.g. `/v1/xorbs/{prefix}/{hash}`), or
 /// `unmatched` when no route matched.
 ///
@@ -50,7 +54,7 @@ pub(crate) async fn assign(mut request: Request, next: Next) -> Response {
 /// recorded. The raw path is never logged, so a credential or signature
 /// in any path segment or the query is structurally unloggable; a request is
 /// found by its id, which the client logs too.
-pub(crate) fn span(request: &Request) -> tracing::Span {
+pub fn span(request: &Request) -> tracing::Span {
     let id = request.extensions().get::<RequestId>();
     let route = request
         .extensions()

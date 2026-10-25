@@ -42,6 +42,21 @@ contract and duplicate-request semantics are documented in
 `hosted/waitlist/README.md`; visual and language decisions are in
 [the design system](design.md).
 
+## Deployed revision
+
+Verified on 2026-10-24: Sites version **3**, source
+`560fef926cec458b4583ab813f824c6c472c2f17`, deployment
+`appgdep_6adcdcd157dc8191896ed7807cc1d250` succeeded at the service origin above.
+The public form is anonymous; the database remains owner-accessible operational
+storage. Its verified tables are `waitlist_entries`, `waitlist_receipts` and
+`waitlist_rate_limits`. The production HTTP smoke test passed and withdrew its
+synthetic request. No launch emails were sent.
+
+The repository source matches this deployment after removing unused starter UI
+examples and dependencies. A future release must replace this record with its
+actual source/version/deployment evidence, not assume that pushing GitHub changes
+updates the independently deployed service.
+
 ## Prepare and publish a change
 
 1. Read the installed `sites:sites` skill, including its storage and identity

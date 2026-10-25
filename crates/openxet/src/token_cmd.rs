@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use openxet_auth::{
-    AuthError, Authenticator, Mode, StaticToken, TokenSigner, default_tenant, generate_keypair,
+    AuthError, Authenticator, CasGrant, Mode, REPO_SCOPE_PREFIX, StaticToken, TokenSigner,
+    default_tenant, generate_keypair,
 };
 use serde::Serialize;
 
@@ -375,13 +376,23 @@ fn generate(
     subject: &str,
     output: Output,
 ) -> Result<(), CliError> {
+    if scope.starts_with(REPO_SCOPE_PREFIX) {
+        return Err(CliError::new(
+            "invalid_claims",
+            "the scope starts with `repo:`, a prefix reserved for repositories",
+            "Pick another --scope; the server refuses static tokens with a repository scope.",
+        ));
+    }
     let token = secret::generate_token()?;
     let entry = StaticToken {
         sha256: StaticToken::digest(&token),
-        scope: scope.to_owned(),
-        mode: mode.mode(),
         subject: subject.to_owned(),
-        tenant: tenant.map(str::to_owned),
+        cas: Some(CasGrant {
+            scope: scope.to_owned(),
+            mode: mode.mode(),
+            tenant: tenant.map(str::to_owned),
+        }),
+        user: None,
     };
     let sha256 = secret::hex(&entry.sha256);
     // The server applies the same checks when it loads the entry.
@@ -465,5 +476,21 @@ mod tests {
             table["auth"]["jwt_public_keys"][0].as_str(),
             Some(r#"/a "quoted"\dir/key.pub"#)
         );
+    }
+
+    /// `repo:` scopes belong to repositories (M2-R2); the server refuses a
+    /// static token naming one, so `generate` never prints such an entry.
+    #[test]
+    fn generate_refuses_a_repository_scope() {
+        let err = generate(
+            "repo:0192f0c4a1b27c3d8e9f00112233aabb",
+            None,
+            ModeArg::Read,
+            "ci",
+            Output::Json,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "invalid_claims");
+        assert!(err.message.contains("reserved for repositories"), "{err:?}");
     }
 }

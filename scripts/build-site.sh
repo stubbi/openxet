@@ -24,6 +24,7 @@ python3 -I "$root/scripts/check-docs-nav.py"
 # The link preprocessor must refuse includes from outside the repository.
 python3 -I "$root/site/test_repo_links.py" -q
 python3 -I "$root/site/test_site_output.py" -q
+python3 -I "$root/site/test_public_artifact.py" -q
 node --test "$root/site/"test_*.mjs
 
 rm -rf "$out"
@@ -49,4 +50,5 @@ if bare="$(grep -E '^- \[[^]]+\]\(https://openxet\.com/docs/[^)]+\)$' "$public/l
   echo "$bare" >&2
   exit 1
 fi
+python3 -I "$root/site/check_public_artifact.py" "$public"
 echo "site written to $public"

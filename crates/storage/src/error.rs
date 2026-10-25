@@ -96,4 +96,30 @@ pub enum StorageError {
         /// The object's size.
         size: u64,
     },
+
+    /// A key, or a part of one, that no bucket object may have: a malformed
+    /// repository id or pack name, or a kind of key the operation doesn't
+    /// take.
+    #[error("{key} is not valid here: {reason}")]
+    InvalidKey {
+        /// The key or part, escaped.
+        key: String,
+        /// What a valid one looks like, or which operation to use instead.
+        reason: &'static str,
+    },
+
+    /// A streamed body held more or fewer bytes than its declared length.
+    #[error(
+        "the body sent for {key} held {received}{more} bytes, but {expected} were declared; nothing was stored. Send the whole object with its exact length",
+        more = if received > expected { " or more" } else { "" }
+    )]
+    LengthMismatch {
+        /// The key being written.
+        key: Box<Key>,
+        /// The declared length.
+        expected: u64,
+        /// The bytes read before the mismatch was found: all of them when
+        /// too few, and the first ones past `expected` when too many.
+        received: u64,
+    },
 }

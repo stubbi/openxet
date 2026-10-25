@@ -109,6 +109,99 @@ pub struct Registrant<'a> {
     pub seq: u64,
 }
 
+/// A repository's immutable id: a `UUIDv7`, shown as 32 lowercase hex
+/// characters (ruling M2-R2). Its CAS scope is `repo:{id}`, and its bucket
+/// keys carry the id, so a rename rewrites one record and orphans nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RepoId(pub [u8; 16]);
+
+/// A pack row's id: a `UUIDv7`, shown as 32 lowercase hex characters. Each
+/// attempt to write a pack takes a new one, so a row is never reused across
+/// attempts (ADR 0004 item 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackId(pub [u8; 16]);
+
+/// A Git object id: SHA-1, shown as 40 lowercase hex characters. SHA-256
+/// repositories are out of scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Oid(pub [u8; 20]);
+
+/// Why a string isn't an id: the expected length in hex characters, which
+/// the message names.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("expected {0} hex characters")]
+pub struct ParseIdError(usize);
+
+fn write_hex(f: &mut std::fmt::Formatter<'_>, bytes: &[u8]) -> std::fmt::Result {
+    for b in bytes {
+        write!(f, "{b:02x}")?;
+    }
+    Ok(())
+}
+
+fn parse_hex<const N: usize>(s: &str) -> Result<[u8; N], ParseIdError> {
+    // Checked up front: `from_str_radix` alone would take a `+` sign.
+    if s.len() != N * 2 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ParseIdError(N * 2));
+    }
+    let digit = |b: u8| match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        _ => b - b'A' + 10,
+    };
+    let mut out = [0; N];
+    for (byte, pair) in out.iter_mut().zip(s.as_bytes().chunks_exact(2)) {
+        *byte = digit(pair[0]) << 4 | digit(pair[1]);
+    }
+    Ok(out)
+}
+
+macro_rules! hex_id {
+    ($ty:ident, $len:literal) => {
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write_hex(f, &self.0)
+            }
+        }
+
+        impl std::str::FromStr for $ty {
+            type Err = ParseIdError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                parse_hex::<$len>(s).map(Self)
+            }
+        }
+
+        impl $ty {
+            pub(crate) fn from_slice(bytes: &[u8], what: &str) -> Result<Self, IndexError> {
+                bytes.try_into().map(Self).map_err(|_| {
+                    IndexError::Corrupt(format!("{what} is {} bytes, not {}", bytes.len(), $len))
+                })
+            }
+        }
+    };
+}
+
+hex_id!(RepoId, 16);
+hex_id!(PackId, 16);
+hex_id!(Oid, 20);
+
+impl RepoId {
+    /// A new id: a `UUIDv7`, so ids sort by creation time.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::now_v7().into_bytes())
+    }
+}
+
+impl PackId {
+    /// A new id: a `UUIDv7`, so ids sort by creation time.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::now_v7().into_bytes())
+    }
+}
+
 const HASH_LEN: usize = 32;
 const CHUNK_ENTRY_LEN: usize = HASH_LEN + 4 + 4;
 pub(crate) const TERM_LEN: usize = HASH_LEN + 4 + 4 + 4;
@@ -464,6 +557,29 @@ mod tests {
         assert_eq!(bytes.len(), 2 * TERM_LEN);
         assert_eq!(decode_terms(&bytes)?, terms);
         assert_eq!(decode_terms(&[])?, Vec::new());
+        Ok(())
+    }
+
+    #[test]
+    fn ids_round_trip_through_hex() -> Result<(), ParseIdError> {
+        let repo = RepoId::generate();
+        let shown = repo.to_string();
+        assert_eq!(shown.len(), 32);
+        assert_eq!(shown, shown.to_ascii_lowercase());
+        assert_eq!(shown.parse::<RepoId>()?, repo);
+        let oid: Oid = "0123456789abcdefABCDEF0123456789abcdef01".parse()?;
+        assert_eq!(oid.to_string(), "0123456789abcdefabcdef0123456789abcdef01");
+        assert_ne!(PackId::generate(), PackId::generate());
+        for bad in [
+            "",
+            "0123",
+            "zz23456789abcdef0123456789abcdef",
+            "+f23456789abcdef0123456789abcdef",
+            "é123456789abcdef0123456789abcde",
+        ] {
+            assert_eq!(bad.parse::<RepoId>(), Err(ParseIdError(32)), "{bad}");
+        }
+        assert_eq!("00".repeat(16).parse::<Oid>(), Err(ParseIdError(40)));
         Ok(())
     }
 

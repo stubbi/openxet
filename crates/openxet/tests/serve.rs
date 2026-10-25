@@ -384,6 +384,18 @@ async fn dev_mode_prints_working_token() {
     assert_eq!(status(http().head(&file)).await, 401);
     assert_eq!(status(http().get(server.url("/healthz"))).await, 200);
     assert_eq!(status(http().get(server.url("/readyz"))).await, 200);
+    // The Hub API is served beside the CAS, and the dev token is the user
+    // `dev` there (ruling M2-R3).
+    let whoami = http()
+        .get(server.url("/api/whoami-v2"))
+        .header("authorization", bearer(&token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(whoami.status(), 200);
+    let whoami: Value = whoami.json().await.unwrap();
+    assert_eq!(whoami["name"], "dev");
+    assert_eq!(status(http().get(server.url("/api/whoami-v2"))).await, 401);
 
     for name in ["dev-token", "transfer.key", "index.sqlite"] {
         assert!(data.join(name).is_file(), "{name} is missing");
@@ -467,6 +479,14 @@ async fn dev_mode_banner_is_ready_to_paste() {
         "{banner}"
     );
     assert!(banner.contains("openxet upload model.bin"), "{banner}");
+    assert!(
+        banner.contains(&format!("  export HF_ENDPOINT={endpoint}\n")),
+        "{banner}"
+    );
+    assert!(
+        banner.contains(&format!("  hf auth login --token {token}\n")),
+        "{banner}"
+    );
 }
 
 #[tokio::test]
@@ -1233,7 +1253,13 @@ async fn the_data_dir_is_private() {
         assert_eq!(mode_of(&dir), 0o700, "{}", dir.display());
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
-            if path.is_dir() {
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_symlink() {
+                // The Git cache's `proc-receive` hook links to the openxet
+                // binary: a link holds no data, and its target is not ours.
+                continue;
+            }
+            if kind.is_dir() {
                 dirs.push(path);
             } else {
                 assert_eq!(mode_of(&path), 0o600, "{}", path.display());
@@ -1363,11 +1389,17 @@ fn generate_requires_a_subject() {
 fn concurrent_first_starts_share_one_token() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
-    let spawn = || {
+    // The data directory is shared, as the key files are; the Git cache
+    // is locked to one process (`GitError::CacheInUse`), so each server
+    // gets its own.
+    let spawn = |cache: &str| {
         let data = data.clone();
-        thread::spawn(move || Server::start(&data, &[], &[]))
+        let cache = dir.path().join(cache).display().to_string();
+        thread::spawn(move || {
+            Server::start(&data, &[], &[("OPENXET_GIT__CACHE_DIR", cache.as_str())])
+        })
     };
-    let (a, b) = (spawn(), spawn());
+    let (a, b) = (spawn("cache-a"), spawn("cache-b"));
     let (a, b) = (a.join().unwrap(), b.join().unwrap());
     assert_eq!(a.token(), b.token());
     a.stop();

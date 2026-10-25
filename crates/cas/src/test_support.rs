@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
+use axum::Router;
 use axum::body::{Body, Bytes};
 use http_body::{Frame, SizeHint};
 use http_body_util::channel::{Channel, Sender};
@@ -23,7 +24,19 @@ use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
 use tokio::sync::Semaphore;
 use url::Url;
 
+use crate::routes::Routes;
 use crate::{AppState, CasConfig};
+
+/// `routes` with `state`, composed as `openxet serve` composes the CAS.
+pub(crate) fn serve(routes: Routes, state: AppState) -> Router {
+    let body_deadline = state.cfg.body_deadline;
+    openxet_http::compose(vec![routes.with_state(state)], body_deadline)
+}
+
+/// The CAS's routes with `state`, composed as `openxet serve` composes them.
+pub(crate) fn router(state: AppState) -> Router {
+    serve(crate::routes(), state)
+}
 
 /// State over a fresh index and bucket in `dir`, accepting `tokens`.
 pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {
@@ -74,6 +87,10 @@ impl PermitProbe {
 
 #[async_trait::async_trait]
 impl Index for PermitProbe {
+    async fn probe(&self) -> Result<(), IndexError> {
+        self.inner.probe().await
+    }
+
     async fn put_xorb(
         &self,
         xorb: &MerkleHash,
@@ -227,11 +244,15 @@ impl BlockingBucket {
 
 #[async_trait::async_trait]
 impl Bucket for BlockingBucket {
+    async fn probe(&self) -> Result<(), StorageError> {
+        self.inner.probe().await
+    }
+
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
         self.started.fetch_add(1, Ordering::SeqCst);
         let (delay, finished) = (self.delay, Arc::clone(&self.finished));
         let inner = Arc::clone(&self.inner);
-        let key = *key;
+        let key = key.clone();
         let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             std::thread::sleep(delay);
@@ -266,6 +287,39 @@ impl Bucket for BlockingBucket {
 
     async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
         self.inner.size(key).await
+    }
+
+    async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
+        self.inner.put_replace(key, bytes).await
+    }
+
+    async fn put_stream(
+        &self,
+        key: Key,
+        body: openxet_storage::BodyStream,
+        len: u64,
+    ) -> Result<(), StorageError> {
+        self.inner.put_stream(key, body, len).await
+    }
+
+    async fn get_to_file(&self, key: Key, path: &std::path::Path) -> Result<u64, StorageError> {
+        self.inner.get_to_file(key, path).await
+    }
+
+    async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
+        self.inner.last_modified(key).await
+    }
+
+    async fn list_under(
+        &self,
+        repo: openxet_storage::RepoIdHex,
+        kind: openxet_storage::KeyKind,
+    ) -> Result<Vec<Key>, StorageError> {
+        self.inner.list_under(repo, kind).await
+    }
+
+    async fn delete(&self, key: &Key) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
     }
 }
 

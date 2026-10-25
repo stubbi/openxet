@@ -18,9 +18,19 @@ hyper-util = { version = "0.1.21", features = ["server-graceful", "tokio"] }
 openxet-auth = { path = "../auth", version = "0.0.0" }
 openxet-cas = { path = "../cas", version = "0.0.0" }
 openxet-client = { path = "../client", version = "0.0.0" }
+openxet-git = { path = "../git", version = "0.0.0" }
+openxet-http = { path = "../http", version = "0.0.0" }
+openxet-hub = { path = "../hub", version = "0.0.0" }
 openxet-index = { path = "../index", version = "0.0.0" }
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
 openxet-storage = { path = "../storage", version = "0.0.0" }
+# `openxet label`'s requests, with the TLS the client core uses.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+# Not used directly: reqwest takes rustls without its default features, which
+# leaves `prefer-post-quantum` off and offers X25519MLKEM768 last. Cargo
+# unifies features, so this turns it on for every rustls client in the
+# binary: the client core's and `openxet label`'s (ADR 0011 item 1, #66).
+rustls = { version = "0.23.46", default-features = false, features = ["prefer-post-quantum"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -36,8 +46,10 @@ libc = "0.2.191"
 
 [dev-dependencies]
 assert_cmd = "2"
+bytes = "1.12.1"
+futures-util = "0.3.34"
 predicates = "3"
-reqwest = { version = "0.13.5", default-features = false }
+rustls = { version = "0.23.46", default-features = false, features = ["std"] }
 sha2 = "0.11.1"
 tempfile = "3"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }

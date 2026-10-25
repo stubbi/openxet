@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::header::{AUTHORIZATION, RANGE};
-use openxet_auth::{Authenticator, Mode, StaticToken, UrlSigner};
-use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, router};
+use openxet_auth::{Authenticator, CasGrant, Mode, StaticToken, UrlSigner};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, MemoryBudget, SendDeadline, mounted};
+use openxet_http::compose;
 use openxet_index::{
     ChunkTable, FileRecord, Index as _, NewFile, Registrant, SqliteIndex, Term, Visibility,
 };
@@ -148,10 +149,13 @@ fn shaped(shape: Shape, terms: u32) -> FileRecord {
 fn state(dir: &Path, index: SqliteIndex) -> AppState {
     let token = StaticToken {
         sha256: StaticToken::digest(READ),
-        scope: SCOPE.to_owned(),
-        mode: Mode::Read,
         subject: "large-files".to_owned(),
-        tenant: None,
+        cas: Some(CasGrant {
+            scope: SCOPE.to_owned(),
+            mode: Mode::Read,
+            tenant: None,
+        }),
+        user: None,
     };
     AppState::new(
         Arc::new(index),
@@ -245,7 +249,8 @@ pub async fn get(
     }
     let request = request.body(Body::empty()).unwrap();
     let started = Instant::now();
-    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let app = compose(vec![mounted(state.clone())], state.cfg.body_deadline);
+    let response = app.oneshot(request).await.unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let took = started.elapsed();

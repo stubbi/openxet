@@ -32,7 +32,7 @@ hash.
 | Source | Form | Example |
 | ------ | ---- | ------- |
 | File | `[section]` and `key = value` | `[cas]` `url_lifetime = "45m"` |
-| Environment | `OPENXET_<SECTION>__<KEY>`, case-insensitive, `__` between section and key | `OPENXET_CAS__URL_LIFETIME=45m` |
+| Environment | `OPENXET_<SECTION>__<KEY>`, case-insensitive, `__` between section and key and between a subsection and its key | `OPENXET_CAS__URL_LIFETIME=45m`, `OPENXET_GIT__REACHABILITY__MAX_MS=3000` |
 | Flags | `--port N` replaces the port of `server.bind`; `--data-dir DIR` and `--log-format text\|json` replace their keys | `--port 0` |
 
 An environment value is taken as written for string keys. For the other
@@ -45,7 +45,7 @@ the file or the environment is a problem, not ignored.
 
 Durations are a whole number and one unit: `s`, `m`, `h` or `d`, such as
 `30s`, `60m`, `24h` or `30d`. Sizes are a whole number and one binary
-unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
+unit: `KiB`, `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 
 ## Keys
 
@@ -55,7 +55,7 @@ unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | --- | ------- | ------ | ------- |
 | `bind` | `127.0.0.1:8080` | an IP address and port | Where to listen. `0.0.0.0:8080` or `[::]:8080` listens on every interface and then needs `public_url`. `hf_xet`'s default CAS endpoint is `http://localhost:8080`. |
 | `public_url` | `http://` and the bound address | absolute `http` or `https` URL of an origin root | The URL clients reach the server at. Every transfer URL is built from it. |
-| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
+| `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key`, `cas-token.key`, by default the Git cache `git-cache/` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
 | `log_format` | `text` | `text` or `json` | Log lines on stderr. |
 | `log_level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | openxet's own log level. Other libraries log warnings and errors only. `debug` logs one line per request. |
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
@@ -97,6 +97,10 @@ Requests that don't fit wait for bytes to come free:
 - A reconstruction that fits in the free bytes takes them at once, past
   any queued upload, so uploads never hold up downloads. One that doesn't
   fit waits up to 5 s. A batch's own body waits the same way.
+
+Answers that fit go ahead of queued uploads, so under read load that
+holds nearly the whole budget, uploads can wait their full 120 s and get
+`503`.
 
 After its wait a request is refused with `503 memory_busy` and
 `Retry-After: 1`; stock clients retry it. An upload refused so is not
@@ -155,12 +159,71 @@ configure at least one credential.
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
 | `static_tokens` | none | an array of tables | Long-lived tokens, by hash. See [Static tokens](#static-tokens). |
+| `rules` | none | an array of tables | What user credentials may do per repository. See [Rules](#rules). |
 | `jwt_public_keys` | none | an array of strings | Ed25519 public keys trusted to sign CAS tokens: a file path, or the PEM itself. See [CAS tokens](#cas-tokens). |
 | `max_token_lifetime` | `24h` | `1m` to `30d` | A CAS token whose `exp` lies further ahead than this is refused. |
 
-Every request needs a credential: there are no anonymous reads. The two
+Every request needs a credential: there are no anonymous reads unless a
+[rule](#rules) for `anonymous` grants them on a repository. The other
 exceptions are the probes, `GET /healthz` and `GET /readyz`, which answer
 a fixed body that says nothing about stored data.
+
+### `[hub]`
+
+The Hub API, which `huggingface_hub` and the `hf` CLI call, is served at
+the root of the same origin as the CAS.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `public_url` | `server.public_url` | absolute `http` or `https` URL of an origin root | The URL clients reach the Hub API at: their `HF_ENDPOINT`. Every repository URL the Hub answers is built from it, and `huggingface_hub` parses those against its endpoint, so it must be the one clients use. |
+| `cas_url` | `server.public_url` | absolute `http` or `https` URL of an origin root | The CAS URL the Hub's tokens name. Set it only when clients reach the CAS at another URL than the server's. |
+| `lfs_threshold` | `1MiB` | `1KiB` to `10MiB` | Files at least this large are uploaded through Xet; smaller ones travel inside the commit as Git blobs. |
+| `max_commit_bytes` | `64MiB` | `1MiB` to `1GiB`, and at least twice `lfs_threshold` | The largest commit body. A regular file travels base64-encoded inside it. |
+| `token_ttl` | `15m` | `1m` to `24h`, and at most `auth.max_token_lifetime` | How long the CAS tokens the Hub hands clients live. Clients refresh them before they expire. |
+| `page_size` | `1000` | `1` to `1000` | The most entries one listing page holds. A listing with more answers `Link: <…>; rel="next"`, which `huggingface_hub` follows. |
+| `commit_wait` | `30s` | `1s` to `10m` | How long a Hub commit waits for the commits to the same branch already running on this node. One that waits longer is refused as retryable (`503` with `Retry-After`), and `huggingface_hub` retries it. |
+
+A repository the caller may not read answers exactly as one that doesn't
+exist: `404` with `X-Error-Code: RepoNotFound`. A request without a
+credential gets `401` instead, unless a [rule](#rules) for `anonymous`
+grants the read.
+
+### `[git]`
+
+The Git engine behind the Hub's commits and reads and Git smart HTTP. It
+keeps a node-local cache of packs hydrated from the bucket, and runs
+`git` 2.37 or newer from `PATH`.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `cache_dir` | `<data_dir>/git-cache` | a directory path | The node's Git cache: hydrated packs, per-request snapshots and the `proc-receive` hook (a link to the openxet binary). It must be on a filesystem with hard links. One process holds it at a time: a second `serve` given the same directory refuses to start, naming the key, so servers that share a data directory each need their own `cache_dir`. |
+| `cache_max_bytes` | `20GiB` | `1GiB` to `1PiB` | The cache is evicted down to this size; an evicted pack is hydrated from the bucket again when a request needs it. |
+| `max_plain_blob_bytes` | unset | `1KiB` to `1TiB` | A pushed blob larger than this that is not a Git LFS pointer is refused, and the message names `git lfs track`. Unset, any size is accepted. |
+
+#### `[git.reachability]`
+
+Limits on the reachability check that a fetch asking for an object by its
+id runs, so one request can't walk a whole history. A request over a limit
+is refused as retryable.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `max_commits` | `200000` | `1` or more | The most commits one check may walk. |
+| `max_ms` | `2000` | `1` or more | The most milliseconds one check may take. |
+| `max_concurrent_per_repo` | `2` | `1` or more | The most checks running at once in one repository. |
+| `max_concurrent_per_principal` | `4` | `1` or more | The most checks one caller may run at once. |
+
+#### `[git.thin_bases]`
+
+Limits on the check a push's thin pack goes through: every base object it
+leaves out must be reachable from a ref the pusher may read. A push over a
+limit is refused as retryable. The check shares
+`[git.reachability]`'s concurrency limits.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `max_objects` | `2000000` | `1` or more | The most objects one check may visit. |
+| `max_ms` | `2000` | `1` or more | The most milliseconds one check may take. |
 
 ## Dev mode
 
@@ -168,12 +231,16 @@ Without a configuration file, or with one that has no `[auth]` section,
 `openxet serve` creates in `data_dir`, on first start:
 
 - `index.sqlite` and `bucket/`, the data (see [Keys and tokens on disk](#keys-and-tokens-on-disk) for modes)
-- `dev-token` (mode `0600`): one static write token for scope `default`
-- `transfer.key` (mode `0600`)
+- `dev-token` (mode `0600`): one static write token for scope `default`,
+  which is also the user `dev`; dev mode's one [rule](#rules) lets `dev`
+  read, write and create every repository
+- `transfer.key` and `cas-token.key` (mode `0600`)
+- `git-cache/`, the Git cache, unless `git.cache_dir` names another place
 
 It reuses all of them on every later start, so data, the token and transfer
 URLs signed before a restart keep working. It prints the endpoint, the data
-directory, the token and ready-to-paste upload commands on stdout. With
+directory, the token, ready-to-paste upload commands and the `HF_ENDPOINT`
+and `hf auth login --token …` lines for the `hf` CLI on stdout. With
 `--json` it prints one line instead:
 
 ```json
@@ -229,6 +296,16 @@ already handed out.
 - Remote bucket backends (M3) must require the key: with a shared bucket
   there is no shared data directory to hold a generated one.
 
+`cas-token.key` is an Ed25519 private key in PKCS#8 PEM, the format of
+`openxet token keygen`. The Hub signs the [CAS tokens](#cas-tokens) it
+hands clients (`xet-read-token` and `xet-write-token`) with it, and the
+CAS trusts its public key without it being listed in
+`auth.jwt_public_keys`. Like `transfer.key`, every node behind one
+endpoint must share it, or a token one node's Hub hands out is refused by
+another node's CAS. A missing key is generated, silently in dev mode and
+with a warning naming the file when `[auth]` is configured. Replacing it
+invalidates the tokens already handed out; clients fetch new ones.
+
 ## Token format
 
 Tokens openxet generates (the dev token and `openxet token generate`) are
@@ -240,26 +317,96 @@ scanners find a token committed by accident; this repository's own scan
 ## Static tokens
 
 A static token is configured by the SHA-256 of its UTF-8 bytes, never by
-the token itself:
+the token itself. It is a CAS credential, a user credential, or both
+(ADR 0012):
 
 ```toml
 [[auth.static_tokens]]
 sha256 = "<64 lowercase hex characters>"
-scope = "ci"
-mode = "write"      # or "read"
 subject = "ci-bot"  # who the token acts for
+scope = "ci"        # a CAS credential for this scope
+mode = "write"      # or "read"; required with scope
 tenant = "ci"       # optional; `scope:` and the scope when left out
+
+[[auth.static_tokens]]
+sha256 = "<64 lowercase hex characters>"
+subject = "alice"                      # no scope: a user credential
+name = "Alice Martin"                  # optional; whoami's name, the subject when left out
+email = "alice@example.com"            # optional; the author of her Hub commits
+claims = { orgs = ["acme"], groups = ["ml-team"] }  # optional; string lists that rules match
 ```
 
+- **CAS credential:** a token with `scope` may use the CAS routes within
+  that scope, as `mode` allows: `write` may upload; `read` may download
+  and query. `tenant` names the [tenant](#tenants) the scope belongs to.
+- **User credential:** a token without `scope` acts for its subject on
+  the Hub API, Git and LFS routes, where [rules](#rules) decide what it
+  may do per repository. It gets CAS access per repository from the Hub's
+  token routes, as `huggingface_hub` and `git-xet` do; presented to a CAS
+  route itself it answers `403 insufficient_scope`. `mode` and `tenant`
+  are then refused, since there is no scope for them to apply to.
+- **Both:** a token with `scope` and any of `name`, `email` or `claims` is
+  both credentials, for the same subject. The dev token is one.
+
 `openxet token generate --scope ci --mode write --subject ci-bot` prints a
-new token and this entry. Give each token its own `subject`, so the audit
+new CAS token and its entry; for a user token, leave out `scope` and `mode`
+from that entry. Give each token its own `subject`, so the audit
 log tells them apart. A presented token is hashed and compared against
 every configured hash in constant time. `scope` and `subject` must not be
 empty or contain control characters, and `scope` is at most 1024 bytes.
-`tenant` names the [tenant](#tenants) the scope belongs to. It follows the
-same rules as `scope` and may not start with `scope:`; without it the
-tenant is `scope:` and the scope.
-`write` may upload; `read` may download and query.
+A scope may not start with `repo:`, a prefix reserved for repositories;
+pick another scope. The subject of a user credential may not be
+`anonymous`, which names requests without a credential. `name`, `email`,
+claim names and claim values may not contain control characters.
+`tenant` follows the same rules as `scope` and may not start with
+`scope:`; without it the tenant is `scope:` and the scope.
+
+## Rules
+
+Rules decide what a user credential may do on the Hub API, Git and LFS
+routes: `read` a repository, `write` it (commit, push, change refs and
+labels; `write` includes `read`), or `create` repositories in a namespace.
+CAS routes don't consult them: a CAS credential's scope and mode decide
+there.
+
+```toml
+[[auth.rules]]
+subjects = ["alice"]            # these subjects
+claims = { groups = ["ml-team"] }  # or anyone holding one of these values under that claim
+repos = ["acme/*"]              # these repositories
+actions = ["read", "write", "create"]
+
+[[auth.rules]]
+subjects = ["anonymous"]        # everyone, with or without a credential
+repos = ["acme/public-model"]
+actions = ["read"]
+```
+
+- A request is allowed when any rule applies to the caller, covers the
+  repository and lists the action; with no such rule it is denied. Rules
+  only grant: their order doesn't matter and there is no deny rule.
+- A rule applies to a caller whose subject is in `subjects`, or who holds,
+  under any claim name in `claims`, any of the values listed for it. It
+  needs at least one subject or claim value. Subjects match exactly; `*`
+  is not a wildcard there.
+- `repos` are patterns: `*` alone covers every repository, and
+  `{namespace}/{name}` with `*` inside a part matches any characters
+  except `/`, so `acme/*` covers every repository in `acme`, `acme/llama-*`
+  the ones whose names start with `llama-`, and `a*/x` the repository `x`
+  in every namespace starting with `a`. `**` is refused. Matching ignores
+  ASCII case, as repository names do.
+- `create` on `acme/*` (or `*`) allows creating repositories in the
+  namespace `acme`. Creation is decided per namespace, before the name is
+  looked at, so a pattern such as `acme/llama-*` never grants it.
+- `anonymous` is the subject of a request without a credential. A rule
+  naming it applies to everyone, so a repository it makes readable is
+  readable with any credential too. No rule names it unless you add one.
+- A repository the caller may not read answers exactly as one that
+  doesn't exist.
+
+Without `[auth]`, in [dev mode](#dev-mode), the one rule is
+`subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`.
+With `[auth]` and no rules, user credentials may do nothing.
 
 ## CAS tokens
 
@@ -393,6 +540,13 @@ again.
   everything else, `GET /readyz` included, answers `503 not_ready` with
   `Retry-After: 1`. Then `GET /readyz` answers `200`, and the ready line or
   banner is printed.
+- **Readiness:** from then on `GET /readyz` answers `200` only while the
+  index answers a read and the bucket takes a write, and `503 unavailable`
+  naming `index` or `storage` otherwise; the cause is logged at error
+  level ([routes](routes.md#get-healthz-get-readyz)). Point the load
+  balancer's or orchestrator's readiness check at it, and the liveness
+  check at `GET /healthz`, so a node with a full disk leaves the rotation
+  without being restarted.
 - **Shutdown:** on `SIGTERM` or `SIGINT` the server stops accepting
   connections, lets in-flight requests finish within `shutdown_grace`, and
   exits 0. A second signal exits at once with code 1. Every acknowledged
@@ -407,6 +561,11 @@ again.
   limits come with rate limiting in M3.
 - The server speaks HTTP/1.1, which is what stock clients use. Put TLS in
   front of it with a proxy, and set `public_url` to the proxy's URL.
+  Choose a proxy that negotiates the hybrid post-quantum key exchange
+  `X25519MLKEM768` ([ADR 0011](../adr/0011-post-quantum-readiness.md)):
+  one built on OpenSSL 3.5 or later, or on Go 1.24 or later, does by
+  default unless its config overrides the key exchange groups (for
+  nginx, `ssl_ecdh_curve`).
 
 ## Example
 
@@ -430,4 +589,17 @@ sha256 = "<from openxet token generate>"
 scope = "ci"
 mode = "write"
 subject = "ci-bot"
+
+[[auth.static_tokens]]
+sha256 = "<from openxet token generate>"
+subject = "alice"
+claims = { groups = ["ml-team"] }
+
+[[auth.rules]]
+claims = { groups = ["ml-team"] }
+repos = ["acme/*"]
+actions = ["read", "write", "create"]
+
+[hub]
+lfs_threshold = "4MiB"
 ```

@@ -185,3 +185,169 @@ state, mobile menu/Escape and form failure with retained input were exercised.
 These are browser checks, not a completed assistive-technology or user study.
 Cross-browser and physical-device testing, field Core Web Vitals, and first-time
 participant comprehension remain follow-up evidence needs.
+
+## Published homepage and waitlist verification — 2026-10-24
+
+<!-- release-verification: 270ccd84bb9740ae5346fb059b0e256ff4df6e61 -->
+
+PR [#58](https://github.com/stubbi/openxet/pull/58) merged as
+[`270ccd84bb97`](https://github.com/stubbi/openxet/commit/270ccd84bb9740ae5346fb059b0e256ff4df6e61). The operator verified the successful
+[GitHub Pages deployment](https://github.com/stubbi/openxet/actions/runs/40125379486) and checked the public website and waitlist
+before recording this release. The waitlist is deployed independently: its exact
+Sites v3 source, deployment and production HTTP signup/withdrawal evidence are in
+[the operating guide](../hosted-waitlist.md#deployed-revision).
+
+Recorded candidate checks passed: **20 Python site tests, 11 JavaScript behavior
+tests and 31 service tests**, the site build and local links/fragments, plus the
+waitlist TypeScript check and production build. The pre-merge redaction guard and
+harness-isolation run passed **580 tests**. These are recorded test runs, not a
+claim that this documentation update reran them.
+
+The measured homepage HTML, CSS and JavaScript total **10.87 KiB gzip**; JavaScript
+accounts for **1.19 KiB gzip**. The three self-hosted font files total **73.11 KiB**.
+These are local artifact sizes and gzip estimates, not measured network transfer,
+field loading or responsiveness metrics.
+
+Chrome checks covered 320, 390, 768 and 1440 CSS pixels without horizontal page
+overflow on the homepage and waitlist, and exercised the diagram, mobile menu and
+Escape, form validation and retained input after failure. On 2026-10-24, a real
+browser checked the then-public, pre-release docs search: sequentially typing
+`upload` produced 30 results including the CLI reference and storage quickstart.
+Opening the quickstart result reached `#4-upload-and-download-with-openxet` with
+the heading highlighted. This is a search interaction observation, not a
+screen-reader evaluation or a post-release search test.
+
+ADR 0009 and the URI milestone handoff record a future `xet://` contract: M2
+specification/shared parser, M6 client integration and M7 published support
+evidence. No URI parser, SDK adapter or operating-system handler ships in this
+website release. HTTPS remains the canonical browser link.
+
+### Final public automated audit
+
+The final public audit used Squirrel **0.0.133** at `2026-10-24T19:29:00.581Z`.
+The report records full coverage, a 100-page cap, no cap reached,
+and no replayed pages. Overall score: **83/B**.
+
+| Reported measure | Result |
+| --- | ---: |
+| Crawled resources | 76 |
+| HTML pages evaluated | 40 |
+| Passed summary checks | 4523 |
+| Warning summary checks | 235 |
+| Failed summary checks | 0 |
+| Total summary checks (passed + warnings + failed) | 4758 |
+| Errors summed from reported score groups | 0 |
+| Listed issue rules | 27 |
+| Listed failing rules | 0 |
+| Listed warning rules | 27 |
+| Listed error-severity rules | 0 |
+
+Summary counts and listed rule counts measure different things. Shared markup can
+trigger several rules; these totals are not counts of independent product defects.
+
+The XML lists no failed or error-severity issue rules. Warning findings still
+need interpretation; this result does not establish usability or accessibility compliance.
+
+The same Squirrel version previously reported 49/F and 116 failed summary
+checks before the documentation release, then 73/C and three failed checks
+after PR #56. Discovery and page coverage changed, so score changes are
+directional; individual rule findings provide the stronger comparison.
+
+Audit input: `openxet-audit-release2.txt`; SHA-256 `6e64acd82f1a78091d71ed8c903e9ff4d96638626ee98283956eb36efa1e8f7e`.
+
+### Evidence still needed
+
+- Participant testing of first-time comprehension, successful setup and return use.
+- Cross-browser and physical-device checks.
+- Assistive-technology evaluation beyond the recorded browser and automated checks.
+- Production field Core Web Vitals.
+
+The release demonstrates the checks above. It does not establish perfection,
+usability for every visitor, accessibility compliance, conversion gains or loyalty.
+
+
+### Live browser signup and homepage check
+
+After PR #58 deployed, Chrome on `https://openxet.com/waitlist/` rejected `a@b`
+with an actionable email message and `aria-invalid=true`. A synthetic
+`example.com` request reached “Your request is saved”; the private-link copy
+control reported success. The synthetic request was then withdrawn through the
+API without logging its receipt. The deployed HTTP smoke test also passed again
+and removed its own synthetic request. No launch email was sent.
+
+The published homepage was visually inspected in its automatic dark appearance.
+The “All new” control showed zero reused parts and eight new parts, and “Small
+edit” restored seven reused parts and one new part. These checks establish the
+observed interactions, not comprehensive operating-system or browser coverage.
+
+### Warning triage
+
+All **27 listed warning rules** in the final Squirrel report were reviewed against
+the generated site and source. The 235 warning checks are not 235 independent
+defects. No additional functional release blocker was confirmed. The missing
+`security.txt` discovery route is addressed by the separate follow-up; its public
+availability must be checked after deployment.
+
+- **Canonical aliases:** `crawl/sitemap-coverage`, `core/title-unique`,
+  `content/duplicate-title` and `content/duplicate-description` refer to `/docs/`
+  and `/docs/index.html`. Both identify `/docs/` as canonical; the sitemap contains
+  that preferred URL. Keep the working alias and canonical-only sitemap rather
+  than inventing different content or indexing both. This follows
+  [Google's canonical sitemap guidance](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap).
+- **Copy thresholds:** `core/meta-title`, `core/meta-description`,
+  `content/keyword-stuffing`, `content/word-count` and
+  `content/title-pattern-outlier` mostly reflect concise task pages, repeated
+  technical vocabulary and different marketing/documentation title formats.
+  Do not pad the waitlist or replace precise protocol terms to satisfy counts.
+  Next iteration: remove the redundant `openxet docs - openxet docs` title and
+  improve individual descriptions where they fail to explain the page, without
+  treating character limits as a writing goal.
+- **Agent discovery:** `ax/agents-md` and `ax/markdown-response` do not account
+  for the existing `llms.txt`, per-document Markdown files, alternate links and
+  visible Markdown links. There is no content-negotiated Markdown response at
+  the homepage. Publishing repository editing instructions at the site root
+  would not improve this reader contract; avoid a duplicate, drifting manual.
+- **Documentation performance:** `perf/inp-hints`, `perf/dom-size`,
+  `perf/render-blocking`, `perf/critical-request-chains` and `perf/unminified-js`
+  identify real mdBook assets and long reference documents, not measured field
+  failures. The report's resource attribution also lists docs scripts against
+  marketing pages that do not load them. Profile representative docs on a slower
+  device before changing script order, styles or document structure; preserve
+  working search, sidebar, keyboard navigation and code copying. The small
+  marketing modules do not justify adding a build dependency merely to remove
+  an unminified-source warning.
+- **Security controls:** `security/csp`, `security/hsts` and
+  `security/x-frame-options` identify absent static-origin response controls.
+  Keep these as explicit hosting-hardening work for the next iteration, with
+  tested header control and HTTPS behavior; they are not proof of an exploited
+  vulnerability or a blocker for this public waitlist release. A meta CSP cannot
+  supply `frame-ancestors` protection ([CSP specification](https://www.w3.org/TR/CSP/#directive-frame-ancestors)).
+  The separate service already sends CSP on native form responses.
+  `security/form-captcha` does not mean abuse controls are absent: the service
+  validates bounded input, checks origin, uses a honeypot and enforces persistent
+  client/global rate limits. Reconsider challenges if abuse warrants their cost.
+  `security/security-txt` is the concrete discovery fix noted above.
+- **Navigation:** `links/no-contextual-inbound` identifies pages reachable mainly
+  through the book navigation; add relevant task-to-reference links when they
+  help a reader. `a11y/identical-links-same-purpose` identifies repeated `config`
+  labels for different sections of the same reference. The surrounding sentence,
+  list or table cell supplies purpose, as permitted by
+  [WCAG's link-context criterion](https://www.w3.org/WAI/WCAG22/Understanding/link-purpose-in-context.html).
+  Next iteration: use specific labels such as “memory configuration” to improve
+  scanning and assistive-technology link lists. These are navigation improvements,
+  not a confirmed conformance failure from this rule alone.
+- **Asset and URL conventions:** `social/asset-divergence` compares two
+  byte-identical favicon files under different build URLs and the docs/marketing
+  theme colors. Align the docs browser theme color with its actual surface in a
+  later polish pass; do not replace correct assets to match a path majority.
+  `url/lowercase` concerns existing research filenames. Preserve working URLs;
+  any future naming migration must retain redirects or aliases.
+- **Contact and privacy discovery:** `eeat/contact-page` misses the existing
+  project contact routes on About and Privacy. `eeat/privacy-policy` correctly
+  observes that docs pages lack a direct Privacy link. Add a concise shared docs
+  link in the next navigation iteration so readers can find the notice without
+  returning to marketing pages. Neither finding justifies duplicating contact
+  pages or adding claims unsupported by the project's actual practices.
+
+These dispositions complete this warning review, not the outstanding participant,
+cross-browser, physical-device, assistive-technology or field-performance work.

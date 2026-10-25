@@ -12,8 +12,9 @@ use ed25519_dalek::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _, EncodePr
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use openxet_auth::{
-    AuthError, Authenticator, ForbiddenReason, MAX_TOKEN_BYTES, Mode, Principal, PublicKey,
-    StaticToken, TokenSigner, TransferQuery, UrlSigner, generate_keypair,
+    AuthError, Authenticator, CasGrant, Credential, ForbiddenReason, MAX_TOKEN_BYTES, Mode,
+    Principal, PublicKey, StaticToken, TokenSigner, TransferQuery, UrlSigner, UserPrincipal,
+    UserProfile, generate_keypair,
 };
 use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use sha2::Sha256;
@@ -26,10 +27,21 @@ const STATIC_SECRET: &str = "oxt_static_secret_never_printed_0123456789";
 fn static_token(secret: &str, mode: Mode) -> StaticToken {
     StaticToken {
         sha256: StaticToken::digest(secret),
-        scope: "org/model".to_owned(),
-        mode,
         subject: "ci".to_owned(),
-        tenant: None,
+        cas: Some(CasGrant {
+            scope: "org/model".to_owned(),
+            mode,
+            tenant: None,
+        }),
+        user: None,
+    }
+}
+
+/// The CAS credential `credential` must be.
+fn cas(credential: Credential) -> Principal {
+    match credential {
+        Credential::Cas(principal) => principal,
+        other => panic!("expected a CAS credential only, got {other:?}"),
     }
 }
 
@@ -59,7 +71,7 @@ fn static_token_matches_by_hash() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static token");
+    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).expect("static token"));
     assert_eq!(
         principal,
         Principal {
@@ -78,16 +90,16 @@ fn static_token_matches_by_hash() {
 #[test]
 fn static_token_tenant_is_configured_or_the_scope() {
     let mut org = static_token("org secret", Mode::Read);
-    org.tenant = Some("org".to_owned());
+    org.cas.as_mut().unwrap().tenant = Some("org".to_owned());
     let auth = Authenticator::new(
         vec![static_token(STATIC_SECRET, Mode::Read), org],
         vec![],
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static");
+    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).expect("static"));
     assert_eq!(principal.tenant, "scope:org/model");
-    let principal = auth.authenticate("org secret", NOW).expect("static");
+    let principal = cas(auth.authenticate("org secret", NOW).expect("static"));
     assert_eq!(principal.scope, "org/model");
     assert_eq!(principal.tenant, "org");
 }
@@ -105,7 +117,7 @@ fn static_tokens_with_invalid_tenant_are_rejected_at_construction() {
         "scope:",
     ] {
         let mut token = static_token(STATIC_SECRET, Mode::Read);
-        token.tenant = Some(tenant.to_owned());
+        token.cas.as_mut().unwrap().tenant = Some(tenant.to_owned());
         let error = Authenticator::new(
             vec![token],
             vec![],
@@ -117,6 +129,153 @@ fn static_tokens_with_invalid_tenant_are_rejected_at_construction() {
             "{tenant:?}: {error:?}"
         );
     }
+}
+
+fn user_token(secret: &str, subject: &str, profile: UserProfile) -> StaticToken {
+    StaticToken {
+        sha256: StaticToken::digest(secret),
+        subject: subject.to_owned(),
+        cas: None,
+        user: Some(profile),
+    }
+}
+
+fn authenticator(tokens: Vec<StaticToken>) -> Result<Authenticator, AuthError> {
+    Authenticator::new(tokens, vec![], Authenticator::DEFAULT_MAX_TOKEN_LIFETIME)
+}
+
+/// A static token without a scope is a user credential only (ruling M2-R3):
+/// its name defaults to the subject, and it carries its claims.
+#[test]
+fn token_without_scope_is_user_only() {
+    let orgs = std::collections::BTreeMap::from([(
+        "orgs".to_owned(),
+        vec!["acme".to_owned(), "research".to_owned()],
+    )]);
+    let auth = authenticator(vec![
+        user_token(
+            STATIC_SECRET,
+            "alice",
+            UserProfile {
+                claims: orgs.clone(),
+                ..UserProfile::default()
+            },
+        ),
+        user_token(
+            "named secret",
+            "bob",
+            UserProfile {
+                name: Some("Bob B.".to_owned()),
+                email: Some("bob@example.com".to_owned()),
+                ..UserProfile::default()
+            },
+        ),
+    ])
+    .expect("valid config");
+    let credential = auth.authenticate(STATIC_SECRET, NOW).expect("user token");
+    assert_eq!(
+        credential,
+        Credential::User(UserPrincipal {
+            subject: "alice".to_owned(),
+            name: "alice".to_owned(),
+            email: None,
+            claims: orgs,
+        })
+    );
+    assert_eq!(credential.cas(), None);
+    let bob = auth.authenticate("named secret", NOW).expect("user token");
+    let bob = bob.user().expect("a user credential");
+    assert_eq!(
+        (bob.name.as_str(), bob.email.as_deref()),
+        ("Bob B.", Some("bob@example.com"))
+    );
+}
+
+/// A static token with a scope and a user identity is both credentials,
+/// for the same subject.
+#[test]
+fn token_with_scope_and_claims_is_both() {
+    let claims = std::collections::BTreeMap::from([("groups".to_owned(), vec!["ml".to_owned()])]);
+    let mut token = static_token(STATIC_SECRET, Mode::Write);
+    token.user = Some(UserProfile {
+        claims: claims.clone(),
+        ..UserProfile::default()
+    });
+    let auth = authenticator(vec![token]).expect("valid config");
+    let credential = auth.authenticate(STATIC_SECRET, NOW).expect("static token");
+    let Credential::Both(principal, user) = credential else {
+        panic!("expected both credentials, got {credential:?}");
+    };
+    assert_eq!(
+        (
+            principal.subject.as_str(),
+            principal.scope.as_str(),
+            principal.mode
+        ),
+        ("ci", "org/model", Mode::Write)
+    );
+    assert_eq!((user.subject.as_str(), user.claims), ("ci", claims));
+
+    // Without a user identity it stays the M1 CAS credential.
+    let auth = authenticator(vec![static_token(STATIC_SECRET, Mode::Read)]).expect("valid");
+    assert!(matches!(
+        auth.authenticate(STATIC_SECRET, NOW),
+        Ok(Credential::Cas(_))
+    ));
+}
+
+/// What a user token may not hold: the reserved subject, control
+/// characters in its identity, or nothing to grant at all.
+#[test]
+fn user_tokens_with_invalid_identity_are_rejected_at_construction() {
+    let claims = |name: &str, value: &str| UserProfile {
+        claims: std::collections::BTreeMap::from([(name.to_owned(), vec![value.to_owned()])]),
+        ..UserProfile::default()
+    };
+    let bad = [
+        user_token(STATIC_SECRET, "anonymous", UserProfile::default()),
+        user_token(STATIC_SECRET, "", UserProfile::default()),
+        user_token(STATIC_SECRET, "a\nb", UserProfile::default()),
+        user_token(
+            STATIC_SECRET,
+            "alice",
+            UserProfile {
+                name: Some("A\u{202E}lice".to_owned()),
+                ..UserProfile::default()
+            },
+        ),
+        user_token(
+            STATIC_SECRET,
+            "alice",
+            UserProfile {
+                email: Some(" ".to_owned()),
+                ..UserProfile::default()
+            },
+        ),
+        user_token(STATIC_SECRET, "alice", claims("", "x")),
+        user_token(STATIC_SECRET, "alice", claims("orgs", "a\rb")),
+        StaticToken {
+            sha256: StaticToken::digest(STATIC_SECRET),
+            subject: "alice".to_owned(),
+            cas: None,
+            user: None,
+        },
+    ];
+    for token in bad {
+        let shown = format!("{token:?}");
+        assert!(
+            matches!(
+                authenticator(vec![token]),
+                Err(AuthError::InvalidStaticToken { index: 0, .. })
+            ),
+            "{shown}"
+        );
+    }
+    // A CAS-only token may keep the subject `anonymous`, as in M1: it never
+    // reaches the authorizer.
+    let mut cas_only = static_token(STATIC_SECRET, Mode::Read);
+    cas_only.subject = "anonymous".to_owned();
+    assert!(authenticator(vec![cas_only]).is_ok());
 }
 
 #[test]
@@ -142,7 +301,7 @@ fn read_mode_cannot_write() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let principal = auth.authenticate(STATIC_SECRET, NOW).expect("static token");
+    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).expect("static token"));
     assert!(principal.can_read());
     assert!(!principal.can_write());
 }
@@ -164,9 +323,9 @@ fn jwt_round_trip_and_kid_rotation() {
         let token = s
             .sign("alice", "org/model", Mode::Read, NOW + 60, NOW)
             .expect("valid claims");
-        let principal = auth
+        let principal = cas(auth
             .authenticate(&token, NOW)
-            .expect("token from a known key");
+            .expect("token from a known key"));
         assert_eq!(principal.subject, "alice");
         assert_eq!(principal.scope, "org/model");
         assert_eq!(principal.mode, Mode::Read);
@@ -566,7 +725,7 @@ fn jwt_rejects_unknown_claims() {
 fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
     let (auth, key, header) = auth_for_raw_tokens();
     let token = sign_raw(&key, &header, &b64(&valid_claims().to_string()));
-    let principal = auth.authenticate(&token, NOW).expect("no tenant claim");
+    let principal = cas(auth.authenticate(&token, NOW).expect("no tenant claim"));
     assert_eq!(principal.tenant, "scope:org/model");
 
     let max = "t".repeat(1024);
@@ -576,7 +735,7 @@ fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
             &header,
             &b64(&with_claim("tenant", tenant.into()).to_string()),
         );
-        let principal = auth.authenticate(&token, NOW).expect("valid tenant");
+        let principal = cas(auth.authenticate(&token, NOW).expect("valid tenant"));
         assert_eq!(principal.tenant, tenant);
         assert_eq!(principal.scope, "org/model");
     }
@@ -598,12 +757,15 @@ fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
             NOW,
         )
         .expect("valid claims");
-    assert_eq!(auth.authenticate(&token, NOW).expect("valid").tenant, "org");
+    assert_eq!(
+        cas(auth.authenticate(&token, NOW).expect("valid")).tenant,
+        "org"
+    );
     let token = s
         .sign_with_tenant("alice", "org/model", None, Mode::Write, NOW + 60, NOW)
         .expect("valid claims");
     assert_eq!(
-        auth.authenticate(&token, NOW).expect("valid").tenant,
+        cas(auth.authenticate(&token, NOW).expect("valid")).tenant,
         "scope:org/model"
     );
 }
@@ -772,7 +934,7 @@ fn static_tokens_with_invalid_subject_or_scope_are_rejected_at_construction() {
     ] {
         let mut token = static_token(STATIC_SECRET, Mode::Read);
         token.subject = subject.to_owned();
-        token.scope = scope.to_owned();
+        token.cas.as_mut().unwrap().scope = scope.to_owned();
         let good = static_token("another secret", Mode::Read);
         let error = Authenticator::new(
             vec![good, token],
@@ -870,7 +1032,7 @@ fn subject_and_scope_reject_invisible_separator_and_blank_values() {
             "{value:?}"
         );
         let mut token = static_token(STATIC_SECRET, Mode::Read);
-        token.scope = value.clone();
+        token.cas.as_mut().unwrap().scope = value.clone();
         assert!(
             Authenticator::new(
                 vec![token],

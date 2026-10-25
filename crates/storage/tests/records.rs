@@ -178,7 +178,7 @@ async fn create_keeps_the_first_object() {
     let key = Key::registration("s", "t", h("shard"));
     let tasks: Vec<_> = (0..16u8)
         .map(|i| {
-            let b = Arc::clone(&bucket);
+            let (b, key) = (Arc::clone(&bucket), key.clone());
             tokio::spawn(async move {
                 let bytes = Bytes::from(vec![i; 10 + usize::from(i)]);
                 (b.create(&key, bytes.clone()).await.unwrap(), bytes)
@@ -235,7 +235,13 @@ async fn list_names_every_object_of_a_kind() {
             ),
         ];
         for (kind, key) in keys {
-            bucket.put(&key, Bytes::from_static(b"x")).await.unwrap();
+            // Each kind is written the one way it is (registrations are
+            // create-only).
+            if kind == KeyKind::Registration {
+                assert!(bucket.create(&key, Bytes::from_static(b"x")).await.unwrap());
+            } else {
+                bucket.put(&key, Bytes::from_static(b"x")).await.unwrap();
+            }
             want.push((kind, key));
         }
     }
