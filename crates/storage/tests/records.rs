@@ -235,7 +235,13 @@ async fn list_names_every_object_of_a_kind() {
             ),
         ];
         for (kind, key) in keys {
-            bucket.put(&key, Bytes::from_static(b"x")).await.unwrap();
+            // Each kind is written the one way it is (registrations are
+            // create-only).
+            if kind == KeyKind::Registration {
+                assert!(bucket.create(&key, Bytes::from_static(b"x")).await.unwrap());
+            } else {
+                bucket.put(&key, Bytes::from_static(b"x")).await.unwrap();
+            }
             want.push((kind, key));
         }
     }

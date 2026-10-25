@@ -10,8 +10,8 @@ use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use openxet_storage::{
-    Bucket, Key, KeyKind, LocalBucket, MidxExt, PackExt, PurgeRecord, RefLogEntry, RefLogRecord,
-    RepoIdHex, RepoMeta, STREAM_BLOCK_BYTES, StorageError,
+    Bucket, Key, KeyKind, LocalBucket, MidxExt, PackExt, PackName, PurgeRecord, RefLogEntry,
+    RefLogRecord, RepoIdHex, RepoMeta, STREAM_BLOCK_BYTES, StorageError,
 };
 
 const ID: &str = "0192f3a4b5c67d8e9fa0b1c2d3e4f5a6";
@@ -47,7 +47,7 @@ fn meta(name: &str, labels: &[&str]) -> RepoMeta {
 fn pack(repo_id: &str, ext: PackExt) -> Key {
     Key::Pack {
         repo: repo(repo_id),
-        name: PACK.to_owned(),
+        name: PackName::parse(PACK).unwrap(),
         ext,
     }
 }
@@ -314,10 +314,10 @@ async fn put_stream_keeps_the_first_pack() {
     assert_eq!(bucket.get(&key).await.unwrap().unwrap(), body);
 }
 
+/// A pack key can only hold a name git writes, so no backend ever builds a
+/// path from anything else.
 #[tokio::test]
-async fn put_stream_refuses_an_invalid_pack_name() {
-    let dir = tempfile::tempdir().unwrap();
-    let bucket = LocalBucket::open(dir.path()).unwrap();
+async fn pack_names_are_checked_at_construction() {
     for name in [
         "",
         "../../../escape",
@@ -326,29 +326,63 @@ async fn put_stream_refuses_an_invalid_pack_name() {
         "pack-1f2e3d4c5b6a79880716253443526170819a0b1c.pack",
         "1f2e3d4c5b6a79880716253443526170819a0b1c",
     ] {
-        let key = Key::Pack {
-            repo: repo(ID),
-            name: name.to_owned(),
-            ext: PackExt::Pack,
-        };
-        let err = bucket
-            .put_stream(key, blocks_of(b"x", 1), 1)
-            .await
-            .unwrap_err();
+        let err = PackName::parse(name).unwrap_err();
         assert!(
             matches!(err, StorageError::InvalidKey { .. }),
             "{name:?}: {err:?}"
         );
     }
-    let sha256 = Key::Pack {
+    let sha256 = format!("pack-{}", "ab".repeat(32));
+    assert_eq!(PackName::parse(&sha256).unwrap().as_str(), sha256);
+    assert_eq!(PackName::parse(PACK).unwrap().to_string(), PACK);
+
+    let dir = tempfile::tempdir().unwrap();
+    let bucket = LocalBucket::open(dir.path()).unwrap();
+    let key = Key::Pack {
         repo: repo(ID),
-        name: format!("pack-{}", "ab".repeat(32)),
+        name: PackName::parse(&sha256).unwrap(),
         ext: PackExt::Pack,
     };
-    bucket
-        .put_stream(sha256, blocks_of(b"x", 1), 1)
-        .await
-        .unwrap();
+    bucket.put_stream(key, blocks_of(b"x", 1), 1).await.unwrap();
+}
+
+/// A repository's metadata is only ever written whole with `put_replace`:
+/// `put` would keep an old record of the same size and answer `Ok`, a
+/// silent no-op. And `put` never touches a create-only record.
+#[tokio::test]
+async fn put_and_create_refuse_keys_written_another_way() {
+    let dir = tempfile::tempdir().unwrap();
+    let bucket = LocalBucket::open(dir.path()).unwrap();
+    let meta_key = Key::RepoMeta { repo: repo(ID) };
+    let bytes = meta("model", &[]).to_bytes();
+
+    let err = bucket.put(&meta_key, bytes.clone()).await.unwrap_err();
+    assert!(matches!(err, StorageError::InvalidKey { .. }), "{err:?}");
+    assert!(err.to_string().contains("put_replace"), "{err}");
+    let err = bucket.create(&meta_key, bytes).await.unwrap_err();
+    assert!(matches!(err, StorageError::InvalidKey { .. }), "{err:?}");
+    assert!(err.to_string().contains("put_replace"), "{err}");
+    assert_eq!(bucket.size(&meta_key).await.unwrap(), None);
+
+    for key in [
+        Key::RefLog {
+            repo: repo(ID),
+            seq: 1,
+        },
+        Key::Purge(h("purged")),
+        Key::registration("scope", "tenant", h("shard")),
+    ] {
+        let err = bucket
+            .put(&key, Bytes::from_static(b"r"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StorageError::InvalidKey { .. }),
+            "{key}: {err:?}"
+        );
+        assert!(err.to_string().contains("create"), "{err}");
+        assert_eq!(bucket.size(&key).await.unwrap(), None, "{key}");
+    }
 }
 
 #[tokio::test]

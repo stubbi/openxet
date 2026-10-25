@@ -204,13 +204,52 @@ impl MidxExt {
     }
 }
 
-/// Whether `name` is a pack name git writes: `pack-` and a 40 (SHA-1) or
-/// 64 (SHA-256) lowercase hex digit checksum. Anything else could name a
-/// path outside the repository's directory.
-pub(crate) fn is_pack_name(name: &str) -> bool {
-    name.strip_prefix("pack-").is_some_and(|sum| {
-        matches!(sum.len(), 40 | 64) && sum.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    })
+/// A Git pack's name as git writes it: `pack-` and its 40 (SHA-1) or 64
+/// (SHA-256) lowercase hex digit checksum. Checked at construction, so a
+/// pack key can't name a path outside its repository's directory.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackName(String);
+
+impl PackName {
+    /// Parses a pack name, such as the stem git's `index-pack` writes.
+    ///
+    /// # Errors
+    ///
+    /// [`StorageError::InvalidKey`] for anything else.
+    pub fn parse(name: &str) -> Result<Self, StorageError> {
+        let valid = name.strip_prefix("pack-").is_some_and(|sum| {
+            matches!(sum.len(), 40 | 64)
+                && sum.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        });
+        if valid {
+            Ok(Self(name.to_owned()))
+        } else {
+            Err(StorageError::InvalidKey {
+                key: name.escape_debug().to_string(),
+                reason: "a pack's name is `pack-` and its 40 or 64 lowercase hex digit checksum, as git writes it",
+            })
+        }
+    }
+
+    /// The name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for PackName {
+    type Err = StorageError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::parse(name)
+    }
+}
+
+impl fmt::Display for PackName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// The logical name of a stored object. Backends map it to their own layout;
@@ -247,9 +286,8 @@ pub enum Key {
     Pack {
         /// The repository.
         repo: RepoIdHex,
-        /// The pack's name as git writes it: `pack-` and its 40 or 64
-        /// lowercase hex digit checksum. A bucket refuses any other.
-        name: String,
+        /// The pack's name.
+        name: PackName,
         /// Which of the pack's files.
         ext: PackExt,
     },
@@ -325,21 +363,6 @@ impl Key {
             | Self::Purge(_) => None,
         }
     }
-
-    /// Checks the parts of the key its type doesn't: a pack's name.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::InvalidKey`] if the key names an invalid pack.
-    pub fn validate(&self) -> Result<(), StorageError> {
-        match self {
-            Self::Pack { name, .. } if !is_pack_name(name) => Err(StorageError::InvalidKey {
-                key: self.to_string().escape_debug().to_string(),
-                reason: "a pack's name is `pack-` and its 40 or 64 lowercase hex digit checksum, as git writes it",
-            }),
-            _ => Ok(()),
-        }
-    }
 }
 
 impl fmt::Display for Key {
@@ -404,6 +427,54 @@ impl KeyKind {
     }
 }
 
+/// How an object is written: each kind has one way (the [crate
+/// docs](crate#objects) list which).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteMode {
+    /// [`Bucket::put`] or [`Bucket::put_stream`]: bytes that follow from
+    /// the key, so a second write of the same size changes nothing.
+    Put,
+    /// [`Bucket::create`]: written once, the first writer's bytes kept.
+    Create,
+    /// [`Bucket::put_replace`]: overwritten whole.
+    Replace,
+}
+
+impl Key {
+    /// Refuses a write of `self` the way `how` writes, unless that is the
+    /// kind's way. Another way could keep an old object of the same size
+    /// and answer `Ok`, a silent no-op (`put` of a changed [`RepoMeta`]),
+    /// or replace an object that is written once.
+    pub(crate) fn check_write(&self, how: WriteMode) -> Result<(), StorageError> {
+        let (expected, reason) = match self.kind() {
+            KeyKind::RepoMeta => (
+                WriteMode::Replace,
+                "a repository's metadata record is written whole with put_replace",
+            ),
+            KeyKind::Registration | KeyKind::RefLog | KeyKind::Purge => (
+                WriteMode::Create,
+                "this record is written once with create, which keeps the first and says whether this call stored it",
+            ),
+            KeyKind::Xorb | KeyKind::Shard | KeyKind::XorbOwner | KeyKind::Pack | KeyKind::Midx => {
+                (
+                    WriteMode::Put,
+                    "this object is written with put or put_stream; only a repository's metadata record is ever replaced",
+                )
+            }
+        };
+        // `create` of a key `put` writes is M1's contract and stays allowed:
+        // it never replaces, and reports whether it stored.
+        if how == expected || (how == WriteMode::Create && expected == WriteMode::Put) {
+            Ok(())
+        } else {
+            Err(StorageError::InvalidKey {
+                key: self.to_string(),
+                reason,
+            })
+        }
+    }
+}
+
 /// A body being written block by block ([`Bucket::put_stream`]). A failure
 /// partway ends it with the error.
 pub type BodyStream = BoxStream<'static, Result<Bytes, std::io::Error>>;
@@ -444,8 +515,11 @@ pub trait Bucket: Send + Sync + 'static {
     /// different size. Keys are verified content hashes, so this means a bug
     /// or a hash collision. It is detected when puts are sequential and is
     /// best-effort under concurrent puts of the same key, so callers must
-    /// verify content before putting, not rely on this check. And
-    /// [`StorageError::Io`] if the write fails. Nothing is stored on error.
+    /// verify content before putting, not rely on this check.
+    /// [`StorageError::InvalidKey`] for a [`RepoMeta`], which only
+    /// [`Bucket::put_replace`] writes, and for a record written once with
+    /// [`Bucket::create`]. And [`StorageError::Io`] if the write fails.
+    /// Nothing is stored on error.
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError>;
 
     /// Stores `bytes` under `key` unless the key exists, for objects whose
@@ -456,7 +530,9 @@ pub trait Bucket: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// [`StorageError::Io`] if the write fails. Nothing is stored on error.
+    /// [`StorageError::InvalidKey`] for a [`RepoMeta`], which only
+    /// [`Bucket::put_replace`] writes, and [`StorageError::Io`] if the write
+    /// fails. Nothing is stored on error.
     async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError>;
 
     /// The whole object, or `None` if it does not exist. For small objects
@@ -542,9 +618,13 @@ pub trait Bucket: Send + Sync + 'static {
     /// object is then left as it was.
     async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError>;
 
-    /// Stores `len` bytes read from `body` under `key`, holding about one of
-    /// its blocks at a time, never the object: what packs are written with.
-    /// On `Ok` the bytes are durable.
+    /// Stores `len` bytes read from `body` under `key`, holding one of its
+    /// blocks at a time, never the object: what packs are written with. On
+    /// `Ok` the bytes are durable.
+    ///
+    /// Callers yield blocks of at most [`STREAM_BLOCK_BYTES`]: the bucket
+    /// writes each block as it comes and doesn't split it, so the block
+    /// size bounds the memory a write holds (ruling M1-R27).
     ///
     /// The object is written once. If `key` exists with `len` bytes the
     /// first object stays, so its [`Bucket::last_modified`] remains its
@@ -552,7 +632,8 @@ pub trait Bucket: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// [`StorageError::InvalidKey`] if `key` fails [`Key::validate`],
+    /// [`StorageError::InvalidKey`] if `key` isn't a kind [`Bucket::put`]
+    /// writes,
     /// [`StorageError::LengthMismatch`] if `body` doesn't hold exactly `len`
     /// bytes, [`StorageError::SizeConflict`] if `key` exists with another
     /// size, and [`StorageError::Io`] if reading `body` or the write fails.

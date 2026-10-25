@@ -16,8 +16,8 @@
 //! ```
 //!
 //! A repository's paths are its keys: a [`RepoIdHex`] is 32 hex digits and
-//! a pack's name is checked ([`Key::validate`]) before any path is built,
-//! so no key escapes its directory.
+//! a [`PackName`] is checked when it is made, so no key escapes its
+//! directory.
 //!
 //! `hex` is [`hash_to_hex`] of the key's xorb, shard or file; `{scope}` and
 //! `{tenant}` are [`NameHash`]es, 64 hex digits, so no name ever becomes a
@@ -40,8 +40,8 @@ use bytes::Bytes;
 use openxet_protocol::{MerkleHash, hash_from_hex, hash_to_hex};
 
 use crate::{
-    BodyStream, Bucket, Key, KeyKind, MidxExt, NameHash, PackExt, RangeStream, RepoIdHex,
-    STREAM_BLOCK_BYTES, StorageError, create_private_dir_all, is_pack_name,
+    BodyStream, Bucket, Key, KeyKind, MidxExt, NameHash, PackExt, PackName, RangeStream, RepoIdHex,
+    STREAM_BLOCK_BYTES, StorageError, WriteMode, create_private_dir_all,
 };
 
 const TMP_DIR: &str = ".tmp";
@@ -134,13 +134,7 @@ impl LocalBucket {
         })
     }
 
-    /// Where `key` lives.
-    ///
-    /// # Errors
-    ///
-    /// [`StorageError::InvalidKey`] if the key fails [`Key::validate`].
-    fn place(&self, key: &Key) -> Result<Place, StorageError> {
-        key.validate()?;
+    fn place(&self, key: &Key) -> Place {
         let (base, dir, hash) = match key {
             Key::Xorb(h) => {
                 let base = self.root.join(XORBS_DIR);
@@ -170,21 +164,21 @@ impl LocalBucket {
             }
             Key::RepoMeta { .. } | Key::Pack { .. } | Key::Midx { .. } | Key::RefLog { .. } => {
                 // The key's logical form is its path under the root.
-                return Ok(Place {
+                return Place {
                     base: self.root.join(REPOS_DIR),
                     path: self.root.join(key.to_string()),
-                });
+                };
             }
         };
         let hex = hash_to_hex(hash);
-        Ok(Place {
+        Place {
             base,
             path: dir.join(&hex[..2]).join(hex),
-        })
+        }
     }
 
-    fn path(&self, key: &Key) -> Result<PathBuf, StorageError> {
-        Ok(self.place(key)?.path)
+    fn path(&self, key: &Key) -> PathBuf {
+        self.place(key).path
     }
 }
 
@@ -440,6 +434,10 @@ struct StreamTemp {
 }
 
 impl Drop for StreamTemp {
+    // One unlink of a path inside the bucket. On success the guard is
+    // dropped on the blocking pool (it moves into the publishing task);
+    // only on an error or a dropped write does it run on an async worker,
+    // where the syscall is as short as the fsync-free cleanup M1 does.
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
@@ -643,7 +641,7 @@ fn repo_key(repo: RepoIdHex, kind: KeyKind, names: &[String]) -> Option<Key> {
             let (name, ext) = file.split_once('.')?;
             Some(Key::Pack {
                 repo,
-                name: is_pack_name(name).then(|| name.to_owned())?,
+                name: PackName::parse(name).ok()?,
                 ext: PackExt::parse(ext)?,
             })
         }
@@ -861,13 +859,15 @@ async fn blocking<T: Send + 'static>(
 #[async_trait::async_trait]
 impl Bucket for LocalBucket {
     async fn put(&self, key: &Key, bytes: Bytes) -> Result<(), StorageError> {
-        let (root, key, place) = (self.root.clone(), key.clone(), self.place(key)?);
+        key.check_write(WriteMode::Put)?;
+        let (root, key, place) = (self.root.clone(), key.clone(), self.place(key));
         let durable = Arc::clone(&self.fs);
         blocking(move || put_blocking(durable.as_ref(), &root, key, &place, &bytes)).await
     }
 
     async fn create(&self, key: &Key, bytes: Bytes) -> Result<bool, StorageError> {
-        let (root, place) = (self.root.clone(), self.place(key)?);
+        key.check_write(WriteMode::Create)?;
+        let (root, place) = (self.root.clone(), self.place(key));
         let durable = Arc::clone(&self.fs);
         blocking(move || create_blocking(durable.as_ref(), &root, &place, &bytes)).await
     }
@@ -883,7 +883,7 @@ impl Bucket for LocalBucket {
         start: u64,
         end_inclusive: u64,
     ) -> Result<Bytes, StorageError> {
-        let (key, path) = (key.clone(), self.path(key)?);
+        let (key, path) = (key.clone(), self.path(key));
         blocking(move || get_range_blocking(&path, key, start, end_inclusive)).await
     }
 
@@ -893,7 +893,7 @@ impl Bucket for LocalBucket {
         start: u64,
         end_inclusive: u64,
     ) -> Result<RangeStream, StorageError> {
-        let (key, path) = (key.clone(), self.path(key)?);
+        let (key, path) = (key.clone(), self.path(key));
         let (file, size, path) = blocking(move || {
             let (mut file, size) = open_range(&path, &key, start, end_inclusive)?;
             file.seek(SeekFrom::Start(start))
@@ -908,18 +908,13 @@ impl Bucket for LocalBucket {
     }
 
     async fn size(&self, key: &Key) -> Result<Option<u64>, StorageError> {
-        let path = self.path(key)?;
+        let path = self.path(key);
         blocking(move || existing_size(&path)).await
     }
 
     async fn put_replace(&self, key: Key, bytes: Bytes) -> Result<(), StorageError> {
-        if key.kind() != KeyKind::RepoMeta {
-            return Err(StorageError::InvalidKey {
-                key: key.to_string(),
-                reason: "only a repository's metadata record is ever replaced; every other object is written once, with put, create or put_stream",
-            });
-        }
-        let (root, place) = (self.root.clone(), self.place(&key)?);
+        key.check_write(WriteMode::Replace)?;
+        let (root, place) = (self.root.clone(), self.place(&key));
         let durable = Arc::clone(&self.fs);
         blocking(move || put_replace_blocking(durable.as_ref(), &root, &place, &bytes)).await
     }
@@ -930,7 +925,8 @@ impl Bucket for LocalBucket {
         mut body: BodyStream,
         len: u64,
     ) -> Result<(), StorageError> {
-        let place = self.place(&key)?;
+        key.check_write(WriteMode::Put)?;
+        let place = self.place(&key);
         let temp = StreamTemp {
             path: self
                 .root
@@ -984,13 +980,13 @@ impl Bucket for LocalBucket {
     }
 
     async fn get_to_file(&self, key: Key, path: &Path) -> Result<u64, StorageError> {
-        let (source, dest) = (self.path(&key)?, path.to_path_buf());
+        let (source, dest) = (self.path(&key), path.to_path_buf());
         let durable = Arc::clone(&self.fs);
         blocking(move || get_to_file_blocking(durable.as_ref(), key, &source, &dest)).await
     }
 
     async fn last_modified(&self, key: Key) -> Result<Option<u64>, StorageError> {
-        let path = self.path(&key)?;
+        let path = self.path(&key);
         blocking(move || last_modified_blocking(&path)).await
     }
 
@@ -1135,7 +1131,7 @@ mod tests {
             .await
             .unwrap();
 
-        let object_parent = bucket.path(&key).unwrap().parent().unwrap().to_path_buf();
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
         let prefix_parent = object_parent.parent().unwrap().to_path_buf();
         assert_eq!(
             rec.take(),
@@ -1163,7 +1159,7 @@ mod tests {
             .await
             .unwrap();
 
-        let object_parent = bucket.path(&key).unwrap().parent().unwrap().to_path_buf();
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
         let prefix_parent = object_parent.parent().unwrap().to_path_buf();
         assert_eq!(
             rec.take(),
@@ -1187,7 +1183,7 @@ mod tests {
                 .unwrap()
         );
 
-        let object_parent = bucket.path(&key).unwrap().parent().unwrap().to_path_buf();
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
         let tenant_dir = object_parent.parent().unwrap().to_path_buf();
         let scope_dir = tenant_dir.parent().unwrap().to_path_buf();
         let base = dir.path().join(REGISTRATIONS_DIR);
@@ -1226,7 +1222,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (bucket, rec) = recording_bucket(dir.path());
         let key = Key::Shard(chunk_hash(b"existing"));
-        let object_parent = bucket.path(&key).unwrap().parent().unwrap().to_path_buf();
+        let object_parent = bucket.path(&key).parent().unwrap().to_path_buf();
         std::fs::create_dir_all(&object_parent).unwrap();
         rec.take();
         bucket
@@ -1374,7 +1370,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_dir = bucket.path(&key).unwrap().parent().unwrap().to_path_buf();
+        let repo_dir = bucket.path(&key).parent().unwrap().to_path_buf();
         assert_eq!(
             rec.take(),
             [
@@ -1459,13 +1455,13 @@ mod tests {
         rec.take();
         let key = Key::Pack {
             repo: RepoIdHex::parse("0192f3a4b5c67d8e9fa0b1c2d3e4f5a6").unwrap(),
-            name: format!("pack-{}", "1f".repeat(20)),
+            name: PackName::parse(&format!("pack-{}", "1f".repeat(20))).unwrap(),
             ext: PackExt::Pack,
         };
         let body: BodyStream = Box::pin(Once(Some(Bytes::from_static(b"pack bytes"))));
         bucket.put_stream(key.clone(), body, 10).await.unwrap();
 
-        let packs = bucket.path(&key).unwrap().parent().unwrap().to_path_buf();
+        let packs = bucket.path(&key).parent().unwrap().to_path_buf();
         let repo_dir = packs.parent().unwrap().to_path_buf();
         assert_eq!(
             rec.take(),
