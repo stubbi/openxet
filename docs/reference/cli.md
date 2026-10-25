@@ -242,24 +242,31 @@ openxet purge 36f01138cb24db2e9c72d0c9fdb7dff31322b73b2e60b4d365bb1e3fb54d0f23 -
 - **Order.** It writes the purge record `purges/{hash}` to the bucket
   first, then removes the file's registrations from the index, then
   appends an `audit_log` row naming the actor, so the purge survives a
-  rebuild of the index. If it fails after the record, run it again: it is
-  safe to repeat, and a repeat reports `scopes_removed` 0 once nothing is
-  left.
+  rebuild of the index. The record carries `through_seq`, the
+  registration sequence number at the time of the purge: a rebuild skips
+  the file's registrations up to it, and keeps a later upload's.
+- **Repeating.** If it fails after the record, run it again: a repeat
+  completes the earlier purge under its record (its actor and
+  `through_seq`), with an audit row saying so, and reports
+  `scopes_removed` 0 once nothing is left.
+- **Unknown files.** A hash no scope holds and no purge recorded answers
+  `not_found` (exit 1), with `--dry-run` too, and writes nothing.
 - **What stays.** Dedup entries describe chunks, not files, and stay. The
   file's bytes stay in the bucket until garbage collection removes data no
   file references (nothing is deleted outside GC); until then they can't
   be downloaded, since no scope lists the file. Purge doesn't block the
   content: an upload of the same bytes afterwards registers the file
-  again to the uploader's scope.
+  again to the uploader's scope, and that registration survives a
+  rebuild.
 - **Confirmation.** `--dry-run` reports `scopes_removed`, the scopes it
   would remove the file from, and changes nothing. Otherwise, on a
   terminal it asks first, unless `--yes` is given. With `--json`, or
   without a terminal, it never asks: without `--yes` it exits 2 with
   `confirmation_required` and changes nothing.
 - **Actor.** The audit row and the purge record name `--actor`, or `cli:`
-  and the operating system user (`USER`, `LOGNAME` or `USERNAME`). With
-  none of those set, pass `--actor`; it exits 2 with `no_actor`
-  otherwise.
+  and the operating system user (`USER`, `LOGNAME` or `USERNAME`), at
+  most 256 bytes. With none of those set, pass `--actor`; it exits 2 with
+  `no_actor` otherwise.
 - **Data directory.** A directory without an index (`index.sqlite`) is
   refused with `index`, and nothing is created there. A bucket write that
   fails is `storage` and leaves the file registered everywhere.
@@ -295,7 +302,8 @@ alice/my-model: model, eval-logs
 - **Idempotent.** Adding a label the repository carries, or removing one
   it lacks, changes nothing and succeeds. If another writer changes the
   labels at the same moment, the server answers `labels_changed` and the
-  command sends its change again, up to three times.
+  command sends its change again after a random 50 to 200 ms pause, for
+  up to three attempts in all.
 - **Dry run.** `add` and `remove` with `--dry-run` read the labels and
   print what they would become, with `"dry_run":true`; nothing is
   changed. A dry run needs only `read` on the repository, so it doesn't

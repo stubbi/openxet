@@ -24,6 +24,19 @@ const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
 /// after another writer's change is safe.
 const ATTEMPTS: usize = 3;
 
+/// A random pause of 50 to 200 ms before resending a change, so writers
+/// that collided don't collide again in step.
+fn retry_delay() -> Duration {
+    let mut byte = [0u8; 1];
+    // Without randomness the pause is the midpoint: still a pause.
+    let spread = if getrandom::fill(&mut byte).is_ok() {
+        u64::from(byte[0]) * 150 / 255
+    } else {
+        75
+    };
+    Duration::from_millis(50 + spread)
+}
+
 /// The server and the token, as `upload` and `download` take them.
 #[derive(Debug, clap::Args)]
 pub struct HubArgs {
@@ -303,12 +316,18 @@ impl Client {
                  such as http://127.0.0.1:8080.",
             )
         })?;
-        if let Ok(mut segments) = url.path_segments_mut() {
-            segments
-                .pop_if_empty()
-                .extend(["api", "openxet", "v1", "repos", repo[0], repo[1], "labels"])
-                .extend(label);
-        }
+        url.path_segments_mut()
+            .map_err(|()| {
+                usage_error(
+                    "invalid_endpoint",
+                    "the endpoint can't take a path",
+                    "Set OPENXET_ENDPOINT (or --endpoint) to the endpoint `openxet serve` \
+                     prints, such as http://127.0.0.1:8080.",
+                )
+            })?
+            .pop_if_empty()
+            .extend(["api", "openxet", "v1", "repos", repo[0], repo[1], "labels"])
+            .extend(label);
         Ok(url)
     }
 
@@ -349,6 +368,7 @@ impl Client {
             let error = server_error(status, &body, &repo.join("/"));
             if error.code == "labels_changed" && attempt < ATTEMPTS {
                 attempt += 1;
+                tokio::time::sleep(retry_delay()).await;
                 continue;
             }
             return Err(error);
@@ -500,5 +520,20 @@ mod tests {
             client.url(&["a", "b"], None).unwrap().as_str(),
             "http://h:1/base/api/openxet/v1/repos/a/b/labels"
         );
+        assert_eq!(
+            client.url(&["a b", "c/d"], Some("x?y")).unwrap().as_str(),
+            "http://h:1/base/api/openxet/v1/repos/a%20b/c%2Fd/labels/x%3Fy"
+        );
+    }
+
+    #[test]
+    fn retries_pause_50_to_200_ms() {
+        for _ in 0..100 {
+            let delay = retry_delay();
+            assert!(
+                (Duration::from_millis(50)..=Duration::from_millis(200)).contains(&delay),
+                "{delay:?}"
+            );
+        }
     }
 }

@@ -171,6 +171,13 @@ fn purge_removes_file_from_every_scope_and_cas_answers_404() {
     std::fs::write(&other, noise(200_000, 18)).unwrap();
     let other_hash = f.upload(0, &other);
 
+    let long = "a".repeat(257);
+    let error = json_error(
+        &run(f.purge().args(["--yes", "--json", "--actor", &long])),
+        2,
+    );
+    assert_eq!(error["code"], "invalid_actor", "{error}");
+
     let out = run(f.purge().args(["--yes", "--json", "--actor", "ops"]));
     assert_eq!(
         json_stdout(&out),
@@ -194,11 +201,20 @@ fn purge_removes_file_from_every_scope_and_cas_answers_404() {
     assert_eq!(record["v"], 1);
     assert_eq!(record["file"], f.hash.as_str());
     assert_eq!(record["actor"], "ops");
+    // The registration sequence current at the purge: reindex skips the
+    // file's registrations up to it, and keeps a later upload's.
+    assert!(
+        record["through_seq"].as_u64().is_some_and(|seq| seq > 0),
+        "{record}"
+    );
 
-    // Purging again removes nothing more and succeeds.
-    let again = run(f.purge().args(["--yes", "--json"]));
+    // Purging again completes the earlier purge: nothing more is removed,
+    // it succeeds, and the record stays as it was.
+    let again = run(f
+        .purge()
+        .args(["--yes", "--json", "--actor", "someone-else"]));
     assert_eq!(json_stdout(&again)["scopes_removed"], 0);
-    assert_eq!(f.record()["actor"], "ops", "the first record stays");
+    assert_eq!(f.record(), record, "the first record stays");
 }
 
 /// The bucket's purge record is written before any index row is removed
@@ -208,15 +224,21 @@ fn purge_removes_file_from_every_scope_and_cas_answers_404() {
 fn purge_writes_bucket_record_first() {
     let f = Fixture::new();
     // A file where the record's prefix directory must go makes the bucket
-    // write fail on every platform, whoever runs the test.
+    // fail on every platform, whoever runs the test: before the record is
+    // durable, no index row may go.
     let blocker = f.record_path().parent().unwrap().to_owned();
     std::fs::write(&blocker, b"in the way").unwrap();
 
     let error = json_error(&run(f.purge().args(["--yes", "--json"])), 1);
     assert_eq!(error["code"], "storage", "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was purged"),
+        "{error}"
+    );
     f.assert_served_in_both_scopes();
-    let dry = run(f.purge().args(["--dry-run", "--json"]));
-    assert_eq!(json_stdout(&dry)["scopes_removed"], 2);
 
     std::fs::remove_file(&blocker).unwrap();
     let out = run(f
@@ -236,8 +258,13 @@ fn purge_json_requires_yes() {
     assert_eq!(error["code"], "confirmation_required", "{error}");
     assert!(error["hint"].as_str().unwrap().contains("--yes"), "{error}");
 
-    // Without a terminal to ask on, a person's run is refused the same way.
-    let human = run(&mut f.purge());
+    // Without a terminal to ask on, a person's run is refused the same way,
+    // before it asks who is running it.
+    let human = run(f
+        .purge()
+        .env_remove("USER")
+        .env_remove("LOGNAME")
+        .env_remove("USERNAME"));
     assert_eq!(human.status.code(), Some(2));
     let text = String::from_utf8(human.stderr).unwrap();
     assert!(text.contains("--yes"), "{text}");
@@ -271,4 +298,33 @@ fn purge_refuses_bad_input_without_touching_anything() {
         "{error}"
     );
     assert!(!missing.exists());
+}
+
+/// A hash no scope holds and no purge recorded answers `not_found` and
+/// writes nothing: a permanent record would only skip a later upload of
+/// those bytes on a reindex.
+#[test]
+fn purge_of_an_unknown_file_is_not_found_and_writes_nothing() {
+    let f = Fixture::new();
+    let unknown = "ab".repeat(32);
+    for extra in [&["--yes"][..], &["--dry-run"][..]] {
+        let error = json_error(
+            &run(openxet()
+                .args(["purge", &unknown, "--json", "--config"])
+                .arg(&f.config)
+                .arg("--data-dir")
+                .arg(&f.server.data_dir)
+                .args(extra)),
+            1,
+        );
+        assert_eq!(error["code"], "not_found", "{error}");
+    }
+    assert!(
+        !f.server
+            .data_dir
+            .join("bucket/purges")
+            .join(&unknown[..2])
+            .exists()
+    );
+    f.assert_served_in_both_scopes();
 }

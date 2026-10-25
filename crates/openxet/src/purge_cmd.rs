@@ -5,7 +5,8 @@
 //! The bucket's purge record is written first, then the index rows go,
 //! then the audit row: the bucket is the source of truth (design §5.3), so
 //! a purge interrupted after its record is finished by running it again,
-//! and `reindex` (M4) skips the file either way. Nothing is deleted from
+//! and `reindex` (M4) skips the file's registrations up to the record's
+//! `through_seq` either way, keeping a later upload of the same bytes. Nothing is deleted from
 //! the bucket (non-negotiable 3): the file's xorbs stay until garbage
 //! collection finds them unreferenced.
 
@@ -14,9 +15,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use openxet_client::ClientError;
-use openxet_index::{AuditEntry, IndexError, Repos as _, SqliteIndex};
+use openxet_index::{AuditEntry, Index as _, IndexError, Repos as _, SqliteIndex};
 use openxet_protocol::{MerkleHash, hash_from_hex};
-use openxet_storage::{Bucket as _, LocalBucket, PurgeRecord, StorageError};
+use openxet_storage::{Bucket as _, Key, LocalBucket, PurgeRecord, StorageError};
 use serde::Serialize;
 use serde_json::json;
 
@@ -125,6 +126,14 @@ async fn purge(data_dir: &Path, file: MerkleHash, args: &PurgeArgs) -> Result<Pu
         .file_scope_count(&file)
         .await
         .map_err(|err| index_error(&err))?;
+    let bucket = open_bucket(data_dir)?;
+    let key = Key::Purge(file);
+    let earlier = read_record(&bucket, &key, data_dir).await?;
+    // A record is permanent: one for a hash nothing holds would only skip
+    // a later upload's registrations on a reindex.
+    if present == 0 && earlier.is_none() {
+        return Err(not_found(&args.hash));
+    }
     let result = |scopes_removed, dry_run| Purged {
         schema: "openxet.purge.v1",
         file: args.hash.clone(),
@@ -134,40 +143,106 @@ async fn purge(data_dir: &Path, file: MerkleHash, args: &PurgeArgs) -> Result<Pu
     if args.dry_run {
         return Ok(result(present, true));
     }
-    // Only a purge that writes names who ran it.
-    let actor = actor(args.actor.as_deref())?;
+    if !args.yes {
+        require_terminal()?;
+    }
+    // A re-run completes the earlier purge under its record, so only a
+    // first purge names who runs it.
+    let run = match earlier {
+        Some(record) => Run::Completion(record),
+        None => Run::First {
+            actor: actor(args.actor.as_deref())?,
+        },
+    };
     if !args.yes {
         confirm(&args.hash, present)?;
     }
-    let bucket = open_bucket(data_dir)?;
-    let record = PurgeRecord {
-        file,
-        actor: actor.clone(),
-        at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
+    let (record, completes) = match run {
+        Run::Completion(record) => (record, true),
+        Run::First { actor } => {
+            let through_seq = index
+                .next_registration_seq()
+                .await
+                .map_err(|err| index_error(&err))?;
+            let record = PurgeRecord {
+                file,
+                actor,
+                at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs()),
+                through_seq: Some(through_seq),
+            };
+            // Bucket first (ruling M2-R13). Losing the create to a
+            // concurrent purge completes that one's record instead.
+            let created = bucket
+                .create(&key, record.to_bytes())
+                .await
+                .map_err(|err| storage_error(data_dir, &err))?;
+            if created {
+                (record, false)
+            } else {
+                let stored = read_record(&bucket, &key, data_dir).await?;
+                (stored.unwrap_or(record), true)
+            }
+        }
     };
-    // Bucket first (ruling M2-R13). A record that already exists is a
-    // purge run before, perhaps interrupted: its index rows go now.
-    bucket
-        .create(&record.key(), record.to_bytes())
-        .await
-        .map_err(|err| storage_error(data_dir, &err))?;
     let removed = index
         .purge_file(&file)
         .await
         .map_err(|err| index_error(&err))?;
     index
         .audit(&AuditEntry {
-            actor,
+            actor: record.actor,
             action: "purge".to_owned(),
             repo: None,
-            detail: json!({ "file": args.hash, "scopes_removed": removed }),
+            detail: json!({
+                "file": args.hash,
+                "scopes_removed": removed,
+                "through_seq": record.through_seq,
+                "completes_earlier_purge": completes,
+                "purged_at": record.at,
+            }),
         })
         .await
         .map_err(|err| index_error(&err))?;
     Ok(result(removed, false))
 }
+
+/// A purge's first run, or a run completing an earlier one.
+enum Run {
+    First { actor: String },
+    Completion(PurgeRecord),
+}
+
+/// The purge record already in the bucket, if any.
+async fn read_record(
+    bucket: &LocalBucket,
+    key: &Key,
+    data_dir: &Path,
+) -> Result<Option<PurgeRecord>, CliError> {
+    let Some(bytes) = bucket
+        .get(key)
+        .await
+        .map_err(|err| storage_error(data_dir, &err))?
+    else {
+        return Ok(None);
+    };
+    PurgeRecord::from_bytes(key, &bytes)
+        .map(Some)
+        .map_err(|err| storage_error(data_dir, &err))
+}
+
+fn not_found(hash: &str) -> CliError {
+    CliError::new(
+        "not_found",
+        format!("no scope holds {hash}, and it was never purged; nothing was purged"),
+        "Check the hash `openxet upload` printed. A purge of a file no scope holds writes \
+         nothing, so it never blocks a later upload of those bytes.",
+    )
+}
+
+/// The longest actor the audit log and the purge record take.
+const MAX_ACTOR_BYTES: usize = 256;
 
 /// `--actor`, or `cli:` and the operating system user.
 fn actor(flag: Option<&str>) -> Result<String, CliError> {
@@ -186,11 +261,12 @@ fn actor(flag: Option<&str>) -> Result<String, CliError> {
             })?;
         format!("cli:{user}")
     };
-    if actor.is_empty() || actor.chars().any(char::is_control) {
+    if actor.is_empty() || actor.len() > MAX_ACTOR_BYTES || actor.chars().any(char::is_control) {
         return Err(usage_error(
             "invalid_actor",
-            "the actor is empty or holds a control character",
-            "Pass `--actor NAME` with a printable name, such as your user name.",
+            "the actor is empty, longer than 256 bytes, or holds a control character",
+            "Pass `--actor NAME` with a printable name of at most 256 bytes, such as your user \
+             name.",
         ));
     }
     Ok(actor)
@@ -205,13 +281,19 @@ fn confirmation_required(why: &str) -> CliError {
     )
 }
 
-/// Asks on the terminal; a run without one must pass `--yes`.
-fn confirm(hash: &str, present: u64) -> Result<(), CliError> {
-    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-        return Err(confirmation_required(
+/// A run without `--yes` needs a terminal to ask on.
+fn require_terminal() -> Result<(), CliError> {
+    if io::stdin().is_terminal() && io::stderr().is_terminal() {
+        Ok(())
+    } else {
+        Err(confirmation_required(
             "there is no terminal to confirm the purge on",
-        ));
+        ))
     }
+}
+
+/// Asks on the terminal [`require_terminal`] found.
+fn confirm(hash: &str, present: u64) -> Result<(), CliError> {
     eprint!(
         "Purge {hash} from {}? No scope will serve it again. Type `yes` to purge: ",
         scopes(present)
@@ -275,7 +357,7 @@ fn storage_error(dir: &Path, err: &StorageError) -> CliError {
     CliError::new(
         "storage",
         format!(
-            "could not write to the bucket in {}: {err}; nothing was purged",
+            "the bucket in {} failed: {err}; nothing was purged",
             dir.display()
         ),
         "Check that you may write the data directory, as the server's user does, and that its \

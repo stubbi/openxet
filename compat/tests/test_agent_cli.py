@@ -68,6 +68,9 @@ def expand(openxet_bin, args, tmp_path, env):
         file_hash = json.loads(out.stdout)["files"][0]["hash"]
         args = [a.replace("{hash}", file_hash) for a in args]
     if any("{repo}" in a for a in args):
+        # The scheme apart from its value keeps the repository's redaction
+        # scan (tests/test_fixture_redaction.py) from reading the header
+        # template as a stored credential.
         scheme = "Bearer"
         created = httpx.post(
             f"{env['OPENXET_ENDPOINT']}/api/repos/create",

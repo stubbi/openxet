@@ -51,14 +51,14 @@ lines.
 | `unreachable_endpoint` | 1 | Nothing answered at the endpoint, or at the proxy in front of it (named in the message). |
 | `confirmation_required` | 2 | `purge` without `--yes`, with `--json` or without a terminal to ask on. Nothing was purged. |
 | `declined` | 1 | `purge` asked on the terminal and the answer wasn't `yes`. Nothing was purged. |
-| `no_actor`, `invalid_actor` | 2 | `purge` couldn't tell who is running it (none of `USER`, `LOGNAME`, `USERNAME` is set), or `--actor` is empty or holds a control character. The hint names `--actor`. |
+| `no_actor`, `invalid_actor` | 2 | `purge` couldn't tell who is running it (none of `USER`, `LOGNAME`, `USERNAME` is set), or `--actor` is empty, longer than 256 bytes, or holds a control character. The hint names `--actor`. |
 | `invalid_repo` | 2 (1 from the server) | `label` was given a repository that isn't `namespace/name` with a valid namespace and name. |
 | `invalid_label` | 2 (1 from the server) | `label` was given a label that isn't a lowercase slug of 1 to 64 bytes, or `add` would give a repository more than 32 labels. |
 | `repo_not_found` | 1 | `label`: no such repository, or the token may not read it; the two answer alike. |
-| `labels_changed` | 1 | `label add` or `remove` lost to concurrent label changes three times in a row. Nothing was changed; run it again. |
+| `labels_changed` | 1 | `label add` or `remove` lost to concurrent label changes three times in a row, 50 to 200 ms apart. Nothing was changed; run it again. |
 | `unauthorized` | 1 | The server refused the token (`401`): unknown, revoked or expired. |
 | `forbidden` | 1 | The token doesn't allow this (`403`), e.g. a read token uploading, a token without `write` changing labels, or a CAS token used with `label`. |
-| `not_found` | 1 | `download`: no file with this hash in the token's scope. |
+| `not_found` | 1 | `download`: no file with this hash in the token's scope. `purge`: no scope holds the hash and no purge recorded it; nothing was written. |
 | `no_clobber_unsupported` | 1 | `download` without `--force` on a filesystem that can neither rename without replacing nor hard-link. Nothing was written. The hint names `--force`. |
 | `size_mismatch` | 1 | `download --size` doesn't match the file's size: the size or the hash is wrong. Nothing was written. |
 | `interrupted` | 130 | `upload` or `download` was stopped by a signal. The message says what is known: a download wrote nothing to its output; an upload may or may not have been registered, and re-running it is safe. |

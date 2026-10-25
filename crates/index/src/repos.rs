@@ -162,7 +162,10 @@ pub trait Repos: Send + Sync + 'static {
     /// left alone: they describe xorbs, not files, and no bucket record
     /// mirrors their deletion, so removing them would make the index
     /// diverge from a rebuild. The caller has written the bucket's purge
-    /// record first and writes the audit row after. Returns the number of
+    /// record first and writes the audit row after. The `purges` row only
+    /// marks the file: the bucket record, with its `through_seq`, is what
+    /// `reindex` reads to decide which registrations to skip (ruling M2-R13
+    /// as amended). Returns the number of
     /// scopes it was removed from.
     ///
     /// # Errors
