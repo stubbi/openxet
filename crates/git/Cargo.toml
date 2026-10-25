@@ -10,8 +10,10 @@ repository.workspace = true
 [features]
 # Test-only: the actor names in `publish` that stop a publish between the
 # upload and the commit transaction, or between the commit and the answer,
-# as a crashed node would (ADR 0004, `publish_then_cas_survives_faults`).
-# Never enable it in a shipped build.
+# as a crashed node would (ADR 0004, `publish_then_cas_survives_faults`),
+# and `Engine::set_fault_hook`, which runs a test's code at the points
+# where repacks and the pack sweep race other writers. Never enable it in a
+# shipped build.
 fault-injection = []
 # Fuzz-only: `RequestParser` and `hook::parse_hook_request`, the parsers of
 # untrusted push bytes, for the targets in `fuzz/`. Never enable it in a

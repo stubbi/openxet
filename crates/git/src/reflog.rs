@@ -8,7 +8,12 @@
 //! deriving at once may write overlapping records; `reindex` reads every
 //! record and keeps each row once, by its sequence number. On SQLite rows
 //! commit in sequence order (writes are serialized), so no row can appear
-//! below one already derived.
+//! below one already derived. That ordering is SQLite's only: a Postgres
+//! sequence hands numbers out before commit, so a row can commit below one
+//! already derived, and the Postgres index of M3 must derive by commit
+//! order instead (deferred to M3 with the Postgres migrations).
+
+use std::sync::Arc;
 
 use openxet_index::{RefLogRow, RepoId};
 use openxet_storage::{Key, KeyKind, RefLogEntry, RefLogRecord, RepoIdHex};
@@ -26,13 +31,14 @@ pub const REF_LOG_RECORD_MAX_ENTRIES: usize = 1000;
 /// [`GitError::Index`] and [`GitError::Storage`]; rows not yet written are
 /// written by the next call.
 pub async fn derive_bucket_ref_log(engine: &Engine, repo: RepoId) -> Result<u64, GitError> {
-    let mut derived = engine.derived.lock().await;
+    let lock = derived_lock(engine, repo);
+    let mut derived = lock.lock().await;
     let repo_hex = repo_hex(repo)?;
-    let head = match derived.get(&repo) {
-        Some(head) => *head,
+    let head = match *derived {
+        Some(head) => head,
         None => bucket_head(engine, repo_hex).await?,
     };
-    derived.insert(repo, head);
+    *derived = Some(head);
     let rows = engine.index.ref_log_since(repo, head).await?;
     let mut written = 0;
     for chunk in rows.chunks(REF_LOG_RECORD_MAX_ENTRIES) {
@@ -46,7 +52,7 @@ pub async fn derive_bucket_ref_log(engine: &Engine, repo: RepoId) -> Result<u64,
             .bucket
             .create(&record.key(), record.to_bytes())
             .await?;
-        derived.insert(repo, last.seq);
+        *derived = Some(last.seq);
         written += chunk.len() as u64;
     }
     Ok(written)
@@ -57,11 +63,20 @@ pub async fn derive_bucket_ref_log(engine: &Engine, repo: RepoId) -> Result<u64,
 /// one knows: what the ref log's retention may prune through (ADR 0004
 /// item 3).
 pub(crate) async fn derived_head(engine: &Engine, repo: RepoId) -> Result<u64, GitError> {
-    let mut derived = engine.derived.lock().await;
+    let lock = derived_lock(engine, repo);
+    let mut derived = lock.lock().await;
     let head = bucket_head(engine, repo_hex(repo)?).await?;
-    let known = derived.entry(repo).or_insert(head);
-    *known = (*known).max(head);
+    *derived = Some(derived.map_or(head, |known| known.max(head)));
     Ok(head)
+}
+
+/// `repo`'s entry in [`Engine`]'s derivation state, made on first use.
+fn derived_lock(engine: &Engine, repo: RepoId) -> Arc<tokio::sync::Mutex<Option<u64>>> {
+    let mut all = engine
+        .derived
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(all.entry(repo).or_default())
 }
 
 /// Every row of `repo`'s bucket ref log, each once, in sequence order.

@@ -16,7 +16,7 @@ use openxet_git::{
     check_writer_rule, git_command,
 };
 use openxet_index::{CommitError, GitStore as _, Oid, PackRecord, PackState, RefUpdate, RepoId};
-use openxet_storage::{Bucket as _, KeyKind, RepoIdHex};
+use openxet_storage::{Bucket as _, Key, KeyKind, PackExt, PackName, RepoIdHex};
 use tempfile::TempDir;
 
 use crate::common::fetch::{not_our_ref, upload, v2_fetch};
@@ -139,6 +139,49 @@ impl Env {
         .unwrap_or_else(|| panic!("the lease is free for {holder}"))
     }
 
+    /// The repository's repack lease for a pack sweep: the one a test
+    /// already holds, renewed (tests take it once and keep it), or a new one
+    /// for `gc`.
+    pub async fn gc_lease(&self) -> Lease {
+        let ttl = std::time::Duration::from_mins(10);
+        let held: Option<(String, i64)> = ok(sqlx::query_as(
+            "SELECT holder, epoch FROM repo_leases WHERE repo = ? \
+             AND expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)",
+        )
+        .bind(&self.repo.0[..])
+        .fetch_optional(&self.world.sql().await)
+        .await);
+        match held {
+            Some((holder, epoch)) => ok(self
+                .world
+                .index
+                .renew_lease(self.repo, &holder, u64::try_from(epoch).unwrap_or(0), ttl)
+                .await)
+            .unwrap_or_else(|| panic!("the held lease renews")),
+            None => self.lease("gc").await,
+        }
+    }
+
+    /// Whether the bucket holds pack `name`'s `.pack`.
+    pub async fn bucket_has_pack(&self, name: &str) -> bool {
+        let key = Key::Pack {
+            repo: ok(RepoIdHex::parse(&self.repo.to_string())),
+            name: ok(PackName::parse(name)),
+            ext: PackExt::Pack,
+        };
+        ok(self.world.bucket.size(&key).await).is_some()
+    }
+
+    /// Every committed row's files are in the bucket.
+    pub async fn assert_committed_files(&self) {
+        for name in self.committed_names().await {
+            assert!(
+                self.bucket_has_pack(&name).await,
+                "committed pack {name} has no files in the bucket"
+            );
+        }
+    }
+
     /// Expires whatever lease the repository has, then takes it for
     /// `holder`: a takeover.
     pub async fn take_over(&self, holder: &str) -> Lease {
@@ -159,7 +202,7 @@ impl Env {
         for q in [
             "UPDATE ref_log SET at = at - ? WHERE repo = ?",
             "UPDATE packs SET created_at = created_at - ?1, superseded_at = superseded_at - ?1, \
-             committed_at = committed_at - ?1 WHERE repo = ?2",
+             committed_at = committed_at - ?1, inserted_at = inserted_at - ?1 WHERE repo = ?2",
         ] {
             ok(sqlx::query(q)
                 .bind(secs)

@@ -32,6 +32,7 @@ use openxet_index::{
 };
 use openxet_storage::{Key, MidxExt, PackExt, PackName};
 
+use crate::lease::while_renewing;
 use crate::reflog::repo_hex;
 use crate::snapshot::write_refs;
 use crate::store::pin;
@@ -207,6 +208,8 @@ fn with_state(packs: Vec<Pack>, state: PackState) -> Vec<Pack> {
     packs.into_iter().map(|p| Pack { state, ..p }).collect()
 }
 
+/// Prepares a repack while renewing `lease` (ADR 0004 item 5), so a repack
+/// that takes longer than the lease's TTL still publishes.
 async fn prepare(
     engine: &Engine,
     repo: RepoId,
@@ -216,6 +219,17 @@ async fn prepare(
     if lease.repo != repo {
         return Err(GitError::RepackFenced);
     }
+    while_renewing(engine, lease, prepare_under(engine, repo, lease, kind))
+        .await
+        .0
+}
+
+async fn prepare_under(
+    engine: &Engine,
+    repo: RepoId,
+    lease: &Lease,
+    kind: Kind,
+) -> Result<Prepared, GitError> {
     // Read before the working copy: a ref change between the two then fails
     // the publish, to be retried, and can never slip past the fence.
     let high_water = match kind {
@@ -227,6 +241,8 @@ async fn prepare(
         Kind::Geometric => DEFAULT_GRACE,
     };
     let snap = engine.snapshot(repo).await?;
+    #[cfg(feature = "fault-injection")]
+    engine.fault(crate::FaultPoint::RepackBeforeGit, "").await;
     let keep = keep_roots(engine, &snap, window).await?;
     let pack_dir = snap.dir.path().join("objects/pack");
     let (before, after) = run_git_repack(engine, &snap, &keep, kind).await?;

@@ -21,7 +21,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_core::Stream;
 use openxet_auth::UserPrincipal;
-use openxet_index::{CommitError, Oid, RefUpdate, RepoId};
+use openxet_index::{CommitError, IndexError, Oid, RefUpdate, RepoId};
 use openxet_storage::{BodyStream, PackExt, PackName};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::process::{Child, ChildStdout};
@@ -399,6 +399,9 @@ impl Receive {
             Err(PublishError::Commit(CommitError::PackNotPending)) => {
                 Err(Refusal::all("the push took too long to commit; push again"))
             }
+            Err(PublishError::Index(IndexError::PackDeleting { .. })) => Err(Refusal::all(
+                "garbage collection is deleting an identical pack; push again in a few seconds",
+            )),
             Err(e) => Err(internal(&e)),
         }
     }

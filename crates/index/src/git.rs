@@ -62,8 +62,10 @@ pub struct Pack {
     pub name: String,
     /// Its state.
     pub state: PackState,
-    /// When it was created, Unix seconds; nodes pin the pack's mtime to it
-    /// (ADR 0004 item 4).
+    /// The age of its objects, Unix seconds: when it was published, or for
+    /// a repack's output its oldest input's. Nodes pin the pack's mtime to
+    /// it (ADR 0004 item 4), so cruft expiry reads it; the pack sweep ages
+    /// rows by [`PackRecord::inserted_at`] instead.
     pub created_at: u64,
     /// The size of its `.pack` file.
     pub bytes: u64,
@@ -76,6 +78,10 @@ pub struct Pack {
 pub struct PackRecord {
     /// The row.
     pub pack: Pack,
+    /// When the row was inserted, or a discard made it `lost`, Unix seconds
+    /// on the database clock: what a `pending`, `lost` or `expired` row's
+    /// grace period runs from.
+    pub inserted_at: u64,
     /// When a commit transaction or a repack publish committed it, Unix
     /// seconds on the database clock; `None` if none did.
     pub committed_at: Option<u64>,
@@ -212,6 +218,8 @@ pub struct Lease {
     pub epoch: u64,
     /// When it expires, Unix milliseconds on the database clock.
     pub expires_at_ms: u64,
+    /// How long each acquisition or renewal lasts.
+    pub ttl: Duration,
 }
 
 /// A repack's publish transaction (ADR 0004 item 5).
@@ -298,14 +306,16 @@ pub trait GitStore: Send + Sync + 'static {
     /// [`IndexError::Corrupt`].
     async fn snapshot(&self, repo: RepoId) -> Result<Snapshot, IndexError>;
 
-    /// Records a pack before its files are uploaded. `pack.state` must be
+    /// Records a pack before its files are uploaded, stamping
+    /// [`PackRecord::inserted_at`]. `pack.state` must be
     /// [`PackState::Pending`].
     ///
     /// # Errors
     ///
     /// [`IndexError::UnknownRepo`], [`IndexError::InvalidInput`] for
-    /// another state or an id already recorded, and
-    /// [`IndexError::Database`].
+    /// another state or an id already recorded,
+    /// [`IndexError::PackDeleting`] while the pack sweep deletes files of
+    /// the same name (retry), and [`IndexError::Database`].
     async fn insert_pack(&self, pack: &Pack) -> Result<(), IndexError>;
 
     /// Runs the commit transaction of ADR 0004 item 3, atomically: the
@@ -366,6 +376,23 @@ pub trait GitStore: Send + Sync + 'static {
         ttl: Duration,
     ) -> Result<Option<Lease>, IndexError>;
 
+    /// Extends `holder`'s lease of epoch `epoch` to `ttl` from now on the
+    /// database clock, keeping the epoch, if it still holds it unexpired: a
+    /// leaseholder renews every `ttl / 3` while it works, so a long repack
+    /// doesn't fence itself. `None` if the lease is lost.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::InvalidInput`] for a `ttl` too large to store, and
+    /// [`IndexError::Database`].
+    async fn renew_lease(
+        &self,
+        repo: RepoId,
+        holder: &str,
+        epoch: u64,
+        ttl: Duration,
+    ) -> Result<Option<Lease>, IndexError>;
+
     /// Publishes a repack in one transaction (ADR 0004 item 5): the lease
     /// still holds, every output goes `Pending` to `Committed`, every input
     /// `Committed` to `Superseded`, and for a full repack the ref log hasn't
@@ -409,6 +436,32 @@ pub trait GitStore: Send + Sync + 'static {
     ///
     /// [`IndexError::Database`] or [`IndexError::Corrupt`].
     async fn packs(&self, repo: RepoId) -> Result<Vec<PackRecord>, IndexError>;
+
+    /// Claims the deletion of pack `name`'s files (ADR 0004 item 5), in a
+    /// transaction that checks no `pending`, `committed` or `recovered` row
+    /// of the repository names it, and reports whether it did. While the
+    /// claim exists, [`GitStore::insert_pack`] refuses rows of that name
+    /// with [`IndexError::PackDeleting`]. A claim already held is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`].
+    async fn claim_pack_deletion(&self, repo: RepoId, name: &str) -> Result<bool, IndexError>;
+
+    /// The repository's pack deletion claims, by name: those a sweep that
+    /// died left, for the next one to finish.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`].
+    async fn pack_deletions(&self, repo: RepoId) -> Result<Vec<String>, IndexError>;
+
+    /// Removes the claim on `name`, once its files are gone.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`].
+    async fn release_pack_deletion(&self, repo: RepoId, name: &str) -> Result<(), IndexError>;
 
     /// Deletes pack row `id` if it is in `state`, and reports whether it
     /// was: the pack sweep's last step, once the pack's files are gone.
@@ -464,16 +517,19 @@ pub trait GitStore: Send + Sync + 'static {
         covered: &[Oid],
     ) -> Result<(), CommitError>;
 
-    /// Deletes every unplaced entry of the repository, as `reindex discard`
-    /// does once its recovered packs are `Lost`, and returns how many.
+    /// `reindex discard` (ADR 0004 item 4) in one transaction: every
+    /// `Recovered` pack of the repository goes `Lost`, its
+    /// [`PackRecord::inserted_at`] stamped now so GC's grace period runs from
+    /// the discard, and every unplaced entry is deleted. Returns how many packs and entries.
     ///
     /// # Errors
     ///
-    /// [`IndexError::Database`].
-    async fn discard_unplaced(&self, repo: RepoId) -> Result<u64, IndexError>;
+    /// [`IndexError::Database`]; nothing changes.
+    async fn discard(&self, repo: RepoId) -> Result<(u64, u64), IndexError>;
 
     /// Replaces the repository's refs, `ref_log` rows, pack rows and
-    /// unplaced entries with `r` in one transaction, and increases its
+    /// unplaced entries with `r`, and drops its pack deletion claims (the
+    /// bucket was just listed), in one transaction, and increases its
     /// full-repack generation, which fences any writer whose snapshot
     /// predates it (ADR 0004 item 4).
     ///

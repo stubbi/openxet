@@ -45,6 +45,28 @@ fn pack_from(row: &SqliteRow) -> Result<Pack, IndexError> {
     })
 }
 
+/// A lease's duration in milliseconds, as stored.
+fn ttl_ms(ttl: Duration) -> Result<i64, IndexError> {
+    i64::try_from(ttl.as_millis())
+        .map_err(|_| IndexError::InvalidInput(format!("a lease of {ttl:?} is too long to store")))
+}
+
+/// A lease from a `RETURNING epoch, expires_at` row.
+fn lease_from(
+    row: &SqliteRow,
+    repo: RepoId,
+    holder: &str,
+    ttl: Duration,
+) -> Result<Lease, IndexError> {
+    Ok(Lease {
+        repo,
+        holder: holder.to_owned(),
+        epoch: to_u64(row.try_get(0)?, "lease epoch")?,
+        expires_at_ms: to_u64(row.try_get(1)?, "lease expiry")?,
+        ttl,
+    })
+}
+
 /// Refuses commands that can't form a commit transaction, before any write.
 fn check_updates(updates: &[RefUpdate]) -> Result<(), IndexError> {
     if updates.is_empty() {
@@ -284,9 +306,20 @@ impl GitStore for SqliteIndex {
             .transpose()?;
         let mut tx = self.begin_write().await?;
         require_repo(&mut tx, pack.repo).await?;
+        let claimed: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM pack_deletions WHERE repo = ? AND name = ?")
+                .bind(&pack.repo.0[..])
+                .bind(&pack.name)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if claimed.is_some() {
+            return Err(IndexError::PackDeleting {
+                name: pack.name.clone(),
+            });
+        }
         let inserted = sqlx::query(
-            "INSERT INTO packs (id, repo, name, state, created_at, bytes, midx_gen) \
-             VALUES (?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO packs (id, repo, name, state, created_at, bytes, midx_gen, inserted_at) \
+             VALUES (?, ?, ?, 'pending', ?, ?, ?, unixepoch()) ON CONFLICT (id) DO NOTHING",
         )
         .bind(&pack.id.0[..])
         .bind(&pack.repo.0[..])
@@ -374,9 +407,7 @@ impl GitStore for SqliteIndex {
         holder: &str,
         ttl: Duration,
     ) -> Result<Option<Lease>, IndexError> {
-        let ttl_ms = i64::try_from(ttl.as_millis()).map_err(|_| {
-            IndexError::InvalidInput(format!("a lease of {ttl:?} is too long to store"))
-        })?;
+        let ttl_ms = ttl_ms(ttl)?;
         let mut tx = self.begin_write().await?;
         require_repo(&mut tx, repo).await?;
         let row = sqlx::query(concat!(
@@ -394,15 +425,32 @@ impl GitStore for SqliteIndex {
         .fetch_optional(&mut *tx)
         .await?;
         tx.commit().await?;
-        row.map(|row| {
-            Ok(Lease {
-                repo,
-                holder: holder.to_owned(),
-                epoch: to_u64(row.try_get(0)?, "lease epoch")?,
-                expires_at_ms: to_u64(row.try_get(1)?, "lease expiry")?,
-            })
-        })
-        .transpose()
+        row.map(|row| lease_from(&row, repo, holder, ttl))
+            .transpose()
+    }
+
+    async fn renew_lease(
+        &self,
+        repo: RepoId,
+        holder: &str,
+        epoch: u64,
+        ttl: Duration,
+    ) -> Result<Option<Lease>, IndexError> {
+        let row = sqlx::query(concat!(
+            "UPDATE repo_leases SET expires_at = ",
+            now_ms!(),
+            " + ? WHERE repo = ? AND holder = ? AND epoch = ? AND expires_at > ",
+            now_ms!(),
+            " RETURNING epoch, expires_at"
+        ))
+        .bind(ttl_ms(ttl)?)
+        .bind(&repo.0[..])
+        .bind(holder)
+        .bind(to_i64(epoch, "lease epoch")?)
+        .fetch_optional(&self.writer)
+        .await?;
+        row.map(|row| lease_from(&row, repo, holder, ttl))
+            .transpose()
     }
 
     async fn publish_repack(&self, p: RepackPublish<'_>) -> Result<(), CommitError> {
@@ -528,7 +576,7 @@ impl GitStore for SqliteIndex {
     async fn packs(&self, repo: RepoId) -> Result<Vec<PackRecord>, IndexError> {
         sqlx::query(
             "SELECT id, repo, name, state, created_at, bytes, midx_gen, committed_at, \
-             superseded_at FROM packs WHERE repo = ? ORDER BY created_at, id",
+             superseded_at, inserted_at FROM packs WHERE repo = ? ORDER BY created_at, id",
         )
         .bind(&repo.0[..])
         .fetch_all(&self.reader)
@@ -542,6 +590,7 @@ impl GitStore for SqliteIndex {
             };
             Ok(PackRecord {
                 pack: pack_from(row)?,
+                inserted_at: to_u64(row.try_get(9)?, "pack insert time")?,
                 committed_at: time(7, "pack commit time")?,
                 superseded_at: time(8, "pack supersede time")?,
             })
@@ -564,6 +613,49 @@ impl GitStore for SqliteIndex {
             .await?
             .rows_affected();
         Ok(deleted == 1)
+    }
+
+    async fn claim_pack_deletion(&self, repo: RepoId, name: &str) -> Result<bool, IndexError> {
+        let mut tx = self.begin_write().await?;
+        let live: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM packs WHERE repo = ? AND name = ? \
+             AND state IN ('pending', 'committed', 'recovered')",
+        )
+        .bind(&repo.0[..])
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if live.is_some() {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO pack_deletions (repo, name, claimed_at) VALUES (?, ?, unixepoch()) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(&repo.0[..])
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    async fn pack_deletions(&self, repo: RepoId) -> Result<Vec<String>, IndexError> {
+        Ok(
+            sqlx::query_scalar("SELECT name FROM pack_deletions WHERE repo = ? ORDER BY name")
+                .bind(&repo.0[..])
+                .fetch_all(&self.reader)
+                .await?,
+        )
+    }
+
+    async fn release_pack_deletion(&self, repo: RepoId, name: &str) -> Result<(), IndexError> {
+        sqlx::query("DELETE FROM pack_deletions WHERE repo = ? AND name = ?")
+            .bind(&repo.0[..])
+            .bind(name)
+            .execute(&self.writer)
+            .await?;
+        Ok(())
     }
 
     async fn ref_log_head(&self, repo: RepoId) -> Result<u64, IndexError> {
@@ -631,12 +723,23 @@ impl GitStore for SqliteIndex {
         Ok(())
     }
 
-    async fn discard_unplaced(&self, repo: RepoId) -> Result<u64, IndexError> {
-        Ok(sqlx::query("DELETE FROM reindex_unplaced WHERE repo = ?")
+    async fn discard(&self, repo: RepoId) -> Result<(u64, u64), IndexError> {
+        let mut tx = self.begin_write().await?;
+        let packs = sqlx::query(
+            "UPDATE packs SET state = 'lost', inserted_at = unixepoch() \
+                 WHERE repo = ? AND state = 'recovered'",
+        )
+        .bind(&repo.0[..])
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        let entries = sqlx::query("DELETE FROM reindex_unplaced WHERE repo = ?")
             .bind(&repo.0[..])
-            .execute(&self.writer)
+            .execute(&mut *tx)
             .await?
-            .rows_affected())
+            .rows_affected();
+        tx.commit().await?;
+        Ok((packs, entries))
     }
 
     async fn reindex(&self, repo: RepoId, r: Reindexed<'_>) -> Result<(), IndexError> {
@@ -659,6 +762,7 @@ impl GitStore for SqliteIndex {
             "DELETE FROM ref_log WHERE repo = ?",
             "DELETE FROM packs WHERE repo = ?",
             "DELETE FROM reindex_unplaced WHERE repo = ?",
+            "DELETE FROM pack_deletions WHERE repo = ?",
         ] {
             sqlx::query(table).bind(id).execute(&mut *tx).await?;
         }
@@ -698,8 +802,8 @@ impl GitStore for SqliteIndex {
         insert_ref_log(&mut tx, repo, r.corrections, r.actor, r.request).await?;
         for p in r.packs {
             sqlx::query(
-                "INSERT INTO packs (id, repo, name, state, created_at, bytes, midx_gen) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO packs (id, repo, name, state, created_at, bytes, midx_gen, \
+                 inserted_at) VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())",
             )
             .bind(&p.id.0[..])
             .bind(id)

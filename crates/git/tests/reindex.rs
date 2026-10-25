@@ -252,7 +252,15 @@ async fn reindex_unplaced_persisted() {
 
     // Far past the grace period, nothing is discarded and GC keeps them.
     let far = now() + 100 * DAY;
-    let swept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, far, false).await);
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.lease("node-r").await,
+        DEFAULT_GRACE,
+        far,
+        false,
+    )
+    .await);
     assert!(swept.deleted.is_empty(), "{swept:?}");
     assert_eq!(
         ok(env.world.index.unplaced(env.repo).await).len(),
@@ -436,9 +444,103 @@ async fn recovered_packs_never_exposed() {
     for p in geometric.superseded.iter().chain(&full.superseded) {
         assert!(p.name != l.p2 && p.name != l.p3, "{p:?}");
     }
-    ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, now() + 365 * DAY, false).await);
+    ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        now() + 365 * DAY,
+        false,
+    )
+    .await);
     assert_eq!(env.state(&l.p2).await, Some(PackState::Recovered));
     assert_eq!(env.state(&l.p3).await, Some(PackState::Recovered));
     let files = env.bucket_files().await;
     assert!(files.iter().any(|f| f.contains(&l.p2)), "{files:?}");
+}
+
+/// `reindex discard` (ADR 0004 item 4) releases what only the unplaced
+/// entries kept in committed packs: a full repack before the discard keeps
+/// those objects, the first full repack after it drops them.
+#[tokio::test(flavor = "multi_thread")]
+async fn discard_releases_committed_objects() {
+    let l = lagging().await;
+    let env = &l.env;
+    ok(reindex_repo(&env.node, env.repo).await);
+    env.age(100 * DAY).await;
+    let lease = env.lease("node-r").await;
+    ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
+    assert!(
+        has_object(&env.node, env.repo, l.c4).await,
+        "kept by its entry"
+    );
+    assert!(has_object(&env.node, env.repo, l.tagged_tree).await);
+
+    let started = now();
+    let discarded = ok(reindex_discard(&env.node, env.repo, false).await);
+    assert!(discarded.committed_objects >= 3, "{discarded:?}");
+    // The discarded packs' grace period runs from the discard, not from
+    // when reindex found them.
+    for name in [&l.p2, &l.p3] {
+        let row = env
+            .rows()
+            .await
+            .into_iter()
+            .find(|r| &r.pack.name == name)
+            .unwrap_or_else(|| panic!("{name} listed"));
+        assert_eq!(row.pack.state, PackState::Lost);
+        assert!(row.inserted_at >= started, "{row:?}");
+    }
+    ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
+    assert!(!has_object(&env.node, env.repo, l.c4).await, "released");
+    assert!(!has_object(&env.node, env.repo, l.tagged_tree).await);
+    assert!(has_object(&env.node, env.repo, l.c1).await, "main keeps c1");
+    assert_i1(&env.node, env.repo).await;
+    drop(l.old_db);
+}
+
+/// A rebuilt ref falls back only to values since it was last created (ADR
+/// 0004 item 4): a ref deleted and created again whose new value's closure
+/// is gone from the bucket is left out, not rebuilt at a value of its
+/// earlier lifetime.
+#[tokio::test(flavor = "multi_thread")]
+async fn ref_fallback_stops_at_recreation() {
+    let env = env(12).await;
+    let base = env.oid("refs/remotes/origin/main");
+    let first = env.new_commit(base, "first.txt", b"first\n");
+    assert!(env.push("refs/heads/x", first).await.ok("refs/heads/x"));
+    assert!(env.delete("refs/heads/x").await.ok("refs/heads/x"));
+    let before = env.committed_names().await;
+    let second = env.new_commit(base, "second.txt", b"second\n");
+    assert!(env.push("refs/heads/x", second).await.ok("refs/heads/x"));
+    ok(derive_bucket_ref_log(&env.node, env.repo).await);
+    let lost: Vec<String> = env
+        .committed_names()
+        .await
+        .difference(&before)
+        .cloned()
+        .collect();
+    assert_eq!(lost.len(), 1);
+    // The recreated value's pack is gone from the bucket.
+    let hex = ok(RepoIdHex::parse(&env.repo.to_string()));
+    for ext in [PackExt::Pack, PackExt::Idx, PackExt::Rev] {
+        let key = Key::Pack {
+            repo: hex,
+            name: ok(PackName::parse(&lost[0])),
+            ext,
+        };
+        ok(env.world.bucket.delete(&key).await);
+    }
+
+    let report = ok(reindex_repo(&env.node, env.repo).await);
+    assert_eq!(env.db_ref("refs/heads/x").await, None, "{report:?}");
+    assert!(
+        report
+            .rolled_back
+            .iter()
+            .any(|r| r.name == "refs/heads/x" && r.logged == second && r.now.is_none()),
+        "{report:?}"
+    );
+    assert!(env.db_ref("refs/heads/main").await.is_some());
+    assert_i1(&env.node, env.repo).await;
 }

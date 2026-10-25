@@ -20,7 +20,6 @@ mod push_support;
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::sync::Arc;
 
 use openxet_git::{
     DEFAULT_GRACE, Engine, GitError, Lease, PackFiles, Publication, PublishError, Publisher,
@@ -65,7 +64,7 @@ enum Op {
     Sweep(bool),
     /// Everything in the index looks a grace period and a day older.
     Age,
-    /// The checks run on a second node with its own cache.
+    /// The checks run on a new node with an empty cache.
     Hydrate,
     DeriveRefLog,
     /// `reindex`, after deriving the bucket ref log or not, then a restore
@@ -102,7 +101,7 @@ fn cases() -> u32 {
 /// The model: the commits made, the lease, the restores.
 struct Model {
     env: Env,
-    other: Arc<Engine>,
+    hydrations: usize,
     commits: Vec<Oid>,
     holder: usize,
     lease: Lease,
@@ -259,12 +258,23 @@ impl Model {
             }
             Op::Sweep(far) => {
                 let now = unix_now() + if *far { 3 * 30 * DAY } else { 0 };
-                ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, now, false).await);
+                ok(sweep_packs(
+                    &env.node,
+                    env.repo,
+                    &env.gc_lease().await,
+                    DEFAULT_GRACE,
+                    now,
+                    false,
+                )
+                .await);
             }
             Op::Age => env.age(31 * DAY).await,
             Op::Hydrate => {
-                assert_i1(&self.other, env.repo).await;
-                self.check_r22(&self.other).await;
+                // A node that has never cached anything of the repository.
+                self.hydrations += 1;
+                let fresh = env.engine(&format!("node-h{}", self.hydrations)).await;
+                assert_i1(&fresh, env.repo).await;
+                self.check_r22(&fresh).await;
             }
             Op::DeriveRefLog => {
                 ok(derive_bucket_ref_log(&env.node, env.repo).await);
@@ -351,11 +361,10 @@ fn unix_now() -> u64 {
 
 async fn run(ops: Vec<Op>) {
     let env = env(6).await;
-    let other = env.engine("node-b").await;
     let lease = env.lease("node-0").await;
     let mut model = Model {
         env,
-        other,
+        hydrations: 0,
         commits: Vec::new(),
         holder: 0,
         lease,

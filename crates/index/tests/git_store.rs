@@ -1024,9 +1024,122 @@ async fn reindex_restore_and_discard() {
         Some("refs/heads/restored")
     );
 
-    assert!(ok(index
-        .mark_pack(rec_b.id, PackState::Recovered, PackState::Lost)
-        .await));
-    assert_eq!(ok(index.discard_unplaced(repo).await), 2);
+    // Discard is one transaction: the recovered pack goes lost and every
+    // entry goes with it.
+    assert_eq!(ok(index.discard(repo).await), (1, 2));
     assert!(ok(index.unplaced(repo).await).is_empty());
+    let states: Vec<(PackId, PackState)> = ok(index.packs(repo).await)
+        .into_iter()
+        .map(|r| (r.pack.id, r.pack.state))
+        .collect();
+    assert!(states.contains(&(rec_b.id, PackState::Lost)), "{states:?}");
+    assert!(
+        states.contains(&(rec_a.id, PackState::Committed)),
+        "{states:?}"
+    );
+}
+
+/// The pack sweep's deletion claims (ADR 0004 item 5): a claim is refused
+/// while a pending, committed or recovered row names the pack, and while
+/// one exists, a row of that name can't be inserted.
+#[tokio::test]
+async fn pack_deletion_claims_exclude_new_rows() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "a").await;
+    let other = new_repo(&index, "b").await;
+    let live = pending(repo, "shared");
+    ok(index.insert_pack(&live).await);
+    assert!(
+        !ok(index.claim_pack_deletion(repo, "shared").await),
+        "pending row names it"
+    );
+    assert!(ok(index
+        .mark_pack(live.id, PackState::Pending, PackState::Lost)
+        .await));
+    assert!(ok(index.claim_pack_deletion(repo, "shared").await));
+    assert!(
+        ok(index.claim_pack_deletion(repo, "shared").await),
+        "a held claim is kept"
+    );
+    assert_eq!(
+        ok(index.pack_deletions(repo).await),
+        vec!["shared".to_owned()]
+    );
+
+    match index.insert_pack(&pending(repo, "shared")).await {
+        Err(IndexError::PackDeleting { name }) => assert_eq!(name, "shared"),
+        other => panic!("expected PackDeleting, got {other:?}"),
+    }
+    // Claims are per repository.
+    ok(index.insert_pack(&pending(other, "shared")).await);
+    assert!(!ok(index.claim_pack_deletion(other, "shared").await));
+
+    ok(index.release_pack_deletion(repo, "shared").await);
+    assert!(ok(index.pack_deletions(repo).await).is_empty());
+    ok(index.insert_pack(&pending(repo, "shared")).await);
+
+    let committed = push(&index, repo, None, 1).await;
+    assert!(!ok(index.claim_pack_deletion(repo, &committed.name).await));
+}
+
+/// A pack row's `inserted_at` is the database clock at insert, whatever
+/// `created_at` the writer gives it (a repack output carries its oldest
+/// input's), and reindex stamps its rows the same way.
+#[tokio::test]
+async fn inserted_at_is_the_database_clock() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "a").await;
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let old = Pack {
+        created_at: 1_000,
+        ..pending(repo, "old-objects")
+    };
+    ok(index.insert_pack(&old).await);
+    let row = ok(index.packs(repo).await)
+        .into_iter()
+        .find(|r| r.pack.id == old.id)
+        .unwrap_or_else(|| panic!("the row is listed"));
+    assert_eq!(row.pack.created_at, 1_000);
+    assert!(row.inserted_at >= before, "{row:?}");
+}
+
+/// Lease renewal (ADR 0004 item 5) extends the holder's lease under the
+/// same epoch, and fails once the lease is lost or taken over.
+#[tokio::test]
+async fn renew_lease_keeps_epoch_until_lost() {
+    let dir = ok(TempDir::new());
+    let index = open(&dir).await;
+    let repo = new_repo(&index, "a").await;
+    let ttl = Duration::from_millis(400);
+    let lease =
+        ok(index.acquire_lease(repo, "node-a", ttl).await).unwrap_or_else(|| panic!("lease"));
+    assert_eq!(lease.ttl, ttl);
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let renewed = ok(index.renew_lease(repo, "node-a", lease.epoch, ttl).await)
+            .unwrap_or_else(|| panic!("renewed"));
+        assert_eq!(renewed.epoch, lease.epoch);
+    }
+    // Renewed past its first expiry, so nobody else can take it.
+    assert_eq!(ok(index.acquire_lease(repo, "node-b", ttl).await), None);
+    assert_eq!(
+        ok(index.renew_lease(repo, "node-b", lease.epoch, ttl).await),
+        None
+    );
+    assert_eq!(
+        ok(index
+            .renew_lease(repo, "node-a", lease.epoch + 1, ttl)
+            .await),
+        None
+    );
+    tokio::time::sleep(ttl + Duration::from_millis(100)).await;
+    assert_eq!(
+        ok(index.renew_lease(repo, "node-a", lease.epoch, ttl).await),
+        None,
+        "an expired lease isn't renewed"
+    );
 }

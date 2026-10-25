@@ -31,6 +31,8 @@
 #![forbid(unsafe_code)]
 
 mod config;
+#[cfg(feature = "fault-injection")]
+mod fault;
 pub mod hook;
 mod interpose;
 mod lease;
@@ -41,6 +43,7 @@ mod process;
 mod publish;
 mod reach;
 mod receive;
+mod recover;
 mod reflog;
 mod reindex;
 mod repack;
@@ -60,6 +63,8 @@ use openxet_index::{HubIndex, IndexError, Oid, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
 pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
+#[cfg(feature = "fault-injection")]
+pub use fault::{FaultHook, FaultPoint};
 pub use hook::HookServer;
 pub use lease::{DEFAULT_LEASE_TTL, acquire_lease};
 pub use maintain::{
@@ -76,11 +81,9 @@ pub use publish::{FAULT_AFTER_COMMIT_ACTOR, FAULT_AFTER_UPLOAD_ACTOR};
 pub use publish::{PackFiles, Publication, PublishError, Publisher};
 pub use reach::{Reachability, Refused};
 pub use receive::{LARGE_BLOB_REPORT_BYTES, WriterRuleCounts};
+pub use recover::{DISCARD_COMMITTED_WARNING, DiscardReport, reindex_discard, reindex_restore};
 pub use reflog::{REF_LOG_RECORD_MAX_ENTRIES, derive_bucket_ref_log};
-pub use reindex::{
-    DISCARD_COMMITTED_WARNING, DiscardReport, REINDEX_ACTOR, ReindexReport, RolledBack,
-    reindex_discard, reindex_repo, reindex_restore,
-};
+pub use reindex::{REINDEX_ACTOR, ReindexReport, RolledBack, reindex_repo};
 #[cfg(feature = "fault-injection")]
 pub use repack::{Prepared, prepare_full, prepare_geometric};
 pub use repack::{RepackReport, repack_full, repack_geometric};
@@ -248,6 +251,13 @@ pub enum GitError {
          it ran; its outputs are marked lost for GC. Take the lease again and rerun it"
     )]
     RepackFenced,
+    /// The repository's repack lease was lost or taken over while the pack
+    /// sweep held it (ADR 0004 item 5); it deleted nothing further.
+    #[error(
+        "the repository's repack lease was lost or taken over during the pack sweep; take the \
+         lease again and rerun the sweep, which finishes what this one started"
+    )]
+    LeaseLost,
     /// A `reindex restore` was refused.
     #[error("cannot restore {oid} as {refname}: {reason}")]
     Restore {
@@ -300,8 +310,11 @@ pub struct Engine {
     reach: Reachability,
     counters: Arc<receive::Counters>,
     /// Per repository, the highest `ref_log` row this engine knows the
-    /// bucket ref log holds ([`derive_bucket_ref_log`]).
-    derived: tokio::sync::Mutex<HashMap<RepoId, u64>>,
+    /// bucket ref log holds ([`derive_bucket_ref_log`]), each behind its own
+    /// lock so one repository's derivation never waits on another's.
+    derived: std::sync::Mutex<HashMap<RepoId, Arc<tokio::sync::Mutex<Option<u64>>>>>,
+    #[cfg(feature = "fault-injection")]
+    hooks: fault::Hooks,
 }
 
 impl std::fmt::Debug for Engine {
@@ -356,7 +369,9 @@ impl Engine {
             v2_advertisement: Vec::new(),
             reach,
             counters: Arc::default(),
-            derived: tokio::sync::Mutex::default(),
+            derived: std::sync::Mutex::default(),
+            #[cfg(feature = "fault-injection")]
+            hooks: fault::Hooks::default(),
         };
         engine.v2_advertisement = engine.capture_v2_advertisement().await?;
         Ok(engine)

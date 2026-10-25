@@ -334,6 +334,16 @@ pub enum IndexError {
         /// The id asked for.
         repo: RepoId,
     },
+    /// The pack sweep is deleting the files of a pack of this name (ADR 0004
+    /// item 5); a pack row of the name can be inserted once it is done.
+    #[error(
+        "garbage collection is deleting an identical pack ({name}) of this repository; retry in \
+         a few seconds"
+    )]
+    PackDeleting {
+        /// The pack's name.
+        name: String,
+    },
     /// The caller passed data the index can't store, which is a bug in the
     /// caller.
     #[error("invalid index input: {0}; this is a bug in openxet, please report it")]

@@ -6,10 +6,12 @@ mod lifecycle_support;
 mod push_support;
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use openxet_git::{
-    DEFAULT_GRACE, Engine, GitError, PackFiles, Publication, PublishError, Publisher,
+    DEFAULT_GRACE, Engine, FaultPoint, GitError, PackFiles, Publication, PublishError, Publisher,
     derive_bucket_ref_log, git_command, maintain, prepare_full, prepare_geometric, repack_full,
     repack_geometric, sweep_packs,
 };
@@ -130,6 +132,7 @@ async fn repack_publish_lease_fenced() {
     let swept = ok(sweep_packs(
         &env.node,
         env.repo,
+        &env.gc_lease().await,
         DEFAULT_GRACE,
         now() + GRACE_S + 60,
         false,
@@ -287,15 +290,15 @@ async fn keep_refs_cover_ref_log_window() {
 /// `hydrated_pack_mtime_pinned`, the leaseholder's half (ADR 0004 item 5):
 /// the repack pins every input pack's mtime to its row right before git
 /// runs, so a cached pack git freshened still expires its unreachable
-/// objects by the pack's creation time.
+/// objects by the pack's creation time. The hook freshens the cached files
+/// after the working copy's snapshot is built, as serving git would, so
+/// only the leaseholder's own re-pin can set them back.
 #[tokio::test(flavor = "multi_thread")]
 async fn hydrated_pack_mtime_pinned() {
     let (env, tips) = pushed(12).await;
     let res = env.push("refs/heads/main", tips[0]).await;
     assert!(res.ok("refs/heads/main"), "{res:?}");
     env.age(GRACE_S + DAY).await;
-    // Hydrate, then freshen every cached file as serving git would.
-    drop(ok(env.node.snapshot(env.repo).await));
     let cache = env
         .world
         .dir
@@ -303,14 +306,29 @@ async fn hydrated_pack_mtime_pinned() {
         .join("node-a/repos")
         .join(env.repo.to_string());
     let snap = ok(env.world.index.snapshot(env.repo).await);
-    for p in &snap.packs {
-        let file = cache.join(format!("{}.pack", p.name));
-        let f = ok(std::fs::File::open(&file));
-        ok(f.set_times(std::fs::FileTimes::new().set_modified(SystemTime::now())));
-    }
+    let files: Vec<std::path::PathBuf> = snap
+        .packs
+        .iter()
+        .map(|p| cache.join(format!("{}.pack", p.name)))
+        .collect();
+    let freshened = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&freshened);
+    env.node.set_fault_hook(
+        FaultPoint::RepackBeforeGit,
+        Some(Arc::new(move |_| {
+            for file in &files {
+                let f = ok(std::fs::File::open(file));
+                ok(f.set_times(std::fs::FileTimes::new().set_modified(SystemTime::now())));
+            }
+            flag.store(true, Ordering::SeqCst);
+            Box::pin(async {})
+        })),
+    );
 
     let lease = env.lease("node-a").await;
     ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
+    env.node.set_fault_hook(FaultPoint::RepackBeforeGit, None);
+    assert!(freshened.load(Ordering::SeqCst), "the hook ran");
     for p in &snap.packs {
         let file = cache.join(format!("{}.pack", p.name));
         let mtime = ok(ok(std::fs::metadata(&file)).modified());
@@ -440,14 +458,30 @@ async fn gc_removes_pack_side_files() {
         files.contains(&format!("repos/{hex}/midx/{g}.multi-pack-index"))
     };
 
-    let early = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, now(), false).await);
+    let early = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        now(),
+        false,
+    )
+    .await);
     assert!(
         early.deleted.is_empty() && early.midx_deleted.is_empty(),
         "{early:?}"
     );
 
     let later = now() + GRACE_S + 60;
-    let swept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, later, false).await);
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        later,
+        false,
+    )
+    .await);
     assert!(!swept.deleted.is_empty(), "{swept:?}");
     assert_eq!(swept.midx_deleted, vec![g1]);
     let files = env.bucket_files().await;
@@ -455,7 +489,15 @@ async fn gc_removes_pack_side_files() {
 
     // A full repack leaves no committed pack carrying a generation.
     ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
-    let swept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, later, false).await);
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        later,
+        false,
+    )
+    .await);
     assert_eq!(swept.midx_deleted, vec![g2], "{swept:?}");
 
     let committed = env.committed_names().await;
@@ -475,6 +517,7 @@ async fn gc_removes_pack_side_files() {
 /// packs never, a dry run changes nothing, and a grace below 28 days is
 /// refused.
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
 async fn sweep_deletes_only_past_grace() {
     let (env, _) = pushed(12).await;
     let src = fixture_repo(&env.fx);
@@ -515,6 +558,7 @@ async fn sweep_deletes_only_past_grace() {
     let short = sweep_packs(
         &env.node,
         env.repo,
+        &env.gc_lease().await,
         Duration::from_secs(27 * DAY),
         now(),
         false,
@@ -526,12 +570,28 @@ async fn sweep_deletes_only_past_grace() {
     );
 
     let just_before = now() + GRACE_S - 3600;
-    let none = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, just_before, false).await);
+    let none = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        just_before,
+        false,
+    )
+    .await);
     assert!(none.deleted.is_empty(), "{none:?}");
     assert_eq!(env.bucket_files().await, files);
 
     let far = now() + 10 * GRACE_S;
-    let dry = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, far, true).await);
+    let dry = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        far,
+        true,
+    )
+    .await);
     let dry_names: BTreeSet<String> = dry.deleted.iter().map(|d| d.name.clone()).collect();
     let mut expected: BTreeSet<String> = superseded.iter().cloned().collect();
     expected.insert(lost.name.clone());
@@ -539,7 +599,15 @@ async fn sweep_deletes_only_past_grace() {
     assert_eq!(env.bucket_files().await, files, "a dry run deletes nothing");
     assert_eq!(env.state(&lost.name).await, Some(PackState::Lost));
 
-    let swept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, far, false).await);
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        far,
+        false,
+    )
+    .await);
     let names: BTreeSet<String> = swept.deleted.iter().map(|d| d.name.clone()).collect();
     assert_eq!(names, expected);
     assert_eq!(env.state(&recovered.name).await, Some(PackState::Recovered));
@@ -620,6 +688,7 @@ async fn pending_packs_aged_out_by_gc() {
     let early = ok(sweep_packs(
         &env.node,
         env.repo,
+        &env.gc_lease().await,
         DEFAULT_GRACE,
         now() + GRACE_S - 60,
         false,
@@ -632,7 +701,15 @@ async fn pending_packs_aged_out_by_gc() {
     assert_eq!(env.state(&files.name).await, Some(PackState::Pending));
 
     let late = now() + GRACE_S + 60;
-    let swept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, late, false).await);
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        late,
+        false,
+    )
+    .await);
     assert_eq!(swept.expired, vec![files.name.clone()]);
     assert!(
         swept
@@ -770,10 +847,26 @@ async fn ref_log_in_cas_transaction() {
             .ok("refs/heads/main")
     );
     let retained = now() + 2 * GRACE_S - 3600;
-    let kept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, retained, false).await);
+    let kept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        retained,
+        false,
+    )
+    .await);
     assert_eq!(kept.ref_log_pruned, 0);
     let past = now() + 2 * GRACE_S + 3600;
-    let pruned = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, past, false).await);
+    let pruned = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        past,
+        false,
+    )
+    .await);
     assert_eq!(pruned.ref_log_pruned, rows.len() as u64);
     let left = ok(env.world.index.ref_log_since(env.repo, 0).await);
     assert_eq!(
@@ -808,7 +901,15 @@ async fn publish_then_cas_survives_faults() {
         report.superseded.iter().all(|p| p.id != row.id),
         "not an input"
     );
-    let swept = ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, now(), false).await);
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        now(),
+        false,
+    )
+    .await);
     assert!(swept.deleted.iter().all(|d| d.name != held.name));
     let late = env
         .world
@@ -842,7 +943,15 @@ async fn publish_then_cas_survives_faults() {
     let b_gen = ok(env.world.index.snapshot(env.repo).await).full_repack_gen;
     assert!(env.push("refs/heads/a", tips[2]).await.ok("refs/heads/a"));
     ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
-    ok(sweep_packs(&env.node, env.repo, DEFAULT_GRACE, now(), false).await);
+    ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        now(),
+        false,
+    )
+    .await);
     assert!(
         has_object(&env.node, env.repo, a1).await,
         "a1 is in the ref log window"
@@ -923,6 +1032,7 @@ async fn publish_then_cas_survives_faults() {
     ok(sweep_packs(
         &env.node,
         env.repo,
+        &env.gc_lease().await,
         DEFAULT_GRACE,
         now() + GRACE_S + 60,
         false,
@@ -1068,6 +1178,7 @@ async fn sweep_keeps_files_another_row_names() {
     let swept = ok(sweep_packs(
         &env.node,
         env.repo,
+        &env.gc_lease().await,
         DEFAULT_GRACE,
         now() + 2 * GRACE_S,
         false,
@@ -1089,4 +1200,292 @@ async fn sweep_keeps_files_another_row_names() {
     );
     let fresh = env.engine("node-fresh").await;
     assert_i1(&fresh, env.repo).await;
+}
+
+/// Repack outputs carry their oldest input's `created_at`, so in an aged
+/// repository they look old by object age the moment they are written. The
+/// sweep ages `pending` rows by `inserted_at` (ADR 0004 item 5), so a sweep
+/// between a repack's prepare and its publish leaves the outputs pending
+/// with their files, and the publish succeeds.
+#[tokio::test(flavor = "multi_thread")]
+async fn sweep_during_repack_keeps_outputs() {
+    let (env, _) = pushed(12).await;
+    env.age(2 * GRACE_S).await;
+    let lease = env.lease("node-a").await;
+    let prepared = ok(prepare_geometric(&env.node, env.repo, &lease).await);
+    let outputs: Vec<_> = env
+        .rows()
+        .await
+        .into_iter()
+        .filter(|r| r.pack.state == PackState::Pending)
+        .collect();
+    assert!(!outputs.is_empty(), "the repack wrote outputs");
+    assert!(
+        outputs.iter().all(|r| r.pack.created_at + GRACE_S < now()),
+        "the outputs carry an object age past the grace period: {outputs:?}"
+    );
+
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &env.gc_lease().await,
+        DEFAULT_GRACE,
+        now(),
+        false,
+    )
+    .await);
+    assert!(swept.expired.is_empty(), "{swept:?}");
+    for r in &outputs {
+        assert_eq!(env.state(&r.pack.name).await, Some(PackState::Pending));
+        assert!(
+            env.bucket_has_pack(&r.pack.name).await,
+            "{} kept",
+            r.pack.name
+        );
+    }
+    let report = ok(prepared.publish(&env.node).await);
+    assert_eq!(report.published.len(), outputs.len());
+    env.assert_committed_files().await;
+    let fresh = env.engine("node-fresh").await;
+    assert_i1(&fresh, env.repo).await;
+}
+
+/// A push whose pack has the name of one the sweep is deleting (ADR 0004
+/// item 5): pushed between the sweep's read and its claim, its pending row
+/// stops the claim and the files stay; pushed after the claim, it is
+/// refused retryably and its retry uploads the files again. Either way no
+/// committed row is left without its files.
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
+async fn sweep_claim_races_resent_push() {
+    let env = env(12).await;
+    let base = env.oid("refs/remotes/origin/main");
+    let seed = env.committed_names().await;
+    let mut packs = Vec::new();
+    let mut tip = base;
+    for i in 0..2 {
+        let old = tip;
+        tip = env.new_commit(old, &format!("race/{i}.txt"), format!("{i}\n").as_bytes());
+        let pack = env.pack_for(tip).await;
+        let before = env.committed_names().await;
+        let res = push_support::raw_push(
+            &env.node,
+            env.repo,
+            "pusher",
+            &[(Some(old), Some(tip), "refs/heads/main")],
+            Some(pack.clone()),
+        )
+        .await;
+        assert!(res.ok("refs/heads/main"), "{res:?}");
+        let name: Vec<String> = env
+            .committed_names()
+            .await
+            .difference(&before)
+            .cloned()
+            .collect();
+        assert_eq!(name.len(), 1);
+        packs.push((tip, pack, name[0].clone()));
+    }
+    assert!(packs.iter().all(|(_, _, n)| !seed.contains(n)));
+    let lease = env.lease("node-a").await;
+    let report = ok(repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await);
+    for (_, _, name) in &packs {
+        assert!(
+            report.superseded.iter().any(|p| &p.name == name),
+            "{report:?}"
+        );
+    }
+
+    // The resends run on another node, from inside the sweep.
+    let other = env.engine("node-b").await;
+    let repo = env.repo;
+    let (tip_a, pack_a, name_a) = packs[0].clone();
+    let (tip_b, pack_b, name_b) = packs[1].clone();
+    let read_push = Arc::new(std::sync::Mutex::new(None));
+    let claim_push = Arc::new(std::sync::Mutex::new(None));
+    {
+        let (other, out) = (Arc::clone(&other), Arc::clone(&read_push));
+        env.node.set_fault_hook(
+            FaultPoint::SweepAfterRead,
+            Some(Arc::new(move |_| {
+                let (other, out, pack) = (Arc::clone(&other), Arc::clone(&out), pack_a.clone());
+                Box::pin(async move {
+                    let res = push_support::raw_push(
+                        &other,
+                        repo,
+                        "pusher",
+                        &[(None, Some(tip_a), "refs/heads/again-a")],
+                        Some(pack),
+                    )
+                    .await;
+                    *out.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(res);
+                })
+            })),
+        );
+    }
+    {
+        let (other, out) = (Arc::clone(&other), Arc::clone(&claim_push));
+        let pack_b = pack_b.clone();
+        let name_b = name_b.clone();
+        env.node.set_fault_hook(
+            FaultPoint::SweepAfterClaim,
+            Some(Arc::new(move |name| {
+                let (other, out, pack) = (Arc::clone(&other), Arc::clone(&out), pack_b.clone());
+                let mine = name == name_b;
+                Box::pin(async move {
+                    if !mine {
+                        return;
+                    }
+                    let res = push_support::raw_push(
+                        &other,
+                        repo,
+                        "pusher",
+                        &[(None, Some(tip_b), "refs/heads/again-b")],
+                        Some(pack),
+                    )
+                    .await;
+                    *out.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(res);
+                })
+            })),
+        );
+    }
+    let swept = ok(sweep_packs(
+        &env.node,
+        env.repo,
+        &lease,
+        DEFAULT_GRACE,
+        now() + 2 * GRACE_S,
+        false,
+    )
+    .await);
+    env.node.set_fault_hook(FaultPoint::SweepAfterRead, None);
+    env.node.set_fault_hook(FaultPoint::SweepAfterClaim, None);
+    let take = |m: &Arc<std::sync::Mutex<Option<push_support::RawResult>>>| {
+        m.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .unwrap_or_else(|| panic!("the hook pushed"))
+    };
+
+    // Between the read and the claim: the push commits and keeps the files.
+    let a = take(&read_push);
+    assert!(a.ok("refs/heads/again-a"), "{a:?}");
+    assert!(
+        swept
+            .deleted
+            .iter()
+            .any(|d| d.name == name_a && d.state == PackState::Superseded),
+        "{swept:?}"
+    );
+    assert!(env.bucket_has_pack(&name_a).await, "the files stay");
+    env.assert_committed_files().await;
+
+    // After the claim: refused retryably, and the files went.
+    let b = take(&claim_push);
+    let reason = b
+        .ng("refs/heads/again-b")
+        .unwrap_or_else(|| panic!("refused: {b:?}"));
+    assert!(reason.contains("push again"), "{reason}");
+    assert_eq!(env.db_ref("refs/heads/again-b").await, None);
+    assert!(
+        !env.bucket_has_pack(&name_b).await,
+        "the claimed files went"
+    );
+    assert!(ok(env.world.index.pack_deletions(env.repo).await).is_empty());
+    env.assert_committed_files().await;
+
+    // The retry uploads them again.
+    let retry = push_support::raw_push(
+        &other,
+        env.repo,
+        "pusher",
+        &[(None, Some(tip_b), "refs/heads/again-b")],
+        Some(pack_b),
+    )
+    .await;
+    assert!(retry.ok("refs/heads/again-b"), "{retry:?}");
+    assert!(env.bucket_has_pack(&name_b).await);
+    env.assert_committed_files().await;
+    let fresh = env.engine("node-fresh").await;
+    assert_i1(&fresh, env.repo).await;
+}
+
+/// A deletion claim a sweep that died left behind (ADR 0004 item 5) blocks
+/// rows of its name until the next sweep finishes it: deleting the files if
+/// no row names them, keeping them if one does.
+#[tokio::test(flavor = "multi_thread")]
+async fn sweep_finishes_an_interrupted_claim() {
+    let (env, _) = pushed(12).await;
+    let lease = env.lease("node-a").await;
+    let committed = env.committed_names().await;
+    let live = committed
+        .iter()
+        .next()
+        .unwrap_or_else(|| panic!("a committed pack"))
+        .clone();
+    // Claims as a dead sweep would have left them: one on files nothing
+    // names, and one on a committed pack, which only reindex can produce.
+    let orphan = "pack-0123456789abcdef0123456789abcdef01234567";
+    let hex = ok(RepoIdHex::parse(&env.repo.to_string()));
+    let key = Key::Pack {
+        repo: hex,
+        name: ok(PackName::parse(orphan)),
+        ext: PackExt::Pack,
+    };
+    ok(env
+        .world
+        .bucket
+        .put(&key, bytes::Bytes::from_static(b"PACK"))
+        .await);
+    assert!(ok(env
+        .world
+        .index
+        .claim_pack_deletion(env.repo, orphan)
+        .await));
+    ok(
+        sqlx::query("INSERT INTO pack_deletions (repo, name, claimed_at) VALUES (?, ?, 0)")
+            .bind(&env.repo.0[..])
+            .bind(&live)
+            .execute(&env.world.sql().await)
+            .await,
+    );
+
+    let swept = ok(sweep_packs(&env.node, env.repo, &lease, DEFAULT_GRACE, now(), false).await);
+    let finished: BTreeSet<&str> = swept.finished_claims.iter().map(String::as_str).collect();
+    assert_eq!(finished, BTreeSet::from([orphan, live.as_str()]));
+    assert!(
+        !env.bucket_has_pack(orphan).await,
+        "the orphan's files went"
+    );
+    assert!(env.bucket_has_pack(&live).await, "the named pack's stayed");
+    assert!(ok(env.world.index.pack_deletions(env.repo).await).is_empty());
+    env.assert_committed_files().await;
+}
+
+/// The leaseholder renews its lease every third of its TTL while a repack
+/// runs (ADR 0004 item 5), so a repack that takes longer than the TTL still
+/// publishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn long_repack_renews_its_lease() {
+    let (env, _) = pushed(12).await;
+    let ttl = Duration::from_millis(600);
+    let lease = ok(env.world.index.acquire_lease(env.repo, "node-a", ttl).await)
+        .unwrap_or_else(|| panic!("the lease is free"));
+    env.node.set_fault_hook(
+        FaultPoint::RepackBeforeGit,
+        Some(Arc::new(|_| {
+            Box::pin(tokio::time::sleep(Duration::from_secs(2)))
+        })),
+    );
+    let report = repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await;
+    env.node.set_fault_hook(FaultPoint::RepackBeforeGit, None);
+    let report = ok(report);
+    assert!(!report.published.is_empty(), "{report:?}");
+    assert_eq!(
+        ok(env.world.index.acquire_lease(env.repo, "node-b", ttl).await),
+        None,
+        "the holder still has it"
+    );
 }
