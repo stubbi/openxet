@@ -5,6 +5,12 @@
 //! node's pack cache, hydrated from the bucket on demand. Nodes stay
 //! stateless (design §5.3): the cache is a cache.
 //!
+//! Pushes run `git receive-pack` on such a snapshot; its `proc-receive`
+//! hook (openxet itself, [`hook`]) hands the commands back to the engine,
+//! which applies the writer reachability rule ([`check_writer_rule`]),
+//! publishes the pack and moves the refs in the fenced commit transaction
+//! ([`Publisher`], ADR 0004 item 3).
+//!
 //! git runs as a separate program with a sanitised environment (ADR 0004
 //! items 7 and 8); `git` 2.37 or newer must be on `PATH`. Unix only, like
 //! the hard links and file descriptors it relies on.
@@ -16,13 +22,17 @@
 #![forbid(unsafe_code)]
 
 mod config;
+pub mod hook;
 mod interpose;
 mod ls_refs;
 mod pkt;
 mod process;
+mod publish;
 mod reach;
+mod receive;
 mod snapshot;
 mod store;
+mod thin;
 mod upload;
 
 use std::path::{Path, PathBuf};
@@ -32,14 +42,22 @@ use openxet_index::{HubIndex, IndexError, Pack, RepoId};
 use openxet_storage::{Bucket, PackName, StorageError};
 
 pub use config::{Budget, DEFAULT_CACHE_MAX_BYTES, GitConfig};
+pub use hook::HookServer;
 pub use pkt::{
     Fetch, LsRefs, MAX_PKT_LEN, Pkt, PktError, V2Command, err_pkt, find_flush, parse_v0_wants,
     parse_v2_command, read_pkt,
 };
 pub use process::{MIN_GIT_VERSION, PINNED_CONFIG, git_command, protocol_version};
+#[cfg(feature = "fault-injection")]
+pub use publish::{FAULT_AFTER_COMMIT_ACTOR, FAULT_AFTER_UPLOAD_ACTOR};
+pub use publish::{PackFiles, Publication, PublishError, Publisher};
 pub use reach::{Reachability, Refused};
+pub use receive::{LARGE_BLOB_REPORT_BYTES, WriterRuleCounts};
 pub use snapshot::SnapshotRepo;
 pub use store::Eviction;
+pub use thin::{
+    MISSING_OBJECTS, Proof, SentObjects, THIN_HINT, WriterRefused, check_writer_rule, classify_sent,
+};
 pub use upload::{ResponseStream, Service};
 
 use process::ProcessEnv;
@@ -196,6 +214,7 @@ pub struct Engine {
     process: Arc<ProcessEnv>,
     v2_advertisement: Vec<u8>,
     reach: Reachability,
+    counters: Arc<receive::Counters>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -211,7 +230,9 @@ impl Engine {
     /// Starts the engine: opens the node cache at `config.cache_dir` (one
     /// process at a time), sweeps snapshots a previous process leaked,
     /// checks that snapshots can hard-link cached packs (ADR 0004 item 4),
-    /// finds `git` on `PATH` and checks it is 2.37 or newer (item 8), and
+    /// finds `git` on `PATH` and checks it is 2.37 or newer (item 8),
+    /// installs the `proc-receive` hook (item 3: a symlink to
+    /// `config.hook_program`, by default the running executable), and
     /// captures git's protocol v2 capability advertisement (item 2).
     ///
     /// # Errors
@@ -227,10 +248,16 @@ impl Engine {
         let git = process::find_git()?;
         let dir = config.cache_dir.clone();
         let cache = blocking(move || NodeCache::open(&dir)).await?;
-        let bootstrap = ProcessEnv::bootstrap(&cache.home())?;
+        let bootstrap = ProcessEnv::bootstrap(&git, &cache.home())?;
         process::check_version(&git, &bootstrap).await?;
         let exec_dir = process::exec_path(&git, &bootstrap).await?;
-        let process = Arc::new(ProcessEnv::new(&exec_dir, &cache.hooks(), &cache.home())?);
+        let process = Arc::new(ProcessEnv::new(
+            &git,
+            &exec_dir,
+            &cache.hooks(),
+            &cache.home(),
+        )?);
+        install_hook(&cache.hooks(), config.hook_program.as_deref())?;
         let reach = Reachability::new(config.reachability);
         let mut engine = Self {
             index,
@@ -241,6 +268,7 @@ impl Engine {
             process,
             v2_advertisement: Vec::new(),
             reach,
+            counters: Arc::default(),
         };
         engine.v2_advertisement = engine.capture_v2_advertisement().await?;
         Ok(engine)
@@ -407,4 +435,19 @@ impl Engine {
         }
         Ok(out.stdout)
     }
+}
+
+/// Links `{hooks}/proc-receive` to `program`, or to the running executable:
+/// the hook is openxet itself, which runs `openxet proc-receive` when
+/// started under that name (ADR 0004 item 3).
+fn install_hook(hooks: &Path, program: Option<&Path>) -> Result<(), GitError> {
+    let program = match program {
+        Some(p) => p.to_path_buf(),
+        None => {
+            std::env::current_exe().map_err(io_err("find the running executable for", hooks))?
+        }
+    };
+    let link = hooks.join("proc-receive");
+    std::os::unix::fs::symlink(&program, &link)
+        .map_err(io_err("install the proc-receive hook", &link))
 }
