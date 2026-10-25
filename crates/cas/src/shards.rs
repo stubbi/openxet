@@ -741,7 +741,7 @@ mod tests {
         let budget = state.budget.bytes();
         let held = Arc::clone(&state.validate).acquire_owned().await.unwrap();
 
-        let response = crate::router(state.clone())
+        let response = crate::test_support::router(state.clone())
             .oneshot(
                 Request::post("/v2/shards")
                     .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
@@ -805,7 +805,7 @@ mod tests {
         let whole = state.budget.bytes();
 
         let upload = tokio::spawn(
-            crate::router(state.clone()).oneshot(
+            crate::test_support::router(state.clone()).oneshot(
                 Request::post("/v1/shards")
                     .header(AUTHORIZATION, format!("{} oxt_unit_write", "Bearer"))
                     .body(Body::from(capture("upload.shard")))

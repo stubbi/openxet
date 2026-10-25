@@ -1,8 +1,9 @@
 //! The CAS test server, shared by every integration test of `openxet-cas`.
 //!
-//! [`TestServer::start`] serves [`openxet_cas::router`] over real HTTP/1.1 on
-//! `127.0.0.1:0`, backed by a temporary `SqliteIndex` and `LocalBucket`, and
-//! captures every log line the server writes ([`TestServer::logs`]).
+//! [`TestServer::start`] serves the CAS, composed as `openxet serve` composes
+//! it, over real HTTP/1.1 on `127.0.0.1:0`, backed by a temporary
+//! `SqliteIndex` and `LocalBucket`, and captures every log line the server
+//! writes ([`TestServer::logs`]).
 //! [`TestServer::start_with`] swaps in another bucket, such as
 //! [`FailingBucket`], and [`TestServer::start_with_index`] wraps the index,
 //! as [`SlowIndex`] does.
@@ -31,7 +32,8 @@ use std::time::Duration;
 use axum::body::Bytes;
 use futures_core::stream::BoxStream;
 use openxet_auth::{Authenticator, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair};
-use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, router};
+use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, mounted};
+use openxet_http::compose;
 use openxet_index::{
     ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, SqliteIndex,
     TermBytes, Visibility,
@@ -472,7 +474,8 @@ impl TestServer {
                 ready_tx
                     .send((tokio::runtime::Handle::current(), index))
                     .unwrap();
-                axum::serve(listener, router(state))
+                let body_deadline = state.cfg.body_deadline;
+                axum::serve(listener, compose(vec![mounted(state)], body_deadline))
                     .with_graceful_shutdown(async {
                         let _ = stop.await;
                     })

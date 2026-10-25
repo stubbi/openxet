@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
+use axum::Router;
 use axum::body::{Body, Bytes};
 use http_body::{Frame, SizeHint};
 use http_body_util::channel::{Channel, Sender};
@@ -23,7 +24,19 @@ use openxet_storage::{Bucket, Key, LocalBucket, StorageError};
 use tokio::sync::Semaphore;
 use url::Url;
 
+use crate::routes::Routes;
 use crate::{AppState, CasConfig};
+
+/// `routes` with `state`, composed as `openxet serve` composes the CAS.
+pub(crate) fn serve(routes: Routes, state: AppState) -> Router {
+    let body_deadline = state.cfg.body_deadline;
+    openxet_http::compose(vec![routes.with_state(state)], body_deadline)
+}
+
+/// The CAS's routes with `state`, composed as `openxet serve` composes them.
+pub(crate) fn router(state: AppState) -> Router {
+    serve(crate::routes(), state)
+}
 
 /// State over a fresh index and bucket in `dir`, accepting `tokens`.
 pub(crate) async fn state(dir: &Path, tokens: Vec<StaticToken>) -> AppState {

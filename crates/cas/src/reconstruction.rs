@@ -549,7 +549,8 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
-    use crate::{SendDeadline, router, test_support};
+    use crate::SendDeadline;
+    use crate::test_support::{self, router};
 
     // The scheme is a constant so the repository's secret scanner, which
     // flags any literal bearer value, can tell this test token from leaks.
