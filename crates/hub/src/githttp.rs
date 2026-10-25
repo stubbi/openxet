@@ -273,11 +273,13 @@ async fn receive_pack(
         if content_length(&headers).is_some_and(|len| len > limit) {
             return Err(HubError::PushTooLarge { limit });
         }
+        // Every check of the request comes before a missing repository is
+        // created, so a refused push creates nothing.
+        let body = request_body(&headers, body)?;
         let repo = match repo {
             Some(repo) => repo,
             None => target.create(&state, &who).await?,
         };
-        let body = request_body(&headers, body)?;
         let out = state
             .engine
             .receive_pack(repo.id, protocol(&headers), &who, body)

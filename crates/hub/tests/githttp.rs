@@ -419,6 +419,32 @@ async fn receive_pack_needs_write() {
     );
     assert!(large.text().contains("git lfs track"), "{}", large.text());
 
+    // A refused first push creates nothing: too large, or an encoding git
+    // never sends.
+    for (header, status) in [
+        (
+            ("content-length", "20000000000"),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (("content-encoding", "br"), StatusCode::BAD_REQUEST),
+    ] {
+        let refused = send(
+            &hub,
+            Method::POST,
+            "/carol/refused/git-receive-pack",
+            Some(basic(CAROL)),
+            &[RECEIVE_REQUEST, header],
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(refused.status, status, "{}", refused.text());
+        assert_eq!(
+            labels_of(&hub, "refused").await.status,
+            StatusCode::NOT_FOUND,
+            "a refused push created the repository"
+        );
+    }
+
     // Bob may not create in `alice`: no repository appears.
     for (method, route) in [
         (Method::GET, "info/refs?service=git-receive-pack"),
