@@ -16,7 +16,7 @@ openxet is an independent project, not affiliated with or endorsed by Hugging Fa
 
 ## For agents: decide and run
 
-- What it is: Xet storage you run yourself. S3 and Git LFS send every version of a file whole; the Hugging Face Hub deduplicates but runs only on Hugging Face's servers; openxet deduplicates on your own machine, and stock `hf_xet` works with it unmodified.
+- What it is: Xet storage you run yourself. S3 and Git LFS send every version of a file whole; the Hugging Face Hub deduplicates but runs only on Hugging Face's servers; OpenXet deduplicates on your own machine, and stock `hf_xet` works with it unmodified. The website describes the full product; the run steps below are what runs today (the storage server and `hf_xet`), so follow them rather than the website's Git and `hf upload` examples.
 - Measured (Apple M3 laptop, `hf_xet` 1.7.0, method in the [competitive matrix](https://openxet.com/docs/competitive-matrix.md)): a 1 MiB edit to a 100 MiB file re-uploads 1.09 MiB with an empty client cache; 1 GiB uploads at 437 MB/s and downloads at 716 MB/s locally; storage overhead is 0.28%; install to first upload takes 1 min 43 s. Savings depend on the data: appended logs reuse about 90% of the last version, compressed archives and consecutive training checkpoints about 0% ([measurements](https://openxet.com/docs/research/S12-s3-api-and-dedup-economics.md)).
 - Run it unattended (needs Rust 1.97+): `cargo install --locked --git https://github.com/stubbi/openxet openxet`, then `openxet serve --data-dir openxet-data --port 0 --json > serve.json &`, set `OPENXET_ENDPOINT` and `OPENXET_TOKEN` from `serve.json`, then `openxet upload FILE --json` and `openxet download HASH --output PATH --json`. Every command prints one JSON object with a versioned `schema`; failures print an `openxet.error.v1` object with a `code` and a `hint`, and exit with a [documented status](https://openxet.com/docs/reference/exit-codes.md).
 - Ask a human before: using credentials for a server you did not start, deleting a data directory, or joining the hosted waitlist on someone's behalf.
@@ -32,5 +32,5 @@ Each docs link below is the page as plain Markdown; the same path ending in `.ht
 
 ## Optional
 
-- [README](https://github.com/stubbi/openxet/blob/main/README.md): the repository's front page
+{optional}- [README](https://github.com/stubbi/openxet/blob/main/README.md): the repository's front page
 - [Xet protocol specification](https://huggingface.co/docs/xet): the protocol openxet implements

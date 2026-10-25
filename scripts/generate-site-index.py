@@ -5,7 +5,8 @@ Usage: generate-site-index.py PUBLIC_DIR (run by scripts/build-site.sh after
 mdBook has written PUBLIC_DIR/docs).
 
 llms.txt (https://llmstxt.org) is site/llms-template.txt with `{docs}`
-replaced by one section per part of the navigation, linking each page's
+replaced by one section per part of the navigation (the Project part goes
+to `{optional}`, under `## Optional`), linking each page's
 plain Markdown copy (design §7.1), with a one-line note for each (see
 note()). scripts/build-site.sh fails if any entry has none.
 
@@ -24,6 +25,7 @@ REPO = Path(__file__).resolve().parents[1]
 SUMMARY = REPO / "docs/SUMMARY.md"
 TEMPLATE = REPO / "site/llms-template.txt"
 SITE = "https://openxet.com"
+OPTIONAL = {"Project"}
 
 PART = re.compile(r"^# (.+)$")
 ENTRY = re.compile(r"^\s*(?:- )?\[([^\]]+)\]\(([^)]*)\)\s*$")
@@ -82,17 +84,24 @@ def note(markdown: Path) -> str:
 
 
 def llms_txt(docs: Path, parts) -> str:
-    sections = []
+    """Each navigation part becomes a section; the parts in OPTIONAL go
+    under the template's `## Optional`, the llms.txt heading for links an
+    agent may skip (design records, ADRs, research)."""
+    sections, optional = [], []
     for name, entries in parts:
-        lines = [f"## {name}", ""]
+        lines = []
         for title, page in entries:
             path = published(page)
             line = f"- [{title}]({SITE}/docs/{path}.md)"
             if summary := note(docs / f"{path}.md"):
                 line += f": {summary}"
             lines.append(line)
-        sections.append("\n".join(lines) + "\n")
-    return TEMPLATE.read_text(encoding="utf-8").replace("{docs}", "\n".join(sections))
+        if name in OPTIONAL:
+            optional.extend(lines)
+        else:
+            sections.append("\n".join([f"## {name}", ""] + lines) + "\n")
+    template = TEMPLATE.read_text(encoding="utf-8")
+    return template.replace("{docs}", "\n".join(sections)).replace("{optional}", "".join(f"{line}\n" for line in optional))
 
 
 def tag_html(tag: str, attrs: dict[str, str | None]) -> str:
