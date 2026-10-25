@@ -100,9 +100,38 @@ impl Engine {
         .await
     }
 
+    /// The size in bytes of the file at `path` in `commit` (from
+    /// [`Engine::resolve_revision`] on the same snapshot), read from its
+    /// object header without inflating it, so a caller can reserve memory
+    /// before [`Engine::read_blob`] buffers it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Engine::read_blob`].
+    pub async fn blob_size(
+        &self,
+        snap: &SnapshotRepo,
+        commit: Oid,
+        path: &str,
+    ) -> Result<u64, GitError> {
+        let comps = read_components(path)
+            .filter(|c| !c.is_empty())
+            .ok_or_else(|| entry_not_found(path))?;
+        let dir = snap.dir.path().to_path_buf();
+        let path = path.to_owned();
+        blocking(move || {
+            let repo = open_snapshot(&dir)?;
+            let id = find_file(&repo, commit, &comps, &path)?;
+            Ok(repo.find_header(id).map_err(objects_err)?.size())
+        })
+        .await
+    }
+
     /// Reads the file at `path` in `commit` (from
     /// [`Engine::resolve_revision`] on the same snapshot): its bytes, or the
-    /// LFS pointer it holds.
+    /// LFS pointer it holds. The whole blob is buffered; a caller bounds it
+    /// with [`Engine::blob_size`] first (streaming large blobs is
+    /// <https://github.com/stubbi/openxet/issues/91>).
     ///
     /// # Errors
     ///
@@ -121,11 +150,7 @@ impl Engine {
         let path = path.to_owned();
         blocking(move || {
             let repo = open_snapshot(&dir)?;
-            let root = commit_tree(&repo, commit)?;
-            let id = match find_path(&repo, root, &comps)? {
-                Some((mode, id)) if !mode.is_tree() && !mode.is_commit() => id,
-                _ => return Err(entry_not_found(&path)),
-            };
+            let id = find_file(&repo, commit, &comps, &path)?;
             let data = repo.find_blob(id).map_err(objects_err)?.take_data();
             let oid = oid_of(id)?;
             if data.len() <= MAX_POINTER_BYTES
@@ -334,6 +359,21 @@ pub(super) fn objects_err(e: impl std::fmt::Display) -> GitError {
 
 pub(super) fn oid_of(id: impl Into<ObjectId>) -> Result<Oid, GitError> {
     from_gix(id.into()).ok_or_else(|| GitError::Corrupt("an object id is not SHA-1".to_owned()))
+}
+
+/// The blob of the file at `comps` (`path` as the caller named it) in
+/// `commit`'s tree: not a folder, the root or a submodule.
+fn find_file(
+    repo: &gix::Repository,
+    commit: Oid,
+    comps: &[String],
+    path: &str,
+) -> Result<ObjectId, GitError> {
+    let root = commit_tree(repo, commit)?;
+    match find_path(repo, root, comps)? {
+        Some((mode, id)) if !mode.is_tree() && !mode.is_commit() => Ok(id),
+        _ => Err(entry_not_found(path)),
+    }
 }
 
 fn entry_not_found(path: &str) -> GitError {

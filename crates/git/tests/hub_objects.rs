@@ -757,8 +757,15 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
             "{path}: {e:?}"
         );
     }
+    // The size, from the object header, without inflating the blob.
+    assert_eq!(ok(node.blob_size(&snap, c3, "docs/a.txt").await), 2);
     for path in ["docs", "", "nope.txt", "docs/a.txt/x"] {
         let e = node.read_blob(&snap, c3, path).await.err();
+        assert!(
+            matches!(e, Some(GitError::EntryNotFound { .. })),
+            "{path}: {e:?}"
+        );
+        let e = node.blob_size(&snap, c3, path).await.err();
         assert!(
             matches!(e, Some(GitError::EntryNotFound { .. })),
             "{path}: {e:?}"
