@@ -374,7 +374,7 @@ async fn open(
                  uses it with an incompatible version. The index can be rebuilt from the bucket.",
             )
         })?;
-    let bucket = LocalBucket::open(&dir.join("bucket")).map_err(|err| {
+    let bucket = LocalBucket::open(&dir.join(BUCKET_DIR)).map_err(|err| {
         let hint = if matches!(err, StorageError::NoHardLinks { .. }) {
             "Move the data directory to a filesystem with hard links, such as ext4, XFS, APFS \
              or NTFS (--data-dir or server.data_dir)."
@@ -458,7 +458,11 @@ fn authorizer(config: &Config) -> RulesAuthorizer {
     }
 }
 
-const INDEX_FILE: &str = "index.sqlite";
+/// The index file in the data directory.
+pub(crate) const INDEX_FILE: &str = "index.sqlite";
+
+/// The local bucket's directory in the data directory.
+pub(crate) const BUCKET_DIR: &str = "bucket";
 
 /// Creates the data directory mode `0700` if it is missing, and the index
 /// file mode `0600` (SQLite gives its `-wal` and `-shm` files the database

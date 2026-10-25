@@ -4,13 +4,13 @@ use openxet_client::ClientError;
 
 use crate::error::{CliError, ExitCode, FileError};
 
-pub(super) fn usage_error(code: &'static str, message: &str, hint: &'static str) -> CliError {
+pub(crate) fn usage_error(code: &'static str, message: &str, hint: &'static str) -> CliError {
     CliError::new(code, message, hint).with_exit(ExitCode::USAGE)
 }
 
 /// The stable code, message and hint for a client failure. The message is
 /// the client's, which never holds the token (`ClientError`'s invariant).
-pub(super) fn client_error(err: &ClientError) -> CliError {
+pub(crate) fn client_error(err: &ClientError) -> CliError {
     let message = err.to_string();
     if let Some(usage) = usage_failure(err, &message) {
         return usage;
