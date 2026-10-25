@@ -1688,7 +1688,8 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     push or a Hub `create_branch` from resurrecting, or copying out, a
     force-pushed-away object. Until the `git-reachability` bitmap
     follow-up, some honest thin pushes can be refused (ADR 0004 item 3);
-    the refusal hints `git push --no-thin`, which sends no thin bases.
+    the refusal hints `git -c pack.window=0 push`, which sends no thin
+    bases (over smart HTTP git ignores `--no-thin`).
   - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
     serves `object-info` for any object, so openxet refuses it, along
     with `bundle-uri` and unknown commands.

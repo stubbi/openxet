@@ -60,6 +60,10 @@ pub struct GitConfig {
     /// The largest blob a push may carry that isn't an LFS pointer; `None`
     /// accepts any size and only reports large ones.
     pub max_plain_blob_bytes: Option<u64>,
+    /// The program the `proc-receive` hook runs; `None` for the running
+    /// executable, which is `openxet` in the server. It must run the hook
+    /// when started as `proc-receive` (`openxet_git::hook::proc_receive_hook`).
+    pub hook_program: Option<PathBuf>,
 }
 
 impl GitConfig {
@@ -72,6 +76,7 @@ impl GitConfig {
             reachability: Budget::REACHABILITY,
             thin_bases: Budget::THIN_BASES,
             max_plain_blob_bytes: None,
+            hook_program: None,
         }
     }
 }

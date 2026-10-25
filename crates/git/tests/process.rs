@@ -245,7 +245,10 @@ async fn upload_pack_config_pinned() {
         config.get("core.hookspath"),
         Some(&hooks.to_string_lossy().as_ref())
     );
-    assert!(hooks.is_dir() && ok(fs::read_dir(&hooks)).count() == 0);
+    let installed: Vec<_> = ok(fs::read_dir(&hooks))
+        .map(|e| ok(e).file_name())
+        .collect();
+    assert_eq!(installed, ["proc-receive"], "only openxet's own hook");
     assert_eq!(config.get("core.bare"), Some(&"true"));
 }
 

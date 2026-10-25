@@ -8,6 +8,14 @@
 - Amended: 2026-10-23, in the M0 design reconciliation (rulings on the
   ADR's review): item 3's thin-base predicate and its known limitation,
   item 4's `tag` entries and discard semantics, item 5's GC of side files
+- Amended: 2026-10-25, in M2 Task 8 (found while building receive-pack):
+  item 7's hook channel is a pair of pipes, not a socketpair; item 3's
+  thin-pack hint is `git -c pack.window=0 push`, because git ignores
+  `--no-thin` over smart HTTP; item 1's `core.alternateRefsCommand=true`
+  is written so that it runs without `PATH`; item 3's policy re-check
+  fences stale updates by the old value and accepts non-fast-forward
+  updates, since a forced push can't be told apart on the wire, and
+  `main` can't be deleted (branch protection is a later feature)
 
 ## Context
 
@@ -109,7 +117,12 @@ results below are **observed**.
      - `uploadpack.allowFilter=false` until partial clone is designed
        and tested; turning it on needs its own ADR amendment
      - `core.alternateRefsCommand=true`, as defence in depth: snapshots
-       have no alternates
+       have no alternates. It is written `: no alternate refs`: git looks
+       a value without shell metacharacters up on the sanitised `PATH`
+       (item 7), which has no `true`, and receive-pack, whose quarantine
+       has the snapshot as an alternate, then printed `cannot run true`
+       to every pusher. With a space the value runs through `/bin/sh`,
+       whose `:` builtin prints nothing, as `true` would.
      - `receive.procReceiveRefs=refs/`
      - `receive.fsckObjects=true`
      - `receive.unpackLimit=1`
@@ -230,7 +243,14 @@ results below are **observed**.
    - The hook hands the commands and the new pack path to the parent
      openxet process. openxet then:
      1. validates the request (item 7)
-     2. re-checks fast-forward and branch policy itself
+     2. re-checks the commands and branch policy itself: each command's
+        old value must equal the ref's value in the snapshot, which fences
+        a stale update (a client checks fast-forward against that old
+        value, so a non-forced push is a fast-forward of the server's
+        ref); a non-fast-forward update is accepted, because a forced
+        push (`+ref`) can't be told apart from one on the wire, as with
+        git's own default `receive.denyNonFastForwards=false`; `main`
+        can't be deleted. Branch protection is a later feature.
      3. applies the writer reachability rule below
      4. inserts the pack row as `pending`, then uploads `.pack` and `.idx`
         to the bucket. The row comes first, so the bucket never holds a
@@ -294,7 +314,18 @@ results below are **observed**.
             `max_concurrent_per_principal`), so concurrent pushes can't
             stack full walks.
        3. **Fail closed.** A base not found within the budget refuses
-          the push, with the hint `git push --no-thin`.
+          the push, with a hint to fetch and push again with
+          `git -c pack.window=0 push`, which sends no thin bases. Over
+          smart HTTP, git ignores `git push --no-thin`: git v2.39.5
+          `transport-helper.c` lists `TRANS_OPT_THIN` among the options a
+          remote helper never receives, and `remote-curl` always passes
+          `--thin` to `send-pack` (observed with `GIT_TRACE`). Without a
+          delta search (`pack.window=0`) pack-objects computes no new
+          deltas, and in the stale-client test, whose new objects were
+          loose, the retry sent no thin bases. It can still reuse a delta
+          already stored in the client's packs against a base it believes
+          the server has, so the hint is not a guarantee; such a push
+          stays refused, never accepted wrongly.
        - Stock git takes its default thin-pack bases from the edge
          commits' trees at the same path (source:
          `builtin/pack-objects.c`, `show_edge` → `add_preferred_base`,
@@ -317,8 +348,8 @@ results below are **observed**.
          - **commit-type bases**, which are never tree entries, so no
            fast path can match them
 
-         Each refusal carries the `git push --no-thin` hint, which sends
-         no thin bases.
+         Each refusal carries the thin-pack hint above, which sends no
+         thin bases.
      - A writer with no pack (a Hub ref create or update) must get an
        empty list, so N must already be reachable from the snapshot's
        refs. N is checked exactly like an R22 want (item 2): a ref tip or
@@ -692,11 +723,15 @@ results below are **observed**.
      a ref dangle, but they write `ref_log`, and one transaction shape
      for every writer is simpler to test.
 7. **Hardening of the hook route and the git process.**
-   - **Hook channel.** It is an inherited `socketpair` fd with no
-     filesystem path, over HTTP and SSH alike.
-     - openxet clears `FD_CLOEXEC` on that one fd for the git child,
-       which passes it on to the hook.
-     - The hook finds it through `OPENXET_HOOK_FD`.
+   - **Hook channel.** It is a pair of inherited pipes, one each way,
+     with no filesystem path and no listener, over HTTP and SSH alike.
+     - openxet clears `FD_CLOEXEC` on those two descriptors for the git
+       child only, which passes them on to the hook.
+     - The hook finds them through `OPENXET_HOOK_FD` (`{read},{write}`)
+       and adopts them by opening `/dev/fd/N`.
+     - Pipes, not a socketpair: safe Rust has no way to take ownership
+       of an inherited descriptor number, and `/dev/fd/N` can be opened
+       for a pipe on Linux and macOS, but not for a socket on Linux.
    - **Token.** Each request gets a single-use token, delivered as
      `OPENXET_HOOK_TOKEN`. It is bound to repo ID, principal and request
      ID, and expires when the request ends.
@@ -774,7 +809,7 @@ results below are **observed**.
     stored, and billed, until an operator restores or discards them.
     There is no auto-discard, so an alert on unresolved entries is
     shipped. Full repacks are never blocked.
-  - Hook plumbing: an inherited socketpair and tokens.
+  - Hook plumbing: inherited pipes and tokens.
   - Large repos need repo-affinity routing to keep caches warm.
 - **Not yet proven: the pack lifecycle must be prototyped first, in M2.**
   - The pack lifecycle above is intricate, and it came out of review, not
@@ -804,10 +839,10 @@ results below are **observed**.
       only client-sent objects count, and every `--fix-thin` base must be
       reachable from the snapshot's refs: path-matched fast paths in
       boundary-commit and ref-tip trees, then a full walk under its own
-      budget, failing closed with the `--no-thin` hint
+      budget, failing closed with the thin-pack hint
     - [ ] the known-limitation clients (bitmap-enabled, shallow, stale)
-      either push or are refused with the hint, and succeed with
-      `--no-thin`
+      either push or are refused with the hint, and succeed as the hint
+      says
     - [ ] Hub reads by OID pass R22
     - [ ] the v2 command allowlist: only `ls-refs` and `fetch`
     - [ ] the lease epoch check at every repack publish
@@ -900,8 +935,10 @@ results below are **observed**.
   - `hook_pack_path_confined`: pack paths outside the request's snapshot
     or quarantine directory are rejected, including symlink and `..`
     escapes.
-  - `hook_policy_rechecked`: a non-fast-forward or a protected-branch
-    update is refused by openxet even if the hook reports it as allowed.
+  - `hook_policy_rechecked`: openxet refuses, whatever the hook relays,
+    an update whose old value isn't the ref's value in the snapshot (a
+    stale update), a deletion of `main`, and a non-commit on a branch; a
+    forced non-fast-forward update whose old value matches is accepted.
   - `git_env_sanitised`:
     - an injected `GIT_PROTOCOL` value other than `version=N` is
       dropped
@@ -971,8 +1008,8 @@ results below are **observed**.
       client with bitmaps, a shallow client with two refs pushing both,
       and the stale-client sequence (the client's view of the server's
       refs is older than the snapshot). Each push either succeeds or is
-      refused with the `git push --no-thin` hint, then succeeds with
-      `--no-thin`. None of them makes an unreachable object reachable.
+      refused with the thin-pack hint, then succeeds as the hint says.
+      None of them makes an unreachable object reachable.
       The test records which path each push took (fast path, fallback
       walk, or refusal) and asserts it against the expected path, so a
       fast-path regression fails the test.

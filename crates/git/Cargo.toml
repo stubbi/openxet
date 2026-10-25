@@ -7,24 +7,60 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only: the actor names in `publish` that stop a publish between the
+# upload and the commit transaction, or between the commit and the answer,
+# as a crashed node would (ADR 0004, `publish_then_cas_survives_faults`).
+# Never enable it in a shipped build.
+fault-injection = []
+# Fuzz-only: `RequestParser` and `hook::parse_hook_request`, the parsers of
+# untrusted push bytes, for the targets in `fuzz/`. Never enable it in a
+# shipped build.
+fuzzing = []
+# Test-only: builds `openxet-git-test-hook`, the proc-receive hook the tests
+# install in place of the `openxet` binary, which can forge what it relays.
+test-hook = []
+
+[[bin]]
+name = "openxet-git-test-hook"
+path = "tests/support/test_hook.rs"
+required-features = ["test-hook"]
+test = false
+doc = false
+
 [dependencies]
 bytes = "1.12.1"
+command-fds = { version = "0.3.3", features = ["tokio"] }
 futures-core = "0.3.34"
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+getrandom = "0.4.3"
 # The R22 reachability walk and object lookups only; gix never serves the
 # wire (ADR 0004 item 6).
 gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
+openxet-auth = { path = "../auth", version = "0.0.0" }
 openxet-index = { path = "../index", version = "0.0.0" }
 openxet-storage = { path = "../storage", version = "0.0.0" }
+subtle = "2.6.1"
 tempfile = "3.27.0"
 thiserror = "2"
-tokio = { version = "1.54.1", features = ["io-util", "process", "rt", "sync"] }
+tokio = { version = "1.54.1", features = ["fs", "io-util", "net", "process", "rt", "sync", "time"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
 tracing = "0.1.44"
 uuid = { version = "1.29.0", features = ["v4"] }
 
 [dev-dependencies]
 axum = "0.8.9"
 flate2 = "1.1.10"
+futures-util = "0.3.34"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+# Enables the test-only features for this crate's own tests. Cargo unifies
+# features across the workspace, so any workspace build that includes these
+# tests (`cargo test`/`nextest --workspace`, `clippy --all-targets`) compiles
+# openxet-git with `fault-injection` and `test-hook`; a release or plain
+# `cargo build` doesn't.
+openxet-git = { path = ".", features = ["fault-injection", "test-hook"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "time"] }
 

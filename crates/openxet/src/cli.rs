@@ -55,6 +55,9 @@ enum Command {
         #[command(subcommand)]
         command: LabelCommand,
     },
+    /// The proc-receive hook of the pushes openxet serves; git runs it
+    #[command(hide = true)]
+    ProcReceive,
 }
 
 #[derive(Serialize)]
@@ -115,6 +118,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Command::Download(args) => transfer_cmd::download(args, output),
         Command::Purge(args) => purge_cmd::run(args, output),
         Command::Label { command } => label_cmd::run(command, output),
+        Command::ProcReceive => return crate::hook_cmd::run(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -225,10 +229,12 @@ mod tests {
     }
 
     /// Every command's invocation as the agent leg lists it: `["name"` for a
-    /// top-level command, `["parent", "child"` for a nested one.
+    /// top-level command, `["parent", "child"` for a nested one. Hidden
+    /// commands are skipped: `proc-receive` is git's hook, not a command
+    /// people or agents run.
     fn invocations(cmd: &clap::Command, parents: &[String]) -> Vec<String> {
         let mut found = Vec::new();
-        for sub in cmd.get_subcommands() {
+        for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
             let mut path = parents.to_vec();
             path.push(format!("\"{}\"", sub.get_name()));
             if sub.has_subcommands() {

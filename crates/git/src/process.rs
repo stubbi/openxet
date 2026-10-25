@@ -17,6 +17,13 @@ pub const MIN_GIT_VERSION: (u32, u32, u32) = (2, 37, 0);
 /// The config every snapshot repository pins (ADR 0004 item 1), beside
 /// `core.hooksPath`, which names openxet's hook directory under the cache.
 ///
+/// `core.alternateRefsCommand` is the ADR's `true` written as `: no alternate
+/// refs`: git runs a value without shell metacharacters by `PATH` lookup,
+/// and the sanitised `PATH` has no `true`, so receive-pack (whose quarantine
+/// has the snapshot as an alternate) printed `cannot run true` to every
+/// pusher. With a space the value runs through `/bin/sh`, whose `:` builtin
+/// ignores git's arguments and prints nothing, as `true` would.
+///
 /// `receive.autogc=false` goes beyond the ADR's list: a snapshot is thrown
 /// away after its request, so the `git gc --auto` receive-pack would start
 /// after a push could only spend CPU on a copy nobody reads; repacking is
@@ -26,7 +33,7 @@ pub const PINNED_CONFIG: &[(&str, &str)] = &[
     ("uploadpack.allowReachableSHA1InWant", "true"),
     ("uploadpack.allowRefInWant", "false"),
     ("uploadpack.allowFilter", "false"),
-    ("core.alternateRefsCommand", "true"),
+    ("core.alternateRefsCommand", ": no alternate refs"),
     ("receive.procReceiveRefs", "refs/"),
     ("receive.fsckObjects", "true"),
     ("receive.unpackLimit", "1"),
@@ -40,6 +47,7 @@ pub const PINNED_CONFIG: &[(&str, &str)] = &[
 /// What every git child's environment is built from.
 #[derive(Debug)]
 pub(crate) struct ProcessEnv {
+    git: PathBuf,
     path: OsString,
     home: PathBuf,
 }
@@ -47,19 +55,24 @@ pub(crate) struct ProcessEnv {
 impl ProcessEnv {
     /// The environment for asking git about itself, before its exec dir is
     /// known: an empty `PATH`, as git is run by its absolute path.
-    pub(crate) fn bootstrap(home: &Path) -> Result<Self, GitError> {
-        Self::with_dirs(&[], home)
+    pub(crate) fn bootstrap(git: &Path, home: &Path) -> Result<Self, GitError> {
+        Self::with_dirs(git, &[], home)
     }
 
     /// The environment of every git child: `PATH` is exactly the exec dir
     /// and the hook dir (ADR 0004 item 7). git starts its helpers from the
     /// exec dir and shell commands with `/bin/sh` by absolute path, so it
     /// needs no system directory there.
-    pub(crate) fn new(exec_dir: &Path, hooks: &Path, home: &Path) -> Result<Self, GitError> {
-        Self::with_dirs(&[exec_dir, hooks], home)
+    pub(crate) fn new(
+        git: &Path,
+        exec_dir: &Path,
+        hooks: &Path,
+        home: &Path,
+    ) -> Result<Self, GitError> {
+        Self::with_dirs(git, &[exec_dir, hooks], home)
     }
 
-    fn with_dirs(dirs: &[&Path], home: &Path) -> Result<Self, GitError> {
+    fn with_dirs(git: &Path, dirs: &[&Path], home: &Path) -> Result<Self, GitError> {
         let path = std::env::join_paths(dirs).map_err(|_| {
             let bad = dirs
                 .iter()
@@ -75,9 +88,15 @@ impl ProcessEnv {
             }
         })?;
         Ok(Self {
+            git: git.to_path_buf(),
             path,
             home: home.to_path_buf(),
         })
+    }
+
+    /// The git every child runs.
+    pub(crate) fn git(&self) -> &Path {
+        &self.git
     }
 
     /// A `git` command with only the ADR 0004 item 7 variables set.
