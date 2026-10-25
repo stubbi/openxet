@@ -346,6 +346,36 @@ async fn file_by_sha256_is_per_scope() {
     );
 }
 
+#[tokio::test]
+async fn file_sha256_is_per_scope() {
+    let dir = ok(TempDir::new());
+    let (index, _) = open(&dir).await;
+    let (xorb, t) = put(&index, "x", 4, "repo:a").await;
+    let f = file("same", xorb, &t, 0, 4);
+    let sha = f.sha256.unwrap_or_else(|| panic!("sha"));
+    register(&index, "shard", std::slice::from_ref(&f), "repo:a", 1).await;
+    let mut unnamed = file("unnamed", xorb, &t, 0, 2);
+    unnamed.sha256 = None;
+    register(
+        &index,
+        "shard2",
+        std::slice::from_ref(&unnamed),
+        "repo:a",
+        2,
+    )
+    .await;
+
+    assert_eq!(
+        ok(index.file_sha256("repo:a", &f.record.hash).await),
+        Some(sha)
+    );
+    assert_eq!(ok(index.file_sha256("repo:b", &f.record.hash).await), None);
+    assert_eq!(
+        ok(index.file_sha256("repo:a", &unnamed.record.hash).await),
+        None
+    );
+}
+
 /// Every chunk of `t`'s dedup answer, in order.
 async fn dedup_answers(index: &SqliteIndex, t: &ChunkTable) -> Vec<Option<MerkleHash>> {
     let mut out = Vec::new();

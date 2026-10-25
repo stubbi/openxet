@@ -149,6 +149,19 @@ pub trait Repos: Send + Sync + 'static {
         sha256: &[u8; 32],
     ) -> Result<Option<FileRecord>, IndexError>;
 
+    /// The SHA-256 `scope` registered `file` with, if its shard named one.
+    /// Client-asserted, like [`Repos::file_by_sha256`]'s: the file gateway
+    /// answers it as the file's `ETag` in that scope only (ruling M2-R9).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn file_sha256(
+        &self,
+        scope: &str,
+        file: &MerkleHash,
+    ) -> Result<Option<[u8; 32]>, IndexError>;
+
     /// The number of scopes `file` is registered to: what
     /// [`Repos::purge_file`] would remove now (ruling M2-R13).
     ///

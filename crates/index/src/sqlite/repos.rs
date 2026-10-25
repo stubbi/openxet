@@ -218,6 +218,30 @@ impl Repos for SqliteIndex {
         .transpose()
     }
 
+    async fn file_sha256(
+        &self,
+        scope: &str,
+        file: &MerkleHash,
+    ) -> Result<Option<[u8; 32]>, IndexError> {
+        let sha256: Option<Option<Vec<u8>>> =
+            sqlx::query_scalar("SELECT sha256 FROM file_scopes WHERE file = ? AND scope = ?")
+                .bind(file.as_bytes())
+                .bind(scope)
+                .fetch_optional(&self.reader)
+                .await?;
+        sha256
+            .flatten()
+            .map(|bytes| {
+                <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+                    IndexError::Corrupt(format!(
+                        "a file's SHA-256 is {} bytes, not 32",
+                        bytes.len()
+                    ))
+                })
+            })
+            .transpose()
+    }
+
     async fn file_scope_count(&self, file: &MerkleHash) -> Result<u64, IndexError> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM file_scopes WHERE file = ?")
             .bind(file.as_bytes())
