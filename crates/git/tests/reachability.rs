@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::future::Future as _;
+use std::task::Poll;
 use std::time::Duration;
 
 use common::fetch::{Scenario, not_our_ref, scenario, upload, v2_fetch};
@@ -111,7 +113,9 @@ async fn reachability_budget_enforced() {
     );
     assert_eq!(check(&instant, &engine, &s, &[s.main]).await, Ok(()));
 
-    // Concurrency: a request needing the walk takes a slot; tips don't.
+    // Concurrency: any want off the ref tips takes both slots before a
+    // lookup, so an unreachable commit, a tag target and an absent object
+    // are all refused alike; tips take none.
     for (limits, refused) in [
         ((Some(0), None), Refused::RepoBusy),
         ((None, Some(0)), Refused::PrincipalBusy),
@@ -121,13 +125,12 @@ async fn reachability_budget_enforced() {
             max_concurrent_per_principal: limits.1,
             ..Budget::REACHABILITY
         });
-        let got = check(&busy, &engine, &s, &[near]).await;
-        assert_eq!(got, Err(refused.clone()));
+        for want in [near, s.dangling, s.t15_target, Oid([0x42; 20])] {
+            let got = check(&busy, &engine, &s, &[want]).await;
+            assert_eq!(got, Err(refused.clone()), "{want}");
+        }
         assert!(refused.retryable());
-        assert_eq!(
-            check(&busy, &engine, &s, &[s.main, s.t15_target]).await,
-            Ok(())
-        );
+        assert_eq!(check(&busy, &engine, &s, &[s.main, s.t15]).await, Ok(()));
     }
 
     // Trees and blobs only as a direct ref or tag target.
@@ -168,4 +171,132 @@ async fn over_the_limit_is_retryable() {
     );
     let served = upload(&engine, s.repo, 2, v2_fetch(&[s.main])).await;
     assert!(has_packfile(&served));
+}
+
+/// A long linear history, all of it pushed with `refs/heads/main` at the
+/// tip, plus a commit on the root that no ref reaches: a want of it walks
+/// the whole history.
+struct Long {
+    _fixture: tempfile::TempDir,
+    repo: openxet_index::RepoId,
+    root: Oid,
+    dangling: Oid,
+}
+
+const LONG_COMMITS: u32 = 30_000;
+
+async fn long_history(world: &World) -> Long {
+    let fx = common::fixture("tf10k", LONG_COMMITS);
+    let src = common::fixture_repo(&fx);
+    let root_spec = format!("main~{}", LONG_COMMITS - 1);
+    let root = common::rev(&src, &root_spec);
+    let root_tree = format!("{root_spec}^{{tree}}");
+    let dangling: Oid = ok(common::git(
+        &src,
+        &[
+            "-c",
+            "user.name=Tester",
+            "-c",
+            "user.email=tester@openxet.invalid",
+            "commit-tree",
+            &root_tree,
+            "-p",
+            &root_spec,
+            "-m",
+            "dangling",
+        ],
+    )
+    .trim()
+    .parse());
+    let repo = world.repo("org", "long").await;
+    let packs = world.dir.path().join("long-packs");
+    let all = common::pack_objects(&src, &format!("main\n{dangling}"), &packs);
+    let tip = common::rev(&src, "main");
+    world
+        .commit(
+            repo,
+            &all,
+            1_761_400_000,
+            &[common::set("refs/heads/main", None, tip)],
+        )
+        .await;
+    Long {
+        repo,
+        root,
+        dangling,
+        _fixture: fx,
+    }
+}
+
+/// Two walks really in flight hold the repository's two slots: a third
+/// request is refused as busy, and admitted once they finish. Each walk is
+/// polled once by hand, which takes its slots, before it is spawned, so
+/// the probe can't take a slot first. The probe wants an absent object,
+/// which costs no walk when admitted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_walks_hold_the_slots() {
+    let world = World::new().await;
+    let long = long_history(&world).await;
+    let engine = world.engine().await;
+    let reach = std::sync::Arc::new(Reachability::new(Budget {
+        max_objects: u64::MAX,
+        max_time: Duration::from_mins(2),
+        max_concurrent_per_repo: Some(2),
+        max_concurrent_per_principal: None,
+    }));
+    let snapshot = std::sync::Arc::new(ok(engine.snapshot(long.repo).await));
+    let mut walks = Vec::new();
+    for who in ["a", "b"] {
+        let (reach, snapshot, want) = (reach.clone(), snapshot.clone(), long.dangling);
+        let mut walk = Box::pin(async move { reach.check(&snapshot, &[want], who).await });
+        let first = std::future::poll_fn(|cx| Poll::Ready(walk.as_mut().poll(cx))).await;
+        assert!(first.is_pending(), "{who}'s walk ended at once: {first:?}");
+        walks.push(tokio::spawn(walk));
+    }
+    let absent = Oid([0x42; 20]);
+    assert_eq!(
+        reach.check(&snapshot, &[absent], "probe").await,
+        Err(Refused::RepoBusy),
+        "a third request while two walks run"
+    );
+    assert!(
+        walks.iter().all(|w| !w.is_finished()),
+        "the walks must still have been running"
+    );
+    for walk in walks {
+        assert_eq!(ok(walk.await), Err(Refused::NotOurRef(long.dangling)));
+    }
+    assert_eq!(
+        reach.check(&snapshot, &[absent], "probe").await,
+        Err(Refused::NotOurRef(absent)),
+        "admitted once the walks gave their slots back"
+    );
+}
+
+/// The walk looks at the clock every 256 commits: with no commit limit and
+/// a 1 ms budget, the walk to the root of the long history is cut short,
+/// while the default budget reaches it. A whole walk takes tens of
+/// milliseconds on any machine (about 70 ms on an M-series laptop, debug
+/// build), so some clock check trips; without the check the walk would
+/// complete and the root pass.
+#[tokio::test]
+async fn time_budget_stops_a_running_walk() {
+    let world = World::new().await;
+    let long = long_history(&world).await;
+    let engine = world.engine().await;
+    let snapshot = ok(engine.snapshot(long.repo).await);
+    let timed = Reachability::new(Budget {
+        max_objects: u64::MAX,
+        max_time: Duration::from_millis(1),
+        ..Budget::REACHABILITY
+    });
+    assert_eq!(
+        timed.check(&snapshot, &[long.root], "tester").await,
+        Err(Refused::NotOurRef(long.root))
+    );
+    let default = Reachability::new(Budget::REACHABILITY);
+    assert_eq!(
+        default.check(&snapshot, &[long.root], "tester").await,
+        Ok(())
+    );
 }

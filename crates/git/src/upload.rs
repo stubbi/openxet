@@ -4,7 +4,6 @@
 //! (R22) before `git upload-pack --stateless-rpc` sees it, on a snapshot
 //! taken for the request.
 
-use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -18,12 +17,8 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::task::JoinHandle;
 
 use crate::interpose::{HeadError, Split, read_head};
-use crate::pkt::{
-    FLUSH, LsRefs, Pkt, V2Command, err_pkt, parse_v0_wants, parse_v2_command, quote, read_pkt,
-    write_pkt,
-};
-use crate::reach;
-use crate::snapshot::HEAD_REF;
+use crate::ls_refs::{filter_v2_advertisement, ls_refs, with_openxet_agent};
+use crate::pkt::{V2Command, err_pkt, parse_v0_wants, parse_v2_command, quote, quote_at_most};
 use crate::{Engine, GitError, SnapshotRepo, git_command, io_err};
 
 /// A response body, streamed block by block; a failure partway ends it with
@@ -53,6 +48,10 @@ impl Service {
 /// How much of git's stderr a failed request logs.
 const STDERR_KEPT: u64 = 16 * 1024;
 
+/// The most characters of git's stderr a log line or error carries,
+/// escaped.
+const STDERR_LOGGED: usize = 2048;
+
 /// The block size of a streamed response.
 const READ_BLOCK: usize = 64 * 1024;
 
@@ -67,7 +66,9 @@ impl Engine {
     /// allowlist (`agent`, `ls-refs`, `fetch` without `filter`,
     /// `server-option`, `object-format`), with no snapshot taken. Otherwise
     /// git prints it from a snapshot of `repo`; git serves `receive-pack`
-    /// with protocol 0 whatever is asked, as it has no v2 push.
+    /// with protocol 0 whatever is asked, as it has no v2 push. Either way
+    /// the `agent` is openxet's (`openxet/{version}`), not git's, so the
+    /// server's git version isn't disclosed.
     ///
     /// # Errors
     ///
@@ -101,7 +102,7 @@ impl Engine {
                 stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
             });
         }
-        Ok(Bytes::from(out.stdout))
+        Ok(Bytes::from(with_openxet_agent(&out.stdout)))
     }
 
     /// Serves one stateless `upload-pack` request of `repo` for principal
@@ -310,7 +311,7 @@ impl Running {
         }
         let stderr = (&mut self.stderr.0).await.unwrap_or_default();
         let status = status.map_or_else(|e| e.to_string(), |s| s.to_string());
-        let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
+        let stderr = quote_at_most(stderr.trim_ascii(), STDERR_LOGGED);
         tracing::warn!(
             git = %self.git.display(),
             repo = %self.snapshot.repo,
@@ -325,145 +326,4 @@ impl Running {
 
 fn answer(bytes: Bytes) -> ResponseStream {
     futures_util::stream::iter([Ok(bytes)]).boxed()
-}
-
-/// git's v2 capability advertisement reduced to ADR 0004 item 2's
-/// allowlist: `version 2`, `agent`, `ls-refs`, `fetch` with `filter`
-/// removed from its features, `server-option` and `object-format`. Adding
-/// a line needs an ADR amendment.
-pub(crate) fn filter_v2_advertisement(raw: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while let Ok(Some((pkt, len))) = read_pkt(raw.get(pos..).unwrap_or_default()) {
-        pos += len;
-        let line = match pkt {
-            Pkt::Data(line) => line.strip_suffix(b"\n").unwrap_or(line),
-            Pkt::Flush => break,
-            Pkt::Delim | Pkt::ResponseEnd => continue,
-        };
-        let (key, value) = match line.iter().position(|b| *b == b'=') {
-            Some(i) => (&line[..i], Some(&line[i + 1..])),
-            None => (line, None),
-        };
-        let kept = match (key, value) {
-            (b"version 2", None)
-            | (b"agent" | b"ls-refs" | b"server-option" | b"object-format", _) => line.to_vec(),
-            (b"fetch", None) => b"fetch".to_vec(),
-            (b"fetch", Some(features)) => {
-                let features: Vec<&[u8]> = features
-                    .split(|b| *b == b' ')
-                    .filter(|f| !f.is_empty() && *f != b"filter")
-                    .collect();
-                let mut kept = b"fetch".to_vec();
-                if !features.is_empty() {
-                    kept.push(b'=');
-                    kept.extend_from_slice(&features.join(&b' '));
-                }
-                kept
-            }
-            _ => continue,
-        };
-        let mut kept = kept;
-        kept.push(b'\n');
-        write_pkt(&mut out, &kept);
-    }
-    out.extend_from_slice(FLUSH);
-    out
-}
-
-/// `ls-refs` from the snapshot's refs (git `ls-refs.c`, which it matches
-/// byte for byte): `HEAD` first, when it matches a prefix, naming
-/// [`HEAD_REF`]; then every ref matching a prefix, in name order. `HEAD`
-/// whose branch doesn't exist is listed as `unborn` only when the client
-/// asked for both `unborn` and `symrefs`.
-fn ls_refs(snapshot: &SnapshotRepo, args: &LsRefs) -> Result<Vec<u8>, GitError> {
-    let repo = if args.peel {
-        Some(reach::open(snapshot.dir.path()).map_err(GitError::Objects)?)
-    } else {
-        None
-    };
-    let matches =
-        |name: &[u8]| args.prefixes.is_empty() || args.prefixes.iter().any(|p| name.starts_with(p));
-    let line = |out: &mut Vec<u8>, oid: Option<Oid>, name: &str, symref: bool| {
-        let mut text = match oid {
-            Some(oid) => format!("{oid} {name}"),
-            None => format!("unborn {name}"),
-        };
-        if symref && args.symrefs {
-            text.push_str(" symref-target:");
-            text.push_str(HEAD_REF);
-        }
-        if let (Some(repo), Some(oid)) = (&repo, oid) {
-            let (chain, end) = reach::peel(repo, oid);
-            if let Some(peeled) = chain.last().filter(|_| chain.len() > 1 && end.is_some()) {
-                let _ = write!(text, " peeled:{peeled}");
-            }
-        }
-        text.push('\n');
-        write_pkt(out, text.as_bytes());
-    };
-    let mut out = Vec::new();
-    if matches(b"HEAD") {
-        let head = snapshot
-            .refs
-            .iter()
-            .find(|(name, _)| name == HEAD_REF)
-            .map(|(_, oid)| *oid);
-        if head.is_some() || (args.unborn && args.symrefs) {
-            line(&mut out, head, "HEAD", true);
-        }
-    }
-    for (name, oid) in &snapshot.refs {
-        if matches(name.as_bytes()) {
-            line(&mut out, Some(*oid), name, false);
-        }
-    }
-    out.extend_from_slice(FLUSH);
-    Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::filter_v2_advertisement;
-    use crate::pkt::write_pkt;
-
-    fn pkts(lines: &[&str]) -> Vec<u8> {
-        let mut out = Vec::new();
-        for line in lines {
-            write_pkt(&mut out, format!("{line}\n").as_bytes());
-        }
-        out.extend_from_slice(b"0000");
-        out
-    }
-
-    #[test]
-    fn advertisement_filtered_to_the_allowlist() {
-        let raw = pkts(&[
-            "version 2",
-            "agent=git/2.39.5",
-            "ls-refs=unborn",
-            "fetch=shallow wait-for-done filter",
-            "server-option",
-            "object-format=sha1",
-            "object-info",
-            "bundle-uri",
-            "session-id=abc",
-            "promisor-remote=x",
-        ]);
-        assert_eq!(
-            filter_v2_advertisement(&raw),
-            pkts(&[
-                "version 2",
-                "agent=git/2.39.5",
-                "ls-refs=unborn",
-                "fetch=shallow wait-for-done",
-                "server-option",
-                "object-format=sha1",
-            ])
-        );
-        assert_eq!(
-            filter_v2_advertisement(&pkts(&["version 2", "fetch=filter", "ls-refs"])),
-            pkts(&["version 2", "fetch", "ls-refs"])
-        );
-    }
 }

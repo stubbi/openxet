@@ -11,7 +11,10 @@
 //! tree traversal; tag wants too, as only refs and other tags point at a
 //! tag, and both are already in the fast set. Everything else fails closed
 //! with one text, whether the object is unreachable, absent or past the
-//! budget, so the answer doesn't tell them apart.
+//! budget, so the answer doesn't tell them apart. For the same reason a
+//! request with any want that isn't a ref tip takes its concurrency slots
+//! before anything is looked up, so a busy repository answers every such
+//! request alike.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -90,8 +93,9 @@ impl Reachability {
     }
 
     /// Checks that every one of `wants` is reachable from `snapshot`'s
-    /// refs, for principal `who`. Only a request that needs the walk takes
-    /// a concurrency slot.
+    /// refs, for principal `who`. A request whose wants are all ref tips
+    /// takes no concurrency slot; any other takes both before the first
+    /// object lookup.
     ///
     /// # Errors
     ///
@@ -109,22 +113,23 @@ impl Reachability {
             return Ok(());
         }
         let started = Instant::now();
+        let _repo_slot = self
+            .per_repo
+            .try_acquire(snapshot.repo)
+            .ok_or(Refused::RepoBusy)?;
+        let _principal_slot = self
+            .per_principal
+            .try_acquire(who.to_owned())
+            .ok_or(Refused::PrincipalBusy)?;
         let dir = snapshot.dir.path().to_path_buf();
         let refs: Vec<Oid> = snapshot.refs.iter().map(|(_, oid)| *oid).collect();
         let wants = wants.to_vec();
-        let (repo, who) = (snapshot.repo, who.to_owned());
-        let per_repo = Arc::clone(&self.per_repo);
-        let per_principal = Arc::clone(&self.per_principal);
         let budget = self.budget;
         // gix's repository handle stays on the one blocking thread.
         blocking(move || {
-            let Some(plan) = classify(&dir, &refs, wants)? else {
+            let Some(plan) = classify(&dir, &refs, wants, budget, started)? else {
                 return Ok(());
             };
-            let _repo_slot = per_repo.try_acquire(repo).ok_or(Refused::RepoBusy)?;
-            let _principal_slot = per_principal
-                .try_acquire(who)
-                .ok_or(Refused::PrincipalBusy)?;
             plan.walk(budget, started)
         })
         .await
@@ -150,10 +155,21 @@ struct Walk {
 
 /// Settles every want the fast set decides; `Ok(None)` when none is left
 /// for the walk.
-fn classify(dir: &Path, refs: &[Oid], wants: Vec<Oid>) -> Result<Option<Walk>, Refused> {
+fn classify(
+    dir: &Path,
+    refs: &[Oid],
+    wants: Vec<Oid>,
+    budget: Budget,
+    started: Instant,
+) -> Result<Option<Walk>, Refused> {
+    let first_off_tip = wants
+        .iter()
+        .find(|w| !refs.contains(w))
+        .copied()
+        .unwrap_or(Oid([0; 20]));
     let repo = open(dir).map_err(|reason| {
         tracing::warn!(%reason, "opening a snapshot for the reachability check failed");
-        Refused::NotOurRef(wants.first().copied().unwrap_or(Oid([0; 20])))
+        Refused::NotOurRef(first_off_tip)
     })?;
     let mut fast: HashSet<Oid> = HashSet::with_capacity(refs.len());
     let mut tips = Vec::with_capacity(refs.len());
@@ -163,6 +179,10 @@ fn classify(dir: &Path, refs: &[Oid], wants: Vec<Oid>) -> Result<Option<Walk>, R
             tips.extend(chain.last().map(|c| to_gix(*c)));
         }
         fast.extend(chain);
+        // Peeling many refs counts against the time budget too.
+        if started.elapsed() >= budget.max_time {
+            return Err(Refused::NotOurRef(first_off_tip));
+        }
     }
     let mut pending = Vec::new();
     for want in wants {
@@ -173,7 +193,7 @@ fn classify(dir: &Path, refs: &[Oid], wants: Vec<Oid>) -> Result<Option<Walk>, R
             Ok(Some(Kind::Commit)) => pending.push(want),
             Ok(_) => return Err(Refused::NotOurRef(want)),
             Err(reason) => {
-                tracing::warn!(%want, %reason, "reading a want's type failed; refusing it");
+                tracing::warn!(%reason, "reading a want's type failed; refusing it");
                 return Err(Refused::NotOurRef(want));
             }
         }

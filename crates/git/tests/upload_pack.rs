@@ -84,6 +84,11 @@ async fn child_v2_command_allowlist() {
         "{lines:?}"
     );
     assert!(adv.ends_with(b"0000"));
+    let agent = format!("agent=openxet/{}", env!("CARGO_PKG_VERSION"));
+    assert!(
+        lines.contains(&agent),
+        "openxet's agent, not git's: {lines:?}"
+    );
     let unknown = RepoId::generate();
     assert!(matches!(
         engine.advertise(unknown, 2, Service::UploadPack).await,
@@ -263,6 +268,23 @@ async fn ls_refs_matches_git() {
         }
     }
     let adv = ok(engine.advertise(s.repo, 0, Service::UploadPack).await);
+    let agent = format!("agent=openxet/{}", env!("CARGO_PKG_VERSION"));
+    for (protocol, service) in [
+        (0, Service::UploadPack),
+        (1, Service::UploadPack),
+        (0, Service::ReceivePack),
+    ] {
+        let adv = ok(engine.advertise(s.repo, protocol, service).await);
+        let caps = lines(&adv)
+            .iter()
+            .find_map(|l| l.split_once('\0').map(|(_, caps)| caps.to_owned()))
+            .unwrap_or_default();
+        let agents: Vec<&str> = caps
+            .split(' ')
+            .filter(|c| c.starts_with("agent="))
+            .collect();
+        assert_eq!(agents, [agent.as_str()], "v{protocol} {service:?}: {caps}");
+    }
     let advertised: BTreeSet<String> = lines(&adv)
         .iter()
         .map(|l| l.split('\0').next().unwrap_or_default().to_owned())

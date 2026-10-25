@@ -17,6 +17,7 @@
 
 mod config;
 mod interpose;
+mod ls_refs;
 mod pkt;
 mod process;
 mod reach;

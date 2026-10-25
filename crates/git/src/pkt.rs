@@ -63,11 +63,17 @@ const QUOTE_LEN: usize = 80;
 /// At most [`QUOTE_LEN`] characters of `line`, escaped so no control
 /// character reaches the client's terminal, with `...` if cut.
 pub(crate) fn quote(line: &[u8]) -> String {
-    let line = &line[..line.len().min(QUOTE_LEN * 4)];
+    quote_at_most(line, QUOTE_LEN)
+}
+
+/// At most `max` characters of `bytes`, escaped so no control character
+/// reaches a terminal or splits a log line, with `...` if cut.
+pub(crate) fn quote_at_most(bytes: &[u8], max: usize) -> String {
+    let bytes = &bytes[..bytes.len().min(max.saturating_mul(4))];
     let mut out = String::new();
-    for c in String::from_utf8_lossy(line).chars() {
+    for c in String::from_utf8_lossy(bytes).chars() {
         let escaped = c.escape_debug().to_string();
-        if out.len() + escaped.len() > QUOTE_LEN {
+        if out.len() + escaped.len() > max {
             out.push_str("...");
             break;
         }
@@ -199,8 +205,9 @@ pub struct Fetch {
     pub want_refs: Vec<String>,
 }
 
-/// More `ref-prefix` lines than this and git ignores them all (`ls-refs.c`,
-/// `TOO_MANY_PREFIXES`); openxet does the same so its answer matches.
+/// With this many `ref-prefix` lines git ignores them all and lists every
+/// ref (`ls-refs.c`, `TOO_MANY_PREFIXES`: it keeps at most one fewer);
+/// openxet does the same so its answer matches.
 const TOO_MANY_PREFIXES: usize = 65536;
 
 /// Parses one protocol v2 command request, through its closing flush.
@@ -273,22 +280,22 @@ fn capability(line: &[u8]) -> Result<(), PktError> {
 
 fn ls_refs(args: &[&[u8]]) -> Result<LsRefs, PktError> {
     let mut out = LsRefs::default();
-    let mut too_many = false;
     for arg in args {
         match *arg {
             b"symrefs" => out.symrefs = true,
             b"peel" => out.peel = true,
             b"unborn" => out.unborn = true,
             _ => match arg.strip_prefix(b"ref-prefix ") {
-                Some(prefix) if out.prefixes.len() < TOO_MANY_PREFIXES => {
-                    out.prefixes.push(prefix.to_vec());
+                Some(prefix) => {
+                    if out.prefixes.len() < TOO_MANY_PREFIXES {
+                        out.prefixes.push(prefix.to_vec());
+                    }
                 }
-                Some(_) => too_many = true,
                 None => return Err(PktError::Unexpected(quote(arg))),
             },
         }
     }
-    if too_many {
+    if out.prefixes.len() >= TOO_MANY_PREFIXES {
         out.prefixes.clear();
     }
     Ok(out)
@@ -343,14 +350,14 @@ pub fn parse_v0_wants(section: &[u8]) -> Result<Vec<Oid>, PktError> {
 
 /// Appends `data` as one pkt-line. `data` is at most [`MAX_PKT_LEN`] − 4
 /// bytes; openxet only frames its own short lines.
-pub fn write_pkt(out: &mut Vec<u8>, data: &[u8]) {
+pub(crate) fn write_pkt(out: &mut Vec<u8>, data: &[u8]) {
     let len = (data.len() + 4).min(MAX_PKT_LEN);
     out.extend_from_slice(format!("{len:04x}").as_bytes());
     out.extend_from_slice(&data[..len - 4]);
 }
 
 /// `0000`.
-pub const FLUSH: &[u8] = b"0000";
+pub(crate) const FLUSH: &[u8] = b"0000";
 
 /// An `ERR` packet carrying `message` (`gitprotocol-pack.txt`: the client
 /// reports it as `remote error: {message}`).
@@ -504,14 +511,20 @@ mod tests {
 
     #[test]
     fn too_many_prefixes_means_all() {
-        let mut lines = vec!["command=ls-refs".to_owned(), "0001".to_owned()];
-        lines.extend((0..=TOO_MANY_PREFIXES).map(|i| format!("ref-prefix refs/{i}")));
-        lines.push("0000".to_owned());
-        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let Ok(V2Command::LsRefs(ls)) = parse_v2_command(&req(&lines)) else {
-            panic!("not ls-refs");
-        };
-        assert!(ls.prefixes.is_empty());
+        // git keeps at most 65,535 prefixes; at 65,536 it lists everything.
+        for (count, kept) in [
+            (TOO_MANY_PREFIXES - 1, TOO_MANY_PREFIXES - 1),
+            (TOO_MANY_PREFIXES, 0),
+        ] {
+            let mut lines = vec!["command=ls-refs".to_owned(), "0001".to_owned()];
+            lines.extend((0..count).map(|i| format!("ref-prefix refs/{i}")));
+            lines.push("0000".to_owned());
+            let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let Ok(V2Command::LsRefs(ls)) = parse_v2_command(&req(&lines)) else {
+                panic!("not ls-refs");
+            };
+            assert_eq!(ls.prefixes.len(), kept, "{count} prefixes");
+        }
     }
 
     #[test]
