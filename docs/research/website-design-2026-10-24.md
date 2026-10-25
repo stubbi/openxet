@@ -1,6 +1,6 @@
 # Website design research
 
-<!-- description: Research, stakeholder decisions, source references and verification evidence for the openxet website and shared design system. -->
+<!-- description: Research, stakeholder decisions, source references and verification evidence for the OpenXet website and shared design system. -->
 
 Date: 2026-10-24. Baseline repository: `4d7c086`. This records observed sources,
 design judgments and testable hypotheses separately. The canonical decisions
@@ -28,7 +28,7 @@ All external pages below were accessed on 2026-10-24. Observations are about
 the inspected pages, not proof of their conversion performance. No reference
 site's audience, customer claims, benchmarks or certification is ours.
 
-| Source | Observed pattern | openxet decision |
+| Source | Observed pattern | OpenXet decision |
 |---|---|---|
 | [Hugging Face Storage](https://huggingface.co/storage) | Clear product category, concrete actions, alternating explanation/visual sections, an eight-part upload comparison, and a dedicated agent section. Desktop page visually inspected in Chrome. | Learn from explanation beside proof. Put simple reuse before a terminal. Use original graphics and our own availability; do not copy its pricing, logos or claims. |
 | [From Files to Chunks](https://huggingface.co/blog/from-files-to-chunks), 2024-11-20 | Walks from whole files to repeated pieces, then changes one piece. Its two-version visual makes overlap tangible. | Two versions of one file are the first example. A still diagram must teach the idea; interaction confirms it. |
@@ -47,7 +47,7 @@ The lessons above are intentionally short paraphrases. Reference visuals are
 inspiration, not transferred assets. Our diagram, icon refinement and social
 artwork are original. Any future direct asset reuse must record its source,
 license and attribution first. Benchmark results from upstream remain upstream
-results and never appear as openxet measurements.
+results and never appear as OpenXet measurements.
 
 ## What the current site makes difficult
 
@@ -135,7 +135,7 @@ Publish when the underlying example is tested, not on a quota:
 | What happens when you change a large file? | Understand reuse without protocol knowledge | Our file-version diagram; same/new/mixed cases |
 | Run your first Xet storage server | Complete an upload and download locally | Existing CI-tested quickstart, explicit supported client version |
 | Measure the bytes your next upload sends | Evaluate the benefit for their own data | Reproducible script, workload, hardware, versions and raw results |
-| Where your files live when you run openxet | Understand storage and recovery responsibility | Current architecture; label future backends and recovery tools |
+| Where your files live when you run OpenXet | Understand storage and recovery responsibility | Current architecture; label future backends and recovery tools |
 | Give an agent access to one repository | Delegate a useful task without sharing broad authority | Only publish the walkthrough when the corresponding token flow is implemented and tested |
 
 Each article has an author, publication/revision date, references and a next

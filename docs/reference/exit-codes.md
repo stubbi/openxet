@@ -1,6 +1,6 @@
 # Exit codes
 
-`openxet` exits with one of these codes. They are stable: scripts and agents
+The `openxet` command exits with one of these codes. They are stable: scripts and agents
 can rely on them.
 
 <!-- table-caption: Process exit codes -->
@@ -75,17 +75,17 @@ An error object may carry `files`, a list of `{"path", "problem"}` entries,
 when a command given several paths finds problems with some of them; it is
 absent otherwise.
 
-`openxet serve` exits 0 after a graceful stop on `SIGTERM` or `SIGINT`, and
+The `openxet serve` command exits 0 after a graceful stop on `SIGTERM` or `SIGINT`, and
 1 after a second signal, which stops it without waiting for in-flight
-requests. `openxet config check` exits 1 when it finds problems; its report
+requests. The `openxet config check` command exits 1 when it finds problems; its report
 is on stdout and the `config` error on stderr.
 
 `--json` counts only as an option: after `--`, or as the value of an option
 that accepts values starting with `-`, it is an ordinary argument. Right
 after any other option that takes a value, it is still `--json`, and the
-missing value is reported as a JSON usage error. `openxet --help` and
-`openxet --version` print to stdout and exit 0. `openxet` with no command
-prints the help to stderr and exits 2, since nothing was run.
+missing value is reported as a JSON usage error. Both `openxet --help` and
+`openxet --version` print to stdout and exit 0. Run with no command,
+`openxet` prints the help to stderr and exits 2, since nothing was run.
 
 Successful output goes to stdout and carries a `schema` field of the form
 `openxet.<command>.v1`. For example, `openxet version --json`:

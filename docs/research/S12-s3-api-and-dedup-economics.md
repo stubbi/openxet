@@ -1,6 +1,6 @@
 # S12: An S3 API in front of buckets, and what dedup saves
 
-<!-- description: Whether an S3-compatible API over openxet buckets is feasible, what CDC dedup saves on multi-tenant data, a cost model against S3, R2, B2, Wasabi and Hetzner, and the security and billing consequences. -->
+<!-- description: Whether an S3-compatible API over OpenXet buckets is feasible, what CDC dedup saves on multi-tenant data, a cost model against S3, R2, B2, Wasabi and Hetzner, and the security and billing consequences. -->
 
 - Date: 2026-10-24. Every URL below was accessed on that date.
 - Status: the measurements and prices are a record. The recommendation
@@ -8,7 +8,7 @@
   decision; the design schedules nothing from it until then.
 - Question (from the user): "does an S3-compatible API in front of buckets
   mean we could host a very cost-efficient S3 multi-tenancy for our
-  users?" "Buckets" means openxet's planned generic bucket primitive
+  users?" "Buckets" means OpenXet's planned generic bucket primitive
   (mutable, non-versioned, next to the versioned repository; design §10.4
   describes it today as the `bucket` repo type). The question splits into:
   is it feasible, what does dedup save, what does it cost, what does it do
@@ -20,7 +20,7 @@
     `duckdb-httpfs` `77392a72` (the commit DuckDB v2.0.0 pins, as in
     [S4](S4-analytics-clients.md)).
   - `s3s` `main` on 2026-10-24 (crate 0.17.0, published 2026-09-24).
-  - `xet-data` and `xet-core-structures` 1.7.0, as pinned by openxet.
+  - `xet-data` and `xet-core-structures` 1.7.0, as pinned by OpenXet.
   - Price pages and price-list files listed in "Prices", read on
     2026-10-24.
 
@@ -114,7 +114,7 @@ What this means for the server (Verified from the table):
 - **`aws-chunked` with trailing checksums must be parsed**, or AWS CLI ≥
   2.23 and recent `boto3` fail with default settings. huggingface.co asks
   users to set `request_checksum_calculation = when_required` instead
-  (same page). openxet should need no client configuration beyond the
+  (same page). OpenXet should need no client configuration beyond the
   endpoint and keys.
 - **User metadata** (`x-amz-meta-*`, 2 KB) is needed by rclone for
   modification times. huggingface.co does not store it (same page).
@@ -145,10 +145,10 @@ MD5 costs about 1.6 CPU-seconds per GB (Measured, see "Experiment"), about
 a third of chunking plus compression.
 
 **Credentials (Estimated design).** SigV4 is symmetric: the server needs
-the secret to verify a signature. openxet stores only token hashes (§5.4).
+the secret to verify a signature. OpenXet stores only token hashes (§5.4).
 Instead of storing S3 secrets, derive them:
 `secret = HMAC(master_key_v, access_key_id)`. The access key ID names the
-openxet token (and so its external identity, scopes and expiry) and the
+OpenXet token (and so its external identity, scopes and expiry) and the
 master-key version. Nodes then stay stateless, revocation works through the
 token, and keys rotate by version. `s3s`'s `S3Auth::get_secret_key`
 (`crates/s3s/src/auth/mod.rs:185`) fits this. huggingface.co does the same
@@ -157,12 +157,12 @@ permissions of the underlying access token" (Verified, same page).
 
 ### Prior art and licences
 
-| Project | Licence (Verified) | Language | Status (2026-10-24) | Use for openxet |
+| Project | Licence (Verified) | Language | Status (2026-10-24) | Use for OpenXet |
 |---|---|---|---|---|
 | huggingface.co `s3.hf.co` | proprietary | — | in production | The product shape to match: keys from Hub tokens, path-style URLs with the namespace in the endpoint, `302` to a CDN for reads, ListObjectsV2 only, no user metadata, 7-day multipart expiry ([docs](https://huggingface.co/docs/hub/storage-buckets-s3)). |
 | `s3s` | Apache-2.0 | Rust | 0.17.0, about 615k downloads in 90 days on crates.io; used by RustFS | **Reuse** for routing, XML, SigV4 (header and presigned), `aws-chunked` and checksum trailers (`crates/s3s/src/stream/aws_chunked_stream.rs`). It calls itself experimental and leaves authentication and limits to the embedding service ([README](https://github.com/s3s-project/s3s)). It is a hyper service; axum can nest it. |
 | MinIO | AGPL-3.0 | Go | GitHub repository archived (last push 2026-04-24) | Neither licence nor status fits. Its users need a new home, which matters for design §1's "teams who keep large files in MinIO". |
-| Garage | AGPL-3.0 | Rust | active | Not linkable into openxet. It already works as a storage backend (§5.2), and its [compatibility table](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) is a useful checklist. |
+| Garage | AGPL-3.0 | Rust | active | Not linkable into OpenXet. It already works as a storage backend (§5.2), and its [compatibility table](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) is a useful checklist. |
 | SeaweedFS | Apache-2.0 | Go | active | Reference only; different language and storage model. |
 | JuiceFS gateway | Apache-2.0 | Go | active | Runs on MinIO's gateway code; returns no ETag unless `--keep-etag` ([docs](https://juicefs.com/docs/community/guide/gateway/)). Some S3 users work without ETags, but DuckDB and `s3fs` lose conditional reads. |
 | Ceph RGW | LGPL-2.1 or LGPL-3 ([COPYING](https://github.com/ceph/ceph/blob/main/COPYING)) | C++ | active | Semantics reference. `ceph/s3-tests` (MIT, archived on GitHub) is the usual S3 conformance suite and could seed a compat leg. |
@@ -387,7 +387,7 @@ they already own.
 Xet's dedup query (`GET /v1/chunks/…`) answers whether a chunk exists;
 design §5.4 keys answers with HMAC and offers `per-scope` visibility for
 multi-tenant hosting. An S3 client never calls it: the server chunks and
-dedups for it. Two channels remain, and both are openxet's to design:
+dedups for it. Two channels remain, and both are OpenXet's to design:
 - **Write timing.** A PUT of bytes already stored skips the xorb write.
   For a 64 MB xorb the difference is visible. It is visible under
   `per-scope` too, because §5.4 keeps storage shared ("the upload of a
@@ -436,7 +436,7 @@ workloads that's where nearly all the savings came from.
 In scope, in **M5**, delivered with buckets:
 - It depends on M3 (Postgres, S3/GCS/Azure backends), M4 (server-side
   chunking, metering, GC) and the bucket primitive itself.
-- huggingface.co's buckets ship an S3 API, so an openxet bucket without
+- huggingface.co's buckets ship an S3 API, so an OpenXet bucket without
   one is a compatibility gap for users moving from the Hub. §1's MinIO
   users are a second audience, now that MinIO's repository is archived.
 - §12 defines M0–M7 as 1.0. "M8" would be the first post-1.0 milestone,
@@ -462,7 +462,7 @@ In scope, in **M5**, delivered with buckets:
   configurable period.
 - **Integrity:** verify `Content-MD5` and every `x-amz-checksum-*` on
   upload; store them and return them with `ChecksumMode`.
-- **Out of v1:** ACLs and bucket policies (the openxet authorizer
+- **Out of v1:** ACLs and bucket policies (the OpenXet authorizer
   decides), object versioning (§10.4 makes it optional; map later),
   lifecycle, tagging, SSE-C, Object Lock, Select, website hosting,
   notifications.
@@ -512,7 +512,7 @@ In scope, in **M5**, delivered with buckets:
 1. **S3 API surface:** the subset above, `s3s` as the protocol layer,
    addressing, and how S3 operations map onto bucket semantics (overwrite,
    delete, copy, conditional writes, list consistency).
-2. **S3 credentials:** access keys derived from openxet tokens with a
+2. **S3 credentials:** access keys derived from OpenXet tokens with a
    versioned master key; presigned URLs as delegated credentials, with
    capped expiry and revocation through the token, and the wording §5.9
    needs, since they are signed but not range-bound.

@@ -60,11 +60,11 @@
     `SSL_CERT_FILE`.
   - So the local quickstart should default to `http://` on loopback.
 - **S2: the presign endpoint must be reachable from the client.** A
-  presigned URL carries, and SigV4 signs, the store host that openxet
+  presigned URL carries, and SigV4 signs, the store host that OpenXet
   presigned with. The client then connects to exactly that host. In the
   Linux runs the client shared MinIO's network namespace, so the stub
   presigned with `127.0.0.1:9000`; from the macOS host it was
-  `127.0.0.1:19000`. In a compose quickstart, openxet must presign with
+  `127.0.0.1:19000`. In a compose quickstart, OpenXet must presign with
   the store's client-facing address, not the in-network service name.
 
 ## Method
@@ -293,7 +293,7 @@ The exact commands and status/header lines are in
     discarded (`utils/_http.py:735-784`, `_is_same_or_hub_host`).
   - A cross-origin redirect stops there and uses the 302's headers. That is
     what huggingface.co does (302 to `us.aws.cdn.hf.co`).
-  - **If openxet redirects `resolve` to its own transfer role on the same
+  - **If OpenXet redirects `resolve` to its own transfer role on the same
     origin, the redirect target must repeat the Xet headers.**
 - `huggingface_hub` caches the read token until 60 s before `exp`
   (`XET_CONNECTION_INFO_SAFETY_PERIOD`).
@@ -309,7 +309,7 @@ The exact commands and status/header lines are in
   yet.
 - Follow-up (2026-10-23): the client flow that uses them is on tag
   `v1.8.0-dev0` and in the PyPI pre-release `hf-xet` 1.8.0.dev0, not in a
-  stable release. Design §3 records the API shape and §5.5 how openxet
+  stable release. Design §3 records the API shape and §5.5 how OpenXet
   will support it.
 
 ## Not verified here

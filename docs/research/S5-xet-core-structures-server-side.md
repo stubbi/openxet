@@ -6,7 +6,7 @@
 - Version examined: `xet-core-structures` 1.7.0 (crates.io, 2026-10-06), the
   exact version `openxet-protocol` pins. Paths below are relative to that
   crate's `src/`. Upstream `main` was at `d26341d4` (2026-10-22).
-- Question (design §11, ADR 0001): can openxet use upstream's crate for
+- Question (design §11, ADR 0001): can OpenXet use upstream's crate for
   every format, hashing and shard operation the server needs, or must some
   piece be reimplemented?
 
@@ -91,13 +91,13 @@ reimplementing the format:
   This is index logic: build an `MDBInMemoryShard` from the index, then
   `serialize_from` followed by `export_as_keyed_shard`.
 - **Xorb upload validation and footers.** Upstream's in-process test
-  backend accepts an optional footer, so openxet does too:
+  backend accepts an optional footer, so OpenXet does too:
   - `xet-client` 1.7.0 `cas_client/simulation/local_server/handlers.rs`
     (`post_xorb`) passes the body with `footer_start: None`.
   - `local_client.rs` (`upload_xorb`) then calls
     `reconstruct_xorb_with_footer`, compares the computed hash with the path
     hash, and stores the result: chunks plus a recomputed footer.
-  - openxet's `xorb_with_footer` applies its own checks first, composed from
+  - OpenXet's `xorb_with_footer` applies its own checks first, composed from
     upstream primitives (ADR 0001): each chunk header through
     `deserialize_chunk_header`, decompression into a buffer bounded by the
     header's uncompressed length (at most 128 KiB) with an exact length
@@ -158,7 +158,7 @@ Both are worth reporting upstream.
   and `shard_benchmark.rs`, which the server doesn't use.
 - **tokio features are unified into ours.** The non-wasm dependency enables
   tokio `rt-multi-thread`, `macros`, `time`, `sync`, `io-util` and
-  `test-util`, so openxet's tokio always has `test-util`. That feature only
+  `test-util`, so OpenXet's tokio always has `test-util`. That feature only
   adds APIs (time pausing), but it is compiled into production builds.
 - **Debug builds read `HF_XET_*` environment variables.**
   `test_configurable_constants!` (`xet-runtime`,

@@ -14,7 +14,7 @@
     `simulation/local_server/handlers.rs`), `xet_runtime`
     (`config/groups/{data,shard}.rs`).
   - `hf_xet` 1.7.0 as installed in `compat/.venv`, run for real.
-  - openxet `main` at `061c1ac`, and a scratch build of it with the
+  - OpenXet `main` at `061c1ac`, and a scratch build of it with the
     experiment below (never committed); then the M1-R30 implementation on
     branch `m1/t10b-dedup-shard` (from `f2da565`).
   - The spec pages [deduplication](https://huggingface.co/docs/xet/deduplication),
@@ -28,7 +28,7 @@
     "Observed on huggingface.co".
 - Question (M1): a 1 MiB edit in the middle of a 100 MiB file, re-uploaded
   by stock `hf_xet` 1.7.0 with an empty client cache, sends about 30 MB
-  of xorbs to openxet; with a warm cache, about 1.2 MB. Design §1a wants
+  of xorbs to OpenXet; with a warm cache, about 1.2 MB. Design §1a wants
   ≤ 2 MB. Why, and what should a dedup answer contain so the target holds?
 
 Labels used below:
@@ -41,7 +41,7 @@ Labels used below:
 
 ## Answer
 
-The gap is the size of the answer, not the client. openxet's dedup answer
+The gap is the size of the answer, not the client. OpenXet's dedup answer
 (ruling M1-R4) offers only the xorb that holds the queried chunk, so one
 hit on a file's first chunk dedups only that file's first xorb; every
 later xorb needs its own hit on a hash-eligible chunk (about 1 in 1024
@@ -235,26 +235,26 @@ What this means for M1-R30:
 - **Granularity matches.** huggingface.co offers a shard's xorbs, not the
   single matched xorb and not a small fixed count; that is the content
   M1-R30 chose. The larger observed answer, 109 xorbs in 5.2 MB, is a
-  third of openxet's 16 MiB budget (ruling M1-R32), so openxet would
+  third of OpenXet's 16 MiB budget (ruling M1-R32), so OpenXet would
   offer it whole; a
-  shard past the budget is where openxet's answer is cut, a size not seen
+  shard past the budget is where OpenXet's answer is cut, a size not seen
   here.
 - **Form matches:** no file info, no lookup tables, every chunk hash
   keyed, a 7-day expiry (M1-R4 already used 7 days), and `404` when
   nothing matches. The non-eligible chunk's `404` is consistent with an
-  index of eligible and first chunks only, which is what openxet's dedup
+  index of eligible and first chunks only, which is what OpenXet's dedup
   index records (one sample).
 - **Order and key differ, without effect on dedup.** huggingface.co does
   not put the matched xorb first and keeps one key across answers;
-  openxet orders by the matched xorb only to choose which xorbs fit the
+  OpenXet orders by the matched xorb only to choose which xorbs fit the
   budget, and keys each answer freshly. The client indexes every offered
   chunk whatever the order and keys each cached shard by its own footer
   (see "What the client does with an answer").
-- **Which shard.** openxet resolves chunk → xorb → the newest visible
+- **Which shard.** OpenXet resolves chunk → xorb → the newest visible
   shard referencing that xorb; huggingface.co returned a shard that
   holds the chunk, here not the queried file's own. When a chunk is
   stored in one xorb only, both arrive at the shards that reference it.
-  For dedup against openxet's own
+  For dedup against OpenXet's own
   data, M1-R30 is therefore at least as good as the observed answer.
 
 ## Experiment

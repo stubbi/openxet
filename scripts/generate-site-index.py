@@ -272,9 +272,9 @@ def finish_docs(docs: Path, parts) -> None:
                 tag_html("link", {"rel": "alternate", "type": "text/markdown", "title": "Markdown", "href": markdown}),
             ]
             for name, value in {
-                "type": "website", "site_name": "openxet", "title": f"{title} · openxet docs",
+                "type": "website", "site_name": "OpenXet", "title": f"{title} · OpenXet docs",
                 "description": description, "url": canonical, "image": f"{SITE}/og.png",
-                "image:width": "1200", "image:height": "630", "image:alt": "openxet — storage for large files",
+                "image:width": "1200", "image:height": "630", "image:alt": "OpenXet — storage for large files",
             }.items():
                 metadata.append(tag_html("meta", {"property": f"og:{name}", "content": value}))
             metadata.append(tag_html("meta", {"name": "twitter:card", "content": "summary_large_image"}))

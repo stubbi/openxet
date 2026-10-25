@@ -1,6 +1,6 @@
 # Benchmarks
 
-What openxet measures about its own speed, how to rerun it, and the last
+What OpenXet measures about its own speed, how to rerun it, and the last
 results. AGENTS.md's rule holds here: a performance claim comes with a
 benchmark, and a speed regression fails CI.
 
@@ -262,13 +262,13 @@ Local, load average 15:
 | Bench | Time | Throughput (uncompressed) |
 |---|---|---|
 | `xorb_ingest/xorb_with_footer`, all of `POST /v1/xorbs`'s CPU work | 123.4 ms | 519 MiB/s |
-| `xorb_ingest/validation_pass`, openxet's decompress-and-hash pass alone | 77.6 ms | 825 MiB/s |
+| `xorb_ingest/validation_pass`, OpenXet's decompress-and-hash pass alone | 77.6 ms | 825 MiB/s |
 
 **The M1-R8 double decompression costs about 46 ms per 64 MiB xorb,
 37% of ingest.** `xorb_with_footer` decompresses and hashes every chunk
 to validate it, then upstream's `reconstruct_xorb_with_footer`
 decompresses and hashes them again to build the footer. Ruling M1-R8
-keeps that, since openxet doesn't reimplement footer serialization (ADR
+keeps that, since OpenXet doesn't reimplement footer serialization (ADR
 0001). The cost is what a change could buy back: up to 1.6× faster
 ingest per core (123.4 / 77.6), for instance by handing upstream's footer
 serializer the first pass's hashes and offsets.

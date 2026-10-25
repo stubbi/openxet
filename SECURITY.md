@@ -30,4 +30,4 @@ There is no security mailbox yet; this page will list one when it exists.
 Anything in this repository, including the server, the client and the
 release pipeline. Protocol-level issues in the Xet specification or
 `xet-core` itself should go to [Hugging Face](https://github.com/huggingface/xet-core/security);
-tell us too if openxet is affected.
+tell us too if OpenXet is affected.

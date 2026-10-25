@@ -34,7 +34,7 @@ a run against the stub; **inferred** = our conclusion.
 | `HfFileSystem` (fsspec) | **Yes** | `HfFileSystem(endpoint=...)` or `HF_ENDPOINT`; all calls go to that host (source and observed). pandas `hf://` works via both routes. | not needed |
 
 Practical summary: for the two engines that matter most (DuckDB, polars),
-`hf://` cannot reach openxet today. The §5.5 read gateway URL
+`hf://` cannot reach OpenXet today. The §5.5 read gateway URL
 `{endpoint}/{repo_type}/{repo}/resolve/{rev}/{path}` works with both as a
 plain URL if it meets the conformance checklist below. Private repos work
 with DuckDB (`http` secret) but **not** with polars on a plain URL (only
@@ -192,11 +192,11 @@ the clients.
 Each item is pass/fail against the plain URL
 `https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. "Result on the S4
 stub" is what the item did against the stub, so the client behaviour is
-known and the stub is a reference. "Status for openxet" says what openxet's
+known and the stub is a reference. "Status for OpenXet" says what OpenXet's
 real gateway still needs: every row is an M1 test, because none has run
 against it yet.
 
-| # | Check | Result on the S4 stub | Status for openxet |
+| # | Check | Result on the S4 stub | Status for OpenXet |
 |---|---|---|---|
 | G1 | `HEAD` returns `200`, `Content-Length` = file size, `Accept-Ranges: bytes`, `ETag`; `Last-Modified` if the backend has one | Pass (curl); DuckDB sends `HEAD` first (observed) | M1 test |
 | G2 | `GET` without `Range` returns `200` with the full body | Pass (curl: 200, 4,471,463 bytes) | M1 test |
@@ -209,7 +209,7 @@ against it yet.
 | G9 | `If-Range` with the current `ETag` returns `206`; with another value `200` and the full body | Pass (curl); no engine sent it | M1 test |
 | G10 | `302` from `resolve` to a relative `Location` is followed with `Range` by DuckDB and polars | Pass (DuckDB 2.0.0, polars 2.0.0) | M1 test against real storage redirects |
 | G11 | Same with an absolute `Location` (a presigned object-store URL) | Pass with an absolute `http://localhost` URL (both engines) | M1 test with presigned URLs and range-bound signatures (ADR 0002) |
-| G12 | Private repo: unauthenticated request returns `401` with `X-Error-Code`; DuckDB `http` secret (`bearer_token`, host-scoped) is accepted on `HEAD` and every ranged `GET` | Pass (DuckDB) | M1 test with openxet tokens |
+| G12 | Private repo: unauthenticated request returns `401` with `X-Error-Code`; DuckDB `http` secret (`bearer_token`, host-scoped) is accepted on `HEAD` and every ranged `GET` | Pass (DuckDB) | M1 test with OpenXet tokens |
 | G13 | `Authorization` is not forwarded to a different origin on redirect | Not run | M1 test (client behaviour unknown) |
 | G14 | polars on a private repo: native `scan_parquet(url)` cannot send `Authorization`; documented route is an fsspec file object with `headers=` | Pass (documents a polars limitation; fsspec route works) | M1 test: keep as documentation check |
 | G15 | `https://` with the deployment's certificate | DuckDB: Pass with `ca_cert_file` for a private CA. polars: Fail with a private CA on macOS (only macOS tested; Linux and Windows unverified) | M1 test with the real certificate |
@@ -222,7 +222,7 @@ itself was checked, not an engine.
 
 - `HfFileSystem` (and so pandas `hf://`) needs the Hub read shapes already
   captured in [`S3-hub-api-shapes.md`](S3-hub-api-shapes.md) (repo info,
-  `tree`, `paths-info` form or JSON, `resolve`); a Hub-compatible openxet serves
+  `tree`, `paths-info` form or JSON, `resolve`); a Hub-compatible OpenXet serves
   them for the other clients anyway.
 - Both engines issue many small ranges per scan (see G16), so the gateway
   must be cheap per range and cacheable.

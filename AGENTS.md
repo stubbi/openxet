@@ -4,9 +4,9 @@ Guidance for anyone, human or agent, changing this repository. Read it fully
 before your first change. When something here is wrong or missing, fixing
 it is part of your change.
 
-## What openxet is
+## What OpenXet is
 
-openxet is the open-source server and client for the Xet protocol, Hugging
+OpenXet is the open-source server and client for the Xet protocol, Hugging
 Face's chunk-deduplicated storage for large, versioned files (models and
 datasets are examples, not the definition). The official
 tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`, `git-lfs`,
@@ -40,7 +40,7 @@ of them worse:
 
 - **Self-hosters:** teams that can't or won't put data on huggingface.co.
   They want one command to a working setup and nothing to babysit.
-- **Platforms** (aqora first): they embed openxet's storage under their own
+- **Platforms** (aqora first): they embed OpenXet's storage under their own
   product, naming and permissions.
 - **openxet.com users:** they want the same thing without running anything.
   The hosted experience must be perfect: landing page to working `hf upload`
@@ -91,14 +91,14 @@ change would lower any of those measures, it isn't done.
 ## Non-negotiables
 
 1. **Protocol exactness.** Chunking, hashes, xorbs, shards and API behaviour
-   match the Xet spec and `xet-core` byte for byte. Data written by openxet is
+   match the Xet spec and `xet-core` byte for byte. Data written by OpenXet is
    readable by stock clients and huggingface.co tooling, and vice versa. Any
    divergence is a release blocker.
 2. **The object-store bucket is the source of truth.** The database is a rebuildable
    index. Losing the database must never lose data.
 3. **Nothing is deleted outside garbage collection,** which is explicit,
    logged, and has a grace period.
-4. **openxet never owns users.** No passwords, profiles or sign-up database.
+4. **OpenXet never owns users.** No passwords, profiles or sign-up database.
    Identity comes from the operator's systems. Our access tokens and SSH keys
    are always bound to an external identity.
 5. **Stateless nodes.** Any node can serve any request; scale by adding

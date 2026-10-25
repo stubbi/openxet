@@ -1,6 +1,6 @@
 # 0009: Use xet for future resource URIs
 
-<!-- description: Choose xet:// with an explicit deployment host for future openxet resource addresses; schedule its specification in M2 and client delivery in M6. -->
+<!-- description: Choose xet:// with an explicit deployment host for future OpenXet resource addresses; schedule its specification in M2 and client delivery in M6. -->
 
 - Status: accepted (name, endpoint boundary and milestone assignment only)
 - Date: 2026-10-24
@@ -8,7 +8,7 @@
 
 ## Context
 
-The founder explicitly chose **`xet://`** for openxet resource addresses and
+The founder explicitly chose **`xet://`** for OpenXet resource addresses and
 asked that delivery be tracked in the milestones. This replaces the research
 note's initial recommendation to evaluate `openxet://`; it does not change a
 released parser or the Xet wire protocol.
@@ -63,7 +63,7 @@ those tools understand a new resource-address grammar.
 
 ## Consequences
 
-Resource addresses can express the same task on any openxet deployment without
+Resource addresses can express the same task on any OpenXet deployment without
 a hosted-only spelling. The chosen name carries legacy compatibility work;
 that work is a scheduled deliverable rather than an unscheduled naming question.
 
@@ -73,7 +73,7 @@ real CLI/SDK/adapter round trips; and accurate human/agent documentation.
 Third-party clients are listed as supported only after a versioned test proves
 the relevant path. A fsspec adapter is not native DuckDB or polars support.
 
-This is an openxet resource-addressing decision, not ownership of Xet or a
+This is an OpenXet resource-addressing decision, not ownership of Xet or a
 change to its chunking, hashes, object formats or CAS API. Wire compatibility
 remains non-negotiable.
 

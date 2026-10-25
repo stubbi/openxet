@@ -121,7 +121,7 @@ openxet token generate --mode read|write --subject NAME [--scope S] [--tenant T]
 Generates a static token (`oxt_` and 43 base64url characters; see
 [Token format](config.md#token-format)) and prints it with its
 `[[auth.static_tokens]]` entry, which holds only the token's SHA-256. The
-token is printed this once; openxet never stores it. `--subject` is
+token is printed this once; OpenXet never stores it. `--subject` is
 required, so that each token's actions are attributed to it; `--scope`
 defaults to `default`. `--tenant` adds a `tenant` to the entry; without it the
 tenant is `scope:` and the scope ([tenants](config.md#tenants)).
@@ -166,7 +166,7 @@ Uploaded 1.2 MiB of 47.7 MiB (97% deduplicated).
   cache already had. They add up to the files' total size.
 - **Empty files.** An empty file's `sha256` is the digest of zero bytes,
   `e3b0c442…b855`. `hf_xet` 1.7.0 reports, and writes into the shard, all
-  zeros for it instead; openxet sends the same zeros, so only what is shown
+  zeros for it instead; OpenXet sends the same zeros, so only what is shown
   differs.
 
 - **Paths** are taken literally, in order: no globbing and no directory
@@ -351,7 +351,7 @@ and `download` also take `--cache-dir`:
   server is reset while the cache remembers its data, uploads fail with
   `upload_rejected` and the server's message says to clear the cache: remove
   the endpoint's directory under the cache root, or point `--cache-dir` at
-  a new, empty directory. A cache root openxet creates is mode `0700`,
+  a new, empty directory. A cache root OpenXet creates is mode `0700`,
   since its shards list your files' hashes; an existing one, which
   `hf_xet` may share, is left as it is.
 - **No telemetry.** The client never sends telemetry, whatever

@@ -29,7 +29,7 @@ Labels used below:
   repository root (`@1.8.0-dev0` marks the other tag).
 - **spec:** the spec page and section linked.
 
-Where spec and client disagree, openxet follows the client; the table in
+Where spec and client disagree, OpenXet follows the client; the table in
 "Spec and client disagreements" lists every case found.
 
 Related notes, not repeated here: hash-to-hex conversion and the `Hub`
@@ -54,7 +54,7 @@ download URL signing and range binding
 | `POST /v1/shards` | shard upload (fallback) | `200 {"result": 0 \| 1}` |
 | `GET /v2/reconstructions/{file}` + `Range` | download plan (preferred) | v2 JSON, or `416` when the range starts at or past EOF |
 | `GET /v1/reconstructions/{file}` + `Range` | download plan (fallback) | v1 JSON, or `416` |
-| `POST /v1/telemetry` | transfer summary | any `2xx`; openxet drops the body |
+| `POST /v1/telemetry` | transfer summary | any `2xx`; OpenXet drops the body |
 
 Plus the data URLs the reconstruction hands out, fetched with a single
 `Range` and no credential (observed).
@@ -126,7 +126,7 @@ Behaviour that shapes the M1 server:
 | `User-Agent` | `hf_xet/1.7.0`, or `{caller UA}; hf_xet/1.7.0` when the caller passes one (`hf_xet/src/headers.rs:7-22`). Our probe sent only its own UA. | observed, source |
 | `Accept` | `*/*`. No `Accept-Encoding`: responses must not be compressed. | observed |
 | Request body | `Content-Length` always set; no `Content-Type` on xorb or shard uploads. | observed |
-| `X-Request-Id` | Read from every response and logged with each failure (`cas_types/mod.rs:19`, `common/http_client.rs:397`). openxet should send one. | source |
+| `X-Request-Id` | Read from every response and logged with each failure (`cas_types/mod.rs:19`, `common/http_client.rs:397`). OpenXet should send one. | source |
 | Timeouts | Connect 60 s; read 300 s of silence (`HF_XET_CLIENT_READ_TIMEOUT`); `POST /v1/shards` has no read timeout (`remote_client.rs:350`). | source |
 
 ## Endpoints
@@ -145,7 +145,7 @@ Behaviour that shapes the M1 server:
 - **Range handling the server must do:**
   - `start >= file_size` → `416` (the client reads it as "past the end",
     `remote_client.rs:271`). An empty file may answer `416` or `200` with
-    no terms; both download correctly (observed). openxet answers `416`
+    no terms; both download correctly (observed). OpenXet answers `416`
     to any `Range`, as the spec says, and `200` with no terms without one
     (`docs/reference/routes.md`).
   - `end >= file_size` → clamp to the file; answer `200`.
@@ -188,7 +188,7 @@ Invariants the client enforces (source,
   reconstruction
 - terms may extend past the requested end; the client trims.
 
-openxet emits one descriptor per fetch entry, each with its own range-bound
+OpenXet emits one descriptor per fetch entry, each with its own range-bound
 URL (ADR 0002, S1). By default the 1.7.0 client splits multi-range entries
 into single-range GETs anyway (`HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING`,
 default off, `xet_runtime/src/config/groups/client.rs:285`).
@@ -248,7 +248,7 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
 
 - **Request:** prefix `default` (observed); the spec says
   `default-merkledb` ([api#2](https://huggingface.co/docs/xet/api#2-query-chunk-deduplication-global-deduplication)).
-  openxet serves both. The path hash is the **raw** chunk hash. No body.
+  OpenXet serves both. The path hash is the **raw** chunk hash. No body.
 - **When the client asks** (source,
   `xet_data/src/deduplication/file_deduplication.rs:155-170`): on the first
   pass over a file, for the file's first chunk and for chunks whose hash
@@ -268,7 +268,7 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
     false`. The spec requires this ([shard#global-deduplication](https://huggingface.co/docs/xet/shard#global-deduplication)).
     The client ignores file entries here, so they would only expose other
     files' reconstructions.
-  - **Xorb-info section:** the offered xorbs. openxet offers every xorb
+  - **Xorb-info section:** the offered xorbs. OpenXet offers every xorb
     of the newest visible shard that references the matched xorb, up to
     16 MiB of answer (rulings M1-R30, M1-R32; S11). Xorb hashes are plain;
     every chunk hash is `HMAC(chunk_hash, key)` (`keyed_chunk_hash`,
@@ -282,7 +282,7 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
     (`shard_file_handle.rs:216`). The spec reference shard uses 21 days.
   - **Lookup tables:** optional. Without them the client rebuilds its
     chunk index from the xorb section (`read_all_truncated_hashes`,
-    `shard_format.rs:761-790`). Both forms deduped (observed). openxet
+    `shard_format.rs:761-790`). Both forms deduped (observed). OpenXet
     omits them (ruling M1-R30), as the spec's reference answer does.
 - **How the client uses it:** it stores the shard in its cache directory,
   indexes it by the keyed truncated hash, and matches its own chunks by
@@ -295,7 +295,7 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
   "no shard" and the upload continues (`remote_client.rs:191-200`): after
   6 attempts for `5xx` (observed with `503`), after one for `429`
   (`with_429_no_retry`, observed), and at once for other `4xx`. A
-  failing dedup endpoint therefore costs dedup, not uploads. openxet relies
+  failing dedup endpoint therefore costs dedup, not uploads. OpenXet relies
   on this: when its dedup permits stay taken for 1 s it answers `429
   dedup_busy` (ruling M1-R33), so the upload goes on without that match.
 
@@ -307,7 +307,7 @@ segments (`remote_client.rs:738-773`); stock `hf_xet` 1.7.0 never calls it.
   **without footer** (native client: `SerializedXorbObject::from_xorb(…,
   false, …)`, `xet_data/src/processing/file_upload_session.rs:392-397`).
   It is streamed, with `Content-Length` and no `Content-Type` (observed,
-  `remote_client.rs:873-886`). S5 lists the validation functions; openxet
+  `remote_client.rs:873-886`). S5 lists the validation functions; OpenXet
   also accepts a consistent footer.
 - **Response `200`, `application/json`:** `{"was_inserted": true}`, or
   `false` when the xorb already existed (spec
@@ -337,7 +337,7 @@ Per spec ([api#7](https://huggingface.co/docs/xet/api#7-head-xorb)):
 - **`501` does not fall back.** It is not retried (`retry_wrapper.rs:268` `@1.8.0-dev0`)
   and is not mapped to `Unavailable`, so the upload fails.
 - **No memo.** The client asks for a grant before every xorb, so until
-  openxet supports grants each xorb costs one extra round trip.
+  OpenXet supports grants each xorb costs one extra round trip.
 - **Opt-out.** `HF_XET_CLIENT_LEGACY_DIRECT_XORB_UPLOAD=1` skips grants
   (`xet_runtime/src/config/groups/client.rs:84` `@1.8.0-dev0`).
 - The rest of the grant protocol is in design §3 and §5.5.
@@ -366,7 +366,7 @@ v2 `404` or `501` (`remote_client.rs:475-519`, observed).
 
 - **Parsing rules** (`shard_upload_v2.rs`, observed):
   - `{"type":"result"}` and the spec's `{"type":"result","result":1}`
-    both parse. openxet sends the spec form.
+    both parse. OpenXet sends the spec form.
   - An unknown `type` is ignored (observed with `{"type":"heartbeat"}`).
   - A line over 1 MiB, a line that isn't JSON, or a stream that ends
     without `result` or `error` fails the upload. No retry for these
@@ -376,7 +376,7 @@ v2 `404` or `501` (`remote_client.rs:475-519`, observed).
     shown to the user (observed: `Internal error: verification failed:
     xorb missing`).
 - **Silence:** the read timeout is 300 s. The spec says the server
-  re-emits the last progress event as a heartbeat while it works; openxet
+  re-emits the last progress event as a heartbeat while it works; OpenXet
   should do so every few seconds.
 - **Status before the stream:**
   - `404` or `501` trigger the v1 fallback.
@@ -437,7 +437,7 @@ Not sent by `hf_xet` 1.7.0 (observed). Per spec
   `HF_HUB_DISABLE_TELEMETRY`, `DISABLE_TELEMETRY`, `DO_NOT_TRACK`,
   `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`
   (`xet_runtime/src/config/groups/telemetry.rs`).
-- **openxet:** answer `204` without reading the body into any store or
+- **OpenXet:** answer `204` without reading the body into any store or
   log (non-negotiable 6). The request carries a credential, so the usual
   no-logging rule applies.
 
@@ -511,15 +511,15 @@ Retry policy for every CAS call (`retry_wrapper.rs`, defaults in
 | redirect, builder, other body errors | final | — |
 
 `404` means "this route doesn't exist here" on `/v2/*` and on the grant
-route, so openxet's `404` there must mean exactly that. "File not found"
+route, so OpenXet's `404` there must mean exactly that. "File not found"
 on `/v2/reconstructions` also returns `404`. That costs the client one
 extra v1 request (observed), which is acceptable. A `501` would also fall
-back on `/v2/*`, but fails the upload on the grant route, so openxet uses
+back on `/v2/*`, but fails the upload on the grant route, so OpenXet uses
 `404` for unimplemented CAS routes.
 
 ## Spec and client disagreements
 
-| Topic | Spec | `hf_xet` 1.7.0 | openxet |
+| Topic | Spec | `hf_xet` 1.7.0 | OpenXet |
 |---|---|---|---|
 | Dedup prefix | `default-merkledb` | `default` | serve both |
 | Batch reconstruction | `POST` with a JSON key list | `GET ?file_id=` (never called) | serve both, same response |
@@ -584,7 +584,7 @@ Two client-side facts that bind the server:
   - GC grace for referenced-then-orphaned xorbs must be at least 21 days
     plus the dedup-shard key validity.
   - A self-hoster who wipes a server must change the endpoint URL or
-    clear `~/.cache/huggingface/xet/{endpoint tag}`. `openxet` docs and
+    clear `~/.cache/huggingface/xet/{endpoint tag}`. OpenXet's docs and
     errors should say so.
 
 The `hf-xet` crate (lib `xet`, crates.io 1.7.0) wraps the same calls as
@@ -603,4 +603,4 @@ session layers.
   `.head(` call; `huggingface.js` wasn't read.
 - The wasm client's xorb uploads (footer or not); M1 targets native.
 - `hf_xet` with `HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING` on against
-  openxet; S1 covers it against MinIO.
+  OpenXet; S1 covers it against MinIO.

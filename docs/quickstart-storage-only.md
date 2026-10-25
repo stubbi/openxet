@@ -1,6 +1,6 @@
 # Quickstart: storage only
 
-Run openxet's Xet storage server (the CAS) on your machine, then move a
+Run OpenXet's Xet storage server (the CAS) on your machine, then move a
 file through it with Hugging Face's own `hf_xet` and with the `openxet`
 command line. This is the storage layer on its own, the way a platform
 embeds it. The Hub API arrives in milestone M2, and with it `hf upload`,
@@ -33,7 +33,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install 'hf_xet>=1.7.0'
 ```
 
-`hf_xet` 1.7.0 is the oldest version openxet supports.
+`hf_xet` 1.7.0 is the oldest version OpenXet supports.
 
 ## 2. Start the server
 
@@ -96,8 +96,8 @@ The file is named by its Xet hash, which is all a download needs.
 
 ## 4. Upload and download with `openxet`
 
-`openxet upload` and `openxet download` read the endpoint and the token
-from the environment:
+The `openxet upload` and `openxet download` commands read the endpoint and
+the token from the environment:
 
 ```bash
 export OPENXET_ENDPOINT=$(python3 -c 'import json; print(json.load(open("serve.json"))["endpoint"])')

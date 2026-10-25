@@ -2,15 +2,15 @@
 
 <!-- description: The xet:// specification: grammar, resource kinds, revisions, escaping, hosts and ports, the HTTPS mapping, credential selection and the legacy XetHub policy. -->
 
-A `xet://` address names one resource on one openxet deployment: a
+A `xet://` address names one resource on one OpenXet deployment: a
 repository, a typed view of it, a bucket, a revision, or a file or folder
-inside one. This page is the contract that every openxet parser, formatter
+inside one. This page is the contract that every OpenXet parser, formatter
 and client follows ([ADR 0009](../adr/0009-xet-resource-uris.md), M2-URI).
 The shared implementation is the `openxet-uri` crate (`crates/uri`); its
 golden vectors (`crates/uri/testdata/vectors.json`) are part of this
 specification, and a test fails when the crate and the vectors disagree.
 
-Status, as of openxet M2:
+Status, as of OpenXet M2:
 
 - The grammar, the parser and the canonical formatter are implemented in
   `openxet-uri`. No released command takes a `xet://` address yet; the
@@ -21,13 +21,13 @@ Status, as of openxet M2:
   `xet://` changes nothing they recognise.
 - `xet` is **not** registered with IANA. The
   [URI scheme registry](https://www.iana.org/assignments/uri-schemes/uri-schemes-1.csv)
-  had no `xet` entry when checked on 2026-10-25, and openxet has not yet
+  had no `xet` entry when checked on 2026-10-25, and OpenXet has not yet
   filed a registration request under
   [RFC 7595](https://www.rfc-editor.org/rfc/rfc7595.html). The name was
   used before by XetHub's deprecated tools; see
   [Legacy forms](#legacy-forms) and the
   [legacy audit](../research/xet-uri-legacy-audit-2026-10.md).
-- A `xet://` address is an openxet resource address, not a name for the
+- A `xet://` address is an OpenXet resource address, not a name for the
   Xet protocol. Chunking, hashes, xorbs, shards and the CAS API are the
   [Xet specification](https://huggingface.co/docs/xet/index)'s, unchanged.
 
@@ -146,7 +146,7 @@ change. On huggingface.co, `hf://models/…` is the model view; in a
 `xet://` address the first segment `models` is refused with a hint rather
 than read as a namespace, as are the singular forms (`dataset/` and the
 rest), which `hf://` refuses too. The plural kind words, and the first
-segments of openxet's own routes, are reserved namespaces (ruling M2-R2,
+segments of OpenXet's own routes, are reserved namespaces (ruling M2-R2,
 ignoring case), so no repository can take a name that an address would
 read as something else.
 
@@ -227,7 +227,7 @@ formatting is idempotent; property tests and a fuzz target check all three
 
 ## Local development
 
-`openxet serve` listens on `http://127.0.0.1:8080` by default, and a local
+The `openxet serve` command listens on `http://127.0.0.1:8080` by default, and a local
 address names it directly:
 
 ```text
@@ -262,7 +262,7 @@ the unprefixed form):
 
 The revision is percent-encoded as one segment (`/` as `%2F`), except a
 special ref, which is written as is, as `huggingface_hub`'s `to_url`
-does. A file path maps to `resolve`, the download route openxet serves
+does. A file path maps to `resolve`, the download route OpenXet serves
 from M2 (Task 13), not to a web viewer.
 
 The unprefixed resolve route is the `model` view (design §6), so in M2 a
@@ -280,7 +280,7 @@ can't be addressed in M2: the first segment after the authority is always
 a kind or a namespace, so there is no room for a prefix, and guessing one
 would let the same text name different resources. A client configured
 with an endpoint that has a path refuses it (`base_path_unsupported`) and
-says to serve openxet at the root of its own host name. M6 revisits base
+says to serve OpenXet at the root of its own host name. M6 revisits base
 paths together with endpoint discovery.
 
 ## Credentials and endpoints
@@ -328,9 +328,9 @@ The policy, tested row by row in `crates/uri/tests/legacy.rs`
 (`legacy_matrix`), is:
 
 - A form that names no host is refused: it pointed at whichever server the
-  reader had configured, and openxet never sends an address to a default
+  reader had configured, and OpenXet never sends an address to a default
   server.
-- A form that names `xethub.com` is refused: no openxet deployment answers
+- A form that names `xethub.com` is refused: no OpenXet deployment answers
   there, and the data's new home can't be inferred.
 - pyxet's explicit-endpoint form names a host, so it is translated to the
   equivalent address on the same host and reported. The parser never
@@ -367,7 +367,7 @@ The policy, tested row by row in `crates/uri/tests/legacy.rs`
 
 pyxet registers its fsspec filesystem for the protocol `xet` when it is
 imported, with `clobber=True`, fsspec's option to take over a name that is
-already registered. fsspec 2026.9.0 has no built-in `xet` entry. openxet's own fsspec adapter
+already registered. fsspec 2026.9.0 has no built-in `xet` entry. OpenXet's own fsspec adapter
 arrives in M6 and will not silently replace another installed `xet`
 handler (ADR 0009 item 5); its coexistence policy is part of M6-URI.
 

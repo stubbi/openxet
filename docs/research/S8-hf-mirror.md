@@ -230,7 +230,7 @@ What to reuse conceptually:
 - the two-phase "download, then upload" seeding as the fallback when
   upstream is unreachable.
 
-What openxet avoids:
+What OpenXet avoids:
 - **Caching whole xorbs only.** Partial-xorb files are common (observed
   above). Re-packing verified chunks avoids the problem.
 - **Handing HF URLs to clients** on the relay path.
@@ -510,7 +510,7 @@ R19 decided the policy:
 - the mirror is disabled on openxet.com until counsel review and,
   ideally, an agreement with HF.
 
-Design rules for openxet's mirror, from openxet's own requirements
+Design rules for OpenXet's mirror, from OpenXet's own requirements
 (design §5.9 requirement 3, §10.6):
 - Token and response caches are keyed by caller, repo and revision.
 - A fallback never serves authorized content without a fresh upstream
@@ -581,7 +581,7 @@ Design §10.6 now states:
 >      registered to the mirrored repo's scope.
 >    - Non-Xet files are verified by Git blob SHA-1 or sha256.
 >    - Mirrored commit metadata is written to the bucket.
->    - Clients only ever see openxet URLs and tokens.
+>    - Clients only ever see OpenXet URLs and tokens.
 >    - Until the window-merge proof test passes, a file's shard is
 >      registered only after the whole-file `X-Xet-Hash` check. Chunks
 >      fetched earlier stay staged and unreferenced.
@@ -597,8 +597,8 @@ Design §10.6 now states:
 >      `LICENSE`, `NOTICE` and the README, and never filters them out of
 >      `tree` or `resolve`.
 > 3. **Authorisation.**
->    - Public, ungated repos: the openxet authorizer alone.
->    - Gated and private repos: the openxet authorizer **and** an
+>    - Public, ungated repos: the OpenXet authorizer alone.
+>    - Gated and private repos: the OpenXet authorizer **and** an
 >      upstream check with the caller's own HF credential, failing
 >      closed. The credential is passed as `X-HF-Upstream-Token` or set up
 >      through `openxet login` (a builder-check call). It is never

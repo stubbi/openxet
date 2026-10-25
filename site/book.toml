@@ -3,8 +3,8 @@
 # navigation). Preview with `mdbook serve site --open`; see docs/README.md.
 
 [book]
-title = "openxet docs"
-description = "Documentation for openxet, the open-source server and client for the Xet protocol."
+title = "OpenXet docs"
+description = "Documentation for OpenXet, the open-source server and client for the Xet protocol."
 language = "en"
 src = "../docs"
 

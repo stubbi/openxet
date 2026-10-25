@@ -12,7 +12,7 @@ The user requested a final-product website with hosted sign-up disabled and a
 working waitlist, and authorized a simple service and database. GitHub Pages
 serves the existing static marketing/docs site and cannot persist form posts.
 Product design §15 permits operational hosted tooling behind the same core
-seams; §4 and AGENTS.md forbid openxet-owned user accounts.
+seams; §4 and AGENTS.md forbid OpenXet-owned user accounts.
 
 ## Decision
 

@@ -14,14 +14,14 @@ REPO = Path(__file__).resolve().parent.parent
 
 # The controls reproduce mdBook 0.5.4's generated index.hbs markup.
 DOC_HTML = '''<!DOCTYPE HTML>
-<html lang="en"><head><title>Reference - openxet docs</title>
+<html lang="en"><head><title>Reference - OpenXet docs</title>
 <meta name="description" content="Generic book description">
 <script>const sample = '<meta name="description" content="leave this alone">';</script>
 </head><body>
 <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
 <label for="mdbook-sidebar-toggle-anchor" aria-label="Toggle Table of Contents"></label>
 <nav id="mdbook-sidebar"><noscript><iframe class="sidebar-iframe-outer" src="../toc.html"></iframe></noscript></nav>
-<h1 class="menu-title">openxet docs</h1>
+<h1 class="menu-title">OpenXet docs</h1>
 <input type="search" id="mdbook-searchbar" name="searchbar" aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
 <div id="mdbook-searchresults-outer"><div id="mdbook-searchresults-header"></div></div>
 <main><h1 id="commands">Commands</h1><p>Use <code>--json</code>.</p>
@@ -58,11 +58,11 @@ class SiteOutput(unittest.TestCase):
         shutil.copy(REPO / "scripts/generate-site-index.py", self.root / "scripts")
         shutil.copy(REPO / "site/llms-template.txt", self.root / "site")
         (self.root / "docs/SUMMARY.md").write_text(
-            "# Summary\n\n[openxet docs](README.md)\n\n# User\n\n- [Commands](reference/cli.md)\n",
+            "# Summary\n\n[OpenXet docs](README.md)\n\n# User\n\n- [Commands](reference/cli.md)\n",
             encoding="utf-8",
         )
         self.write("docs/index.html", DOC_HTML)
-        self.write("docs/index.md", "# openxet docs\n\nStart a storage server and transfer a file.\n")
+        self.write("docs/index.md", "# OpenXet docs\n\nStart a storage server and transfer a file.\n")
         self.write("docs/reference/cli.html", DOC_HTML)
         self.write("docs/reference/cli.md", '# Commands\n\n<!-- description: Use "--json" & inspect <errors> safely. -->\n')
         self.write("docs/toc.html", '<html><head><meta name="robots" content="noindex"></head><body>Contents</body></html>')

@@ -3,7 +3,7 @@
 Every route `openxet serve` answers, with its credential, request, answer
 and every status it can return. The routes are the Xet CAS API
 (<https://huggingface.co/docs/xet/api>) as stock clients call it; where the
-spec and `hf_xet` 1.7.0 differ, openxet serves both, as recorded in
+spec and `hf_xet` 1.7.0 differ, OpenXet serves both, as recorded in
 [S10](../research/S10-cas-wire-contract.md). This page is written from the
 code in `crates/cas/src`; the route list is `served()` in
 `crates/cas/src/lib.rs`, and a test fails if a route is served without
@@ -57,7 +57,7 @@ These answers can come from any route:
 | Status | `code` | Meaning |
 | ------ | ------ | ------- |
 | `401` | `missing_credential` | No `Authorization` header. `WWW-Authenticate: Bearer`. |
-| `401` | `invalid_credential` | The token is unknown, malformed, signed by an untrusted key, carries a claim openxet can't honour, or the header isn't one `Bearer` value. `WWW-Authenticate: Bearer error="invalid_token"`. |
+| `401` | `invalid_credential` | The token is unknown, malformed, signed by an untrusted key, carries a claim OpenXet can't honour, or the header isn't one `Bearer` value. `WWW-Authenticate: Bearer error="invalid_token"`. |
 | `401` | `expired_credential` | The CAS token is at or past its `exp`. Same challenge. |
 | `403` | `insufficient_scope` | A read token on a route that writes. |
 | `404` | `not_found` | No route serves the path, whatever the method: how stock clients learn a route doesn't exist here. Also a `{prefix}` other than the route's. |
@@ -332,7 +332,7 @@ Logs record the route, never the query: `sig` is a credential.
 
 ### `POST /v1/telemetry`
 
-`hf_xet` reports transfer statistics here. openxet needs a credential, then
+`hf_xet` reports transfer statistics here. OpenXet needs a credential, then
 reads and drops the body: it is never stored or logged (no telemetry unless
 an operator opts in). `204 No Content`.
 

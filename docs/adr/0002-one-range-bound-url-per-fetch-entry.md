@@ -8,7 +8,7 @@
 
 ## Context
 
-Design §5.5 wants downloads to bypass openxet: the CAS returns a small
+Design §5.5 wants downloads to bypass OpenXet: the CAS returns a small
 reconstruction, and the client fetches xorb bytes directly from the object
 store. Design §3 assumed that one range per fetch entry, pointing at a
 native presigned URL, would work with stock clients. Spike S1/S2 tested
@@ -71,23 +71,23 @@ That includes whether they can bind a range.
    exactly **one range per fetch entry**, and every entry has its own URL:
    - v2: `xorbs[hash]` is a list of `{url, ranges: [one descriptor]}`.
    - v1: one `fetch_info` entry per range.
-   - openxet never puts more than one range in a fetch entry, on any
+   - OpenXet never puts more than one range in a fetch entry, on any
      backend.
 2. **Every URL is range-bound and short-lived.** Each URL authorises one
-   xorb, one byte range and one expiry, and nothing wider. openxet never
+   xorb, one byte range and one expiry, and nothing wider. OpenXet never
    serves an unbound URL.
 3. **Direct mode is gated per deployment by a range-binding enforcement
    probe, not by a backend list.**
    - **When it runs:** at startup, and on demand in `openxet doctor` and
      `openxet config check`.
-   - **What it does:** openxet writes a probe object to each storage pool
+   - **What it does:** OpenXet writes a probe object to each storage pool
      and presigns a GET for one byte range with the pool's signer. Then it
      checks all three of:
      1. that signed range → `206`
      2. a different range on the same URL → `403`
      3. no `Range` header → any `4xx`
    - **Pass:** only if all three pass does that pool serve direct URLs.
-   - **Fail:** otherwise the pool falls back to the transfer role. openxet
+   - **Fail:** otherwise the pool falls back to the transfer role. OpenXet
      logs which check failed and with what status, and `doctor` reports it
      with the next step.
 
@@ -98,7 +98,7 @@ That includes whether they can bind a range.
    | pool | what the fetch entry URL is |
    |---|---|
    | **probe passed** (any presign-capable store) | native presigned GET with the range bound into the signature, for example SigV4 with `range` in `SignedHeaders` |
-   | **probe failed, or no native presign** (local disk, NVMe or CDN cache tier, any store whose signer cannot bind a range) | an openxet-signed URL to the transfer role, binding xorb hash, range and expiry. The transfer role answers a single `Range` GET with `206` |
+   | **probe failed, or no native presign** (local disk, NVMe or CDN cache tier, any store whose signer cannot bind a range) | an OpenXet-signed URL to the transfer role, binding xorb hash, range and expiry. The transfer role answers a single `Range` GET with `206` |
 
    The transfer role does not need `multipart/byteranges`. With rule 1, no
    client ever sends it a multi-range request.
@@ -109,7 +109,7 @@ That includes whether they can bind a range.
    - return `416` past EOF
    - set `offset_into_first_range`
 
-   On a refresh (the same file and block `Range` asked again), openxet
+   On a refresh (the same file and block `Range` asked again), OpenXet
    returns fresh URLs with the **same terms and the same per-entry ranges**.
    The client itself only checks that the refreshed block covers the same
    byte range (`retrieval_urls.rs:103-108`).
@@ -132,7 +132,7 @@ That includes whether they can bind a range.
    - **Largest sleep after a refresh.** Refresh happens before the sleep,
      so the new URL must survive one sleep: at most 243 s with defaults,
      and 360 s at the `retry_max_duration` cap. Take **360 s**.
-   - **Clock skew bound.** This is the skew between openxet's signing clock
+   - **Clock skew bound.** This is the skew between OpenXet's signing clock
      and the store's clock; the client's clock does not matter. Take
      **60 s**. The spike measured 2 s between the macOS host and the
      colima VM.
@@ -148,7 +148,7 @@ That includes whether they can bind a range.
 ## Consequences
 
 - **Easier:**
-  - Downloads scale with the object store, not with openxet nodes, on any
+  - Downloads scale with the object store, not with OpenXet nodes, on any
     pool that passes the probe.
   - The same response shape serves every client setting:
     - `enable_multirange_fetching` on or off
@@ -175,7 +175,7 @@ That includes whether they can bind a range.
     - in CI, the probe runs against MinIO and must pass
     - in CI, the probe runs against a deliberately unbound signer and must
       fall back to the transfer role
-  - **Compatibility suite:** downloads through openxet:
+  - **Compatibility suite:** downloads through OpenXet:
     - against a probe-passing MinIO pool and a local-disk pool
     - with `HF_XET_CLIENT_ENABLE_MULTIRANGE_FETCHING` both unset and `true`
     - with `HF_XET_CLIENT_RECONSTRUCTION_API_VERSION=1`
@@ -215,7 +215,7 @@ That includes whether they can bind a range.
   - The probe checks what this deployment actually enforces.
 - **Always proxy through the transfer role.**
   - Uniform and easy to bind.
-  - Puts every downloaded byte through openxet nodes, against design §5.5,
+  - Puts every downloaded byte through OpenXet nodes, against design §5.5,
     when the store can do it natively.
 - **Multi-range entries served by the transfer role with
   `multipart/byteranges`** (the original design §5.5 b).

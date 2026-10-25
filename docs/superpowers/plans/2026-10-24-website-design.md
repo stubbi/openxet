@@ -5,7 +5,7 @@
 > alongside implementation. The user has authorized implementation and small,
 > frequent releases to openxet.com.
 
-**Goal:** Make openxet understandable on first contact, with a documented design
+**Goal:** Make OpenXet understandable on first contact, with a documented design
 system, an honest hosted waitlist, and reliable paths for humans and agents.
 
 **Architecture:** Keep the marketing site static on GitHub Pages and docs in

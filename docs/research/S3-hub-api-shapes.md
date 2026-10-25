@@ -28,7 +28,7 @@ Labels used below:
    - Every `lfs` file then goes through Xet whenever `hf_xet` is installed:
      `if is_xet_available():` (`_commit_api.py:396`). No Git LFS batch call
      is made; none appeared in the capture (observed).
-   - So openxet routes a file to Xet by answering `"uploadMode": "lfs"`.
+   - So OpenXet routes a file to Xet by answering `"uploadMode": "lfs"`.
 2. **The Xet token endpoints must return the token twice** (observed and
    source).
    - huggingface.co returns it both in the JSON body
@@ -51,7 +51,7 @@ Labels used below:
      (`hf_api.py:5124`, `hf_api.py:11469`).
    - The client calls `response.json()` before checking the status
      (`hf_api.py:11474`), and any non-2xx then fails the upload.
-   - A `501` would break `upload_folder` of a model card, so openxet must
+   - A `501` would break `upload_folder` of a model card, so OpenXet must
      answer `200 {"errors":[],"warnings":[]}` (or real validation).
 4. **Repo delete is `DELETE /api/repos/delete` with a JSON body, not
    `POST`** (observed `91-…`, `92-…`; source `hf_api.py:4768`). Design §6
@@ -80,7 +80,7 @@ Labels used below:
      and `768000000-1023999999`.
    - The last two got `416` and a text body
      `request_id: …; (12) invalid range`, and the download succeeded.
-   - openxet's CAS must answer `416` (not `200` or `500`) for a range
+   - OpenXet's CAS must answer `416` (not `200` or `500`) for a range
      starting at or past the end of the file.
 
 ## What was captured, and what was not
@@ -179,7 +179,7 @@ Fixtures: `04-…` (200), `05-…`, `06-…`, `32-…--01` (409), `07-…`, `08-
 - Response 200:
   `{"url","name","id","filesCopyPending"}`. Only `url` is read
   (`hf_api.py:4723`). `RepoUrl` parses the repo id from `url` relative to
-  the client's endpoint, so `url` must be absolute and under openxet's
+  the client's endpoint, so `url` must be absolute and under OpenXet's
   public base URL (inferred from `RepoUrl`, `hf_api.py:507`).
 - Errors (observed, source):
   - `409`:
@@ -578,7 +578,7 @@ redirect URLs.**
   (`utils/_http.py:776`).
 - `parse_xet_file_data_from_response` rewrites only `huggingface.co`
   prefixes in the `xet-auth` URL (`utils/_xet.py:75`).
-- So absolute URLs on openxet's own base URL are the safe contract
+- So absolute URLs on OpenXet's own base URL are the safe contract
   (inferred: we did not test a relative `Location`).
 
 **Lesson 7: LFS batch responses use exactly `X-Xet-Cas-Url`,
@@ -609,7 +609,7 @@ can't create elsewhere, and unauthorized requests get a clean 403 that
   Make sure your token has the correct permissions.
   ```
 - The rendering comes from `utils/_http.py:961`. The useful text comes
-  entirely from `X-Error-Message`, so openxet's 403 must set it, and
+  entirely from `X-Error-Message`, so OpenXet's 403 must set it, and
   should name the namespace and the missing permission.
 - Watch out: with `exist_ok=True`, a 403 triggers a `repo_info` probe
   (`hf_api.py:4707`). If that probe succeeds, the client reports success.

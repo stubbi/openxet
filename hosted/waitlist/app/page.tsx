@@ -1,10 +1,10 @@
 export default function Home() {
   return (
     <main className="panel">
-      <a className="brand" href="https://openxet.com/">openxet</a>
+      <a className="brand" href="https://openxet.com/">OpenXet</a>
       <p className="eyebrow">Hosted storage · coming soon</p>
       <h1>Be here for the first upload.</h1>
-      <p>Join the waitlist for hosted openxet. We’ll contact you when access is ready.</p>
+      <p>Join the waitlist for hosted OpenXet. We’ll contact you when access is ready.</p>
       <form action="/api/waitlist" method="post">
         <label htmlFor="email">Email address</label>
         <input id="email" name="email" type="email" inputMode="email" autoComplete="email" maxLength={254} required aria-describedby="email-use" placeholder="you@example.com" />

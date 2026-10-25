@@ -1,6 +1,6 @@
-# openxet
+# OpenXet
 
-> openxet is the open-source (Apache-2.0) server and client for the Xet protocol, which reuses unchanged parts of large files to reduce repeated storage and uploads.
+> OpenXet is the open-source (Apache-2.0) server and client for the Xet protocol, which reuses unchanged parts of large files to reduce repeated storage and uploads.
 
 Available now: the storage-only server on local disk with SQLite, stock `hf_xet`
 upload/download, and the `openxet` command line with versioned JSON and stable
@@ -12,7 +12,7 @@ storage backends, external identity providers, the web UI, and MCP. The hosted
 service is not accepting sign-ups yet. The product design describes the target;
 the changelog and command reference describe what works today.
 
-openxet is an independent project, not affiliated with or endorsed by Hugging Face.
+OpenXet is an independent project, not affiliated with or endorsed by Hugging Face.
 
 Each docs link below is the page as plain Markdown; the same path ending in `.html` is the page for humans.
 
@@ -26,4 +26,4 @@ Each docs link below is the page as plain Markdown; the same path ending in `.ht
 ## Optional
 
 - [README](https://github.com/stubbi/openxet/blob/main/README.md): the repository's front page
-- [Xet protocol specification](https://huggingface.co/docs/xet): the protocol openxet implements
+- [Xet protocol specification](https://huggingface.co/docs/xet): the protocol OpenXet implements

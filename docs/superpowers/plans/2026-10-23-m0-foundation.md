@@ -93,7 +93,7 @@ writes the M1 plan.
 4. **Compat harness pointed at the wrong target:**
    - The harness must print and record the target endpoint and client
      versions in every report. Without that, a "pass" against huggingface.co
-     could be mistaken for a pass against openxet.
+     could be mistaken for a pass against OpenXet.
    - It must refuse to run against a non-default target unless
      `OPENXET_COMPAT_TARGET` is set explicitly.
 

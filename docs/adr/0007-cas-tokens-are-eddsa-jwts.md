@@ -8,7 +8,7 @@
 
 ## Context
 
-Design §5.4 says CAS tokens are short-lived, signed by openxet or by a
+Design §5.4 says CAS tokens are short-lived, signed by OpenXet or by a
 platform with a configured key, and verified statelessly on every node.
 Design §13 left the format and algorithm to the builder.
 
@@ -30,7 +30,7 @@ therefore has to honour `exp` exactly.
    *Amended (M1-R19):* the only other claim accepted is an optional `nbf`,
    and the token is rejected while `now < nbf`. Any other claim, such as
    `aud`, `iss` or `jti`, is rejected rather than ignored, so a restriction
-   openxet cannot honour never fails open. `sub` and `scope` must be
+   OpenXet cannot honour never fails open. `sub` and `scope` must be
    non-empty and free of control characters, and `scope` may be at most
    1024 bytes.
 
@@ -57,7 +57,7 @@ therefore has to honour `exp` exactly.
    compared by SHA-256 in constant time, so timing does not reveal
    how much of a guess matched.
 6. **Platforms** sign tokens themselves with any standard JWT library
-   against a public key set openxet is configured with. openxet never
+   against a public key set OpenXet is configured with. OpenXet never
    needs their private key.
 
 ## Consequences

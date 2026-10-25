@@ -1,6 +1,6 @@
 # 0010: Store data as two primitives, repositories and buckets
 
-<!-- description: openxet has two storage primitives, the versioned repository and the mutable bucket, each with generic labels; Hugging Face's repo types are labels the Hub layer reads and writes. -->
+<!-- description: OpenXet has two storage primitives, the versioned repository and the mutable bucket, each with generic labels; Hugging Face's repo types are labels the Hub layer reads and writes. -->
 
 - Status: accepted
 - Date: 2026-10-24
@@ -15,7 +15,7 @@ with the owner. Four of them behave identically: a Git history of
 commits and refs, with large files in Xet. The fifth, `bucket`, is
 different in kind: mutable objects under keys, with no Git history.
 
-openxet serves anyone storing large versioned or deduplicated files, not
+OpenXet serves anyone storing large versioned or deduplicated files, not
 only machine learning (design §1). Mirroring Hugging Face's artefact
 taxonomy would make a CI artefact store or a log archive pick between
 "model" and "dataset".
@@ -59,7 +59,7 @@ recorded by S3 (`compat/fixtures/hub/`):
   `/api/buckets/{id}/xet-{read|write}-token` with no revision. `bucket` is
   not in `REPO_TYPES`; it appears only as a URI type (`HfUriType`).
 
-The owner decided on 2026-10-24 that openxet has two storage primitives,
+The owner decided on 2026-10-24 that OpenXet has two storage primitives,
 and then that labels are generic, not a fixed set.
 
 ## Decision
@@ -78,7 +78,7 @@ and then that labels are generic, not a fixed set.
    `dataset`, `checkpoint` or `eval-logs`.
    - A label is a lowercase slug (`a`–`z`, `0`–`9` and `-`) of at most
      64 bytes, and an object carries at most 32.
-   - Labels can be added and removed at any time, through openxet's own
+   - Labels can be added and removed at any time, through OpenXet's own
      API and CLI, each change with an audit entry. They never change the
      address, and they change no behaviour: `space` runs nothing.
    - Hugging Face's types `model`, `dataset`, `space` and `kernel` are
@@ -117,10 +117,10 @@ and then that labels are generic, not a fixed set.
        repository exists.
    - The unprefixed resolve route and `/api/models/…` are the `model`
      view, as on huggingface.co. The unprefixed Git URL
-     `/{namespace}/{name}.git` is openxet's own address and serves the
+     `/{namespace}/{name}.git` is OpenXet's own address and serves the
      repository whatever its labels.
    - Buckets answer the Storage Buckets routes above, which have no
-     types; their labels are set through openxet's API.
+     types; their labels are set through OpenXet's API.
 5. **Names are unique across labels.** Unlike huggingface.co, a model
    and a dataset can't share `{namespace}/{name}`. Creating
    `datasets/foo/bar` while a repository `foo/bar` exists answers `409`

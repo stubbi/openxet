@@ -40,8 +40,8 @@ layers. ADR 0001 keeps the server's use of upstream behind
 
 - The client inherits upstream's chunking and upload behaviour, so
   divergence from stock clients can only come from configuration.
-  Compatibility-suite legs run the client against openxet and
-  `hf_xet` against openxet.
+  Compatibility-suite legs run the client against OpenXet and
+  `hf_xet` against OpenXet.
 - No server crate depends on `xet-data` or `xet-client`, or directly on
   `xet-runtime`. The server crates still compile `xet-runtime` (and with it
   `reqwest` and `tower-http` 0.6), because `xet-core-structures` depends on

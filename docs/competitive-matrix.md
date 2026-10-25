@@ -1,6 +1,6 @@
 # Competitive matrix
 
-Where openxet stands against other Xet-protocol servers, re-evaluated every
+Where OpenXet stands against other Xet-protocol servers, re-evaluated every
 minor release (design §16). Every entry states how it was verified.
 Unverified claims are marked as such.
 
@@ -15,7 +15,7 @@ Method:
   throughput, code, maintenance), each graded with the labels in the
   legend below, with the command and its output as evidence.
 
-openxet has no server release yet, so this records the bar to beat and the
+OpenXet has no server release yet, so this records the bar to beat and the
 mistakes to avoid.
 
 Legend: **PASS**, **FAIL**, **PARTIAL** as observed; **N/A** the project
@@ -55,7 +55,7 @@ Authorization is not graded or published for any project.
 Tested `fc8cd642` (2026-10-01), native `cargo build --release`, filesystem
 backend, SQLite index. Clients: `hf_xet` 1.7.0 and `huggingface_hub` 2.2.0;
 `hf_xet` 1.5.2 and 1.6.0 to find which versions work. It is a CAS-only
-server, so checks that need a Hub API, Git or LFS are N/A. openxet is not
+server, so checks that need a Hub API, Git or LFS are N/A. OpenXet is not
 affiliated with ggoggam/openxet; the names collide.
 
 | Check | Result | Evidence |
@@ -207,9 +207,9 @@ code), **Single-maintainer** (one author, code changes within 60 days), or
 \* kebyn's kill landed during Hub staging, before the CAS write, so the run
 didn't exercise a crash inside the CAS.
 
-## 2026-10-24: openxet at M1
+## 2026-10-24: OpenXet at M1
 
-openxet's first measured column, at the end of milestone M1. M1 is the
+OpenXet's first measured column, at the end of milestone M1. M1 is the
 storage-only CAS, so the checks that need the Hub API, Git or LFS name
 the milestone that brings them instead of a grade, and a check that only
 part of M1 can answer is PARTIAL. Every grade is measured, by hand or by
@@ -223,7 +223,7 @@ Rows 6, 11, 15 and 16 come from three runs of
 `--size-mib 1024` (1 GiB of `os.urandom`, so incompressible), which prints
 each figure below; the others cite the test that asserts them.
 
-| Check | openxet M1 | Evidence |
+| Check | OpenXet M1 | Evidence |
 |---|---|---|
 | 1 Setup from README (L14) | PARTIAL (storage only; `hf upload` via the Hub API in M2) | README → [quickstart](quickstart-storage-only.md): 1 min 43 s from `cargo install` with an empty Cargo cache to the first upload with `hf_xet` (99 s build, 3 s `pip install hf_xet`, 0.5 s for the walkthrough), measured by hand. CI runs the walkthrough on every PR. L14's `hf upload` of a ≥ 1 GiB file needs the Hub API |
 | 2 `whoami` (L2) | M2 | No Hub API yet |
@@ -232,7 +232,7 @@ each figure below; the others cite the test that asserts them.
 | 5 Downloads with no extra headers (L4, function only) | PASS | `hf_xet` 1.7.0 downloads with auth on and no extra headers: every data URL is signed for one byte range (`compat/tests/test_storage_only.py`) |
 | 6 Range (L5) | PASS (reconstruction) | A 1000-byte range in the middle of the 1 GiB file plans one or two chunks: 13,743 to 131,080 bytes to fetch over three runs. A 300 MiB download is planned in two or more ranged blocks (`test_range_and_empty_file`). Range on `resolve`: M2 |
 | 7 Dedup, same machine | PASS | A second upload of the same file sends no xorb; the test asserts no `POST /v1/xorbs` (`test_reupload_global_dedup`). That run even uses a fresh cache, so it holds across machines too |
-| 8 Dedup, second machine: bytes sent for a 1 MB edit (L15) | PASS | 1,141,116 B of xorbs sent by stock `hf_xet` for a 1 MiB edit in the middle of a 100 MiB file, fresh cache (`test_fresh_cache_edit_bytes_recorded`, recorded). The bound of at most 2 MiB is asserted with the openxet client on the same client core (`fresh_cache_edit_dedups_against_the_server`, `crates/openxet/tests/transfer_cmd.rs:433`) |
+| 8 Dedup, second machine: bytes sent for a 1 MB edit (L15) | PASS | 1,141,116 B of xorbs sent by stock `hf_xet` for a 1 MiB edit in the middle of a 100 MiB file, fresh cache (`test_fresh_cache_edit_bytes_recorded`, recorded). The bound of at most 2 MiB is asserted with the OpenXet client on the same client core (`fresh_cache_edit_dedups_against_the_server`, `crates/openxet/tests/transfer_cmd.rs:433`) |
 | 9 Python Hub API (L19) | M2 | No Hub API yet |
 | 10 Git: `git-xet`, `git-lfs` (L7, L8, L20) | M2 | No Git or LFS yet |
 | 11 1 GiB incompressible (L9, L24) | PASS | 1 GiB uploaded in one run and downloaded byte-identical, three times |
@@ -269,7 +269,7 @@ reference this list.
    `X-Xet-Token-Expiration` (a real epoch), and absolute `href`s. `ref` is
    optional.
 8. The `git-xet` push and `git-lfs` basic download round trip, and plain
-   `git-lfs` push and pull, all work against an openxet-hosted repo.
+   `git-lfs` push and pull, all work against an OpenXet-hosted repo.
 9. Incompressible data: xorbs up to the protocol maximum (64 MiB plus
    framing) are accepted. Body limits derive from protocol limits, never
    below them.

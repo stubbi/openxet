@@ -1,6 +1,6 @@
 # Legacy xet:// forms: audit of Git-Xet and pyxet
 
-<!-- description: What XetHub's deprecated Git-Xet and pyxet accepted as xet:// addresses, read from pinned sources, their fsspec registration, the registry status, and the policy openxet's parser takes for each form. -->
+<!-- description: What XetHub's deprecated Git-Xet and pyxet accepted as xet:// addresses, read from pinned sources, their fsspec registration, the registry status, and the policy OpenXet's parser takes for each form. -->
 
 Date: 2026-10-25. Input to the [`xet://` specification](../reference/xet-uri.md)
 (M2-URI, [ADR 0009](../adr/0009-xet-resource-uris.md) item 5). The policy and
@@ -97,7 +97,7 @@ another package, registers one.
 
 The [IANA URI scheme registry](https://www.iana.org/assignments/uri-schemes/uri-schemes-1.csv),
 downloaded on 2026-10-25 (455 lines, header included), has no entry for `xet`,
-`hf`, `ox` or `openxet`. openxet has not filed a registration request. The
+`hf`, `ox` or `openxet`. OpenXet has not filed a registration request. The
 specification lists that request, and notice to the legacy projects'
 maintainers, as remaining work; neither has happened.
 
@@ -127,8 +127,8 @@ maintainers, as remaining work; neither has happened.
    is refused under the current grammar anyway (it is a local alias), so the
    two meanings can't silently diverge there.
 4. **`xethub.com` is refused by name** in every form, including subdomains: no
-   openxet deployment answers there.
+   OpenXet deployment answers there.
 5. **fsspec coexistence is M6's.** With pyxet registering `xet` with
    `clobber=True`, two packages that both register `xet` resolve by import
-   order; the openxet adapter's coexistence policy and its tests belong to
+   order; the OpenXet adapter's coexistence policy and its tests belong to
    M6-URI.
