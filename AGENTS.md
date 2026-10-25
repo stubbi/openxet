@@ -201,6 +201,13 @@ or identifier in a code span, and never start a sentence with a bare
 command ("The `openxet serve` command ..."). `scripts/check-brand.py`
 enforces this; a justified exception goes in `scripts/check-brand.allow`.
 
+Public copy never uses an em dash or an en dash, and nothing may read as
+machine-written (owner ruling, 2026-10-25; design.md, Voice and
+vocabulary). This covers the site, docs, help text, errors, commit messages
+and PR text. `scripts/check-copy.py` checks the dashes and a short list of
+stock phrases; a justified exception goes in `scripts/check-copy.allow`
+with its reason.
+
 ## Commits
 
 Use Conventional Commits with a component scope, so `git log` reads per work
@@ -255,6 +262,8 @@ python3 -I scripts/check-latency-gate.py --base base.json --head head.json --hea
 python3 -I scripts/test_check_latency_gate.py              # the comparison script's tests (CI gate)
 python3 -I scripts/check-brand.py                          # the brand is written OpenXet in prose, outside code and identifiers (CI gate)
 python3 -I scripts/test_check_brand.py                     # the brand check's tests (CI gate)
+python3 -I scripts/check-copy.py                           # no em or en dashes and no stock phrasing in public copy (CI gate)
+python3 -I scripts/test_check_copy.py                      # the copy check's tests (CI gate)
 cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo bench -p openxet-cas --bench commit_throughput      # durable shard and index commits per second on local disk
