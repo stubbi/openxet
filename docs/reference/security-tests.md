@@ -83,12 +83,12 @@ its clients sent (`assert_no_credential_in_log`).
 | 7 | `acked_write_survives_sigkill` | `crates/openxet/tests/serve.rs` | M1 |
 | 7 | `acknowledged_bucket_key_write_is_visible` | pending | M5 |
 | 8 | `v2_want_unreachable_refused` | `crates/git/tests/reachability.rs` | M2 |
-| 8 | `hub_read_by_sha_obeys_r22` | pending (M2, `crates/git/tests/hub_objects.rs`) | M2 |
+| 8 | `hub_read_by_sha_obeys_r22` | `crates/git/tests/hub_objects.rs` | M2 |
 | 8 | `writer_cannot_make_unreachable_reachable` | `crates/git/tests/thin_bases.rs` | M2 (pushes) |
-| 8 | `writer_cannot_make_unreachable_reachable` | pending (M2, `crates/git/tests/hub_objects.rs`) | M2 (Hub ref writes and commits) |
-| 8 | `hub_ref_write_fenced` | pending (M2, `crates/git/tests/hub_objects.rs`) | M2 |
+| 8 | `writer_cannot_make_unreachable_reachable` | `crates/git/tests/hub_objects.rs` | M2 (Hub ref writes and commits) |
+| 8 | `hub_ref_write_fenced` | `crates/git/tests/hub_objects.rs` | M2 |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/receive_pack.rs` | M2 (pushes) |
-| 8 | `ref_log_in_cas_transaction` | pending (M2, `crates/git/tests/hub_objects.rs`) | M2 (Hub ref writes and commits) |
+| 8 | `ref_log_in_cas_transaction` | `crates/git/tests/hub_objects.rs` | M2 (Hub ref writes and commits) |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/repack.rs` | M2 (bucket ref log derivation and retention) |
 
 Notes on what some tests cover:

@@ -36,9 +36,11 @@ command-fds = { version = "0.3.3", features = ["tokio"] }
 futures-core = "0.3.34"
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 getrandom = "0.4.3"
-# The R22 reachability walk and object lookups only; gix never serves the
+# The R22 reachability walk and the Hub object layer; gix never serves the
 # wire (ADR 0004 item 6).
 gix = { version = "0.90.0", default-features = false, features = ["sha1"] }
+# The pack writer of Hub commits and tags (ADR 0004 item 6).
+gix-pack = { version = "0.77.0", default-features = false, features = ["generate", "sha1"] }
 openxet-auth = { path = "../auth", version = "0.0.0" }
 openxet-index = { path = "../index", version = "0.0.0" }
 openxet-storage = { path = "../storage", version = "0.0.0" }
