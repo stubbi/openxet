@@ -4,50 +4,66 @@
 //! `git-lfs` through the LFS `basic` download `href` (spike S4).
 //!
 //! The caller's own credential authorizes the read, `Bearer`, or `Basic`
-//! with the token as the password (`git-lfs` sends what it holds for the host);
-//! a repository the caller may not read answers exactly as an unknown one
-//! (ruling M2-R6). A file is served only to the repository whose scope
-//! registered it (design §5.4).
+//! with the token as the password; a `401` challenges `Basic` first, as
+//! `git-lfs` sends the credential it holds for the host only after a
+//! `Basic` challenge. A repository the caller may not read answers exactly
+//! as an unknown one (ruling M2-R6). A file is served only to the
+//! repository whose scope registered it (design §5.4).
 //!
 //! The answer meets S4's conformance list: `HEAD`, the three `Range` forms
 //! with `416` and `Content-Range: bytes */{size}` past the end, an end
-//! past the file clamped, `ETag: "{sha256}"` on every answer, `If-Range`,
-//! `Accept-Ranges` and `Content-Disposition`. The bytes come from the
-//! reconstruction plan `openxet_cas` plans for the reconstruction routes
-//! ([`openxet_cas::plan_file`]), read from the bucket's range stream and
-//! decoded chunk by chunk: a transfer holds one stream block of at most
-//! 1 MiB and one chunk besides its plan (ruling M1-R27).
+//! past the file clamped, the `ETag` on every answer, `If-Range`,
+//! `Accept-Ranges` and `Content-Disposition` (the `name` query parameter,
+//! else the Xet hash, as on an LFS `href`, which carries no name).
+//!
+//! The `ETag` is `"{sha256}"`, the SHA-256 this repository's scope
+//! registered with the file: the value `resolve`'s `X-Linked-ETag`
+//! carries, since `resolve` redirects only to the file it found by that
+//! SHA-256. A file registered without one, reachable only by its Xet hash
+//! and never through `resolve`, has `"{xet hash}"`.
+//!
+//! The bytes come from the reconstruction plan `openxet_cas` plans for the
+//! reconstruction routes ([`openxet_cas::plan_file`]), whose memory is
+//! reserved from the budget shared with the CAS and held until the body is
+//! sent, dropped or past its send deadline (ruling M1-R40); they are read
+//! from the bucket's range stream and decoded chunk by chunk, so a
+//! transfer holds one stream block of at most 1 MiB and one chunk besides
+//! its fetches (ruling M1-R27, [`transfer`]).
 //!
 //! A `Location` from `resolve` carries `commit`, so the gateway repeats the
 //! `X-Repo-Commit`, `X-Xet-Hash` and `Link` headers `huggingface_hub` reads
 //! from where a same-origin redirect lands (`utils/_http.py` lines
 //! 763–782 and `file_download.py` lines 1669–1689, `huggingface_hub`
-//! 2.2.0).
+//! 2.2.0). That `X-Repo-Commit` is informational: the caller chose it, the
+//! gateway checks only that it is a commit id, and it is never
+//! authoritative. The `Link`'s `xet-auth` route goes through the first Hub
+//! view the repository's labels admit, which may differ from the view
+//! `resolve` was reached through; any view the repository admits mints
+//! the same token.
+
+mod transfer;
 
 use std::fmt::Write as _;
+use std::mem::size_of;
 use std::sync::Arc;
 
-use axum::body::{Body, Bytes};
 use axum::extract::{FromRequestParts, RawPathParams, RawQuery, State};
 use axum::http::header::{
     ACCEPT_RANGES, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE,
-    CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG, IF_RANGE, LINK, X_CONTENT_TYPE_OPTIONS,
+    CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG, IF_RANGE, LINK, WWW_AUTHENTICATE,
+    X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
-use futures_util::StreamExt as _;
-use futures_util::stream::BoxStream;
 use openxet_auth::{Action, UserPrincipal};
 use openxet_cas::{ByteRange, Fetch, FilePlan, FilePlanError, plan_file};
+use openxet_git::Pointer;
 use openxet_index::{Oid, Repo, RepoId};
-use openxet_protocol::{
-    CHUNK_HEADER_BYTES, ProtocolError, decode_stored_chunk, hash_from_hex, hash_to_hex,
-    stored_chunk_len,
-};
-use openxet_storage::{Bucket, Key, StorageError};
+use openxet_protocol::{hash_from_hex, hash_to_hex};
 
+use self::transfer::{Transfer, bucket_opener};
 use crate::authz::{allowed, denied, user_for_token};
 use crate::error::X_REPO_COMMIT;
 use crate::routes::{Routes, on};
@@ -147,81 +163,112 @@ impl FromRequestParts<HubState> for GatewayWho {
     }
 }
 
-/// `GET|HEAD /v1/transfer/files/{repo}/{file}?name=&commit=`.
+/// `GET|HEAD /v1/transfer/files/{repo}/{file}?name=&commit=`. A `401`
+/// offers `Basic` before `Bearer` ([`challenge`]).
 async fn gateway(
-    GatewayWho(who): GatewayWho,
+    who: Result<GatewayWho, HubError>,
     State(state): State<HubState>,
     params: RawPathParams,
     RawQuery(query): RawQuery,
     method: Method,
     headers: HeaderMap,
+) -> Response {
+    let answer = match who {
+        Ok(GatewayWho(who)) => {
+            serve(&who, &state, &params, query.as_deref(), &method, &headers).await
+        }
+        Err(e) => Err(e),
+    };
+    answer.unwrap_or_else(|e| challenge(e.into_response()))
+}
+
+/// `response` with a `401`'s challenge offering `Basic` first, then
+/// `Bearer`: `git-lfs` sends its credential only after a `Basic`
+/// challenge, and clients of `Bearer` read either.
+fn challenge(mut response: Response) -> Response {
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let headers = response.headers_mut();
+        let bearer = headers.remove(WWW_AUTHENTICATE);
+        headers.append(
+            WWW_AUTHENTICATE,
+            HeaderValue::from_static(r#"Basic realm="openxet""#),
+        );
+        if let Some(bearer) = bearer {
+            headers.append(WWW_AUTHENTICATE, bearer);
+        }
+    }
+    response
+}
+
+async fn serve(
+    who: &UserPrincipal,
+    state: &HubState,
+    params: &RawPathParams,
+    query: Option<&str>,
+    method: &Method,
+    headers: &HeaderMap,
 ) -> Result<Response, HubError> {
-    let repo = readable_repo(&state, &who, &param(&params, "repo")).await?;
-    let file = hash_from_hex(&param(&params, "file")).map_err(|_| HubError::BadRequest {
+    let repo = readable_repo(state, who, &param(params, "repo")).await?;
+    let file = hash_from_hex(&param(params, "file")).map_err(|_| HubError::BadRequest {
         message: "the file is not a Xet file hash".to_owned(),
         hint: "Use the URL exactly as resolve's Location or the LFS batch href gave it.",
     })?;
     let hex = hash_to_hex(&file);
-    let (mut name, mut commit) = (None, None);
-    for (key, value) in url::form_urlencoded::parse(query.as_deref().unwrap_or("").as_bytes()) {
-        match &*key {
-            "name" => name = Some(value.into_owned()),
-            "commit" => {
-                commit = Some(value.parse::<Oid>().map_err(|_| HubError::BadRequest {
-                    message: "commit is not a 40-character commit id".to_owned(),
-                    hint: "Use the URL exactly as resolve's Location gave it.",
-                })?);
-            }
-            _ => {}
-        }
-    }
+    let (name, commit) = name_and_commit(query)?;
     let scope = format!("repo:{}", repo.id);
-    let etag = match state.index.file_sha256(&scope, &file).await? {
-        Some(sha256) => format!("\"{}\"", hex_of(&sha256)),
+    // One row, no terms decoded: all a `HEAD` reads.
+    let summary = state
+        .index
+        .file_summary(&scope, &file)
+        .await?
+        .ok_or_else(|| HubError::FileNotStored { file: hex.clone() })?;
+    let etag = match summary.sha256 {
+        Some(sha256) => format!(
+            "\"{}\"",
+            Pointer {
+                sha256,
+                size: summary.size
+            }
+            .sha256_hex()
+        ),
         None => format!("\"{hex}\""),
     };
     let name = name
         .as_deref()
         .and_then(|n| n.rsplit('/').find(|c| !c.is_empty()))
         .unwrap_or(&hex);
-    let mut out = HeaderMap::new();
+    let mut out = hub_headers(state, &repo, &hex, commit)?;
+    file_headers(&mut out, &etag, name)?;
+
+    if method == Method::HEAD {
+        out.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        out.insert(CONTENT_LENGTH, HeaderValue::from(summary.size));
+        return Ok((StatusCode::OK, out).into_response());
+    }
+    let range = requested_range(method, headers, &etag);
+    let budget = &state.memory.budget;
+    let FilePlan {
+        size,
+        range,
+        plan,
+        mut reserved,
+    } = match plan_file(state.index.as_ref(), budget, &scope, &file, range).await {
+        Ok(plan) => plan,
+        Err(FilePlanError::NotFound) => return Err(HubError::FileNotStored { file: hex }),
+        Err(FilePlanError::Unsatisfiable { size }) => return Ok(unsatisfiable(out, size)),
+        Err(FilePlanError::Memory(e)) => return Err(e.into()),
+        Err(FilePlanError::Inconsistent(detail)) => {
+            return Err(HubError::Internal(detail.into()));
+        }
+        Err(FilePlanError::Index(e)) => return Err(e.into()),
+    };
     out.insert(
         CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
-    out.insert(X_XET_HASH, header(&hex)?);
-    if let Some(commit) = commit {
-        out.insert(X_REPO_COMMIT, header(&commit.to_string())?);
-        if let Some(links) = View::TYPED
-            .into_iter()
-            .find(|v| v.admits(&repo))
-            .and_then(|view| xet_links(&state, view, &repo, commit, &hex))
-        {
-            out.insert(LINK, header(&links)?);
-        }
-    }
-    file_headers(&mut out, &etag, name)?;
-
-    if method == Method::HEAD {
-        let record = state
-            .index
-            .file(&file, &scope)
-            .await?
-            .ok_or_else(|| not_stored(&hex, commit))?;
-        out.insert(CONTENT_LENGTH, HeaderValue::from(record.size));
-        return Ok((StatusCode::OK, out).into_response());
-    }
-    let range = requested_range(&method, &headers, &etag);
-    let FilePlan { size, range, plan } =
-        match plan_file(state.index.as_ref(), &scope, &file, range).await {
-            Ok(plan) => plan,
-            Err(FilePlanError::NotFound) => return Err(not_stored(&hex, commit)),
-            Err(FilePlanError::Unsatisfiable { size }) => return Ok(unsatisfiable(size)),
-            Err(FilePlanError::Inconsistent(detail)) => {
-                return Err(HubError::Internal(detail.into()));
-            }
-            Err(FilePlanError::Index(e)) => return Err(e.into()),
-        };
     let (status, len) = match range {
         Some((start, end)) => {
             out.insert(
@@ -233,25 +280,70 @@ async fn gateway(
         None => (StatusCode::OK, size),
     };
     out.insert(CONTENT_LENGTH, HeaderValue::from(len));
-    let mut transfer = Transfer {
-        bucket: Arc::clone(&state.bucket),
-        fetches: plan.fetches.into_iter(),
-        blocks: None,
-        block: Bytes::new(),
-        carry: Vec::new(),
-        skip: plan.offset_into_first_range,
-        remaining: len,
-        file: hex,
-    };
+    // The transfer keeps only the fetches: the reservation shrinks to them.
+    let mut fetches = plan.fetches;
+    fetches.shrink_to_fit();
+    reserved.shrink_to((fetches.capacity() * size_of::<Fetch>()) as u64);
+    let mut transfer = Transfer::new(
+        fetches,
+        bucket_opener(Arc::clone(&state.bucket)),
+        plan.offset_into_first_range,
+        len,
+        hex,
+        Some(reserved),
+    );
     // The first read opens before the answer starts, so a xorb the bucket
     // lacks is a `500` rather than a body cut short.
     if len > 0 {
         transfer.open_next().await?;
     }
-    let body = futures_util::stream::unfold(transfer, |mut t| async move {
-        t.next_piece().await.map(|piece| (piece, t))
-    });
-    Ok((status, out, Body::from_stream(body)).into_response())
+    let deadline = state.memory.send_deadline.for_len(len);
+    Ok((status, out, transfer::body(transfer, deadline)).into_response())
+}
+
+/// The `name` and `commit` query parameters.
+///
+/// # Errors
+///
+/// [`HubError::BadRequest`] for a `commit` that isn't a commit id.
+fn name_and_commit(query: Option<&str>) -> Result<(Option<String>, Option<Oid>), HubError> {
+    let (mut name, mut commit) = (None, None);
+    for (key, value) in url::form_urlencoded::parse(query.unwrap_or("").as_bytes()) {
+        match &*key {
+            "name" => name = Some(value.into_owned()),
+            "commit" => {
+                commit = Some(value.parse::<Oid>().map_err(|_| HubError::BadRequest {
+                    message: "commit is not a 40-character commit id".to_owned(),
+                    hint: "Use the URL exactly as resolve's Location gave it.",
+                })?);
+            }
+            _ => {}
+        }
+    }
+    Ok((name, commit))
+}
+
+/// `X-Xet-Hash`, and with a `commit` the `X-Repo-Commit` and `Link`
+/// headers `huggingface_hub` reads after the redirect.
+fn hub_headers(
+    state: &HubState,
+    repo: &Repo,
+    hex: &str,
+    commit: Option<Oid>,
+) -> Result<HeaderMap, HubError> {
+    let mut out = HeaderMap::new();
+    out.insert(X_XET_HASH, header(hex)?);
+    if let Some(commit) = commit {
+        out.insert(X_REPO_COMMIT, header(&commit.to_string())?);
+        if let Some(links) = View::TYPED
+            .into_iter()
+            .find(|v| v.admits(repo))
+            .and_then(|view| xet_links(state, view, repo, commit, hex))
+        {
+            out.insert(LINK, header(&links)?);
+        }
+    }
+    Ok(out)
 }
 
 /// The repository with id `id` if `who` may read it; otherwise the answer
@@ -267,15 +359,6 @@ async fn readable_repo(state: &HubState, who: &UserPrincipal, id: &str) -> Resul
         return Err(denied(who));
     }
     Ok(repo)
-}
-
-/// The answer for a file the repository's scope never registered.
-fn not_stored(hex: &str, commit: Option<Oid>) -> HubError {
-    HubError::EntryNotFound {
-        path: hex.to_owned(),
-        revision: commit.map_or_else(|| "this repository".to_owned(), |c| c.to_string()),
-        commit,
-    }
 }
 
 /// The range a `GET` asks for, or `None` for the whole file: no `Range`,
@@ -298,14 +381,15 @@ pub(crate) fn requested_range(
     }
 }
 
-/// `416` for a file of `size` bytes (RFC 9110 §15.5.17).
-pub(crate) fn unsatisfiable(size: u64) -> Response {
-    let mut headers = HeaderMap::new();
+/// `416` for a file of `size` bytes (RFC 9110 §15.5.17), with the file
+/// answer's other headers `out`, its `ETag` among them (S4 G8).
+pub(crate) fn unsatisfiable(mut out: HeaderMap, size: u64) -> Response {
+    out.remove(CONTENT_TYPE);
+    out.remove(CONTENT_LENGTH);
     if let Ok(value) = HeaderValue::try_from(format!("bytes */{size}")) {
-        headers.insert(CONTENT_RANGE, value);
+        out.insert(CONTENT_RANGE, value);
     }
-    headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    (StatusCode::RANGE_NOT_SATISFIABLE, headers).into_response()
+    (StatusCode::RANGE_NOT_SATISFIABLE, out).into_response()
 }
 
 /// The headers every file answer carries: `ETag`, `Accept-Ranges`, and
@@ -350,152 +434,6 @@ pub(crate) fn content_disposition(name: &str) -> String {
 /// `text` as a header value. Every caller passes server-built ASCII.
 pub(crate) fn header(text: &str) -> Result<HeaderValue, HubError> {
     HeaderValue::try_from(text).map_err(|e| HubError::Internal(Box::new(e)))
-}
-
-fn hex_of(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(2 * bytes.len()), |mut out, b| {
-            // Writing to a `String` can't fail.
-            let _ = write!(out, "{b:02x}");
-            out
-        })
-}
-
-/// Why a transfer stopped partway.
-#[derive(Debug, thiserror::Error)]
-enum TransferError {
-    #[error("the bucket failed: {0}")]
-    Storage(#[from] StorageError),
-    #[error("a stored chunk is invalid: {0}")]
-    Chunk(#[from] ProtocolError),
-    #[error("a fetched range ends inside a chunk")]
-    Truncated,
-    #[error("the plan's fetches ended before the range did")]
-    ShortPlan,
-}
-
-/// A file range being read: the plan's fetches in order, each streamed
-/// from the bucket and decoded one chunk at a time, `skip` bytes dropped
-/// from the start and the body ending after `remaining` more.
-///
-/// The fetches, decoded and concatenated, are the file from the first
-/// planned term's first chunk ([`openxet_cas::Plan`]). At most one stream
-/// block (`block`), one stored chunk (`carry`, a chunk split across
-/// blocks) and one decoded chunk are held at a time.
-struct Transfer {
-    bucket: Arc<dyn Bucket>,
-    fetches: std::vec::IntoIter<Fetch>,
-    blocks: Option<BoxStream<'static, Result<Bytes, StorageError>>>,
-    block: Bytes,
-    carry: Vec<u8>,
-    skip: u64,
-    remaining: u64,
-    file: String,
-}
-
-impl Transfer {
-    /// Opens the next fetch's stream.
-    async fn open_next(&mut self) -> Result<(), TransferError> {
-        let fetch = self.fetches.next().ok_or(TransferError::ShortPlan)?;
-        let stream = self
-            .bucket
-            .get_range_stream(&Key::Xorb(fetch.xorb), fetch.bytes.0, fetch.bytes.1)
-            .await?;
-        self.blocks = Some(stream.blocks);
-        Ok(())
-    }
-
-    /// The next piece of the body, `None` at its end. A failure is logged
-    /// and ends the body short of its `Content-Length`, so no client takes
-    /// it for the whole range.
-    async fn next_piece(&mut self) -> Option<Result<Bytes, std::io::Error>> {
-        match self.piece().await {
-            Ok(piece) => piece.map(Ok),
-            Err(e) => {
-                tracing::error!(
-                    file = %self.file,
-                    error = &e as &dyn std::error::Error,
-                    "a gateway transfer failed partway"
-                );
-                self.remaining = 0;
-                Some(Err(std::io::Error::other(e)))
-            }
-        }
-    }
-
-    async fn piece(&mut self) -> Result<Option<Bytes>, TransferError> {
-        loop {
-            if self.remaining == 0 {
-                return Ok(None);
-            }
-            if let Some(stored) = self.take_chunk()? {
-                let data = decode_stored_chunk(&stored)?;
-                let len = data.len() as u64;
-                if self.skip >= len {
-                    self.skip -= len;
-                    continue;
-                }
-                let start = self.skip;
-                let end = len.min(start + self.remaining);
-                self.skip = 0;
-                self.remaining -= end - start;
-                // Both lie within one chunk, at most `MAX_CHUNK_BYTES`.
-                #[allow(clippy::cast_possible_truncation, reason = "within one chunk")]
-                return Ok(Some(Bytes::from(data).slice(start as usize..end as usize)));
-            }
-            let Some(blocks) = self.blocks.as_mut() else {
-                self.open_next().await?;
-                continue;
-            };
-            match blocks.next().await {
-                Some(block) => self.block = block?,
-                None if self.block.is_empty() && self.carry.is_empty() => self.blocks = None,
-                None => return Err(TransferError::Truncated),
-            }
-        }
-    }
-
-    /// The next whole stored chunk, if the buffered bytes hold one: sliced
-    /// from the block when it lies inside it, else assembled in `carry`.
-    fn take_chunk(&mut self) -> Result<Option<Bytes>, TransferError> {
-        if self.carry.is_empty() && self.block.len() >= CHUNK_HEADER_BYTES {
-            let len = stored_chunk_len(head(&self.block))?;
-            if self.block.len() >= len {
-                return Ok(Some(self.block.split_to(len)));
-            }
-        }
-        if self.carry.len() < CHUNK_HEADER_BYTES {
-            let take = (CHUNK_HEADER_BYTES - self.carry.len()).min(self.block.len());
-            self.carry.extend_from_slice(&self.block.split_to(take));
-            if self.carry.len() < CHUNK_HEADER_BYTES {
-                return Ok(None);
-            }
-        }
-        let len = stored_chunk_len(head(&self.carry))?;
-        let take = (len - self.carry.len()).min(self.block.len());
-        self.carry.extend_from_slice(&self.block.split_to(take));
-        if self.carry.len() < len {
-            return Ok(None);
-        }
-        Ok(Some(Bytes::from(std::mem::take(&mut self.carry))))
-    }
-}
-
-/// The chunk header `bytes` starts with; the caller checked its length.
-fn head(bytes: &[u8]) -> [u8; CHUNK_HEADER_BYTES] {
-    let mut header = [0; CHUNK_HEADER_BYTES];
-    header.copy_from_slice(&bytes[..CHUNK_HEADER_BYTES]);
-    header
-}
-
-impl From<TransferError> for HubError {
-    fn from(e: TransferError) -> Self {
-        match e {
-            TransferError::Storage(e) => e.into(),
-            e => Self::Internal(Box::new(e)),
-        }
-    }
 }
 
 #[cfg(test)]

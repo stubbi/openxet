@@ -1003,13 +1003,21 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
 - **Downloads** *(ruling M2-R9)*. `resolve` answers a small file inline
   from its Git blob, with `ETag: "{blob sha1}"`. A Xet file answers `302`
   to the file gateway,
-  `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}`,
+  `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}&commit={commit}`,
   which serves it with the caller's credential (Bearer, or Basic with the
-  token as the password) and HTTP `Range` (all three forms, `416` past
-  the end), `ETag: "{sha256}"`, `If-Range`, `HEAD`, `Content-Disposition`
-  and `Accept-Ranges`. LFS `basic` download `href`s are the same URL
-  with no `authenticated` field, so `git-lfs` attaches the credential it
-  holds for that host.
+  token as the password; a `401` challenges Basic first) and HTTP `Range`
+  (all three forms, `416` past the end), `ETag: "{sha256}"` (the Xet hash
+  for a file registered without one, which `resolve` never redirects
+  to), `If-Range`, `HEAD`, `Content-Disposition` and `Accept-Ranges`.
+  `commit` is there because `huggingface_hub` follows a same-origin
+  redirect with its `HEAD` and reads `X-Repo-Commit`, `X-Xet-Hash` and
+  the `xet-auth` link from where it lands (Task 13); the gateway repeats
+  them, and echoes the `commit` the caller chose, checked only as a
+  commit id, so it is informational, never authoritative. LFS `basic`
+  download `href`s are the same URL without `name` or `commit` and with
+  no `authenticated` field, so `git-lfs` attaches the credential it holds
+  for that host. A gateway body holds its plan's memory reservation until
+  it is sent, dropped or past its send deadline (M1-R40).
 
 **Errors** *(ruling M2-R6)*. A Hub error carries huggingface.co's `error`
 field and openxet's structured fields:
@@ -2227,7 +2235,7 @@ decides, with superseded parts marked.
 | M2-R6 | Hub errors are `{"error", "schema": "openxet.error.v1", "code", "message", "hint"}` with `X-Error-Code` and `X-Error-Message`; CAS routes keep the M1 body. The unknown-repository answer is one constant `404` (`RepoNotFound`, `Repository not found`, body and hint fixed) for a missing repository, one the caller may not read, and a typed view the caller may not read whose label the repository lacks. A missing credential is `401` with `WWW-Authenticate: Bearer realm="openxet"` and a message naming `hf auth login`; an invalid one is `401` with `Invalid credentials in Authorization header`. Amended in M2 Task 15: the JSON body is for API routes; the Git smart HTTP routes answer the same status and headers with the message and hint as `text/plain`, which git shows as `remote:` lines, their unknown-repository text equally constant, and their `401` offers `Basic` first. | §6, ADR 0010, S3 |
 | M2-R7 | A Hub commit is a real commit built with gix from the parent's tree: `file` operations become blobs, `lfsFile` operations canonical pointers whose sha256 is registered to the repository's scope, and deletes remove entries. The author is the subject (`{subject} <{subject}@users.noreply.openxet.com>` unless an `email` claim is present), the committer openxet, the message `summary`, a blank line and `description`; a `parentCommit` mismatch is `412 precondition_failed`; `commitUrl` is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`. | §6, ADR 0004 |
 | M2-R8 | `tree`, `commits` and the repository listings answer at most 1,000 entries per page, ordered by path or commit order, with `Link: <…?cursor=…>; rel="next"` when more follow; the cursor is the last entry's key, base64url-encoded, and `X-Total-Count` is set where S3 observed it. | §6, S3 |
-| M2-R9 | Xet files resolve with `302` to `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}`, served with the caller's credential (Bearer, or Basic with the token as the password), HTTP `Range` (all three forms, `416` past the end), `ETag: "{sha256}"`, `If-Range`, `HEAD`, `Content-Disposition` and `Accept-Ranges`; LFS `basic` download `href`s are the same URL with no `authenticated` field. Small files are served inline from the Git blob with `ETag: "{blob sha1}"`. | §5.5, §6, ADR 0003 |
+| M2-R9 | Xet files resolve with `302` to `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}&commit={commit}`, served with the caller's credential (Bearer, or Basic with the token as the password; `401` challenges Basic first), HTTP `Range` (all three forms, `416` past the end), `ETag: "{sha256}"` (the Xet hash when none was registered), `If-Range`, `HEAD`, `Content-Disposition` and `Accept-Ranges`; LFS `basic` download `href`s are the same URL without `name` or `commit` and with no `authenticated` field. Small files are served inline from the Git blob with `ETag: "{blob sha1}"`, their size reserved from the memory budget before the blob is read. Amended in Task 13: `commit` added, since `huggingface_hub` reads `X-Repo-Commit` from the gateway after a same-origin redirect; the gateway echoes it as given (checked as a commit id only), so it is informational. | §5.5, §6, ADR 0003 |
 | M2-R10 | Until server-side chunking (M4), an LFS upload batch that doesn't offer `xet` answers each object with an object error `{"code": 501, …}` naming the `git-xet` install command, never a `basic` `href` that fails later. | §6.1, §10.3 |
 | M2-R11 | Smart HTTP is served at `/{prefix}{ns}/{name}.git/…` and without `.git`; a gzip request body is inflated, `Git-Protocol: version=2` selects v2, and the `Basic` (the token as the password) and `Bearer` schemes are accepted. The first push to a missing repository creates it, with the `model` label, if the authorizer allows `create` in the namespace. | §10.9, ADR 0004, ADR 0005 |
 | M2-R12 | openxet's own API lives under `/api/openxet/v1/`; labels are `GET …/repos/{ns}/{name}/labels`, `PUT` and `DELETE …/labels/{label}`, and `openxet label add`, `remove` and `list`. Each change writes the repository's metadata record to the bucket, then the index, then an `audit_log` row (`actor`, `action`, `repo`, `detail`, `at`), the table M4's audit API exposes. | §10.4, ADR 0010 |

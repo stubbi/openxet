@@ -176,7 +176,8 @@ impl MemoryBudget {
     }
 
     /// The most one answer may reserve: an eighth of the budget.
-    pub(crate) fn answer_limit(&self) -> u64 {
+    #[must_use]
+    pub fn answer_limit(&self) -> u64 {
         self.bytes() / Self::ANSWER_SHARE
     }
 
@@ -203,7 +204,14 @@ impl MemoryBudget {
     /// - [`CasError::AnswerTooLarge`] at once if `bytes` exceeds
     ///   [`MemoryBudget::answer_limit`]
     /// - [`CasError::MemoryBusy`] if the wait passes first
-    pub(crate) async fn reserve_answer(&self, bytes: u64) -> Result<Reservation, CasError> {
+    ///
+    /// The Hub's `resolve` and file gateway reserve their reads here too,
+    /// so they share the CAS's pool.
+    ///
+    /// # Errors
+    ///
+    /// As listed.
+    pub async fn reserve_answer(&self, bytes: u64) -> Result<Reservation, CasError> {
         self.check_answer(bytes)?;
         let units = bytes.div_ceil(UNIT);
         if !self.pool.try_take(units) {
@@ -216,7 +224,11 @@ impl MemoryBudget {
 
     /// [`CasError::AnswerTooLarge`] if one answer of `bytes` would exceed
     /// [`MemoryBudget::answer_limit`].
-    pub(crate) fn check_answer(&self, bytes: u64) -> Result<(), CasError> {
+    ///
+    /// # Errors
+    ///
+    /// As described.
+    pub fn check_answer(&self, bytes: u64) -> Result<(), CasError> {
         let limit = self.answer_limit();
         if bytes > limit {
             return Err(CasError::AnswerTooLarge {
@@ -248,7 +260,7 @@ impl MemoryBudget {
 
 /// Bytes reserved from a [`MemoryBudget`], returned to it when dropped.
 #[derive(Debug)]
-pub(crate) struct Reservation {
+pub struct Reservation {
     pool: Arc<Pool>,
     units: u64,
 }
@@ -256,7 +268,7 @@ pub(crate) struct Reservation {
 impl Reservation {
     /// Returns what is reserved beyond `bytes` to the budget. Never grows
     /// the reservation.
-    pub(crate) fn shrink_to(&mut self, bytes: u64) {
+    pub fn shrink_to(&mut self, bytes: u64) {
         let keep = bytes.div_ceil(UNIT);
         if keep < self.units {
             self.pool.give_back(self.units - keep);

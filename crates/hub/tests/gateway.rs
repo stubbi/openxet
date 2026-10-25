@@ -12,21 +12,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::{Body, Bytes};
-use axum::http::header::{IF_RANGE, LINK, LOCATION, RANGE};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::header::{IF_RANGE, LINK, LOCATION, RANGE, WWW_AUTHENTICATE};
+use axum::http::{Method, StatusCode};
 use base64::Engine as _;
-use openxet_auth::RulesAuthorizer;
-use openxet_hub::test_support::{BEARER, PUBLIC_URL, Reply, TestHub};
-use openxet_index::{ChunkTable, FileRecord, NewFile, Registrant, Term, Visibility};
-use openxet_protocol::{chunk_hash, file_hash, hash_to_hex, xorb_with_footer};
-use openxet_storage::{Key, LocalBucket};
+use openxet_auth::{Action, RulesAuthorizer};
+use openxet_hub::test_support::{ALL, BEARER, PUBLIC_URL, Reply, TestHub, rule, user_token};
+use openxet_storage::LocalBucket;
 use sha2::Digest as _;
+use support::files::{
+    Storing, bearer, data, hex, index_file, request, store_file, three_xorb_file,
+};
 use support::{
     A_BIN_HASH, A_BIN_SHA256, ALICE, BOB, CAROL, commit_ok, file, header, hub, lfs_file, repo_id,
     send, uploaded, xet_token,
 };
-use tower::ServiceExt as _;
 
 /// The reference file of `xet-team/xet-spec-reference-files`
 /// (`scripts/fetch-reference-files.sh`).
@@ -71,178 +70,6 @@ async fn upload_reference(hub: &TestHub, router: &Router, repo: &str) -> String 
         .unwrap()
         .trim()
         .to_owned()
-}
-
-/// A file stored as the CAS stores one: its xorbs in the bucket and their
-/// chunk layouts and the file's terms in the index, registered to
-/// `repo`'s scope with its SHA-256.
-struct Stored {
-    hash: String,
-    sha256: String,
-    content: Vec<u8>,
-    /// Where each term's chunks start in the file, and where it ends.
-    boundaries: Vec<u64>,
-}
-
-/// One uncompressed chunk holding `data`, framed per the spec's chunk
-/// header (<https://huggingface.co/docs/xet/xorb#chunk-header-structure>).
-fn chunk(data: &[u8]) -> Vec<u8> {
-    let len = u32::try_from(data.len()).unwrap().to_le_bytes();
-    let mut out = vec![0, len[0], len[1], len[2], 0, len[0], len[1], len[2]];
-    out.extend_from_slice(data);
-    out
-}
-
-/// Stores `xorbs` (each a list of chunk contents) and registers to `repo`
-/// the file whose terms are `terms`, `(xorb, first chunk, end chunk)`.
-async fn store_file(
-    hub: &TestHub,
-    repo: &str,
-    xorbs: &[Vec<Vec<u8>>],
-    terms: &[(usize, u32, u32)],
-) -> Stored {
-    index_file(hub, repo, xorbs, terms, true).await
-}
-
-/// [`store_file`], leaving the xorbs out of the bucket unless `in_bucket`.
-async fn index_file(
-    hub: &TestHub,
-    repo: &str,
-    xorbs: &[Vec<Vec<u8>>],
-    terms: &[(usize, u32, u32)],
-    in_bucket: bool,
-) -> Stored {
-    let scope = format!("repo:{repo}");
-    let index = &hub.state.index;
-    let mut hashes = Vec::new();
-    for chunks in xorbs {
-        let body: Vec<u8> = chunks.iter().flat_map(|c| chunk(c)).collect();
-        let stored = xorb_with_footer(&body).unwrap();
-        let size = stored.bytes.len() as u64;
-        let table = ChunkTable {
-            hashes: stored.chunks.hashes.clone().into(),
-            offsets: stored.chunk_offsets.clone().into(),
-        };
-        if in_bucket {
-            hub.state
-                .bucket
-                .put(&Key::Xorb(stored.hash), Bytes::from(stored.bytes))
-                .await
-                .unwrap();
-        }
-        index
-            .put_xorb(&stored.hash, size, &table, &[], "alice")
-            .await
-            .unwrap();
-        hashes.push(stored.hash);
-    }
-    let (mut content, mut boundaries, mut chunk_list) = (Vec::new(), vec![0], Vec::new());
-    let mut record_terms = Vec::new();
-    for &(x, start, end) in terms {
-        let mut bytes = 0u32;
-        for c in &xorbs[x][start as usize..end as usize] {
-            content.extend_from_slice(c);
-            chunk_list.push((chunk_hash(c), c.len() as u64));
-            bytes += u32::try_from(c.len()).unwrap();
-        }
-        boundaries.push(content.len() as u64);
-        record_terms.push(Term {
-            xorb: hashes[x],
-            chunk_start: start,
-            chunk_end: end,
-            unpacked_bytes: bytes,
-        });
-    }
-    let hash = file_hash(&chunk_list);
-    let sha256: [u8; 32] = sha2::Sha256::digest(&content).into();
-    let new = NewFile {
-        record: FileRecord {
-            hash,
-            size: content.len() as u64,
-            terms: record_terms,
-        },
-        sha256: Some(sha256),
-        first_chunk: Some(chunk_list[0].0),
-    };
-    let seq = index.next_registration_seq().await.unwrap();
-    let by = Registrant {
-        scope: &scope,
-        tenant: "alice",
-        seq,
-    };
-    index
-        .register_shard(&chunk_hash(&content), &[new], by, Visibility::Global)
-        .await
-        .unwrap();
-    Stored {
-        hash: hash_to_hex(&hash),
-        sha256: hex(&sha256),
-        content,
-        boundaries,
-    }
-}
-
-/// `n` bytes of a pattern that differs per `seed`.
-fn data(seed: u8, n: usize) -> Vec<u8> {
-    (0..n)
-        .map(|i| {
-            seed.wrapping_mul(31)
-                .wrapping_add(u8::try_from(i % 251).unwrap())
-        })
-        .collect()
-}
-
-/// A file over three xorbs whose terms revisit the first xorb, so its
-/// plan has fetches of one xorb apart: chunks of 1,000 to 7,000 bytes.
-async fn three_xorb_file(hub: &TestHub, repo: &str) -> Stored {
-    let xorbs: Vec<Vec<Vec<u8>>> = (0..3u8)
-        .map(|x| {
-            (0..5u8)
-                .map(|c| data(x * 10 + c, 1000 + 1500 * usize::from((x + c) % 5)))
-                .collect()
-        })
-        .collect();
-    store_file(
-        hub,
-        repo,
-        &xorbs,
-        &[
-            (0, 0, 2),
-            (1, 0, 3),
-            (0, 1, 4),
-            (2, 0, 2),
-            (1, 3, 5),
-            (2, 2, 5),
-        ],
-    )
-    .await
-}
-
-/// Sends `method path` through `router` with `headers` (name, value).
-async fn request(router: &Router, method: Method, path: &str, headers: &[(&str, String)]) -> Reply {
-    let mut builder = Request::builder().method(method).uri(path);
-    for (name, value) in headers {
-        builder = builder.header(*name, value);
-    }
-    let response = router
-        .clone()
-        .oneshot(builder.body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    Reply {
-        status,
-        headers,
-        body,
-    }
-}
-
-fn bearer(token: &str) -> (&'static str, String) {
-    ("authorization", format!("{BEARER} {token}"))
 }
 
 /// S4's G1, G2 and G8 on `url`: `HEAD` answers every header a `GET` does,
@@ -367,6 +194,8 @@ async fn assert_conforms(router: &Router, url: &str, content: &[u8], etag: &str,
             Some(format!("bytes */{size}").as_str()),
             "{range}"
         );
+        // G8: the ETag on every answer, this one too.
+        assert_eq!(reply.header("etag"), Some(etag), "{range}");
     }
     // G9: If-Range with the current ETag keeps the range; with another, or
     // a date, the answer is the whole file.
@@ -415,7 +244,8 @@ async fn gateway_conformance() {
     assert_eq!(head.header("link"), None);
 
     // The reference file, uploaded as stock clients upload it; its shard
-    // names its SHA-256, the ETag.
+    // names its SHA-256, the ETag. The URL has no `name`, as an LFS `href`
+    // has none: the file is named by its hash.
     let reference_hash = upload_reference(&hub, &router, "alice/m").await;
     let csv = reference(REFERENCE);
     let url = format!("/v1/transfer/files/{id}/{reference_hash}");
@@ -479,14 +309,12 @@ async fn gateway_missing_xorb_is_a_server_fault() {
     let hub = hub().await;
     let (router, _) = uploaded(&hub).await;
     let id = repo_id(&hub, "alice", "m").await;
-    let lost = index_file(
-        &hub,
-        &id,
-        &[vec![data(1, 3000), data(2, 3000)]],
-        &[(0, 0, 2)],
-        false,
-    )
-    .await;
+    let how = Storing {
+        in_bucket: false,
+        named: true,
+    };
+    let xorbs = [vec![data(1, 3000), data(2, 3000)]];
+    let lost = index_file(&hub, &id, &xorbs, &[(0, 0, 2)], how).await;
     let url = format!("/v1/transfer/files/{id}/{}", lost.hash);
     let reply = request(&router, Method::GET, &url, &[bearer(ALICE)]).await;
     assert_eq!(
@@ -496,14 +324,6 @@ async fn gateway_missing_xorb_is_a_server_fault() {
         reply.text()
     );
     assert_eq!(reply.json()["code"], "internal");
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, b| {
-        write!(out, "{b:02x}").unwrap();
-        out
-    })
 }
 
 #[tokio::test]
@@ -558,6 +378,7 @@ async fn gateway_needs_credential_scoped_to_repo() {
     let foreign = get(url(&carol_repo), bearer(CAROL)).await;
     assert_eq!(foreign.status, StatusCode::NOT_FOUND);
     assert_eq!(foreign.header("x-error-code"), Some("EntryNotFound"));
+    assert_eq!(foreign.json()["code"], "file_not_stored");
     // A CAS token, even alice/m's own, is not a user credential.
     let cas = xet_token(&hub, ALICE, "alice/m", "read").await;
     assert_eq!(
@@ -568,7 +389,18 @@ async fn gateway_needs_credential_scoped_to_repo() {
     // exists.
     let anonymous = get(url(&alice_repo), None).await;
     assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
-    assert!(anonymous.header("www-authenticate").is_some());
+    // `Basic` first: git-lfs sends its credential only after a `Basic`
+    // challenge; `Bearer` follows for everyone else.
+    let challenges: Vec<&str> = anonymous
+        .headers
+        .get_all(WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        challenges,
+        [r#"Basic realm="openxet""#, r#"Bearer realm="openxet""#]
+    );
     assert_eq!(
         get(url(gone), None).await.comparable(),
         anonymous.comparable()
@@ -582,10 +414,97 @@ async fn gateway_needs_credential_scoped_to_repo() {
         let reply = get(url(&alice_repo), bad.clone()).await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{bad:?}");
         assert_eq!(
+            reply.headers.get(WWW_AUTHENTICATE).unwrap(),
+            r#"Basic realm="openxet""#
+        );
+        assert_eq!(
             reply.header("x-error-message"),
             Some("Invalid credentials in Authorization header")
         );
     }
+}
+
+#[tokio::test]
+async fn gateway_serves_anonymous_only_by_rule() {
+    // M2-R3 on the gateway: an `anonymous` rule makes `pub/*` readable
+    // without a credential; a private repository and an absent one still
+    // answer the same `401`.
+    let hub = TestHub::start(
+        vec![user_token(ALICE, "alice", &[])],
+        vec![
+            rule(&["alice"], &["*"], ALL),
+            rule(&["anonymous"], &["pub/*"], &[Action::Read]),
+        ],
+    )
+    .await;
+    hub.create(ALICE, "pub", "x", None).await;
+    hub.create(ALICE, "priv", "y", None).await;
+    let router = support::with_cas(&hub);
+    let public = repo_id(&hub, "pub", "x").await;
+    let private = repo_id(&hub, "priv", "y").await;
+    let stored = store_file(&hub, &public, &[vec![data(3, 2000)]], &[(0, 0, 1)]).await;
+    let hidden = store_file(&hub, &private, &[vec![data(4, 2000)]], &[(0, 0, 1)]).await;
+
+    let url = format!("/v1/transfer/files/{public}/{}", stored.hash);
+    let reply = request(&router, Method::GET, &url, &[]).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(reply.body == stored.content, "the bytes differ");
+    let url = format!("/v1/transfer/files/{private}/{}", hidden.hash);
+    let refused = request(&router, Method::GET, &url, &[]).await;
+    assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+    let absent = format!(
+        "/v1/transfer/files/0190f0f0f0f0700080000000000000ff/{}",
+        hidden.hash
+    );
+    assert_eq!(
+        request(&router, Method::GET, &absent, &[])
+            .await
+            .comparable(),
+        refused.comparable()
+    );
+}
+
+#[tokio::test]
+async fn gateway_etag_matches_resolve_linked_etag() {
+    // The ETag is the SHA-256 resolve's `X-Linked-ETag` names, so a client
+    // that follows the redirect validates against the same value; a file
+    // registered without a SHA-256, which resolve never redirects to, has
+    // its Xet hash.
+    let hub = hub().await;
+    let (router, _) = uploaded(&hub).await;
+    let id = repo_id(&hub, "alice", "m").await;
+    let three = three_xorb_file(&hub, &id).await;
+    let size = three.content.len() as u64;
+    let lines = [header("three"), lfs_file("three.bin", &three.sha256, size)];
+    commit_ok(&hub, "alice/m", "main", &lines).await;
+    let resolved = send(
+        &router,
+        Method::HEAD,
+        "/alice/m/resolve/main/three.bin",
+        ALICE,
+        Vec::new(),
+    )
+    .await;
+    let location = resolved.header("location").unwrap();
+    let path = location.strip_prefix(PUBLIC_URL).unwrap();
+    let landed = send(&router, Method::HEAD, path, ALICE, Vec::new()).await;
+    assert_eq!(landed.header("etag"), resolved.header("x-linked-etag"));
+    assert_eq!(
+        landed.header("etag"),
+        Some(format!("\"{}\"", three.sha256).as_str())
+    );
+
+    let how = Storing {
+        in_bucket: true,
+        named: false,
+    };
+    let unnamed = index_file(&hub, &id, &[vec![data(5, 1500)]], &[(0, 0, 1)], how).await;
+    let url = format!("/v1/transfer/files/{id}/{}", unnamed.hash);
+    let reply = send(&router, Method::HEAD, &url, ALICE, Vec::new()).await;
+    assert_eq!(
+        reply.header("etag"),
+        Some(format!("\"{}\"", unnamed.hash).as_str())
+    );
 }
 
 /// Every URL in `reply`'s `Location` and `Link` headers.
@@ -698,18 +617,16 @@ async fn no_unauthenticated_reads() {
 }
 
 #[tokio::test]
+#[ignore = "needs duckdb with httpfs on PATH; run with `cargo nextest run -p openxet-hub \
+            --run-ignored only -E 'test(duckdb)'`"]
 async fn duckdb_reads_through_resolve() {
     // Spike S4's recipe: DuckDB reads a private dataset's file through a
     // plain `resolve` URL with an `http` secret, following the `302` to
-    // the gateway with its ranges. Runs only where `duckdb` (with httpfs)
-    // is on PATH.
-    let Ok(found) = std::process::Command::new("duckdb")
+    // the gateway with its ranges.
+    let found = std::process::Command::new("duckdb")
         .arg("-version")
         .output()
-    else {
-        eprintln!("skipped: duckdb is not on PATH");
-        return;
-    };
+        .unwrap_or_else(|e| panic!("duckdb on PATH: this test runs only where it is ({e})"));
     assert!(found.status.success());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

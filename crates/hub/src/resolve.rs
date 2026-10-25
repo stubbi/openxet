@@ -24,7 +24,7 @@ use axum::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_T
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bstr::ByteSlice as _;
-use openxet_cas::ByteRange;
+use openxet_cas::{ByteRange, CasError, Reservation, SendDeadline, send_body};
 use openxet_git::{Blob, Pointer};
 use openxet_index::Oid;
 
@@ -77,17 +77,60 @@ async fn resolve(
     // The commit is `resolve_revision`'s answer on the same snapshot, as
     // `read_blob` requires (ADR 0004 item 6).
     let commit = resolved.commit;
+    let at = |e| HubError::at(e, &rev, Some(commit));
+    // `read_blob` buffers the whole blob, so its size, read from the object
+    // header, is reserved before it is inflated (ruling M1-R40); a blob
+    // past one answer's share isn't served. Streaming large plain blobs is
+    // <https://github.com/stubbi/openxet/issues/91>.
+    let size = state
+        .engine
+        .blob_size(&snap, commit, &path)
+        .await
+        .map_err(at)?;
+    let reserved = state
+        .memory
+        .budget
+        .reserve_answer(size)
+        .await
+        .map_err(|e| match e {
+            CasError::AnswerTooLarge { limit, .. } => HubError::BlobTooLarge {
+                path: path.clone(),
+                size,
+                limit,
+            },
+            e => e.into(),
+        })?;
     let blob = state
         .engine
         .read_blob(&snap, commit, &path)
         .await
-        .map_err(|e| HubError::at(e, &rev, Some(commit)))?;
+        .map_err(at)?;
     let name = path.rsplit('/').find(|c| !c.is_empty()).unwrap_or_default();
     match blob {
-        Blob::Inline { oid, bytes } => inline(commit, oid, bytes, name, &method, &headers),
+        Blob::Inline { oid, bytes } => {
+            let held = Held {
+                reserved,
+                deadline: state.memory.send_deadline,
+            };
+            inline(commit, oid, bytes, name, &method, &headers, held)
+        }
         Blob::Lfs { pointer, .. } => {
             redirect(&state, &access, &rev, &path, name, commit, &pointer).await
         }
+    }
+}
+
+/// A blob's memory reservation, held until its body is sent, dropped or
+/// past its send deadline.
+struct Held {
+    reserved: Reservation,
+    deadline: SendDeadline,
+}
+
+impl Held {
+    fn body(self, bytes: Bytes) -> Body {
+        let deadline = self.deadline.for_len(bytes.len() as u64);
+        send_body(vec![bytes], self.reserved, deadline)
     }
 }
 
@@ -100,6 +143,7 @@ fn inline(
     name: &str,
     method: &Method,
     headers: &HeaderMap,
+    held: Held,
 ) -> Result<Response, HubError> {
     let mut out = HeaderMap::new();
     out.insert(X_REPO_COMMIT, header(&commit.to_string())?);
@@ -117,13 +161,13 @@ fn inline(
     let part = match requested_range(method, headers, &etag) {
         None => None,
         Some(range) => match satisfiable(range, size) {
-            None => return Ok(unsatisfiable(size)),
+            None => return Ok(unsatisfiable(out, size)),
             part => part,
         },
     };
     let Some((start, end)) = part else {
         out.insert(CONTENT_LENGTH, HeaderValue::from(size));
-        return Ok((StatusCode::OK, out, Body::from(bytes)).into_response());
+        return Ok((StatusCode::OK, out, held.body(bytes)).into_response());
     };
     out.insert(
         CONTENT_RANGE,
@@ -133,7 +177,7 @@ fn inline(
     // Both lie within the blob, which is in memory.
     #[allow(clippy::cast_possible_truncation, reason = "within an in-memory blob")]
     let part = bytes.slice(start as usize..=end as usize);
-    Ok((StatusCode::PARTIAL_CONTENT, out, Body::from(part)).into_response())
+    Ok((StatusCode::PARTIAL_CONTENT, out, held.body(part)).into_response())
 }
 
 /// The `302` to the gateway for the Xet file `pointer` names, as this

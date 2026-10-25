@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use openxet_auth::{Authenticator, Authorizer, TokenSigner};
+use openxet_cas::{MemoryBudget, SendDeadline};
 use openxet_git::Engine;
 #[cfg(feature = "test-support")]
 pub use openxet_http::Endpoint;
@@ -131,11 +132,40 @@ pub struct HubState {
     /// Signs the CAS tokens the token routes hand out: the server's own
     /// key (`{data_dir}/cas-token.key`), which the CAS verifies.
     pub signer: Arc<TokenSigner>,
+    /// The memory budget and send deadline, shared with the CAS.
+    pub memory: SharedMemory,
+}
+
+/// What bounds the memory of the Hub's reads, shared with the CAS so both
+/// draw on one pool (ruling M1-R40): `resolve` reserves a Git blob before
+/// inflating it, the file gateway its plan for as long as it streams.
+#[derive(Debug, Clone)]
+pub struct SharedMemory {
+    /// The process's memory budget: the CAS's, cloned, so the pool is one.
+    pub budget: MemoryBudget,
+    /// How long a gateway body may take to send before it is cut off and
+    /// its reservation released.
+    pub send_deadline: SendDeadline,
+}
+
+impl SharedMemory {
+    /// The budget and send deadline of the CAS `cas`.
+    #[must_use]
+    pub fn of(cas: &openxet_cas::AppState) -> Self {
+        Self {
+            budget: cas.budget.clone(),
+            send_deadline: cas.cfg.send_deadline,
+        }
+    }
 }
 
 impl HubState {
     /// State with the system clock.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each is a distinct service `openxet serve` wires once"
+    )]
     pub fn new(
         index: Arc<dyn HubIndex>,
         bucket: Arc<dyn Bucket>,
@@ -144,6 +174,7 @@ impl HubState {
         cfg: HubConfig,
         engine: Arc<Engine>,
         signer: Arc<TokenSigner>,
+        memory: SharedMemory,
     ) -> Self {
         Self {
             index,
@@ -154,7 +185,15 @@ impl HubState {
             clock: Arc::new(SystemClock),
             engine,
             signer,
+            memory,
         }
+    }
+
+    /// The same state, drawing on `memory` instead.
+    #[must_use]
+    pub fn with_memory(mut self, memory: SharedMemory) -> Self {
+        self.memory = memory;
+        self
     }
 
     /// The same state, with `clock` instead.

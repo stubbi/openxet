@@ -29,7 +29,7 @@ use openxet_cas::{AppState, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
 use openxet_git::Engine;
 use openxet_http::compose;
-use openxet_hub::HubState;
+use openxet_hub::{HubState, SharedMemory};
 use openxet_index::SqliteIndex;
 use openxet_storage::{LocalBucket, StorageError, create_private_dir_all};
 use serde::Serialize;
@@ -446,21 +446,23 @@ async fn open(
              git.cache_dir on a filesystem with hard links.",
         )
     })?;
-    let hub = HubState::new(
+    let cas = AppState::new(
         Arc::clone(&index) as _,
         Arc::clone(&bucket) as _,
         Arc::clone(&auth),
+        Arc::new(urls),
+        config.cas(public_url.clone()),
+    );
+    // The Hub draws on the CAS's memory budget: one pool (ruling M1-R40).
+    let hub = HubState::new(
+        index,
+        bucket,
+        auth,
         authorizer,
         config.hub(public_url),
         Arc::new(engine),
         Arc::new(signer),
-    );
-    let cas = AppState::new(
-        index,
-        bucket,
-        auth,
-        Arc::new(urls),
-        config.cas(public_url.clone()),
+        SharedMemory::of(&cas),
     );
     Ok((cas, hub, dev_token))
 }

@@ -27,7 +27,9 @@ use tempfile::TempDir;
 use tower::ServiceExt as _;
 use url::Url;
 
-use crate::{HubConfig, HubState};
+use openxet_cas::{MemoryBudget, SendDeadline};
+
+use crate::{HubConfig, HubState, SharedMemory};
 
 /// The scheme of every test credential. A constant, so the repository's
 /// secret scanner can tell test tokens from leaks.
@@ -245,6 +247,10 @@ impl TestHub {
             cfg,
             Arc::new(engine),
             Arc::new(signer),
+            SharedMemory {
+                budget: MemoryBudget::new(MemoryBudget::DEFAULT_BYTES),
+                send_deadline: SendDeadline::DEFAULT,
+            },
         );
         Self::with_state(dir, state)
     }

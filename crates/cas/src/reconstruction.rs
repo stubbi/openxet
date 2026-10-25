@@ -73,7 +73,7 @@ const _: () = assert!(MAX_BATCH_FILES == 1000);
 /// The bytes a stored term takes once decoded: its [`openxet_index::Term`]
 /// (a 32-byte hash and three `u32`s) and its recorded byte range (two
 /// `u32`s).
-const DECODED_TERM_BYTES: u64 = 52;
+pub(crate) const DECODED_TERM_BYTES: u64 = 52;
 
 /// The largest batch body read, in bytes: [`MAX_BATCH_FILES`] keys of about
 /// 100 bytes each as the spec writes them, with room for whitespace.

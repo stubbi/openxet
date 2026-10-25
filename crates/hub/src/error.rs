@@ -11,6 +11,7 @@ use axum::http::header::{CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::AuthzError;
+use openxet_cas::CasError;
 use openxet_git::GitError;
 use openxet_http::{ErrorBody, HubErrorBody};
 use openxet_index::{IndexError, Oid};
@@ -187,6 +188,45 @@ pub enum HubError {
         /// The commit the revision resolved to.
         commit: Oid,
     },
+    /// The file gateway's repository never registered the file: it was
+    /// never uploaded there, or was purged. `404` with `X-Error-Code:
+    /// EntryNotFound`.
+    #[error("file {file} is not stored in this repository")]
+    FileNotStored {
+        /// The Xet file hash.
+        file: String,
+    },
+    /// A plain Git blob too large to buffer within one answer's share of
+    /// the memory budget (ruling M1-R40). `503`, without `Retry-After`: it
+    /// will not fit later either. Streaming such blobs is
+    /// <https://github.com/stubbi/openxet/issues/91>.
+    #[error(
+        "{path} is a {size}-byte file stored in Git, larger than this server serves inline \
+         ({limit} bytes)"
+    )]
+    BlobTooLarge {
+        /// The path as the client named it.
+        path: String,
+        /// The blob's size.
+        size: u64,
+        /// The most one answer may hold.
+        limit: u64,
+    },
+    /// The memory budget stayed full for the whole wait (ruling M1-R40).
+    /// `503` with `Retry-After`.
+    #[error("the server is holding as much request data in memory as it may; try again shortly")]
+    MemoryBusy,
+    /// One read would hold more than one answer's share of the memory
+    /// budget (ruling M1-R40). `413`, final.
+    #[error(
+        "the read needs about {needed} bytes of server memory; one answer may hold at most {limit}"
+    )]
+    AnswerTooLarge {
+        /// The bytes needed.
+        needed: u64,
+        /// One answer's share of the budget.
+        limit: u64,
+    },
     /// A commit's `parentCommit` isn't its branch's tip (ruling M2-R7).
     /// `412`.
     #[error("{0}")]
@@ -329,6 +369,26 @@ impl HubError {
                 "Upload the file's content again (`hf upload`, or `git lfs push --all` with \
                  git-xet installed); a pointer committed without its upload reads as missing.",
             ),
+            Self::FileNotStored { .. } => (
+                StatusCode::NOT_FOUND,
+                "file_not_stored",
+                "The file was never uploaded to this repository, or was purged from it. Resolve \
+                 the file's path again (`hf_hub_download`) for its current location.",
+            ),
+            Self::BlobTooLarge { .. } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "blob_too_large",
+                "Store large files with Xet: `git lfs track` the path (with git-xet installed) \
+                 and push again, or upload it with `hf upload`; the operator can raise \
+                 `server.memory_budget`.",
+            ),
+            Self::MemoryBusy => (StatusCode::SERVICE_UNAVAILABLE, "memory_busy", RETRY_HINT),
+            Self::AnswerTooLarge { .. } => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "answer_too_large",
+                "Read the file by range, with `Range: bytes={start}-{end}`; the operator can \
+                 raise `server.memory_budget`.",
+            ),
             Self::ParentMismatch(_) => (
                 StatusCode::PRECONDITION_FAILED,
                 "precondition_failed",
@@ -396,7 +456,9 @@ impl HubError {
         match self {
             Self::UnknownRepo | Self::WrongView { .. } => Some("RepoNotFound"),
             Self::RevisionNotFound { .. } => Some("RevisionNotFound"),
-            Self::EntryNotFound { .. } | Self::LfsObjectMissing { .. } => Some("EntryNotFound"),
+            Self::EntryNotFound { .. }
+            | Self::LfsObjectMissing { .. }
+            | Self::FileNotStored { .. } => Some("EntryNotFound"),
             _ => None,
         }
     }
@@ -476,7 +538,8 @@ impl HubError {
             Self::AuthorizerUnavailable(_)
             | Self::Unavailable(_)
             | Self::Busy(_)
-            | Self::Throttled(_) => {
+            | Self::Throttled(_)
+            | Self::MemoryBusy => {
                 headers.insert(RETRY_AFTER, HeaderValue::from_static("1"));
             }
             Self::EntryNotFound {
@@ -585,6 +648,18 @@ impl From<GitError> for HubError {
             GitError::Index(e) => e.into(),
             GitError::Storage(e) => e.into(),
             _ => Self::Internal(Box::new(e)),
+        }
+    }
+}
+
+impl From<CasError> for HubError {
+    /// The memory budget's refusals; anything else the CAS answers is a
+    /// fault here.
+    fn from(e: CasError) -> Self {
+        match e {
+            CasError::MemoryBusy => Self::MemoryBusy,
+            CasError::AnswerTooLarge { needed, limit } => Self::AnswerTooLarge { needed, limit },
+            e => Self::Internal(Box::new(e)),
         }
     }
 }
