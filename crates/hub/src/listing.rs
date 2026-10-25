@@ -66,18 +66,7 @@ async fn list(
     for (key, value) in url::form_urlencoded::parse(query.as_deref().unwrap_or("").as_bytes()) {
         match &*key {
             "author" => author = Some(value.into_owned()),
-            "limit" => {
-                limit = value
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|&n| n > 0)
-                    .ok_or_else(|| HubError::BadRequest {
-                        message: format!("limit {value:?} is not a positive whole number"),
-                        hint: "Pass `limit` as a whole number from 1; pages hold at most \
-                               hub.page_size entries.",
-                    })?
-                    .min(state.cfg.page_size);
-            }
+            "limit" => limit = page_limit(&value, &state.cfg)?,
             "cursor" => cursor = Some(decode_cursor(&value)?),
             key if OPTIONAL_FIELDS.contains(&key) => {}
             _ => {
@@ -95,15 +84,25 @@ async fn list(
     let json: Vec<Value> = items.iter().map(|repo| repo_json(view, repo)).collect();
     let mut response = Json(json).into_response();
     if let Some(next) = next {
-        let link = next_link(&state.cfg, view, query.as_deref(), &next);
-        // Every part is percent-encoded, so this can't fail; if it did, a
-        // listing without its next page would silently look complete.
-        let value = HeaderValue::from_str(&link).map_err(|e| {
-            HubError::Internal(format!("the Link header is not a header value: {e}").into())
-        })?;
-        response.headers_mut().insert(LINK, value);
+        let path = format!("/api/{}s", view.noun());
+        let link = next_link(&state.cfg, &path, query.as_deref(), &next)?;
+        response.headers_mut().insert(LINK, link);
     }
     Ok(response)
+}
+
+/// A `limit` parameter: a positive whole number, at most `hub.page_size`.
+pub(crate) fn page_limit(value: &str, cfg: &HubConfig) -> Result<usize, HubError> {
+    Ok(value
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0)
+        .ok_or_else(|| HubError::BadRequest {
+            message: format!("limit {value:?} is not a positive whole number"),
+            hint: "Pass `limit` as a whole number from 1; pages hold at most hub.page_size \
+                   entries.",
+        })?
+        .min(cfg.page_size))
 }
 
 /// Up to `limit` repositories matching `filter` that `who` may read,
@@ -139,10 +138,24 @@ async fn readable_page(
     }
 }
 
-/// The listing's next page: this request's URL with `cursor` replaced.
-fn next_link(cfg: &HubConfig, view: View, query: Option<&str>, next: &str) -> String {
+/// The `Link` header of a listing's next page (ruling M2-R8): the
+/// request's URL at `path` (as received, percent-encoded) with `cursor`
+/// set to `next`, base64url-encoded, and the request's other parameters
+/// kept.
+///
+/// # Errors
+///
+/// [`HubError::Internal`] if the link isn't a header value, which a
+/// percent-encoded URL always is: a listing without its next page would
+/// silently look complete.
+pub(crate) fn next_link(
+    cfg: &HubConfig,
+    path: &str,
+    query: Option<&str>,
+    next: &str,
+) -> Result<HeaderValue, HubError> {
     let mut url = cfg.public_url.clone();
-    url.set_path(&format!("/api/{}s", view.noun()));
+    url.set_path(path);
     let kept: Vec<(String, String)> = url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
         .filter(|(key, _)| key != "cursor")
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
@@ -151,12 +164,14 @@ fn next_link(cfg: &HubConfig, view: View, query: Option<&str>, next: &str) -> St
         .clear()
         .extend_pairs(kept)
         .append_pair("cursor", &URL_SAFE_NO_PAD.encode(next));
-    format!("<{url}>; rel=\"next\"")
+    HeaderValue::from_str(&format!("<{url}>; rel=\"next\"")).map_err(|e| {
+        HubError::Internal(format!("the Link header is not a header value: {e}").into())
+    })
 }
 
-/// The index cursor a `cursor` parameter carries, base64url-encoded
-/// (ruling M2-R8).
-fn decode_cursor(text: &str) -> Result<String, HubError> {
+/// The key a `cursor` parameter carries, base64url-encoded (ruling
+/// M2-R8).
+pub(crate) fn decode_cursor(text: &str) -> Result<String, HubError> {
     URL_SAFE_NO_PAD
         .decode(text)
         .ok()

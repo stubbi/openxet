@@ -16,7 +16,7 @@ use crate::authz::{self, RepoAccess};
 use crate::names::full_name;
 use crate::repos::meta_of;
 use crate::routes::{Routes, on};
-use crate::{HubError, HubState};
+use crate::{HubError, HubState, param};
 
 /// The longest label, in bytes (ADR 0010 item 3).
 pub const MAX_LABEL_BYTES: usize = 64;
@@ -83,7 +83,7 @@ async fn add(
     State(state): State<HubState>,
     params: RawPathParams,
 ) -> Result<Json<Value>, HubError> {
-    change(&state, access, &label_of(&params), Change::Add).await
+    change(&state, access, &param(&params, "label"), Change::Add).await
 }
 
 /// `DELETE …/labels/{label}`: removes the label; removing one the
@@ -93,14 +93,7 @@ async fn remove(
     State(state): State<HubState>,
     params: RawPathParams,
 ) -> Result<Json<Value>, HubError> {
-    change(&state, access, &label_of(&params), Change::Remove).await
-}
-
-fn label_of(params: &RawPathParams) -> String {
-    params
-        .iter()
-        .find_map(|(key, value)| (key == "label").then(|| value.to_owned()))
-        .unwrap_or_default()
+    change(&state, access, &param(&params, "label"), Change::Remove).await
 }
 
 #[derive(Clone, Copy)]

@@ -1,16 +1,18 @@
 //! Repositories on the Hub API: create, delete and info (design §6,
 //! ruling M2-R2, ADR 0010).
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::{Duration, UNIX_EPOCH};
 
 use axum::Json;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{Action, UserPrincipal};
+use openxet_git::{HubCommit, Ident, Op};
 use openxet_index::{AuditEntry, IndexError, Repo, RepoId};
 use openxet_storage::{RepoIdHex, RepoMeta};
 use serde::Deserialize;
@@ -18,6 +20,7 @@ use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess, Who};
 use crate::names::{check_name, check_not_reserved, full_name};
+use crate::preupload::DEFAULT_GITATTRIBUTES;
 use crate::routes::{Routes, on};
 use crate::{CONTROL_BODY_LIMIT, HubError, HubState, View, json_body, labels};
 
@@ -28,7 +31,8 @@ use crate::{CONTROL_BODY_LIMIT, HubError, HubState, View, json_body, labels};
 /// create there gets the same `403` whether or not the name exists (ADR
 /// 0010 item 5). Then the name is checked (ruling M2-R2), and the
 /// repository's metadata record is written to the bucket before the index
-/// row and the audit row (design §5.3).
+/// row (design §5.3), then the initial commit (ruling M2-R5) and the audit
+/// row.
 ///
 /// # Errors
 ///
@@ -36,7 +40,7 @@ use crate::{CONTROL_BODY_LIMIT, HubError, HubState, View, json_body, labels};
 /// caller who may not create in `namespace`, [`HubError::InvalidName`] or
 /// [`HubError::InvalidLabel`] for a bad name or label,
 /// [`HubError::NameTaken`] for a name taken ignoring case, and the
-/// storage, index and authorizer failures.
+/// storage, index, Git engine and authorizer failures.
 pub async fn create_repo(
     state: &HubState,
     who: &UserPrincipal,
@@ -106,6 +110,7 @@ pub async fn create_repo(
             other => other.into(),
         });
     }
+    initial_commit(state, id).await?;
     state
         .index
         .audit(&AuditEntry {
@@ -122,6 +127,35 @@ pub async fn create_repo(
         .await?;
     tracing::info!(repo = %id, "repository created");
     Ok(repo)
+}
+
+/// Writes a new repository's `initial commit` on `main`, holding
+/// huggingface.co's default `.gitattributes`, by `openxet
+/// <noreply@openxet.com>` (ruling M2-R5), so `commits`, `refs` and `git
+/// clone` behave as on huggingface.co. Should it fail, the repository
+/// exists without refs, and the first commit to it creates `main` (its
+/// preupload reads the same default `.gitattributes`), so a retried upload
+/// with `exist_ok=True` still lands.
+async fn initial_commit(state: &HubState, id: RepoId) -> Result<(), HubError> {
+    let ident = Ident::openxet();
+    let openxet = UserPrincipal {
+        subject: ident.name.clone(),
+        name: ident.name,
+        email: Some(ident.email),
+        claims: BTreeMap::new(),
+    };
+    let commit = HubCommit {
+        branch: "main",
+        parent: None,
+        summary: "initial commit",
+        description: "",
+        ops: vec![Op::File {
+            path: ".gitattributes".to_owned(),
+            content: Bytes::from_static(DEFAULT_GITATTRIBUTES),
+        }],
+    };
+    state.engine.hub_commit(id, &openxet, commit).await?;
+    Ok(())
 }
 
 /// The repository's bucket metadata record, tombstoned at `deleted_at`.
@@ -201,16 +235,12 @@ async fn taken(
     HubError::NameTaken { message, url }
 }
 
-/// The Hub's repository routes: create, delete, and per type the
-/// repository info.
+/// The Hub's repository routes: create and delete. The info route is
+/// [`crate::info`]'s.
 pub(crate) fn routes() -> Routes {
-    let mut routes = Routes::new()
+    Routes::new()
         .route("/api/repos/create", on(Method::POST, create).private())
-        .route("/api/repos/delete", on(Method::DELETE, delete).private());
-    for info in typed_paths!("/{ns}/{name}") {
-        routes = routes.route(info, on(Method::GET, info_route).private());
-    }
-    routes
+        .route("/api/repos/delete", on(Method::DELETE, delete).private())
 }
 
 /// `POST /api/repos/create`'s body (`hf_api.py` line 4638).
@@ -335,16 +365,12 @@ fn typed_view(kind: Option<&str>) -> Result<View, HubError> {
     })
 }
 
-/// `GET /api/{type}s/{ns}/{name}`: the repository's info (S3 fixture
-/// `22`), of which `huggingface_hub` requires `id` (`hf_api.py` line 894).
-async fn info_route(access: RepoAccess) -> Json<Value> {
-    Json(repo_json(access.view, &access.repo))
-}
-
 /// A repository as the Hub's info and listing routes answer it, for
 /// `view`: the fields huggingface.co sends that openxet knows, plus
-/// openxet's `labels`. Datasets, spaces and kernels leave out the
-/// model-only `modelId`, `config` and `spaces` (S3, fixtures `22`, `42`).
+/// openxet's `labels`, which are also its `tags`. Datasets, spaces and
+/// kernels leave out the model-only `modelId`, `config` and `spaces` (S3,
+/// fixtures `22`, `42`); `huggingface_hub` requires only `id` (`hf_api.py`
+/// line 894).
 pub(crate) fn repo_json(view: View, repo: &Repo) -> Value {
     let id = full_name(repo);
     let mut json = json!({
@@ -352,7 +378,7 @@ pub(crate) fn repo_json(view: View, repo: &Repo) -> Value {
         "id": id,
         "author": repo.namespace,
         "private": repo.private,
-        "tags": [],
+        "tags": repo.labels,
         "downloads": 0,
         "likes": 0,
         "gated": false,
