@@ -19,6 +19,7 @@ use openxet_auth::{
     StaticToken, UrlSigner, UserProfile,
 };
 use openxet_cas::{BodyDeadline, CasConfig, MemoryBudget};
+use openxet_hub::HubConfig;
 use openxet_index::Visibility;
 use serde::Serialize;
 use url::Url;
@@ -150,6 +151,15 @@ pub struct Config {
     /// rule.
     pub rules: Vec<Rule>,
     pub max_token_lifetime: Duration,
+    /// `hub.public_url`; `None` means the server's public URL.
+    pub hub_public_url: Option<Url>,
+    /// `hub.cas_url`; `None` means the server's public URL, where the CAS
+    /// is served.
+    pub hub_cas_url: Option<Url>,
+    pub lfs_threshold: u64,
+    pub max_commit_bytes: u64,
+    pub token_ttl: Duration,
+    pub page_size: usize,
 }
 
 impl Config {
@@ -163,6 +173,24 @@ impl Config {
             body_deadline: self.body_deadline,
             send_deadline: openxet_cas::SendDeadline::DEFAULT,
             memory_budget: self.memory_budget,
+        }
+    }
+
+    /// The Hub configuration for a server reached at `public_url`.
+    pub fn hub(&self, public_url: &Url) -> HubConfig {
+        HubConfig {
+            public_url: self
+                .hub_public_url
+                .clone()
+                .unwrap_or_else(|| public_url.clone()),
+            cas_url: self
+                .hub_cas_url
+                .clone()
+                .unwrap_or_else(|| public_url.clone()),
+            lfs_threshold: self.lfs_threshold,
+            max_commit_bytes: self.max_commit_bytes,
+            token_ttl: self.token_ttl,
+            page_size: self.page_size,
         }
     }
 }
@@ -224,6 +252,17 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("rules", Kind::Rules),
             ("jwt_public_keys", Kind::StrList),
             ("max_token_lifetime", Kind::Str),
+        ],
+    ),
+    (
+        "hub",
+        &[
+            ("public_url", Kind::Str),
+            ("cas_url", Kind::Str),
+            ("lfs_threshold", Kind::Str),
+            ("max_commit_bytes", Kind::Str),
+            ("token_ttl", Kind::Str),
+            ("page_size", Kind::Int),
         ],
     ),
 ];
@@ -329,9 +368,9 @@ impl Raw {
         let hint = match key.split_once('.') {
             Some((section, _)) => match keys_of(section) {
                 Some(keys) => format!("The keys of [{section}] are: {keys}. {DOCS}"),
-                None => format!("The sections are [server], [cas] and [auth]. {DOCS}"),
+                None => format!("The sections are [server], [cas], [auth] and [hub]. {DOCS}"),
             },
-            None => format!("Put keys in a [server], [cas] or [auth] section. {DOCS}"),
+            None => format!("Put keys in a [server], [cas], [auth] or [hub] section. {DOCS}"),
         };
         self.problem(key, None, source, "is not a configuration key", hint);
     }
@@ -813,6 +852,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         );
         (None, Some(Vec::new()))
     };
+    let hub = hub(c, max_token_lifetime)?;
 
     Some(Config {
         bind: bind?,
@@ -834,7 +874,136 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         auth: if c.raw.auth { Some(auth?) } else { None },
         rules: rules?,
         max_token_lifetime: max_token_lifetime?,
+        hub_public_url: hub.public_url,
+        hub_cas_url: hub.cas_url,
+        lfs_threshold: hub.lfs_threshold,
+        max_commit_bytes: hub.max_commit_bytes,
+        token_ttl: hub.token_ttl,
+        page_size: hub.page_size,
     })
+}
+
+/// The `[hub]` section, checked.
+struct Hub {
+    public_url: Option<Url>,
+    cas_url: Option<Url>,
+    lfs_threshold: u64,
+    max_commit_bytes: u64,
+    token_ttl: Duration,
+    page_size: usize,
+}
+
+/// `[hub]`, every key checked; `None` if any has a problem. The token
+/// lifetime is checked against `max_token_lifetime`, since the server
+/// refuses CAS tokens that live longer, its own included.
+fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub> {
+    let public_url = optional_origin_url(
+        c,
+        "hub.public_url",
+        "Give the URL huggingface_hub reaches the Hub API at, its HF_ENDPOINT, such as \
+         https://hub.example.com. Every repository URL the Hub answers is built from it, and \
+         clients parse those against their endpoint, so it must be the one they use; the Hub \
+         is served at the origin root.",
+    );
+    let cas_url = optional_origin_url(
+        c,
+        "hub.cas_url",
+        "Give the URL clients reach the CAS at, which Hub tokens name, such as \
+         https://cas.example.com. Leave it out when the CAS is served beside the Hub.",
+    );
+    let lfs_threshold = c.size(
+        "hub.lfs_threshold",
+        HubConfig::DEFAULT_LFS_THRESHOLD,
+        (HubConfig::MIN_LFS_THRESHOLD, HubConfig::MAX_LFS_THRESHOLD),
+        "Files at least this large are uploaded through Xet; smaller ones travel inside the \
+         commit as Git blobs. 1MiB is the default.",
+    );
+    let max_commit_bytes = c.size(
+        "hub.max_commit_bytes",
+        HubConfig::DEFAULT_MAX_COMMIT_BYTES,
+        (1 << 20, 1 << 30),
+        "The largest commit body huggingface_hub may send. 64MiB is the default.",
+    );
+    if let (Some(threshold), Some(max)) = (lfs_threshold, max_commit_bytes)
+        && max < 2 * threshold
+        && let Some((_, source)) = c.raw.values.get("hub.max_commit_bytes").cloned()
+    {
+        c.raw.problem(
+            "hub.max_commit_bytes",
+            Some(size::format(max)),
+            &source,
+            format!(
+                "must be at least twice hub.lfs_threshold ({})",
+                size::format(threshold)
+            ),
+            "A regular file of up to hub.lfs_threshold travels base64-encoded inside the commit \
+             body, so the body must have room for one; raise it or lower hub.lfs_threshold.",
+        );
+        return None;
+    }
+    let token_ttl = c.duration(
+        "hub.token_ttl",
+        HubConfig::DEFAULT_TOKEN_TTL,
+        (Duration::from_mins(1), Duration::from_hours(24)),
+        "How long the CAS tokens the Hub hands clients live; clients refresh them before they \
+         expire. 15m is the default.",
+    );
+    if let (Some(ttl), Some(max)) = (token_ttl, max_token_lifetime)
+        && ttl > max
+    {
+        let source = c
+            .raw
+            .values
+            .get("hub.token_ttl")
+            .map_or(Source::Default, |(_, source)| source.clone());
+        c.raw.problem(
+            "hub.token_ttl",
+            Some(duration::format(ttl)),
+            &source,
+            format!(
+                "must be at most auth.max_token_lifetime ({})",
+                duration::format(max)
+            ),
+            "The server refuses CAS tokens that live longer than auth.max_token_lifetime, its \
+             own included; lower hub.token_ttl or raise auth.max_token_lifetime.",
+        );
+        return None;
+    }
+    let max_page = u32::try_from(HubConfig::MAX_PAGE_SIZE).unwrap_or(u32::MAX);
+    let page_size = int(
+        c,
+        "hub.page_size",
+        max_page,
+        1..=max_page,
+        "must be a whole number from 1 to 1000",
+        "Listings answer at most this many entries per page and link the next (ruling M2-R8). \
+         1000 is the default.",
+    );
+    Some(Hub {
+        public_url: public_url?,
+        cas_url: cas_url?,
+        lfs_threshold: lfs_threshold?,
+        max_commit_bytes: max_commit_bytes?,
+        token_ttl: token_ttl?,
+        page_size: usize::try_from(page_size?).ok()?,
+    })
+}
+
+/// An optional origin URL at `key`, checked as `server.public_url` is:
+/// `Some(None)` when unset, so the server's public URL is used.
+#[allow(
+    clippy::option_option,
+    reason = "`None` is a problem, `Some(None)` an unset URL that defaults to the server's"
+)]
+fn optional_origin_url(c: &mut Checker<'_>, key: &str, hint: &str) -> Option<Option<Url>> {
+    let Some((text, source)) = c.raw.string(key) else {
+        if c.raw.values.contains_key(key) {
+            return None;
+        }
+        c.set(key, "server.public_url", &Source::Default);
+        return Some(None);
+    };
+    origin_url(c, key, &text, &source, hint).map(Some)
 }
 
 fn int(
@@ -891,7 +1060,20 @@ fn public_url(c: &mut Checker<'_>, bind: Option<SocketAddr>) -> Option<Option<Ur
         c.set(KEY, "http:// and the bound address", &Source::Default);
         return Some(None);
     };
-    let (url, shown) = match Url::parse(&text) {
+    origin_url(c, KEY, &text, &source, HINT).map(Some)
+}
+
+/// `text`, the value of `key` from `source`, as an absolute `http` or
+/// `https` URL of an origin root: no path, query, fragment or user info.
+/// A password is never shown in a problem.
+fn origin_url(
+    c: &mut Checker<'_>,
+    key: &str,
+    text: &str,
+    source: &Source,
+    hint: &str,
+) -> Option<Url> {
+    let (url, shown) = match Url::parse(text) {
         Ok(url) => {
             let mut shown = url.clone();
             if shown.password().is_some() {
@@ -899,7 +1081,7 @@ fn public_url(c: &mut Checker<'_>, bind: Option<SocketAddr>) -> Option<Option<Ur
             }
             (Some(url), shown.to_string())
         }
-        Err(_) => (None, text.clone()),
+        Err(_) => (None, text.to_owned()),
     };
     let mut wrong = Vec::new();
     match &url {
@@ -926,19 +1108,20 @@ fn public_url(c: &mut Checker<'_>, bind: Option<SocketAddr>) -> Option<Option<Ur
         }
     }
     if wrong.is_empty() {
-        c.set(KEY, url.as_ref().map_or(text, Url::to_string), &source);
+        let url = url?;
+        c.set(key, url.to_string(), source);
         Some(url)
     } else {
         c.raw.problem(
-            KEY,
+            key,
             Some(shown),
-            &source,
+            source,
             format!(
                 "must be an absolute http or https URL of the origin root, with no path, query, \
                  fragment or user info; {}",
                 wrong.join(", ")
             ),
-            HINT,
+            hint,
         );
         None
     }
@@ -2153,6 +2336,83 @@ mod tests {
         let config = loaded.config.unwrap();
         assert_eq!(config.visibility, Visibility::PerTenant);
         assert!(config.auth.is_some());
+    }
+
+    #[test]
+    fn hub_keys_default_to_the_server_and_ruling_m2_r4() {
+        let config = load_toml("", &[]).config.unwrap();
+        let server = Url::parse("http://127.0.0.1:8080").unwrap();
+        let hub = config.hub(&server);
+        assert_eq!(hub.public_url, server);
+        assert_eq!(hub.cas_url, server);
+        assert_eq!(hub.lfs_threshold, 1 << 20);
+        assert_eq!(hub.max_commit_bytes, 64 << 20);
+        assert_eq!(hub.token_ttl, Duration::from_mins(15));
+        assert_eq!(hub.page_size, 1000);
+
+        let config = load_toml(
+            "[hub]\npublic_url = \"https://hub.example.com\"\n\
+             cas_url = \"https://cas.example.com\"\nlfs_threshold = \"64KiB\"\n\
+             max_commit_bytes = \"1MiB\"\ntoken_ttl = \"30m\"\npage_size = 50\n",
+            &[("OPENXET_HUB__PAGE_SIZE", "20")],
+        )
+        .config
+        .unwrap();
+        let hub = config.hub(&server);
+        assert_eq!(hub.public_url.as_str(), "https://hub.example.com/");
+        assert_eq!(hub.cas_url.as_str(), "https://cas.example.com/");
+        assert_eq!(hub.lfs_threshold, 64 << 10);
+        assert_eq!(hub.max_commit_bytes, 1 << 20);
+        assert_eq!(hub.token_ttl, Duration::from_mins(30));
+        assert_eq!(hub.page_size, 20);
+    }
+
+    #[test]
+    fn hub_keys_are_checked_with_hints() {
+        let loaded = load_toml(
+            "[hub]\npublic_url = \"https://hub.example.com/prefix\"\ncas_url = \"ftp://x\"\n\
+             lfs_threshold = \"512B\"\npage_size = 1001\ntoken_ttl = \"0s\"\nnope = 1\n",
+            &[],
+        );
+        assert_eq!(
+            problem_keys(&loaded),
+            [
+                "hub.nope",
+                "hub.public_url",
+                "hub.cas_url",
+                "hub.lfs_threshold",
+                "hub.token_ttl",
+                "hub.page_size",
+            ]
+        );
+        let loaded = load_toml("[hub]\nlfs_threshold = \"11MiB\"\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["hub.lfs_threshold"]);
+        assert!(loaded.problems[0].rule.contains("from 1KiB to 10MiB"));
+
+        // A regular file must fit in a commit body, base64-encoded.
+        let loaded = load_toml(
+            "[hub]\nlfs_threshold = \"1MiB\"\nmax_commit_bytes = \"1MiB\"\n",
+            &[],
+        );
+        assert_eq!(problem_keys(&loaded), ["hub.max_commit_bytes"]);
+        assert!(loaded.problems[0].rule.contains("twice hub.lfs_threshold"));
+
+        // The server refuses CAS tokens longer-lived than the cap, its own
+        // included.
+        let loaded = load_toml(
+            &format!(
+                "[auth]\nmax_token_lifetime = \"10m\"\n[[auth.static_tokens]]\n\
+                 sha256 = \"{}\"\nsubject = \"a\"\n",
+                "0".repeat(64)
+            ),
+            &[],
+        );
+        assert_eq!(problem_keys(&loaded), ["hub.token_ttl"]);
+        assert!(
+            loaded.problems[0]
+                .rule
+                .contains("auth.max_token_lifetime (10m)")
+        );
     }
 
     #[test]

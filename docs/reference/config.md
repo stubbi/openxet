@@ -45,7 +45,7 @@ the file or the environment is a problem, not ignored.
 
 Durations are a whole number and one unit: `s`, `m`, `h` or `d`, such as
 `30s`, `60m`, `24h` or `30d`. Sizes are a whole number and one binary
-unit: `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
+unit: `KiB`, `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 
 ## Keys
 
@@ -168,6 +168,25 @@ Every request needs a credential: there are no anonymous reads unless a
 exceptions are the probes, `GET /healthz` and `GET /readyz`, which answer
 a fixed body that says nothing about stored data.
 
+### `[hub]`
+
+The Hub API, which `huggingface_hub` and the `hf` CLI call, is served at
+the root of the same origin as the CAS.
+
+| Key | Default | Bounds | Meaning |
+| --- | ------- | ------ | ------- |
+| `public_url` | `server.public_url` | absolute `http` or `https` URL of an origin root | The URL clients reach the Hub API at: their `HF_ENDPOINT`. Every repository URL the Hub answers is built from it, and `huggingface_hub` parses those against its endpoint, so it must be the one clients use. |
+| `cas_url` | `server.public_url` | absolute `http` or `https` URL of an origin root | The CAS URL the Hub's tokens name. Set it only when clients reach the CAS at another URL than the server's. |
+| `lfs_threshold` | `1MiB` | `1KiB` to `10MiB` | Files at least this large are uploaded through Xet; smaller ones travel inside the commit as Git blobs. |
+| `max_commit_bytes` | `64MiB` | `1MiB` to `1GiB`, and at least twice `lfs_threshold` | The largest commit body. A regular file travels base64-encoded inside it. |
+| `token_ttl` | `15m` | `1m` to `24h`, and at most `auth.max_token_lifetime` | How long the CAS tokens the Hub hands clients live. Clients refresh them before they expire. |
+| `page_size` | `1000` | `1` to `1000` | The most entries one listing page holds. A listing with more answers `Link: <…>; rel="next"`, which `huggingface_hub` follows. |
+
+A repository the caller may not read answers exactly as one that doesn't
+exist: `404` with `X-Error-Code: RepoNotFound`. A request without a
+credential gets `401` instead, unless a [rule](#rules) for `anonymous`
+grants the read.
+
 ## Dev mode
 
 Without a configuration file, or with one that has no `[auth]` section,
@@ -181,7 +200,8 @@ Without a configuration file, or with one that has no `[auth]` section,
 
 It reuses all of them on every later start, so data, the token and transfer
 URLs signed before a restart keep working. It prints the endpoint, the data
-directory, the token and ready-to-paste upload commands on stdout. With
+directory, the token, ready-to-paste upload commands and the `HF_ENDPOINT`
+and `hf auth login --token …` lines for the `hf` CLI on stdout. With
 `--json` it prints one line instead:
 
 ```json
@@ -523,4 +543,7 @@ claims = { groups = ["ml-team"] }
 claims = { groups = ["ml-team"] }
 repos = ["acme/*"]
 actions = ["read", "write", "create"]
+
+[hub]
+lfs_threshold = "4MiB"
 ```
