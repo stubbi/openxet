@@ -826,6 +826,14 @@ results below are **observed**.
      - Pipes, not a socketpair: safe Rust has no way to take ownership
        of an inherited descriptor number, and `/dev/fd/N` can be opened
        for a pipe on Linux and macOS, but not for a socket on Linux.
+     - **Platform limitation (macOS).** Rust's standard library creates
+       pipes on macOS with `pipe()` and sets `FD_CLOEXEC` in a second
+       step, so a git child another request spawns in between can inherit
+       a new channel's descriptors; on Linux `pipe2(O_CLOEXEC)` is atomic.
+       The single-use token, bound to repository, principal and request,
+       bounds what such a child could do with them. Production targets
+       Linux. Tracked in
+       [issue #96](https://github.com/stubbi/openxet/issues/96).
    - **Token.** Each request gets a single-use token, delivered as
      `OPENXET_HOOK_TOKEN`. It is bound to repo ID, principal and request
      ID, and expires when the request ends.

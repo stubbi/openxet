@@ -68,6 +68,63 @@ async fn push_round_trip() {
     drop(server);
 }
 
+/// The Git cache is as private as the data directory it defaults into
+/// (design §5.9): after a push, with a snapshot open on the hydrated packs,
+/// every directory is `0700`, the root included even when an operator
+/// created it wider, and every file is its owner's alone, `0600`,
+/// or `0400` for a cached pack file, which is read-only. The `proc-receive`
+/// hook is a link to the openxet binary and holds no data.
+#[tokio::test(flavor = "multi_thread")]
+async fn git_cache_is_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 5).await;
+    let cache = config(&world, "node");
+    let root = cache.cache_dir.clone();
+    // An operator's pre-created root with a wider mode is narrowed.
+    ok(std::fs::create_dir_all(&root));
+    ok(std::fs::set_permissions(
+        &root,
+        std::fs::Permissions::from_mode(0o755),
+    ));
+    let node = engine(&world, cache).await;
+    let server = Server::start(vec![node.clone()]).await;
+    let client = clone(&fixture_repo(&fx), &server.url(0, repo), &[]);
+    let w = work(&client);
+    commit(&w, "one", &[("a.txt", b"a\n")]);
+    must(&w, &["push", "-q", "origin", "main"]);
+    let snapshot = ok(node.snapshot(repo).await);
+
+    let mut dirs = vec![root];
+    let mut files = 0;
+    while let Some(dir) = dirs.pop() {
+        let mode = |p: &std::path::Path| ok(std::fs::metadata(p)).permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700, "{}", dir.display());
+        for entry in ok(std::fs::read_dir(&dir)) {
+            let path = ok(entry).path();
+            let kind = ok(std::fs::symlink_metadata(&path)).file_type();
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                dirs.push(path);
+            } else {
+                assert!(
+                    matches!(mode(&path), 0o600 | 0o400),
+                    "{} is {:o}",
+                    path.display(),
+                    mode(&path)
+                );
+                files += 1;
+            }
+        }
+    }
+    assert!(files >= 6, "the lock, the snapshot's files and the packs");
+    drop(snapshot);
+    drop(server);
+}
+
 /// `ref_log_in_cas_transaction`, the push half (design §5.9 req 8): a push
 /// writes one ref-log row per command, with the pusher and the request, in
 /// its commit transaction; a refused push and a push stopped before its
@@ -516,6 +573,45 @@ async fn plain_large_blob_refused_above_limit() {
     assert_eq!(db_ref(&world, repo, "refs/heads/main").await, main);
     let rows = pack_rows(&world, repo).await;
     assert_eq!(rows.len(), 1, "nothing published: {rows:?}");
+}
+
+/// `git.max_push_bytes` bounds the pack a push sends: past it git refuses
+/// the push with its own message, which the client shows, and nothing is
+/// published or moved.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_over_max_push_bytes_refused() {
+    let world = World::new().await;
+    let (repo, fx) = seeded(&world, 10).await;
+    let mut cfg = config(&world, "node");
+    cfg.max_push_bytes = 1024 * 1024;
+    let node = engine(&world, cfg).await;
+    let server = Server::start(vec![node]).await;
+    let client = clone(&fixture_repo(&fx), &server.url(0, repo), &[]);
+    let w = work(&client);
+    let main = db_ref(&world, repo, "refs/heads/main").await;
+    let mut noise = Vec::with_capacity(3 << 20);
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    while noise.len() < 3 << 20 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        noise.extend_from_slice(&x.to_le_bytes());
+    }
+    commit(&w, "big", &[("big.bin", &noise)]);
+    let run = client_git(&w, &["push", "origin", "main"]);
+    assert!(!run.success);
+    // git's refusal reaches the client only if the client is still reading
+    // when receive-pack stops; on a fast server the connection closes while
+    // the client is still sending (seen on macOS runners as curl 55), and
+    // the client reports the hang-up instead. Either way nothing moves.
+    assert!(
+        run.stderr.contains("pack exceeds maximum allowed size")
+            || run.stderr.contains("the remote end hung up"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(db_ref(&world, repo, "refs/heads/main").await, main);
+    assert_eq!(pack_rows(&world, repo).await.len(), 1, "nothing published");
 }
 
 /// Review Focus 3: however low `git.max_plain_blob_bytes` is set, it never

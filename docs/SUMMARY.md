@@ -49,4 +49,5 @@
   - [S10: CAS wire contract](research/S10-cas-wire-contract.md)
   - [S11: Global dedup answer](research/S11-global-dedup-response.md)
   - [S12: S3 API and dedup economics](research/S12-s3-api-and-dedup-economics.md)
+  - [S14: Landing page messaging](research/S14-landing-messaging.md)
 - [Competitive matrix](competitive-matrix.md)

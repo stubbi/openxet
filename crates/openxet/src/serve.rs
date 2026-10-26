@@ -1,10 +1,12 @@
-//! `openxet serve`: the CAS and the Hub API over HTTP/1.1, configured by
-//! [`crate::config`].
+//! `openxet serve`: the CAS, the Hub API and Git smart HTTP over HTTP/1.1,
+//! configured by [`crate::config`].
 //!
 //! Startup binds first, so a taken port fails at once, then serves
-//! `/healthz` (and `503 not_ready` elsewhere) while the index and the
-//! bucket open, then serves the CAS and the Hub, composed into one router
-//! (ruling M2-R1), and announces the endpoint on stdout.
+//! `/healthz` (and `503 not_ready` elsewhere) while the index, the bucket
+//! and the Git engine open, then serves the CAS, the Hub and Git, composed
+//! into one router (ruling M2-R1), starts the Git engine's background
+//! maintenance (the bucket ref log and geometric repacks, ADR 0004 item 5),
+//! and announces the endpoints on stdout.
 //! `SIGTERM` or `SIGINT` stops accepting, lets in-flight requests finish
 //! within `server.shutdown_grace`, and exits 0.
 
@@ -163,10 +165,19 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
     let (cas, hub, dev_token) = open(&config, &public_url, authorizer).await?;
     let body_deadline = cas.cfg.body_deadline;
     let hub_endpoint = hub.cfg.public_url.as_str().trim_end_matches('/').to_owned();
+    let engine = Arc::clone(&hub.engine);
     let _ = app.set(compose(
         vec![openxet_cas::mounted(cas), openxet_hub::mounted(hub)],
         body_deadline,
     ));
+    let maintenance = tokio::spawn(openxet_git::run_maintenance(engine, lease_holder()));
+    // Stopped at the shutdown signal, so a pass never holds the exit past
+    // `server.shutdown_grace`; aborting it is safe (`run_maintenance`).
+    let mut stopping = stop.clone();
+    tokio::spawn(async move {
+        let _ = stopping.wait_for(|stopped| *stopped).await;
+        maintenance.abort();
+    });
     let endpoint = public_url.as_str().trim_end_matches('/').to_owned();
     tracing::info!(
         %endpoint,
@@ -193,6 +204,21 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
             "This is a bug; please report it with the log.",
         )
     })
+}
+
+/// This process's name as a repack leaseholder (ADR 0004 item 5): unique
+/// per process, so two nodes, or a restarted one, never take each other's
+/// lease for their own.
+fn lease_holder() -> String {
+    let mut nonce = [0u8; 8];
+    // Without randomness the process id still tells this node's processes
+    // apart; nodes are told apart by the lease's epoch fence regardless.
+    let _ = getrandom::fill(&mut nonce);
+    format!(
+        "serve-{}-{:016x}",
+        std::process::id(),
+        u64::from_le_bytes(nonce)
+    )
 }
 
 /// A channel that turns `true` on the first `SIGTERM` or `SIGINT`. A
@@ -594,16 +620,16 @@ impl HumanDisplay for Ready<'_> {
     fn human(&self) -> String {
         let Some(token) = self.token else {
             return format!(
-                "openxet {} is serving the Xet CAS at {} and the Hub API at {} (data dir {}).\n\
-                 Stop with Ctrl-C.",
-                self.version, self.endpoint, self.hub_endpoint, self.data_dir
+                "openxet {} is serving the Xet CAS at {}, and the Hub API and Git at {} (data dir \
+                 {}).\nClone with: git clone {}/<namespace>/<name>\nStop with Ctrl-C.",
+                self.version, self.endpoint, self.hub_endpoint, self.data_dir, self.hub_endpoint
             );
         };
         let endpoint = self.endpoint;
         let hub = self.hub_endpoint;
         let data_dir = &self.data_dir;
         format!(
-            "openxet {version} is serving the Xet CAS and the Hub API in dev mode.\n\
+            "openxet {version} is serving the Xet CAS, the Hub API and Git in dev mode.\n\
              \n  endpoint  {endpoint}\
              \n  data dir  {data_dir}\
              \n  token     {token}\
@@ -619,6 +645,10 @@ impl HumanDisplay for Ready<'_> {
              \nLog in with the hf CLI (once: pip install huggingface_hub):\
              \n  export HF_ENDPOINT={hub}\
              \n  hf auth login --token {token}\n\
+             \nPush and clone with git; the first push creates the repository (user name: any, \
+             password: the token):\
+             \n  git push {hub}/{DEV_SUBJECT}/my-model HEAD:main\
+             \n  git clone {hub}/{DEV_SUBJECT}/my-model\n\
              \nDev mode accepts only this token. To configure credentials, see \
              docs/reference/config.md.\
              \nStop with Ctrl-C.",

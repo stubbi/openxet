@@ -369,3 +369,18 @@ async fn fetch_round_trip() {
         assert!(seen.iter().all(|p| *p == protocol), "v{protocol}: {seen:?}");
     }
 }
+
+/// The advertisement a push to a repository that doesn't exist yet gets
+/// (ruling M2-R11) is exactly what `advertise` prints for a repository
+/// without refs: the same capabilities and openxet's `agent`.
+#[tokio::test]
+async fn empty_receive_advertisement_matches_an_empty_repository() {
+    let world = World::new().await;
+    let engine = world.engine().await;
+    let repo = world.repo("acme", "empty").await;
+    let live = ok(engine.advertise(repo, 0, Service::ReceivePack).await);
+    assert_eq!(engine.empty_receive_advertisement(), &live[..]);
+    let text = String::from_utf8_lossy(&live);
+    assert!(text.contains("capabilities^{}"), "{text}");
+    assert!(text.contains("agent=openxet/"), "{text}");
+}
