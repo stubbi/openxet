@@ -5,17 +5,17 @@
 use axum::Json;
 use axum::extract::{RawPathParams, RawQuery, State};
 use axum::http::header::LINK;
-use axum::http::{HeaderName, HeaderValue, Method, Uri};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use openxet_git::{CommitInfo, EntryKind, SnapshotRepo};
 use openxet_index::Oid;
 use serde_json::{Value, json};
 
 use crate::authz::RepoAccess;
-use crate::listing::{decode_cursor, next_link, page_limit};
+use crate::listing::{decode_cursor, next_link, page_limit, paged};
 use crate::refs::at_revision;
-use crate::repos::{repo_json, timestamp};
-use crate::routes::{Routes, on};
+use crate::repos::{repo_json, repo_schema, timestamp};
+use crate::routes::{Doc, Routes, on, repo, with_revision};
 use crate::{HubError, HubState, param};
 
 /// `X-Total-Count`: how many commits the history holds (S3 fixture `21`).
@@ -29,11 +29,100 @@ pub(crate) fn routes() -> Routes {
     let commits = typed_paths!("/{ns}/{name}/commits/{rev}");
     for i in 0..info.len() {
         routes = routes
-            .route(info[i], on(Method::GET, info_route).private())
-            .route(at[i], on(Method::GET, info_route).private())
-            .route(commits[i], on(Method::GET, commits_route).private());
+            .route(info[i], on(Method::GET, info_doc(), info_route).private())
+            .route(at[i], on(Method::GET, info_doc(), info_route).private())
+            .route(
+                commits[i],
+                on(Method::GET, commits_doc(), commits_route).private(),
+            );
     }
     routes
+}
+
+fn info_doc() -> Doc {
+    let sibling = json!({
+        "type": "object",
+        "required": ["rfilename"],
+        "properties": {
+            "rfilename": {"type": "string", "description": "The file's path."},
+            "blobId": {"type": "string", "description": "With `blobs`."},
+            "size": {"type": "integer", "description": "With `blobs`."},
+            "lfs": {
+                "type": "object",
+                "description": "With `blobs`, for an LFS file.",
+                "properties": {
+                    "sha256": {"type": "string"},
+                    "size": {"type": "integer"},
+                    "pointerSize": {"type": "integer"}
+                }
+            }
+        }
+    });
+    with_revision(repo("Repository info"))
+        .describe(
+            "The repository, with its files at the revision: `main` without one. A \
+             repository whose initial commit failed answers without `sha`.",
+        )
+        .query(
+            "blobs",
+            false,
+            &json!({"type": "boolean"}),
+            "Each sibling with its `blobId`, `size` and, for an LFS file, `lfs`.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The repository.",
+            Some((
+                "application/json",
+                repo_schema(json!({
+                    "sha": {"type": "string", "description": "The revision's commit."},
+                    "lastModified": {"type": "string", "format": "date-time"},
+                    "siblings": {"type": "array", "items": sibling}
+                })),
+            )),
+        )
+}
+
+fn commits_doc() -> Doc {
+    let doc = with_revision(repo("List commits"))
+        .describe("The history at the revision, newest first.")
+        .answer(
+            StatusCode::OK,
+            "A page of commits.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "title", "message", "authors", "date"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "message": {"type": "string"},
+                            "authors": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "user": {"type": "string"},
+                                        "avatar": {"type": "null"}
+                                    }
+                                }
+                            },
+                            "date": {"type": "string", "format": "date-time"}
+                        }
+                    }
+                }),
+            )),
+        )
+        .answer_header(
+            StatusCode::OK,
+            "X-Total-Count",
+            "On the first page, the number of commits, when it is counted within \
+             `git.reachability`'s budget.",
+        );
+    paged(doc)
 }
 
 /// `GET …/{id}[/revision/{rev}][?blobs=true]`: the repository with `sha`,

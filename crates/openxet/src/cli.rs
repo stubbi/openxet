@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::config_cmd::{self, ConfigCommand};
 use crate::error::{CliError, ExitCode};
 use crate::label_cmd::{self, LabelCommand};
+use crate::openapi_cmd;
 use crate::output::{HumanDisplay, Output};
 use crate::purge_cmd::{self, PurgeArgs};
 use crate::serve::{self, ServeArgs};
@@ -50,6 +51,8 @@ enum Command {
     Download(DownloadArgs),
     /// Unregister a file from every scope, in the server's data directory
     Purge(PurgeArgs),
+    /// Print the server's OpenAPI 3.1 document, as GET /openapi.json serves it
+    Openapi,
     /// Add, remove and list a repository's labels on a running server
     Label {
         #[command(subcommand)]
@@ -118,6 +121,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Command::Download(args) => transfer_cmd::download(args, output),
         Command::Purge(args) => purge_cmd::run(args, output),
         Command::Label { command } => label_cmd::run(command, output),
+        Command::Openapi => openapi_cmd::run(output),
         Command::ProcReceive => return crate::hook_cmd::run(),
     };
     match result {

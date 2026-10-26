@@ -1,6 +1,7 @@
 //! The one place routes are added to the server. Each route is built from
-//! its list of methods and handlers, so what a router serves and what
-//! `endpoints()` lists come from the same calls and can't drift.
+//! its list of methods, handlers and their [`Doc`]s, so what a router
+//! serves, what `endpoints()` lists and what the OpenAPI document describes
+//! come from the same calls and can't drift (ruling M2-R15).
 //!
 //! `clippy.toml` disallows adding routes or fallbacks to an axum `Router`
 //! directly, so a route can't bypass [`Routes`] unnoticed and no second
@@ -12,7 +13,9 @@ use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderValue, Method};
 use axum::response::Response;
 use axum::routing::{MethodFilter, MethodRouter};
+use utoipa::openapi::Paths;
 
+use crate::doc::{self, Doc};
 use crate::error;
 
 /// One method and path template a router serves.
@@ -32,17 +35,17 @@ pub struct Endpoint {
 /// The handlers of one path, at least one, each for one method.
 pub struct Handlers<S> {
     router: MethodRouter<S>,
-    #[cfg(feature = "test-support")]
-    methods: Vec<Method>,
+    docs: Vec<(Method, Doc)>,
     private: bool,
 }
 
-/// Handles `method` with `handler`; add more methods with [`Handlers::on`].
+/// Handles `method` with `handler`, described by `doc`; add more methods
+/// with [`Handlers::on`].
 ///
 /// # Panics
 ///
 /// As [`Handlers::on`].
-pub fn on<S, H, T>(method: Method, handler: H) -> Handlers<S>
+pub fn on<S, H, T>(method: Method, doc: Doc, handler: H) -> Handlers<S>
 where
     S: Clone + Send + Sync + 'static,
     H: Handler<T, S>,
@@ -50,25 +53,24 @@ where
 {
     Handlers {
         router: MethodRouter::new(),
-        #[cfg(feature = "test-support")]
-        methods: Vec::new(),
+        docs: Vec::new(),
         private: false,
     }
-    .on(method, handler)
+    .on(method, doc, handler)
 }
 
 impl<S> Handlers<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    /// Also handles `method` with `handler`.
+    /// Also handles `method` with `handler`, described by `doc`.
     ///
     /// # Panics
     ///
     /// If `method` is not one axum can route (`CONNECT`, or an extension
     /// method). Routes are built at startup, and every test builds them.
     #[must_use]
-    pub fn on<H, T>(mut self, method: Method, handler: H) -> Self
+    pub fn on<H, T>(mut self, method: Method, doc: Doc, handler: H) -> Self
     where
         H: Handler<T, S>,
         T: 'static,
@@ -76,8 +78,7 @@ where
         let filter = MethodFilter::try_from(method.clone())
             .unwrap_or_else(|_| panic!("axum can't route {method}"));
         self.router = self.router.on(filter, handler);
-        #[cfg(feature = "test-support")]
-        self.methods.push(method);
+        self.docs.push((method, doc));
         self
     }
 
@@ -90,9 +91,14 @@ where
     }
 }
 
-/// Routes under construction, with the endpoints they serve.
+/// Routes under construction, with the endpoints they serve and their
+/// description.
 pub struct Routes<S> {
     router: Router<S>,
+    /// Each route's path, method, description and whether it is private,
+    /// turned into the document only by [`Routes::into_paths`], so building
+    /// a router costs no more than its descriptions' values.
+    docs: Vec<(&'static str, Method, Doc, bool)>,
     #[cfg(feature = "test-support")]
     endpoints: Vec<Endpoint>,
 }
@@ -119,6 +125,7 @@ where
     pub fn new() -> Self {
         Self {
             router: Router::new(),
+            docs: Vec::new(),
             #[cfg(feature = "test-support")]
             endpoints: Vec::new(),
         }
@@ -133,13 +140,14 @@ where
     /// builds them.
     #[must_use]
     pub fn route(mut self, path: &'static str, methods: Handlers<S>) -> Self {
-        #[cfg(feature = "test-support")]
-        self.endpoints.extend(
-            methods
-                .methods
-                .into_iter()
-                .map(|method| Endpoint { method, path }),
-        );
+        for (method, doc) in methods.docs {
+            #[cfg(feature = "test-support")]
+            self.endpoints.push(Endpoint {
+                method: method.clone(),
+                path,
+            });
+            self.docs.push((path, method, doc, methods.private));
+        }
         let router = if methods.private {
             private(methods.router)
         } else {
@@ -157,6 +165,7 @@ where
     #[must_use]
     pub fn merge(mut self, other: Self) -> Self {
         self.router = self.router.merge(other.router);
+        self.docs.extend(other.docs);
         #[cfg(feature = "test-support")]
         self.endpoints.extend(other.endpoints);
         self
@@ -169,6 +178,25 @@ where
             #[cfg(feature = "test-support")]
             endpoints: self.endpoints,
         }
+    }
+
+    /// The description of every route, for [`crate::document`].
+    ///
+    /// # Panics
+    ///
+    /// If a description holds a schema the document's model can't carry
+    /// as written. The document's tests render every route.
+    #[must_use]
+    pub fn into_paths(self) -> Paths {
+        let mut paths = Paths::new();
+        for (path, method, doc, private) in self.docs {
+            paths.add_path_operation(
+                doc::openapi_path(path),
+                vec![doc::http_method(&method)],
+                doc.operation(&method, path, private),
+            );
+        }
+        paths
     }
 
     /// Every method and path template these routes serve. Only with the

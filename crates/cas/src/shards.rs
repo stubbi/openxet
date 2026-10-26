@@ -25,8 +25,8 @@ use std::time::Duration;
 use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{FromRequestParts as _, Request, State};
-use axum::http::Method;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use http_body_util::channel::{Channel, Sender};
 use openxet_auth::Principal;
@@ -43,7 +43,7 @@ use tracing::Instrument as _;
 
 use crate::blocking::blocking;
 use crate::budget::Reservation;
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, doc, on, with_body};
 use crate::{AppState, CasError, RequestId, WriteAccess, body};
 
 /// Event lines buffered for a client that reads slowly. The work never
@@ -59,9 +59,127 @@ type Lookup = HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>>;
 /// huggingface.co's CAS accepts (spike S7).
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route("/shards", on(Method::POST, upload_v1))
-        .route("/v1/shards", on(Method::POST, upload_v1))
-        .route("/v2/shards", on(Method::POST, upload_v2))
+        .route(
+            "/shards",
+            on(
+                Method::POST,
+                v1_doc().describe(
+                    "`POST /v1/shards` without the version, which `git-xet` 0.2.1 sends \
+                     and huggingface.co's CAS accepts.",
+                ),
+                upload_v1,
+            ),
+        )
+        .route("/v1/shards", on(Method::POST, v1_doc(), upload_v1))
+        .route("/v2/shards", on(Method::POST, v2_doc(), upload_v2))
+}
+
+/// The shard routes' common description: the body, and the refusals
+/// before it is read.
+fn shard_doc(summary: &'static str) -> Doc {
+    with_body(doc(summary, true))
+        .body(
+            "application/octet-stream",
+            &openxet_http::binary("application/octet-stream"),
+            "An upload shard (https://huggingface.co/docs/xet/shard), at most 64 MiB.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`shard_too_large`: the body is over 64 MiB.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
+        )
+}
+
+fn v1_doc() -> Doc {
+    shard_doc("Register files")
+        .describe(
+            "Parses the shard, verifies it against the stored chunk hashes of every xorb \
+             it references, stores it, then registers its files to the caller's scope. \
+             Uploading again is safe.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Registered.",
+            Some((
+                "application/json",
+                serde_json::json!({
+                    "type": "object",
+                    "required": ["result"],
+                    "properties": {"result": {
+                        "type": "integer",
+                        "enum": [0, 1],
+                        "description": "`1` if the shard or any of its files was new to the \
+                            scope, `0` if all were registered already."
+                    }}
+                }),
+            )),
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`shard_malformed`: the body doesn't parse as an upload shard. \
+             `shard_verification_failed`: it doesn't verify against the stored xorbs. \
+             `unknown_xorb`: a file references a xorb that isn't stored or visible. Final.",
+        )
+}
+
+fn v2_doc() -> Doc {
+    shard_doc("Register files, streaming progress")
+        .describe(
+            "The ingest of `POST /v1/shards`, preferred by `hf_xet` \
+             (https://huggingface.co/docs/xet/api#5-streaming-shard-upload). Once the body \
+             is read, every outcome is a line of the stream; the last event repeats every \
+             `cas.heartbeat_interval` while work runs, and exactly one `result` or `error` \
+             ends it. A client that disconnects doesn't stop the work.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Newline-delimited JSON events, `Cache-Control: no-cache`.",
+            Some((
+                "application/x-ndjson",
+                serde_json::json!({
+                    "description": "One event per line.",
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "required": ["type", "verified", "total"],
+                            "properties": {
+                                "type": {"type": "string", "enum": ["validating"]},
+                                "verified": {"type": "integer", "minimum": 0},
+                                "total": {"type": "integer", "minimum": 0}
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "required": ["type", "stage"],
+                            "properties": {
+                                "type": {"type": "string", "enum": ["committing"]},
+                                "stage": {"type": "string", "enum": ["uploading", "syncing"]}
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "required": ["type", "result"],
+                            "properties": {
+                                "type": {"type": "string", "enum": ["result"]},
+                                "result": {"type": "integer", "enum": [0, 1]}
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "required": ["type", "message", "retryable"],
+                            "properties": {
+                                "type": {"type": "string", "enum": ["error"]},
+                                "message": {"type": "string"},
+                                "retryable": {"type": "boolean"}
+                            }
+                        }
+                    ]
+                }),
+            )),
+        )
 }
 
 /// The v1 answer. `hf_xet` decodes `result` as a `u8` enum, `0` "exists"

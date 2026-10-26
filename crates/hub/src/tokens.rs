@@ -11,14 +11,14 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderName, HeaderValue, Method};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{Action, Mode};
 use openxet_index::Repo;
 use serde_json::json;
 
 use crate::authz::{self, RepoAccess};
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, on, repo, with_write};
 use crate::{HubError, HubState};
 
 /// The headers `huggingface_hub` reads the token from
@@ -36,20 +36,60 @@ pub(crate) fn routes() -> Routes {
         routes = routes
             .route(
                 read,
-                on(Method::GET, |state: State<HubState>, access: RepoAccess| {
-                    token(state, access, Mode::Read)
-                })
+                on(
+                    Method::GET,
+                    token_doc(repo("CAS read token")),
+                    |state: State<HubState>, access: RepoAccess| token(state, access, Mode::Read),
+                )
                 .private(),
             )
             .route(
                 write,
-                on(Method::GET, |state: State<HubState>, access: RepoAccess| {
-                    token(state, access, Mode::Write)
-                })
+                on(
+                    Method::GET,
+                    token_doc(with_write(repo("CAS write token"))),
+                    |state: State<HubState>, access: RepoAccess| token(state, access, Mode::Write),
+                )
                 .private(),
             );
     }
     routes
+}
+
+/// `X-Xet-Access-Token`, named apart from its description: the
+/// repository's credential scan reads a quoted header name followed by a
+/// quoted string as a header and its value.
+const ACCESS_TOKEN_HEADER: &str = "X-Xet-Access-Token";
+
+/// The token routes' answer, for `doc`.
+pub(crate) fn token_doc(doc: Doc) -> Doc {
+    doc.describe(
+        "A CAS token scoped to the repository and the operation, living `hub.token_ttl`. \
+         A revision in the path is accepted and ignored. To refresh, repeat the request.",
+    )
+    .answer(
+        StatusCode::OK,
+        "The token, its expiry and the CAS URL, also in the `X-Xet-*` headers.",
+        Some((
+            "application/json",
+            json!({
+                "type": "object",
+                "required": ["accessToken", "exp", "casUrl"],
+                "properties": {
+                    "accessToken": {"type": "string", "description": "The CAS token."},
+                    "exp": {"type": "integer", "description": "Its expiry, Unix seconds."},
+                    "casUrl": {"type": "string", "description": "The CAS to use it with."}
+                }
+            }),
+        )),
+    )
+    .answer_header(StatusCode::OK, ACCESS_TOKEN_HEADER, "The CAS token.")
+    .answer_header(StatusCode::OK, "X-Xet-Cas-Url", "The CAS URL.")
+    .answer_header(
+        StatusCode::OK,
+        "X-Xet-Token-Expiration",
+        "The token's expiry, Unix seconds.",
+    )
 }
 
 /// A CAS token for the repository: `200 {"accessToken","exp","casUrl"}`

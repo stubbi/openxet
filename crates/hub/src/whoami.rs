@@ -4,17 +4,77 @@ use std::fmt::Write as _;
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::authz::{self, Who};
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Doc, Routes, api, on};
 use crate::{HubError, HubState};
 
 /// The whoami route.
 pub(crate) fn routes() -> Routes {
-    Routes::new().route("/api/whoami-v2", on(Method::GET, whoami).private())
+    Routes::new().route(
+        "/api/whoami-v2",
+        on(Method::GET, whoami_doc(), whoami).private(),
+    )
+}
+
+fn whoami_doc() -> Doc {
+    let org = json!({
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+            "type": {"type": "string", "enum": ["org"]},
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "fullname": {"type": "string"},
+            "avatarUrl": {"type": "string"}
+        }
+    });
+    api(Area::Hub, "Who the token acts for")
+        .describe(
+            "The token's user and organizations, in huggingface.co's shape. `role` is \
+             `fineGrained`: what the token may do is decided per repository by the \
+             operator's rules.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The user.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["type", "id", "name", "orgs", "auth"],
+                    "properties": {
+                        "type": {"type": "string", "enum": ["user"]},
+                        "id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "fullname": {"type": "string"},
+                        "isPro": {"type": "boolean"},
+                        "avatarUrl": {"type": "string"},
+                        "orgs": {"type": "array", "items": org},
+                        "auth": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "enum": ["access_token"]},
+                                "accessToken": {
+                                    "type": "object",
+                                    "properties": {
+                                        "displayName": {
+                                            "type": "string",
+                                            "description": "The name `hf auth login` stores \
+                                                the token under."
+                                        },
+                                        "role": {"type": "string", "enum": ["fineGrained"]}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            )),
+        )
 }
 
 /// `GET /api/whoami-v2`: who the token acts for, in huggingface.co's shape.

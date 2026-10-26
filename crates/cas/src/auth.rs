@@ -87,7 +87,7 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
-    use crate::routes::{Routes, on};
+    use crate::routes::{Routes, doc, on};
     use crate::test_support;
 
     // The scheme is a constant so the repository's secret scanner, which
@@ -121,9 +121,11 @@ mod tests {
         let tokens = vec![token(READ, Mode::Read), token(WRITE, Mode::Write), user];
         let routes = Routes::new().route(
             "/w",
-            on(Method::POST, |WriteAccess(p): WriteAccess| async move {
-                p.subject
-            }),
+            on(
+                Method::POST,
+                doc("Write", true),
+                |WriteAccess(p): WriteAccess| async move { p.subject },
+            ),
         );
         test_support::serve(routes, test_support::state(dir.path(), tokens).await)
     }

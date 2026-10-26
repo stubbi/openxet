@@ -18,6 +18,7 @@ with `--json`, or without a terminal, no command reads stdin.
 | `openxet download` | Downloads a file by its Xet hash | `openxet.download.v1` |
 | `openxet purge` | Unregisters a file from every scope | `openxet.purge.v1` |
 | `openxet label add`, `remove`, `list` | Changes or lists a repository's labels | `openxet.labels.v1` |
+| `openxet openapi` | Prints the server's OpenAPI document | `openxet.openapi.v1` |
 
 ## `openxet serve`
 
@@ -320,6 +321,22 @@ alice/my-model: model, eval-logs
   hint, and exit 1.
 - **Endpoint and token** are taken as by `upload` and `download` (below).
   Where `hub.public_url` differs from the CAS endpoint, pass the Hub's.
+
+## `openxet openapi`
+
+```
+openxet openapi
+```
+
+Prints the OpenAPI 3.1 document of every route `openxet serve` serves,
+exactly the bytes `GET /openapi.json` answers, without a server
+([OpenAPI document](openapi.md)). With `--json`, the document is the
+`document` field of one object, `{"schema":"openxet.openapi.v1",
+"document":{…}}`, on one line.
+
+```bash
+openxet openapi > openapi.json
+```
 
 ## Endpoint, token and cache
 

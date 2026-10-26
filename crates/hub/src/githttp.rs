@@ -36,7 +36,7 @@ use openxet_index::Repo;
 use openxet_storage::BodyStream;
 
 use crate::authz::{self, RepoAccess, Who};
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Doc, Routes, git_url, on, with_write};
 use crate::{HubError, HubState, View, names, param, repos};
 
 /// The paths of one Git route, unprefixed and under each typed prefix
@@ -61,11 +61,126 @@ pub(crate) fn routes() -> Routes {
         Routes::new(),
         |routes, ((refs, upload), receive)| {
             routes
-                .route(refs, on(Method::GET, info_refs).private())
-                .route(upload, on(Method::POST, upload_pack).private())
-                .route(receive, on(Method::POST, receive_pack).private())
+                .route(refs, on(Method::GET, info_refs_doc(), info_refs).private())
+                .route(
+                    upload,
+                    on(Method::POST, upload_pack_doc(), upload_pack).private(),
+                )
+                .route(
+                    receive,
+                    on(Method::POST, receive_pack_doc(), receive_pack).private(),
+                )
         },
     )
+}
+
+/// A Git route: errors are `text/plain`, which git shows as `remote:`
+/// lines.
+fn git_doc(summary: &'static str) -> Doc {
+    git_url(Area::Git, summary).git_errors().error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "`busy`: too many requests in the repository at once. `Retry-After: 1`.",
+    )
+}
+
+/// A `POST` of git's: its own request type and a pack answer.
+fn service_doc(summary: &'static str, service: &'static str) -> Doc {
+    let (request, result) = match service {
+        "upload-pack" => (
+            "application/x-git-upload-pack-request",
+            "application/x-git-upload-pack-result",
+        ),
+        _ => (
+            "application/x-git-receive-pack-request",
+            "application/x-git-receive-pack-result",
+        ),
+    };
+    git_doc(summary)
+        .header(
+            "Content-Encoding",
+            false,
+            "`gzip`, as git sends a large fetch request; inflated as it arrives.",
+        )
+        .body(
+            request,
+            &openxet_http::binary(request),
+            "Git's request, in pkt-lines. Only this type is taken, as `git http-backend` \
+             does, so a browser can't send it without a CORS preflight.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Git's answer, in pkt-lines.",
+            Some((result, openxet_http::binary(result))),
+        )
+        .error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "`unsupported_media_type`: not git's request type.",
+        )
+        .error(
+            StatusCode::REQUEST_TIMEOUT,
+            "`body_timeout`: the body arrived too slowly.",
+        )
+}
+
+fn info_refs_doc() -> Doc {
+    git_doc("Ref advertisement")
+        .describe(
+            "Smart HTTP's first request, for a clone, fetch or push. `{name}` may end in \
+             `.git`. The unprefixed URL sees every repository whatever its labels; \
+             `/datasets`, `/spaces` and `/kernels` see it through that label. For a push to \
+             a missing repository the caller may create in its namespace, it advertises an \
+             empty repository.",
+        )
+        .query(
+            "service",
+            true,
+            &serde_json::json!({"type": "string", "enum": ["git-upload-pack", "git-receive-pack"]}),
+            "The service; a request without one is the dumb protocol's, answered `404`.",
+        )
+        .header("Git-Protocol", false, "`version=2` for protocol v2.")
+        .answer(
+            StatusCode::OK,
+            "The advertisement, in pkt-lines, typed after the service.",
+            Some((
+                "application/x-git-upload-pack-advertisement",
+                openxet_http::binary("application/x-git-upload-pack-advertisement"),
+            )),
+        )
+        .answer_media(
+            StatusCode::OK,
+            "application/x-git-receive-pack-advertisement",
+            openxet_http::binary("application/x-git-receive-pack-advertisement"),
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`dumb_http_not_served`: no `service`; only smart HTTP is served.",
+        )
+}
+
+fn upload_pack_doc() -> Doc {
+    service_doc("Fetch", "upload-pack")
+        .describe(
+            "One stateless fetch or `ls-refs` request. A want the refs don't reach is \
+             refused.",
+        )
+        .error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "`too_many_requests`: the reachability check is over its concurrency limit for \
+             the repository or the caller. `Retry-After: 1`.",
+        )
+}
+
+fn receive_pack_doc() -> Doc {
+    with_write(service_doc("Push", "receive-pack"))
+        .describe(
+            "One push, whose refs move only through the fenced commit transaction. The first \
+             push to a missing repository creates it when the caller may create in its \
+             namespace.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`push_too_large`: the push is larger than `git.max_push_bytes`.",
+        )
 }
 
 /// How much compressed input is inflated at a time: deflate expands at

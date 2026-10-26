@@ -13,12 +13,14 @@ use axum::extract::{MatchedPath, RawPathParams, State};
 use axum::http::{HeaderMap, Method};
 use axum::response::Response;
 use openxet_auth::{Action, Mode};
+use openxet_http::Area;
 
 use super::{Address, LfsError, who};
 use crate::HubState;
 use crate::authz;
-use crate::routes::{Routes, on};
+use crate::routes::{Routes, git_url, on, with_write};
 use crate::tokens::issue;
+use crate::tokens::token_doc;
 
 /// The token routes of every Git URL.
 pub(super) fn routes() -> Routes {
@@ -31,6 +33,7 @@ pub(super) fn routes() -> Routes {
                 read,
                 on(
                     Method::GET,
+                    token_doc(git_url(Area::Lfs, "CAS read token")),
                     |state: State<HubState>, path: MatchedPath, params, headers: HeaderMap| {
                         token(state, path, params, headers, Mode::Read)
                     },
@@ -41,6 +44,7 @@ pub(super) fn routes() -> Routes {
                 write,
                 on(
                     Method::GET,
+                    token_doc(with_write(git_url(Area::Lfs, "CAS write token"))),
                     |state: State<HubState>, path: MatchedPath, params, headers: HeaderMap| {
                         token(state, path, params, headers, Mode::Write)
                     },

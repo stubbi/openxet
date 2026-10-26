@@ -9,6 +9,7 @@
 - [Command line](reference/cli.md)
 - [CAS routes](reference/routes.md)
 - [Git LFS routes](reference/lfs.md)
+- [OpenAPI document](reference/openapi.md)
 - [Exit codes](reference/exit-codes.md)
 - [xet:// addresses](reference/xet-uri.md)
 - [Security tests](reference/security-tests.md)

@@ -88,6 +88,9 @@ jobs:
           key: xet-spec-reference-${{ hashFiles('testdata/xet-spec-reference/SHA256SUMS') }}
       - run: scripts/fetch-reference-files.sh
       - run: cargo nextest run --locked --workspace
+      # Ruling M2-R15: the checked-in OpenAPI document is what the routes
+      # generate.
+      - run: scripts/check-openapi.sh
       # Every Rust test docs/reference/security-tests.md maps runs, once.
       - name: Security test map matches the tests that run
         run: |

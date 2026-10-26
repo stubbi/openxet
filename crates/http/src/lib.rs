@@ -10,16 +10,22 @@
 //! ([`X_REQUEST_ID`]) that is also a field of the request's tracing span, so
 //! a failure a client logs ties back to the server's log. Every error body is
 //! `{"schema":"openxet.error.v1","code","message","hint"}` ([`ErrorBody`]).
+//!
+//! Every route is described where it is built ([`Doc`]), and [`document`]
+//! joins the descriptions into the server's OpenAPI 3.1 document (ruling
+//! M2-R15).
 
 #![forbid(unsafe_code)]
 
 mod clock;
+mod doc;
 mod error;
 mod middleware;
 mod request_id;
 mod routes;
 
 pub use clock::{Clock, SystemClock};
+pub use doc::{Area, Credential, Doc, binary, document};
 pub use error::{ErrorBody, HubErrorBody, SCHEMA, X_ERROR_CODE, X_ERROR_MESSAGE};
 #[cfg(feature = "test-support")]
 pub use middleware::endpoints;

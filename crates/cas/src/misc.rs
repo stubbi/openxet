@@ -7,7 +7,7 @@ use http_body_util::BodyExt as _;
 
 use crate::body;
 use crate::error::closing;
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, doc, on, with_body};
 use crate::{CasError, ReadAccess};
 
 /// The largest telemetry body accepted. `hf_xet` 1.7.0 sends five keys and
@@ -16,7 +16,28 @@ pub const TELEMETRY_BODY_LIMIT: usize = 64 * 1024;
 
 /// Routes that carry no data: telemetry.
 pub(crate) fn routes() -> Routes {
-    Routes::new().route("/v1/telemetry", on(Method::POST, telemetry))
+    Routes::new().route(
+        "/v1/telemetry",
+        on(Method::POST, telemetry_doc(), telemetry),
+    )
+}
+
+fn telemetry_doc() -> Doc {
+    with_body(doc("Accept and drop transfer statistics", false))
+        .describe(
+            "`hf_xet` reports transfer statistics here. The body is read and dropped: \
+             never stored or logged.",
+        )
+        .body(
+            "application/json",
+            &serde_json::json!({"type": "object"}),
+            "Whatever the client reports; up to 64 KiB.",
+        )
+        .answer(StatusCode::NO_CONTENT, "Accepted and dropped.", None)
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`payload_too_large`: the body is over 64 KiB.",
+        )
 }
 
 /// `POST /v1/telemetry`: accepted and dropped (S10 §6; non-negotiable 6, no

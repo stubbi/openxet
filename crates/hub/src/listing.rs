@@ -4,17 +4,17 @@
 use axum::Json;
 use axum::extract::{RawQuery, State};
 use axum::http::header::LINK;
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use openxet_auth::{Action, UserPrincipal};
 use openxet_index::{Repo, RepoFilter};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::authz::{self, Who};
-use crate::repos::repo_json;
-use crate::routes::{Routes, on};
+use crate::repos::{repo_json, repo_schema};
+use crate::routes::{Area, Doc, Routes, api, on};
 use crate::{HubConfig, HubError, HubState, View};
 
 /// How many index rows one page may scan, per entry it may list: a caller
@@ -30,6 +30,7 @@ pub(crate) fn routes() -> Routes {
             path,
             on(
                 Method::GET,
+                list_doc(),
                 move |state: State<HubState>, who: Who, query: RawQuery| {
                     list(state, who, query, view)
                 },
@@ -38,6 +39,62 @@ pub(crate) fn routes() -> Routes {
         );
     }
     routes
+}
+
+fn list_doc() -> Doc {
+    let doc = api(Area::Hub, "List repositories")
+        .describe(
+            "The repositories with the route's label that the caller may read, ordered by \
+             `{namespace}/{name}` ignoring case. `full`, `config`, `cardData` and `expand` \
+             are accepted and answered with what OpenXet has; any other filter or sort \
+             answers `501`.",
+        )
+        .query(
+            "author",
+            false,
+            &json!({"type": "string"}),
+            "Only this namespace's repositories.",
+        )
+        .answer(
+            StatusCode::OK,
+            "A page of repositories; it may be short, even empty, and still link the next.",
+            Some((
+                "application/json",
+                json!({"type": "array", "items": repo_schema(json!({}))}),
+            )),
+        )
+        .error(
+            StatusCode::NOT_IMPLEMENTED,
+            "`not_implemented`: a filter or sort other than `author`.",
+        );
+    paged(doc)
+}
+
+/// A paged listing's parameters, answer header and refusals (ruling
+/// M2-R8), for a `doc` that already describes its `200`.
+pub(crate) fn paged(doc: Doc) -> Doc {
+    doc.query(
+        "limit",
+        false,
+        &json!({"type": "integer", "minimum": 1}),
+        "At most this many per page, and at most `hub.page_size`.",
+    )
+    .query(
+        "cursor",
+        false,
+        &json!({"type": "string"}),
+        "Where the page starts, from the previous page's `Link`.",
+    )
+    .answer_header(
+        StatusCode::OK,
+        "Link",
+        "`<…>; rel=\"next\"` while more follow: the next page's URL, to follow as it is.",
+    )
+    .error(
+        StatusCode::BAD_REQUEST,
+        "`bad_request`: `limit` is not a positive whole number, or `cursor` is not one \
+         this server issued.",
+    )
 }
 
 /// The listing parameters openxet answers: `author` (a namespace), `limit`

@@ -47,9 +47,9 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{FromRequestParts, State};
-use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_index::Visibility;
 use openxet_protocol::{
@@ -57,7 +57,7 @@ use openxet_protocol::{
 };
 
 use crate::blocking::blocking;
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, doc, on};
 use crate::send_body::send_body;
 use crate::{AppState, CasError, ReadAccess, path};
 
@@ -88,8 +88,36 @@ const PERMIT_WAIT: Duration = Duration::from_secs(1);
 pub(crate) fn routes() -> Routes {
     Routes::new().route(
         "/v1/chunks/{prefix}/{hash}",
-        on(Method::GET, query).private(),
+        on(Method::GET, query_doc(), query).private(),
     )
+}
+
+fn query_doc() -> Doc {
+    doc("Global dedup query", false)
+        .describe(
+            "Is the chunk with this raw hash stored in a xorb the caller may see? \
+             `{prefix}` is `default` (what `hf_xet` sends) or `default-merkledb` (what the \
+             spec names). The answer's chunk hashes are HMAC-keyed with a fresh key per \
+             answer, so it never reveals a raw chunk hash.",
+        )
+        .answer(
+            StatusCode::OK,
+            "A shard with a footer offering the xorb holding the chunk and the other xorbs \
+             of the newest shard referencing it, up to 16 MiB.",
+            Some((
+                "application/octet-stream",
+                openxet_http::binary("application/octet-stream"),
+            )),
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`not_found`: no visible xorb offers the chunk, or `{prefix}` is not one of \
+             the two.",
+        )
+        .error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "`dedup_busy`: every dedup slot stayed busy for 1 s. `Retry-After: 1`.",
+        )
 }
 
 /// The raw chunk hash named by the path ([`path::prefixed_hash`]).

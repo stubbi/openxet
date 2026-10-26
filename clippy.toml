@@ -1,6 +1,6 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
-doc-valid-idents = ["SQLite", "XetHub", ".."]
+doc-valid-idents = ["OpenAPI", "OpenXet", "SQLite", "XetHub", ".."]
 # Routes are added only through `openxet_http::Routes`, the route builder
 # every crate uses, which lists every route it serves, so the security tests
 # can check each one is authenticated. The one fallback is set by

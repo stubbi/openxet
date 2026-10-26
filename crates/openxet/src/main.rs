@@ -9,6 +9,7 @@ mod hook_cmd;
 mod host_memory;
 mod label_cmd;
 mod logging;
+mod openapi_cmd;
 mod output;
 mod preflight;
 mod purge_cmd;

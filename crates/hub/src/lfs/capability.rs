@@ -17,20 +17,68 @@
 use axum::extract::rejection::RawPathParamsRejection;
 use axum::extract::{RawPathParams, RawQuery, State};
 use axum::http::header::AUTHORIZATION;
-use axum::http::{HeaderMap, Method};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::Response;
 use openxet_auth::{AuthError, CapabilityQuery, CapabilityRefusal, Mode};
 use openxet_index::{Repo, RepoId};
 
 use super::LfsError;
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Credential, Doc, Routes, on};
+use crate::tokens::token_doc;
 use crate::{HubError, HubState, param, tokens};
 
 /// The capability route.
 pub(super) fn routes() -> Routes {
     Routes::new().route(
         "/v1/capabilities/{repo}/{op}",
-        on(Method::GET, capability_route).private(),
+        on(Method::GET, capability_doc(), capability_route).private(),
+    )
+}
+
+fn capability_doc() -> Doc {
+    let mut doc = token_doc(
+        Doc::new(
+            Area::Lfs,
+            "Refresh an upload's CAS token",
+            Credential::SignedUrl,
+        )
+        .hub_errors(),
+    )
+    .describe(
+        "The `href` of an LFS upload action, which `git-xet` calls to refresh its CAS \
+         token. The signature is the whole authorization: an `Authorization` header is \
+         never used, logged or echoed. The token lives `hub.token_ttl`, never past the \
+         capability's `exp`, for the repository and the pusher it was issued to. `{repo}` \
+         is the repository's id and `{op}` is `write`. Use the `href` exactly as given.",
+    );
+    for (name, schema, description) in [
+        (
+            "exp",
+            "integer",
+            "When the capability expires, Unix seconds.",
+        ),
+        ("sub", "string", "The subject it was issued to."),
+        (
+            "sig",
+            "string",
+            "The signature over the repository, the operation, the subject and `exp`.",
+        ),
+    ] {
+        doc = doc.query(
+            name,
+            true,
+            &serde_json::json!({"type": schema}),
+            description,
+        );
+    }
+    doc.error(
+        StatusCode::FORBIDDEN,
+        "`capability_refused`: the capability is altered, presented for another \
+         repository, operation or subject, or past its `exp`; push again for a fresh one.",
+    )
+    .error(
+        StatusCode::NOT_FOUND,
+        "`repo_not_found`: the repository no longer exists.",
     )
 }
 

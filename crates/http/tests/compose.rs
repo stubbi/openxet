@@ -10,7 +10,10 @@ use axum::body::{Body, to_bytes};
 use axum::extract::{Extension, State};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
-use openxet_http::{BodyDeadline, Endpoint, Mounted, RequestId, Routes, X_REQUEST_ID, compose, on};
+use openxet_http::{
+    Area, BodyDeadline, Credential, Doc, Endpoint, Mounted, RequestId, Routes, X_REQUEST_ID,
+    compose, on,
+};
 use tower::ServiceExt as _;
 
 async fn greeting(State(greeting): State<Arc<str>>) -> String {
@@ -32,13 +35,17 @@ async fn boom() -> &'static str {
 /// A part whose state is a string and one whose state is a number: each
 /// crate of the server mounts its routes with its own state.
 fn parts() -> Vec<Mounted> {
+    let doc = || Doc::new(Area::Meta, "A test route", Credential::None);
     let words = Routes::new()
-        .route("/words", on(Method::GET, greeting))
-        .route("/words/id", on(Method::GET, echo_id))
+        .route("/words", on(Method::GET, doc(), greeting))
+        .route("/words/id", on(Method::GET, doc(), echo_id))
         .with_state(Arc::<str>::from("hello"));
     let numbers = Routes::new()
-        .route("/numbers", on(Method::GET, count).on(Method::PUT, count))
-        .route("/numbers/panic", on(Method::GET, boom))
+        .route(
+            "/numbers",
+            on(Method::GET, doc(), count).on(Method::PUT, doc(), count),
+        )
+        .route("/numbers/panic", on(Method::GET, doc(), boom))
         .with_state(7_u32);
     vec![words, numbers]
 }

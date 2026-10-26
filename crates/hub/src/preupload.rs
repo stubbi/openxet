@@ -11,7 +11,7 @@
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{RawPathParams, State};
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use bstr::{BStr, ByteSlice as _};
 use gix_attributes::StateRef;
 use gix_attributes::glob::Pattern;
@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess};
 use crate::refs::at_revision;
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, on, repo, with_body, with_revision, with_write};
 use crate::{HubError, HubState, param, parse_json, read_body};
 
 /// huggingface.co's default `.gitattributes`, which a new repository's
@@ -43,9 +43,69 @@ const PREUPLOAD_BODY_LIMIT: usize = 4 << 20;
 pub(crate) fn routes() -> Routes {
     let mut routes = Routes::new();
     for path in typed_paths!("/{ns}/{name}/preupload/{rev}") {
-        routes = routes.route(path, on(Method::POST, preupload).private());
+        routes = routes.route(path, on(Method::POST, preupload_doc(), preupload).private());
     }
     routes
+}
+
+fn preupload_doc() -> Doc {
+    with_write(with_body(with_revision(repo("Plan an upload"))))
+        .describe(
+            "How to upload each file: `lfs` (through Xet) for a file at or over \
+             `hub.lfs_threshold` or matched by the revision's `.gitattributes`, else \
+             `regular`. Nothing is ignored. Needs `write`, as the commit it prepares does.",
+        )
+        .body(
+            "application/json",
+            &json!({
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["path", "size"],
+                            "properties": {
+                                "path": {"type": "string"},
+                                "size": {"type": "integer", "minimum": 0},
+                                "sample": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }),
+            "The files to upload, at most 4 MiB.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Each file's upload mode, in request order.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["files", "commitOid"],
+                    "properties": {
+                        "files": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["path", "uploadMode", "shouldIgnore"],
+                                "properties": {
+                                    "path": {"type": "string"},
+                                    "uploadMode": {"type": "string", "enum": ["lfs", "regular"]},
+                                    "shouldIgnore": {"type": "boolean"}
+                                }
+                            }
+                        },
+                        "commitOid": {
+                            "type": ["string", "null"],
+                            "description": "The revision's commit; `null` before the first."
+                        }
+                    }
+                }),
+            )),
+        )
 }
 
 /// `POST …/preupload/{rev}`'s body (`_commit_api.py` line 753).

@@ -43,13 +43,14 @@ use axum::response::{IntoResponse, Response};
 use openxet_index::{ChunkLayout, Visibility};
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::Deserialize;
+use serde_json::{Value, json};
 use tokio::sync::OwnedSemaphorePermit;
 
 use crate::answer::{self, Signer, Version};
 use crate::blocking::blocking;
 use crate::budget::Reservation;
 use crate::plan::{self, PlanError, XorbMap, XorbSet};
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, doc, on, with_body};
 use crate::send_body::send_body;
 use crate::{AppState, CasError, ReadAccess, body, path};
 
@@ -82,15 +83,254 @@ const BATCH_BODY_LIMIT: u64 = 256 * 1024;
 /// The reconstruction routes and `HEAD /v1/files/{hash}`.
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route("/v2/reconstructions/{hash}", on(Method::GET, v2).private())
-        .route("/v1/reconstructions/{hash}", on(Method::GET, v1).private())
+        .route(
+            "/v2/reconstructions/{hash}",
+            on(Method::GET, single_doc(Version::V2), v2).private(),
+        )
+        .route(
+            "/v1/reconstructions/{hash}",
+            on(Method::GET, single_doc(Version::V1), v1).private(),
+        )
         .route(
             "/v1/reconstructions",
-            on(Method::POST, batch_post)
-                .on(Method::GET, batch_get)
+            on(Method::POST, batch_post_doc(), batch_post)
+                .on(Method::GET, batch_get_doc(), batch_get)
                 .private(),
         )
-        .route("/v1/files/{hash}", on(Method::HEAD, head_file).private())
+        .route(
+            "/v1/files/{hash}",
+            on(Method::HEAD, head_file_doc(), head_file).private(),
+        )
+}
+
+/// `{"start", "end"}` of integers.
+fn span(description: &str) -> Value {
+    json!({
+        "type": "object",
+        "description": description,
+        "required": ["start", "end"],
+        "properties": {
+            "start": {"type": "integer", "minimum": 0},
+            "end": {"type": "integer", "minimum": 0}
+        }
+    })
+}
+
+/// A term of a plan: a chunk range of one xorb.
+fn term() -> Value {
+    json!({
+        "type": "object",
+        "required": ["hash", "unpacked_length", "range"],
+        "properties": {
+            "hash": {"type": "string", "description": "The xorb's hash."},
+            "unpacked_length": {"type": "integer", "minimum": 0},
+            "range": span("Chunk indices, end-exclusive.")
+        }
+    })
+}
+
+/// v1's fetch entries by xorb hash: each one range and its own URL.
+fn fetch_info() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["range", "url", "url_range"],
+                "properties": {
+                    "range": span("Chunk indices, end-exclusive."),
+                    "url": {
+                        "type": "string",
+                        "description": "A transfer URL signed for exactly `url_range`."
+                    },
+                    "url_range": span("Bytes, end-inclusive.")
+                }
+            }
+        }
+    })
+}
+
+fn single_doc(version: Version) -> Doc {
+    let (summary, fetch_field, fetches) = match version {
+        Version::V2 => (
+            "Download plan for a file",
+            "xorbs",
+            json!({
+                "type": "object",
+                "description": "Fetches by xorb hash.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["url", "ranges"],
+                        "properties": {
+                            "url": {"type": "string", "description": "A signed transfer URL."},
+                            "ranges": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["chunks", "bytes"],
+                                    "properties": {
+                                        "chunks": span("Chunk indices, end-exclusive."),
+                                        "bytes": span("Bytes, end-inclusive.")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        ),
+        Version::V1 => (
+            "Download plan for a file, v1 shape",
+            "fetch_info",
+            fetch_info(),
+        ),
+    };
+    let properties = json!({
+        "offset_into_first_range": {"type": "integer", "minimum": 0},
+        "terms": {"type": "array", "items": term()},
+        fetch_field: fetches
+    });
+    doc(summary, false)
+        .describe(
+            "The plan to download a file registered to the caller's scope, optionally for \
+             one `Range` (https://huggingface.co/docs/xet/api#1-get-file-reconstruction). \
+             Another scope's file reads the same as one never stored.",
+        )
+        .header(
+            "Range",
+            false,
+            "`bytes=start-end` (inclusive), `bytes=start-` or `bytes=-length`; an end past \
+             the file is clamped.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The plan.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["offset_into_first_range", "terms", fetch_field],
+                    "properties": properties
+                }),
+            )),
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`invalid_range`: `Range` is not one byte range.",
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`not_found`: no file with this hash is registered to the caller's scope.",
+        )
+        .error(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "`range_not_satisfiable`: the range starts at or past the end of the file. \
+             `Content-Range: bytes */{size}`.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`answer_too_large`: the answer would hold more than an eighth of the memory \
+             budget; ask by range.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`memory_busy`: the memory budget stayed full for 5 s. `Retry-After: 1`.",
+        )
+}
+
+/// The batch routes' common description and answer.
+fn batch_doc(summary: &'static str) -> Doc {
+    doc(summary, false)
+        .describe(
+            "The plans for several files at once, each planned whole \
+             (https://huggingface.co/docs/xet/api#6-batch-file-reconstruction). A file \
+             named twice is answered once; a file not registered to the scope is left out.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The plans.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["files", "fetch_info"],
+                    "properties": {
+                        "files": {
+                            "type": "object",
+                            "description": "Terms by file hash.",
+                            "additionalProperties": {"type": "array", "items": term()}
+                        },
+                        "fetch_info": fetch_info()
+                    }
+                }),
+            )),
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`batch_too_large`: more than 1000 distinct files, or more than 100,000 terms.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`answer_too_large`: the answer would hold more than an eighth of the memory \
+             budget; put fewer files in a batch.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`memory_busy`: the memory budget stayed full for 5 s. `Retry-After: 1`.",
+        )
+}
+
+fn batch_post_doc() -> Doc {
+    with_body(batch_doc("Download plans for several files"))
+        .body(
+            "application/json",
+            &json!({
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["prefix", "hash"],
+                    "properties": {
+                        "prefix": {"type": "string", "enum": ["default"]},
+                        "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                }
+            }),
+            "The files, at most 256 KiB.",
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`invalid_batch`: the body is not a JSON list of `{\"prefix\": \"default\", \
+             \"hash\"}` keys.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`payload_too_large`: the body is over 256 KiB.",
+        )
+}
+
+fn batch_get_doc() -> Doc {
+    batch_doc("Download plans for several files, as `xet-client` asks").query(
+        "file_id",
+        true,
+        &json!({"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}),
+        "A file hash; repeat it once per file.",
+    )
+}
+
+fn head_file_doc() -> Doc {
+    doc("Whether a file is stored", false)
+        .answer(
+            StatusCode::OK,
+            "Registered; `Content-Length` is its size.",
+            None,
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`not_found`: not registered to the caller's scope.",
+        )
 }
 
 /// The file named by the path ([`path::hash`]).

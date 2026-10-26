@@ -12,16 +12,17 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::State;
-use axum::http::Method;
 use axum::http::header::CONTENT_TYPE;
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::time::{Instant, timeout};
 use tower_http::trace::TraceLayer;
 
 use crate::error::closing;
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Credential, Doc, Routes, on};
 use crate::{AppState, CasError};
 
 const JSON: [(axum::http::HeaderName, &str); 1] = [(CONTENT_TYPE, "application/json")];
@@ -29,8 +30,43 @@ const JSON: [(axum::http::HeaderName, &str); 1] = [(CONTENT_TYPE, "application/j
 /// The probes of a server that is ready.
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route("/healthz", on(Method::GET, live))
-        .route("/readyz", on(Method::GET, ready))
+        .route("/healthz", on(Method::GET, live_doc(), live))
+        .route("/readyz", on(Method::GET, ready_doc(), ready))
+}
+
+fn status(value: &str) -> serde_json::Value {
+    json!({
+        "type": "object",
+        "required": ["status"],
+        "properties": {"status": {"type": "string", "enum": [value]}}
+    })
+}
+
+fn live_doc() -> Doc {
+    Doc::new(Area::Health, "Liveness", Credential::None).answer(
+        StatusCode::OK,
+        "The process is up and serving HTTP.",
+        Some(("application/json", status("ok"))),
+    )
+}
+
+fn ready_doc() -> Doc {
+    Doc::new(Area::Health, "Readiness", Credential::None)
+        .describe(
+            "Ready once the index answers a read of its tables and the bucket takes a \
+             write. Each component is probed at most once a second, however often this is \
+             called.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The index and the bucket are open and answer.",
+            Some(("application/json", status("ready"))),
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`unavailable`: the index or the bucket failed or took over a second; the \
+             message names `index` or `storage`, never the cause.",
+        )
 }
 
 /// `GET /healthz`: the process is up and serving HTTP.
