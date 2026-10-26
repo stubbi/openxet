@@ -198,6 +198,26 @@ async fn hf_xet_capture_registers_files() {
 }
 
 #[tokio::test]
+async fn unversioned_shards_route_answers_as_v1() {
+    // git-xet 0.2.1 uploads its shard to `POST {cas}/shards`, with no
+    // version, as huggingface.co's CAS accepts (spike S7,
+    // compat/fixtures/lfs/hf/02-push-xet-lfs371--06-POST-shards.json).
+    let server = TestServer::start_default().await;
+    upload_xorb(&server, &server.write_token).await;
+
+    let reply = Reply::of(
+        server
+            .request(Method::POST, "/shards")
+            .header(AUTHORIZATION, bearer(&server.write_token))
+            .body(hf_xet_shard()),
+    )
+    .await;
+
+    assert_result_v1(&reply, 1);
+    assert!(files(&server, SCOPE_A).await.iter().all(Option::is_some));
+}
+
+#[tokio::test]
 async fn v2_stream_events_in_order_and_parse_as_upstream_types() {
     let server = TestServer::start_default().await;
     upload_xorb(&server, &server.write_token).await;

@@ -1,4 +1,5 @@
-//! `POST /v1/shards` and `POST /v2/shards` (S10 §4; spec
+//! `POST /v1/shards` (and its unversioned alias `POST /shards`) and
+//! `POST /v2/shards` (S10 §4; spec
 //! <https://huggingface.co/docs/xet/api#4-upload-shard> and
 //! <https://huggingface.co/docs/xet/api#5-streaming-shard-upload>).
 //!
@@ -53,9 +54,12 @@ const EVENT_BUFFER: usize = 16;
 /// A chunk table as `verify_shard` and `stored_shard` look it up.
 type Lookup = HashMap<MerkleHash, Arc<[(MerkleHash, u64)]>>;
 
-/// `POST /v1/shards` and `POST /v2/shards` (S10 §4).
+/// `POST /v1/shards` and `POST /v2/shards` (S10 §4), and `POST /shards`,
+/// v1 without the version, which `git-xet` 0.2.1 sends and
+/// huggingface.co's CAS accepts (spike S7).
 pub(crate) fn routes() -> Routes {
     Routes::new()
+        .route("/shards", on(Method::POST, upload_v1))
         .route("/v1/shards", on(Method::POST, upload_v1))
         .route("/v2/shards", on(Method::POST, upload_v2))
 }
