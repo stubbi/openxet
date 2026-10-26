@@ -216,6 +216,38 @@ class Check(unittest.TestCase):
         mixed = line("merged full", 5.0, 8.0) + "\n" + line("merged range", 5.0, 8.0, "c" * 40) + "\n"
         self.assertEqual(self.run_files(base, mixed)[0], 2)
 
+    def test_p99_limit_sets_the_absolute_bar(self):
+        # The Hub metadata gate holds token, resolve and tree to 10 ms.
+        hub = ("token", "resolve head xet", "resolve head regular", "tree")
+        base_path = self.write("base.json", "".join(line(s, 3.0, 6.0, BASE_BUILD) + "\n" for s in hub))
+        head = {s: (3.0, 6.0) for s in hub}
+
+        def run(head: dict) -> tuple[int, str]:
+            head_path = self.write("head.json", "".join(line(s, *v) + "\n" for s, v in head.items()))
+            argv = [
+                "--base", str(base_path), "--head", str(head_path), "--head-build", HEAD_BUILD,
+                "--p99-limit-ms", "10", "--title", "Hub metadata latency gate",
+            ]
+            code = self.main(argv, {"GITHUB_STEP_SUMMARY": str(self.summary)})
+            return code, self.summary.read_text()
+
+        self.assertEqual(run(dict(head, tree=(3.0, 9.9)))[0], 0)
+        code, summary = run(dict(head, tree=(3.0, 10.0)))
+        self.assertEqual(code, 1)
+        self.assertIn("## Hub metadata latency gate", summary)
+        self.assertIn("p99 >= 10 ms", summary)
+
+    def test_p99_limit_must_be_positive(self):
+        base = "".join(line(s, 20.0, 28.0, BASE_BUILD) + "\n" for s in SHAPES)
+        head = "".join(line(s, 20.0, 28.0) + "\n" for s in SHAPES)
+        argv = [
+            "--base", str(self.write("b.json", base)), "--head", str(self.write("h.json", head)),
+            "--head-build", HEAD_BUILD, "--p99-limit-ms", "0",
+        ]
+        with self.assertRaises(SystemExit) as raised:
+            self.main(argv, {})
+        self.assertEqual(raised.exception.code, 2)
+
     def test_no_summary_file_without_github(self):
         base_path = self.write("base.json", "".join(line(s, 20.0, 28.0, BASE_BUILD) + "\n" for s in SHAPES))
         head_path = self.write("head.json", "".join(line(s, 20.0, 28.0) + "\n" for s in SHAPES))

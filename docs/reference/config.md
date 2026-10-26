@@ -249,13 +249,17 @@ is refused as retryable.
 #### `[git.thin_bases]`
 
 Limits on the check a push's thin pack goes through: every base object it
-leaves out must be reachable from a ref the pusher may read. A push over a
-limit is refused as retryable. The check shares
-`[git.reachability]`'s concurrency limits.
+leaves out must be reachable from a ref the pusher may read. Most bases are
+found in one lookup; the rest share one walk of everything the refs reach,
+which these keys bound. A push whose bases the walk can't place within them
+is refused with a hint to push again with `git -c pack.window=0 push`, which
+sends no thin bases. The walk shares `[git.reachability]`'s concurrency
+limits, and a push over those is refused as retryable. The defaults are
+measured: [benchmarks](benchmarks.md#thin-base-budget).
 
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
-| `max_objects` | `2000000` | `1` or more | The most objects one check may visit. |
+| `max_objects` | `1000000` | `1` or more | The most objects one check may visit. |
 | `max_ms` | `2000` | `1` or more | The most milliseconds one check may take. |
 
 ## Dev mode

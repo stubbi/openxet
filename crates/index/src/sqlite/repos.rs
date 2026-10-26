@@ -3,14 +3,16 @@
 //! transaction, since a single SQLite statement is atomic; writes of
 //! several take `BEGIN IMMEDIATE`.
 
+use std::collections::HashMap;
+
 use openxet_protocol::MerkleHash;
 use sqlx::Row as _;
 use sqlx::sqlite::SqliteRow;
 
 use super::{SqliteIndex, to_i64, to_u64};
-use crate::types::{decode_terms, hash_from};
+use crate::types::{decode_terms, hash_from, parse_hex, to_hex};
 use crate::{
-    AuditEntry, FileRecord, FileSummary, IndexError, Page, Repo, RepoFilter, RepoId, Repos,
+    AuditEntry, FileRecord, FileSummary, IndexError, Page, Repo, RepoFilter, RepoId, Repos, XetFile,
 };
 
 const REPO_COLUMNS: &str = "id, namespace, name, private, labels, created_at, full_repack_gen";
@@ -218,6 +220,59 @@ impl Repos for SqliteIndex {
             })
         })
         .transpose()
+    }
+
+    async fn xet_files_by_sha256(
+        &self,
+        scope: &str,
+        sha256s: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], XetFile>, IndexError> {
+        if sha256s.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // The SHA-256s go in as one JSON parameter and the matches come
+        // back as one JSON row: a `tree` page asks about up to 1,000, and
+        // binding each as a parameter, then reading each match as a row
+        // across sqlx's channel from its SQLite thread, took a page 2.7 ms
+        // of a 7.7 ms answer on CI's Linux runner (M2 Task 20).
+        let asked: Vec<String> = sha256s.iter().map(|s| to_hex(s)).collect();
+        let asked = serde_json::to_string(&asked)
+            .map_err(|e| IndexError::Corrupt(format!("SHA-256s as JSON: {e}")))?;
+        let answer: String = sqlx::query_scalar(
+            "SELECT json_group_array(json_array(hex(sha256), hex(file), size, registered_seq)) \
+             FROM file_scopes WHERE scope = ? \
+             AND sha256 IN (SELECT unhex(value) FROM json_each(?))",
+        )
+        .bind(scope)
+        .bind(asked)
+        .fetch_one(&self.reader)
+        .await?;
+        let rows: Vec<(String, String, i64, i64)> = serde_json::from_str(&answer).map_err(|e| {
+            IndexError::Corrupt(format!("a SHA-256 lookup answered unreadable JSON: {e}"))
+        })?;
+        // Of several files claiming one SHA-256, the earliest registration
+        // answers: the least (registered_seq, file), as `file_by_sha256`
+        // orders them.
+        let mut found: HashMap<[u8; 32], ((i64, [u8; 32]), XetFile)> =
+            HashMap::with_capacity(rows.len());
+        for (sha256, file, size, seq) in rows {
+            let corrupt = |what: &str| IndexError::Corrupt(format!("a file's {what} is not hex"));
+            let sha256 = parse_hex::<32>(&sha256).map_err(|_| corrupt("SHA-256"))?;
+            let file = parse_hex::<32>(&file).map_err(|_| corrupt("hash"))?;
+            let key = (seq, file);
+            if found.get(&sha256).is_some_and(|(least, _)| *least <= key) {
+                continue;
+            }
+            let entry = XetFile {
+                hash: MerkleHash::from(file),
+                size: to_u64(size, "file size")?,
+            };
+            found.insert(sha256, (key, entry));
+        }
+        Ok(found
+            .into_iter()
+            .map(|(sha, (_, file))| (sha, file))
+            .collect())
     }
 
     async fn file_summary(

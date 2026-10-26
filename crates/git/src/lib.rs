@@ -81,7 +81,7 @@ pub use maintain::{
 };
 pub use objects::{
     Blob, CommitInfo, Entry, EntryKind, HubCommit, Ident, LocatedBlob, Op, Pointer, Resolved,
-    Revision, Signature, TagInfo, canonical_pointer, parse_pointer,
+    Revision, Signature, TagInfo, TreeListing, TreePage, canonical_pointer, parse_pointer,
 };
 #[cfg(feature = "fault-injection")]
 pub use objects::{FAULT_OMIT_BLOBS_ACTOR, HubWriteHold};

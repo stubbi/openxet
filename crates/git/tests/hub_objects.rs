@@ -16,7 +16,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use openxet_git::{
     Blob, Budget, Engine, EntryKind, FAULT_OMIT_BLOBS_ACTOR, GitError, HubCommit, Ident,
-    MISSING_OBJECTS, Op, Pointer, Revision, TagInfo, canonical_pointer, git_command, parse_pointer,
+    MISSING_OBJECTS, Op, Pointer, Revision, TagInfo, TreePage, canonical_pointer, git_command,
+    parse_pointer,
 };
 use openxet_index::{CommitTx, GitStore as _, Oid, RefLogRow, RefUpdate, RepackPublish, RepoId};
 use openxet_storage::{Bucket as _, Key, PackExt, PackName, RepoIdHex};
@@ -746,6 +747,41 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
         .collect();
     assert_eq!(listed, vec![("docs/a.txt", 2), ("docs/b.txt", 2)]);
     assert_eq!(ok(node.read_tree(&snap, c3, "/docs/", false).await), docs);
+    // A page: the entries after the cursor, at most `limit`, and whether
+    // more follow.
+    let all = ok(node.read_tree(&snap, c3, "", true).await);
+    let page = |after, limit| node.read_tree_page(&snap, c3, "", true, TreePage { after, limit });
+    let first = ok(page(None, 2).await);
+    assert_eq!((first.entries.as_slice(), first.more), (&all[..2], true));
+    let rest = ok(page(Some(all[1].path.as_str()), all.len()).await);
+    assert_eq!((rest.entries.as_slice(), rest.more), (&all[2..], false));
+    let past = ok(page(Some("zzz"), 10).await);
+    assert_eq!((past.entries.len(), past.more), (0, false));
+    // A folder's own page, cursor included.
+    let folder =
+        |after, limit| node.read_tree_page(&snap, c3, "docs", false, TreePage { after, limit });
+    let first = ok(folder(None, 1).await);
+    assert_eq!((first.entries.as_slice(), first.more), (&docs[..1], true));
+    let rest = ok(folder(Some("docs/a.txt"), 5).await);
+    assert_eq!((rest.entries.as_slice(), rest.more), (&docs[1..], false));
+    let root_page = ok(node
+        .read_tree_page(
+            &snap,
+            c3,
+            "",
+            false,
+            TreePage {
+                after: Some("docs"),
+                limit: 100,
+            },
+        )
+        .await);
+    let listed = ok(node.read_tree(&snap, c3, "", false).await);
+    let docs_at = listed
+        .iter()
+        .position(|e| e.path == "docs")
+        .unwrap_or(usize::MAX);
+    assert_eq!(root_page.entries, listed[docs_at + 1..]);
     let root = ok(node.read_tree(&snap, c3, "", false).await);
     assert!(root.iter().any(|e| e.path == "w.bin"
         && matches!(e.kind, EntryKind::File { lfs: Some(p), .. } if p == pointer)));
@@ -820,6 +856,61 @@ async fn hub_reads_tree_blob_log_and_last_commit() {
         oids,
         vec![Some(c2), Some(c1), Some(c2), Some(c3), Some(file0), None]
     );
+}
+
+/// A page large enough to be read on several threads lists every entry
+/// once, in path order, each with its own blob's size and pointer.
+#[tokio::test(flavor = "multi_thread")]
+async fn large_tree_page_keeps_order_and_entries() {
+    let world = World::new().await;
+    let (repo, _fx) = seeded(&world, 2).await;
+    let node = node(&world, "node").await;
+    let who = principal("erin");
+    let ops: Vec<Op> = (0..700u32)
+        .map(|i| {
+            if i % 2 == 0 {
+                file(&format!("big/f{i:04}.txt"), &vec![b'x'; i as usize])
+            } else {
+                Op::LfsFile {
+                    path: format!("big/f{i:04}.bin"),
+                    sha256: [u8::try_from(i % 256).unwrap_or(0); 32],
+                    size: u64::from(i),
+                }
+            }
+        })
+        .collect();
+    let commit = ok(node.hub_commit(repo, &who, upload(ops)).await);
+    let snap = ok(node.snapshot(repo).await);
+    let page = ok(node
+        .read_tree_page(
+            &snap,
+            commit,
+            "big",
+            false,
+            TreePage {
+                after: None,
+                limit: 700,
+            },
+        )
+        .await);
+    assert!(!page.more);
+    let listed: Vec<(String, u64, bool)> = page
+        .entries
+        .iter()
+        .map(|e| match &e.kind {
+            EntryKind::File { size, lfs, .. } => {
+                (e.path.clone(), lfs.map_or(*size, |p| p.size), lfs.is_some())
+            }
+            EntryKind::Dir { .. } => panic!("no folders under big/"),
+        })
+        .collect();
+    let expected: Vec<(String, u64, bool)> = (0..700u32)
+        .map(|i| {
+            let ext = if i % 2 == 0 { "txt" } else { "bin" };
+            (format!("big/f{i:04}.{ext}"), u64::from(i), i % 2 == 1)
+        })
+        .collect();
+    assert_eq!(listed, expected);
 }
 
 #[tokio::test]

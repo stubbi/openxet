@@ -16,8 +16,12 @@ use axum::extract::{RawPathParams, RawQuery, State};
 use axum::http::header::LINK;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use openxet_git::{CommitInfo, Entry, EntryKind, GitError, Pointer, Resolved, SnapshotRepo};
+use openxet_git::{
+    CommitInfo, Entry, EntryKind, GitError, Pointer, Resolved, SnapshotRepo, TreePage,
+};
+use openxet_index::XetFile;
 use openxet_protocol::hash_to_hex;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::authz::RepoAccess;
@@ -200,21 +204,20 @@ async fn tree(
         }
     }
     let (snap, resolved) = at_revision(&state, &access, &rev).await?;
-    let entries = state
+    // Entries are ordered by path bytes; a cursor is the last path listed.
+    let page = TreePage {
+        after: cursor.as_deref(),
+        limit,
+    };
+    let listing = state
         .engine
-        .read_tree(&snap, resolved.commit, &path, recursive)
+        .read_tree_page(&snap, resolved.commit, &path, recursive, page)
         .await
         .map_err(|e| HubError::at(e, &rev, Some(resolved.commit)))?;
-    // Entries are ordered by path bytes; a cursor is the last path listed.
-    let start = cursor.map_or(0, |c| {
-        entries.partition_point(|e| e.path.as_bytes() <= c.as_bytes())
-    });
-    let end = entries.len().min(start.saturating_add(limit));
-    let page = &entries[start..end];
-    let json = entries_json(&state, &access, &snap, resolved, page, expand).await?;
+    let json = entries_json(&state, &access, &snap, resolved, &listing.entries, expand).await?;
     let mut response = Json(json).into_response();
-    if end < entries.len()
-        && let Some(last) = page.last()
+    if listing.more
+        && let Some(last) = listing.entries.last()
     {
         let link = next_link(&state.cfg, uri.path(), query.as_deref(), &last.path)?;
         response.headers_mut().insert(LINK, link);
@@ -231,7 +234,7 @@ async fn paths_info_route(
     State(state): State<HubState>,
     params: RawPathParams,
     body: Body,
-) -> Result<Json<Value>, HubError> {
+) -> Result<Response, HubError> {
     let rev = param(&params, "rev");
     let body = read_body(body, PATHS_INFO_BODY_LIMIT).await?;
     let mut paths: Vec<String> = Vec::new();
@@ -283,9 +286,8 @@ async fn paths_info_route(
             found.push(entry.clone());
         }
     }
-    Ok(Json(
-        entries_json(&state, &access, &snap, resolved, &found, expand).await?,
-    ))
+    let json = entries_json(&state, &access, &snap, resolved, &found, expand).await?;
+    Ok(Json(json).into_response())
 }
 
 /// `path` without empty components, or `None` for the root or a path with
@@ -297,14 +299,14 @@ fn normalize(path: &str) -> Option<String> {
 
 /// `entries` as the Hub lists them, with `lastCommit` and
 /// `securityFileStatus` when `expand`.
-async fn entries_json(
+async fn entries_json<'a>(
     state: &HubState,
     access: &RepoAccess,
     snap: &SnapshotRepo,
     resolved: Resolved,
-    entries: &[Entry],
+    entries: &'a [Entry],
     expand: bool,
-) -> Result<Value, HubError> {
+) -> Result<Vec<EntryJson<'a>>, HubError> {
     let scope = format!("repo:{}", access.repo.id);
     let last = if expand {
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
@@ -315,53 +317,88 @@ async fn entries_json(
     } else {
         Vec::new()
     };
-    let mut out = Vec::with_capacity(entries.len());
-    for (i, entry) in entries.iter().enumerate() {
-        let mut json = entry_json(state, &scope, entry).await?;
-        if expand {
-            if let Some(commit) = last.get(i).and_then(Option::as_ref) {
-                json["lastCommit"] = last_commit_json(commit);
-            }
-            if matches!(entry.kind, EntryKind::File { .. }) {
-                json["securityFileStatus"] = security_status();
-            }
-        }
-        out.push(json);
-    }
-    Ok(Value::Array(out))
-}
-
-/// One entry (`hf_api.py` lines 692–743): a file's `oid` is its blob, the
-/// pointer's for an LFS file, whose `size` is the file's and whose `lfs`
-/// names the file's SHA-256 as `oid` (S3 fixture `16`).
-async fn entry_json(state: &HubState, scope: &str, entry: &Entry) -> Result<Value, HubError> {
-    Ok(match &entry.kind {
-        EntryKind::Dir { oid } => json!({
-            "type": "directory",
-            "oid": oid.to_string(),
-            "size": 0,
-            "path": entry.path,
-        }),
-        EntryKind::File { oid, size, lfs } => {
-            let mut json = json!({
-                "type": "file",
-                "oid": oid.to_string(),
-                "size": lfs.map_or(*size, |p| p.size),
-                "path": entry.path,
-            });
-            if let Some(pointer) = lfs {
-                json["lfs"] = json!({
-                    "oid": pointer.sha256_hex(),
-                    "size": pointer.size,
-                    "pointerSize": size,
-                });
-                if let Some(hash) = xet_hash(state, scope, pointer).await? {
-                    json["xetHash"] = hash.into();
+    // One batch of lookups for the page's Xet files, not one per entry.
+    let pointers: Vec<[u8; 32]> = entries
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntryKind::File { lfs: Some(p), .. } => Some(p.sha256),
+            _ => None,
+        })
+        .collect();
+    let xet = state.index.xet_files_by_sha256(&scope, &pointers).await?;
+    Ok(entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let mut json = entry_json(entry, &xet);
+            if expand {
+                json.last_commit = last.get(i).and_then(Option::as_ref).map(last_commit_json);
+                if matches!(entry.kind, EntryKind::File { .. }) {
+                    json.security_file_status = Some(security_status());
                 }
             }
             json
-        }
-    })
+        })
+        .collect())
+}
+
+/// One entry as the Hub lists it (`hf_api.py` lines 692–743), serialized
+/// straight from this struct: a page holds up to 1,000, and building each
+/// as a `serde_json::Value` map cost a page about as much as reading its
+/// blobs did.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryJson<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    oid: String,
+    size: u64,
+    path: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lfs: Option<LfsJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    xet_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_commit: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    security_file_status: Option<Value>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LfsJson {
+    oid: String,
+    size: u64,
+    pointer_size: u64,
+}
+
+/// One entry: a file's `oid` is its blob, the pointer's for an LFS file,
+/// whose `size` is the file's and whose `lfs` names the file's SHA-256 as
+/// `oid` (S3 fixture `16`). `xet` holds the Xet files the scope
+/// registered, by SHA-256.
+fn entry_json<'a>(entry: &'a Entry, xet: &HashMap<[u8; 32], XetFile>) -> EntryJson<'a> {
+    let (kind, oid, size, lfs) = match &entry.kind {
+        EntryKind::Dir { oid } => ("directory", oid, 0, None),
+        EntryKind::File { oid, size, lfs } => ("file", oid, lfs.map_or(*size, |p| p.size), {
+            lfs.map(|p| (p, *size))
+        }),
+    };
+    EntryJson {
+        kind,
+        oid: oid.to_string(),
+        size,
+        path: &entry.path,
+        lfs: lfs.map(|(pointer, pointer_size)| LfsJson {
+            oid: pointer.sha256_hex(),
+            size: pointer.size,
+            pointer_size,
+        }),
+        xet_hash: lfs
+            .and_then(|(pointer, _)| xet.get(&pointer.sha256).filter(|f| f.size == pointer.size))
+            .map(|file| hash_to_hex(&file.hash)),
+        last_commit: None,
+        security_file_status: None,
+    }
 }
 
 /// The Xet file hash `scope` registered for `pointer`'s SHA-256 and size.

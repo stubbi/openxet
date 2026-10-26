@@ -2,6 +2,8 @@
 //! Hub layer records about a repository beside its Git data (design §5.3,
 //! rulings M2-R2, M2-R12, M2-R13).
 
+use std::collections::HashMap;
+
 use openxet_protocol::MerkleHash;
 
 use crate::{FileRecord, IndexError, RepoId};
@@ -39,6 +41,15 @@ pub struct FileSummary {
 
 /// Which repositories [`Repos::list_repos`] returns. Each `Some` narrows
 /// the listing; both `None` lists every repository.
+/// The Xet file a SHA-256 names in one scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XetFile {
+    /// Its Xet file hash.
+    pub hash: MerkleHash,
+    /// Its size in bytes.
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RepoFilter {
     /// Only repositories carrying this label, compared exactly.
@@ -157,6 +168,19 @@ pub trait Repos: Send + Sync + 'static {
         scope: &str,
         sha256: &[u8; 32],
     ) -> Result<Option<FileRecord>, IndexError>;
+
+    /// [`Repos::file_by_sha256`] for many SHA-256s at once, in a few
+    /// queries: the Xet file each names in `scope`, by SHA-256, without
+    /// decoding terms. A SHA-256 `scope` hasn't registered is absent.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn xet_files_by_sha256(
+        &self,
+        scope: &str,
+        sha256s: &[[u8; 32]],
+    ) -> Result<HashMap<[u8; 32], XetFile>, IndexError>;
 
     /// `file` as `scope` registered it, without decoding its terms: its
     /// size and the SHA-256 its shard named, if any. The SHA-256 is
