@@ -32,42 +32,47 @@ pub(crate) type XorbSet = HashSet<MerkleHash, RandomState>;
 
 /// What answers a file range: the terms in file order and one fetch
 /// descriptor per stored byte range, before any URL is signed.
+///
+/// The fetches, in order, hold exactly the terms' chunks in file order:
+/// decoded and concatenated, they are the file from the start of the first
+/// term's first chunk, which [`Plan::offset_into_first_range`] bytes into
+/// it is where the range starts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct Plan {
+pub struct Plan {
     /// The bytes to skip in the first term: where the range starts inside
     /// that term's first chunk.
-    pub(crate) offset_into_first_range: u64,
+    pub offset_into_first_range: u64,
     /// The terms, in file order.
-    pub(crate) terms: Vec<PlannedTerm>,
+    pub terms: Vec<PlannedTerm>,
     /// The descriptors, in the order of the terms that first use them.
     /// Every term lies inside one descriptor of its xorb.
-    pub(crate) fetches: Vec<Fetch>,
+    pub fetches: Vec<Fetch>,
 }
 
 /// One term of a plan: chunks `chunks.0..chunks.1` of `xorb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PlannedTerm {
+pub struct PlannedTerm {
     /// The xorb holding the chunks.
-    pub(crate) xorb: MerkleHash,
+    pub xorb: MerkleHash,
     /// The chunk range, end-exclusive.
-    pub(crate) chunks: (u32, u32),
+    pub chunks: (u32, u32),
     /// The sum of the chunks' uncompressed lengths, which the client checks
     /// against what it decodes (S10 §1).
-    pub(crate) unpacked_length: u32,
+    pub unpacked_length: u32,
     /// The index in [`Plan::fetches`] of the descriptor holding the term.
-    pub(crate) fetch: usize,
+    pub fetch: usize,
 }
 
 /// One fetch descriptor: chunks `chunks.0..chunks.1` of `xorb`, stored at
 /// bytes `bytes.0..=bytes.1`, exactly their chunk headers and payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Fetch {
+pub struct Fetch {
     /// The xorb to fetch from.
-    pub(crate) xorb: MerkleHash,
+    pub xorb: MerkleHash,
     /// The chunk range, end-exclusive.
-    pub(crate) chunks: (u32, u32),
+    pub chunks: (u32, u32),
     /// The byte range in the stored xorb, end-inclusive.
-    pub(crate) bytes: (u64, u64),
+    pub bytes: (u64, u64),
 }
 
 /// Why a file range has no plan.

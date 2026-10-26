@@ -29,7 +29,7 @@ pub use git::{
 };
 #[cfg(feature = "test-support")]
 pub use rebuild::{FileRow, RebuildError, ScopeTables, rebuild_scope_tables};
-pub use repos::{AuditEntry, Page, Repo, RepoFilter, Repos};
+pub use repos::{AuditEntry, FileSummary, Page, Repo, RepoFilter, Repos};
 #[cfg(feature = "fault-injection")]
 pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;

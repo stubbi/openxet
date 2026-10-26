@@ -30,8 +30,9 @@ pub use shard::{
     stored_shard, verify_segment, verify_shard,
 };
 pub use xorb::{
-    MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS, StoredXorb, XorbChunks,
-    read_xorb_chunks, xorb_hash, xorb_with_footer,
+    CHUNK_HEADER_BYTES, MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS,
+    StoredXorb, XorbChunks, decode_stored_chunk, read_xorb_chunks, stored_chunk_len, xorb_hash,
+    xorb_with_footer,
 };
 #[cfg(feature = "test-support")]
 pub use xorb::{decode_fetched_chunks, lz4_xorb_body};

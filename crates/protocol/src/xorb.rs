@@ -7,7 +7,7 @@ use xet_core_structures::merklehash;
 use xet_core_structures::serialization_utils::read_u32;
 use xet_core_structures::xorb_object::{
     CompressionScheme, XORB_CHUNK_HEADER_LENGTH, XorbObjectInfoV1, deserialize_chunk_header,
-    reconstruct_xorb_with_footer,
+    parse_chunk_header, reconstruct_xorb_with_footer,
 };
 
 use crate::{MerkleHash, ProtocolError, chunk_hash};
@@ -80,6 +80,64 @@ pub fn read_xorb_chunks(r: impl Read) -> Result<XorbChunks, ProtocolError> {
         return Err(ProtocolError::XorbEmpty);
     }
     Ok(XorbChunks { hashes })
+}
+
+/// The length of a stored chunk's header, in bytes
+/// (<https://huggingface.co/docs/xet/xorb#chunk-header-structure>).
+pub const CHUNK_HEADER_BYTES: usize = XORB_CHUNK_HEADER_LENGTH;
+
+/// The stored length of the chunk whose header is `header`: the header and
+/// its compressed payload, so a reader of a stored xorb range knows how
+/// many bytes make up the next chunk before it decodes it.
+///
+/// # Errors
+///
+/// [`ProtocolError::MalformedXorb`] if upstream refuses the header: an
+/// unknown version or compression scheme, or a length past the spec's.
+pub fn stored_chunk_len(header: [u8; CHUNK_HEADER_BYTES]) -> Result<usize, ProtocolError> {
+    let header = parse_chunk_header(header).map_err(ProtocolError::MalformedXorb)?;
+    Ok(CHUNK_HEADER_BYTES + header.get_compressed_length() as usize)
+}
+
+/// Decodes `stored`, exactly one stored chunk (its header, then its
+/// compressed payload), to its uncompressed bytes, under the same checks
+/// as an upload ([`xorb_with_footer`]): the chunk decompresses to exactly
+/// its declared length, at most [`MAX_CHUNK_BYTES`], and decompression
+/// stops there. The file gateway decodes stored xorb ranges chunk by chunk
+/// with it, holding one chunk at a time.
+///
+/// # Errors
+///
+/// [`ProtocolError::XorbTruncated`] if `stored` ends inside the payload,
+/// the [`ProtocolError`] `XorbChunk*` variant naming the length rule
+/// broken, or [`ProtocolError::MalformedXorb`] for an invalid header or
+/// payload, or bytes past the payload.
+pub fn decode_stored_chunk(stored: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+    let mut rest = stored;
+    let header = deserialize_chunk_header(&mut rest).map_err(ProtocolError::MalformedXorb)?;
+    let compressed_len = header.get_compressed_length() as usize;
+    let compressed = rest
+        .get(..compressed_len)
+        .ok_or(ProtocolError::XorbTruncated { chunk: 0 })?;
+    if rest.len() > compressed_len {
+        return Err(ProtocolError::MalformedXorb(CoreError::MalformedData(
+            format!(
+                "{} bytes follow the chunk's {compressed_len}-byte payload",
+                rest.len() - compressed_len
+            ),
+        )));
+    }
+    if header.get_uncompressed_length() == 0 {
+        return Err(ProtocolError::XorbChunkEmpty { chunk: 0 });
+    }
+    decompress_chunk(
+        0,
+        header
+            .get_compression_scheme()
+            .map_err(ProtocolError::MalformedXorb)?,
+        compressed,
+        header.get_uncompressed_length(),
+    )
 }
 
 /// A validated xorb upload in its stored form.

@@ -247,6 +247,10 @@ const NOT_REPOSITORY_ROUTES: &[(&str, &str)] = &[
     ("/api/users/{user}/likes", "501, whatever exists"),
     ("/api/models-tags-by-type", "501, whatever exists"),
     ("/api/datasets-tags-by-type", "501, whatever exists"),
+    (
+        "/v1/transfer/files/{repo}/{file}",
+        "addresses the repository by id; gateway_needs_credential_scoped_to_repo",
+    ),
 ];
 
 /// Asserts that `method template` answers Bob, who may not read

@@ -47,11 +47,11 @@ its clients sent (`assert_no_credential_in_log`).
 | --- | --- | --- | --- |
 | 1 | `no_unauthenticated_reads` | `crates/cas/tests/reconstruction.rs` | M1 |
 | 1 | `signed_url_bound_to_range` | `crates/auth/tests/auth.rs` | M1 |
-| 1 | `no_unauthenticated_reads` | pending (M2, `crates/hub/tests/gateway.rs`) | M2 (Hub, gateway and LFS URLs) |
+| 1 | `no_unauthenticated_reads` | `crates/hub/tests/gateway.rs` | M2 (Hub and gateway URLs; LFS URLs with Task 14) |
 | 1 | `anonymous_reads_only_with_rule` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
 | 2 | `unreadable_repo_matches_unknown_repo_on_every_route` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
-| 2 | `gateway_needs_credential_scoped_to_repo` | pending (M2, `crates/hub/tests/gateway.rs`) | M2 (file gateway) |
+| 2 | `gateway_needs_credential_scoped_to_repo` | `crates/hub/tests/gateway.rs` | M2 (file gateway) |
 | 2 | `repo_create_authorized_per_namespace` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `wrong_type_without_read_access_matches_unknown_repo` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `create_collision_authorized_first` | `crates/hub/tests/security.rs` | M2 |

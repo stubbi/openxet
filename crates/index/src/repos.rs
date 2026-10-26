@@ -28,6 +28,15 @@ pub struct Repo {
     pub full_repack_gen: u64,
 }
 
+/// A registered file's size and SHA-256 ([`Repos::file_summary`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileSummary {
+    /// The file's size in bytes.
+    pub size: u64,
+    /// The SHA-256 the registering shard named, if any.
+    pub sha256: Option<[u8; 32]>,
+}
+
 /// Which repositories [`Repos::list_repos`] returns. Each `Some` narrows
 /// the listing; both `None` lists every repository.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,6 +157,20 @@ pub trait Repos: Send + Sync + 'static {
         scope: &str,
         sha256: &[u8; 32],
     ) -> Result<Option<FileRecord>, IndexError>;
+
+    /// `file` as `scope` registered it, without decoding its terms: its
+    /// size and the SHA-256 its shard named, if any. The SHA-256 is
+    /// client-asserted, like [`Repos::file_by_sha256`]'s: the file gateway
+    /// answers it as the file's `ETag` in that scope only (ruling M2-R9).
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Database`] or [`IndexError::Corrupt`].
+    async fn file_summary(
+        &self,
+        scope: &str,
+        file: &MerkleHash,
+    ) -> Result<Option<FileSummary>, IndexError>;
 
     /// The number of scopes `file` is registered to: what
     /// [`Repos::purge_file`] would remove now (ruling M2-R13).

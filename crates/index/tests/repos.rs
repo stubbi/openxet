@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use openxet_index::{
-    AuditEntry, ChunkTable, FileRecord, HubIndex, Index, IndexError, NewFile, Page, Registrant,
-    Repo, RepoFilter, RepoId, Repos, SqliteIndex, Term, Visibility,
+    AuditEntry, ChunkTable, FileRecord, FileSummary, HubIndex, Index, IndexError, NewFile, Page,
+    Registrant, Repo, RepoFilter, RepoId, Repos, SqliteIndex, Term, Visibility,
 };
 use openxet_protocol::{MerkleHash, chunk_hash};
 use tempfile::TempDir;
@@ -343,6 +343,42 @@ async fn file_by_sha256_is_per_scope() {
     assert_eq!(
         ok(index.file_by_sha256("repo:a", &sha).await),
         Some(f.record)
+    );
+}
+
+#[tokio::test]
+async fn file_summary_is_per_scope() {
+    let dir = ok(TempDir::new());
+    let (index, _) = open(&dir).await;
+    let (xorb, t) = put(&index, "x", 4, "repo:a").await;
+    let f = file("same", xorb, &t, 0, 4);
+    let sha = f.sha256.unwrap_or_else(|| panic!("sha"));
+    register(&index, "shard", std::slice::from_ref(&f), "repo:a", 1).await;
+    let mut unnamed = file("unnamed", xorb, &t, 0, 2);
+    unnamed.sha256 = None;
+    register(
+        &index,
+        "shard2",
+        std::slice::from_ref(&unnamed),
+        "repo:a",
+        2,
+    )
+    .await;
+
+    assert_eq!(
+        ok(index.file_summary("repo:a", &f.record.hash).await),
+        Some(FileSummary {
+            size: f.record.size,
+            sha256: Some(sha),
+        })
+    );
+    assert_eq!(ok(index.file_summary("repo:b", &f.record.hash).await), None);
+    assert_eq!(
+        ok(index.file_summary("repo:a", &unnamed.record.hash).await),
+        Some(FileSummary {
+            size: unnamed.record.size,
+            sha256: None,
+        })
     );
 }
 

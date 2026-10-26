@@ -9,7 +9,9 @@ use sqlx::sqlite::SqliteRow;
 
 use super::{SqliteIndex, to_i64, to_u64};
 use crate::types::{decode_terms, hash_from};
-use crate::{AuditEntry, FileRecord, IndexError, Page, Repo, RepoFilter, RepoId, Repos};
+use crate::{
+    AuditEntry, FileRecord, FileSummary, IndexError, Page, Repo, RepoFilter, RepoId, Repos,
+};
 
 const REPO_COLUMNS: &str = "id, namespace, name, private, labels, created_at, full_repack_gen";
 
@@ -214,6 +216,35 @@ impl Repos for SqliteIndex {
                 size: to_u64(row.try_get(1)?, "file size")?,
                 terms: decode_terms(row.try_get::<&[u8], _>(2)?)?,
             })
+        })
+        .transpose()
+    }
+
+    async fn file_summary(
+        &self,
+        scope: &str,
+        file: &MerkleHash,
+    ) -> Result<Option<FileSummary>, IndexError> {
+        let row: Option<(i64, Option<Vec<u8>>)> =
+            sqlx::query_as("SELECT size, sha256 FROM file_scopes WHERE file = ? AND scope = ?")
+                .bind(file.as_bytes())
+                .bind(scope)
+                .fetch_optional(&self.reader)
+                .await?;
+        row.map(|(size, sha256)| {
+            let size = u64::try_from(size)
+                .map_err(|_| IndexError::Corrupt(format!("a file's size is {size}")))?;
+            let sha256 = sha256
+                .map(|bytes| {
+                    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+                        IndexError::Corrupt(format!(
+                            "a file's SHA-256 is {} bytes, not 32",
+                            bytes.len()
+                        ))
+                    })
+                })
+                .transpose()?;
+            Ok(FileSummary { size, sha256 })
         })
         .transpose()
     }
