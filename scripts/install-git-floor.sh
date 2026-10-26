@@ -36,8 +36,9 @@ fi
 tar -xJf "$tarball" -C "$work"
 
 # No translations, Tcl/Tk, Perl or Python: the tests run plumbing and the
-# HTTP transport only.
+# HTTP transport only. C17, because under C23, the default of newer GCC,
+# the `unreachable` macro of <stddef.h> breaks git 2.37's reflog.c.
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
-make -C "$work/git-$version" -j "$jobs" prefix="$prefix" \
+make -C "$work/git-$version" -j "$jobs" prefix="$prefix" CFLAGS="-O2 -std=gnu17" \
   NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 install >/dev/null
 "$prefix/bin/git" --version
