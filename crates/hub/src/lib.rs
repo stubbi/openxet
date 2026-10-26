@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
-use openxet_auth::{Authenticator, Authorizer, TokenSigner};
+use openxet_auth::{Authenticator, Authorizer, CapabilitySigner, TokenSigner};
 use openxet_cas::{MemoryBudget, SendDeadline};
 use openxet_git::Engine;
 #[cfg(feature = "test-support")]
@@ -44,6 +44,22 @@ macro_rules! typed_paths {
     };
 }
 
+/// The paths of a route under a repository's Git URL: the unprefixed one,
+/// `/{ns}/{name}{suffix}`, then one per Hub type but `model`,
+/// `/datasets/{ns}/{name}{suffix}`, … (ADR 0010 item 4). `{name}` may end
+/// in `.git`, which the handlers strip: git and `git-lfs` address a
+/// repository both ways (ruling M2-R11).
+macro_rules! git_paths {
+    ($suffix:literal) => {
+        [
+            concat!("/{ns}/{name}", $suffix),
+            concat!("/datasets/{ns}/{name}", $suffix),
+            concat!("/spaces/{ns}/{name}", $suffix),
+            concat!("/kernels/{ns}/{name}", $suffix),
+        ]
+    };
+}
+
 mod authz;
 mod commit;
 mod error;
@@ -51,6 +67,7 @@ mod gateway;
 mod githttp;
 mod info;
 mod labels;
+mod lfs;
 mod listing;
 mod misc;
 mod names;
@@ -90,6 +107,10 @@ pub struct HubConfig {
     pub max_commit_bytes: u64,
     /// How long the CAS tokens the Hub mints live.
     pub token_ttl: Duration,
+    /// How long an LFS upload's capability `href` answers: at least
+    /// [`HubConfig::token_ttl`], so it outlives the CAS token its batch
+    /// answer carries (ADR 0003 decision 1, ADR 0005 item 10).
+    pub capability_ttl: Duration,
     /// The most entries one listing page holds (ruling M2-R8).
     pub page_size: usize,
     /// How long a file gateway body may go without sending a byte before
@@ -109,6 +130,8 @@ impl HubConfig {
     pub const DEFAULT_MAX_COMMIT_BYTES: u64 = 64 << 20;
     /// The default [`HubConfig::token_ttl`]: 15 minutes.
     pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_mins(15);
+    /// The default [`HubConfig::capability_ttl`]: 60 minutes.
+    pub const DEFAULT_CAPABILITY_TTL: Duration = Duration::from_hours(1);
     /// The largest, and default, [`HubConfig::page_size`]: 1,000 (ruling
     /// M2-R8).
     pub const MAX_PAGE_SIZE: usize = 1000;
@@ -139,6 +162,9 @@ pub struct HubState {
     /// Signs the CAS tokens the token routes hand out: the server's own
     /// key (`{data_dir}/cas-token.key`), which the CAS verifies.
     pub signer: Arc<TokenSigner>,
+    /// Signs and checks LFS upload capability `href`s, with the transfer
+    /// key every node shares (ruling M1-R29, ADR 0003 decision 1).
+    pub caps: Arc<CapabilitySigner>,
     /// The memory budget, and the send deadline of a buffered answer,
     /// shared with the CAS.
     pub memory: SharedMemory,
@@ -183,6 +209,7 @@ impl HubState {
         engine: Arc<Engine>,
         signer: Arc<TokenSigner>,
         memory: SharedMemory,
+        caps: Arc<CapabilitySigner>,
     ) -> Self {
         Self {
             index,
@@ -194,6 +221,7 @@ impl HubState {
             engine,
             signer,
             memory,
+            caps,
         }
     }
 
@@ -240,6 +268,7 @@ pub fn routes() -> routes::Routes {
         .merge(gateway::routes())
         .merge(listing::routes())
         .merge(labels::routes())
+        .merge(lfs::routes())
         .merge(misc::routes())
         .merge(githttp::routes())
 }

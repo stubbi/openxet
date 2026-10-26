@@ -432,10 +432,49 @@ async fn banner_lists_hub_and_git_lines() {
     assert!(text.contains("the Hub API and Git at"), "{text}");
 }
 
+/// An LFS upload batch for one object to `repo` (`{ns}/{name}`), offering
+/// `xet`, with `token` as the Basic password, as `git-lfs` sends it with
+/// `git-xet` registered; the upload action of its answer.
+async fn lfs_upload_action(server: &Server, repo: &str, token: &str) -> Value {
+    let body = json!({
+        "operation": "upload",
+        "transfers": ["xet", "basic"],
+        "objects": [{"oid": "1".repeat(64), "size": 300_000}],
+        "hash_algo": "sha256",
+    });
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/{repo}.git/info/lfs/objects/batch",
+            server.endpoint
+        ))
+        .basic_auth("git", Some(token))
+        .header("content-type", "application/vnd.git-lfs+json")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let answer: Value = response.json().await.unwrap();
+    answer["objects"][0]["actions"]["upload"].clone()
+}
+
+/// A GET on a capability `href`, with `authorization` as the header if
+/// any: the status and the CAS token answered.
+async fn refresh(href: &str, authorization: Option<&str>) -> (u16, Value) {
+    let mut request = reqwest::Client::new().get(href);
+    if let Some(value) = authorization {
+        request = request.header("authorization", value);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap_or(Value::Null))
+}
+
 /// `restart_keeps_repos_tokens_and_capabilities`: after a restart on the
 /// same data directory, pushed repositories clone, the dev token still
-/// works, and a CAS token the Hub handed out before the restart is still
-/// accepted by the CAS, as `cas-token.key` is kept.
+/// works, a CAS token the Hub handed out before the restart is still
+/// accepted by the CAS, as `cas-token.key` is kept, and an LFS capability
+/// `href` still answers, as the transfer key is kept.
 #[tokio::test]
 async fn restart_keeps_repos_tokens_and_capabilities() {
     let dir = TempDir::new().unwrap();
@@ -480,6 +519,11 @@ async fn restart_keeps_repos_tokens_and_capabilities() {
     assert_eq!(probe(&server, "oxt_not_a_token".to_owned()).await, 401);
     let before = probe(&server, cas_token.clone()).await;
     assert_eq!(before, 404, "the CAS token is accepted: nothing is there");
+    let href = lfs_upload_action(&server, "dev/kept", &token).await["href"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(refresh(&href, None).await.0, 200);
     let key = std::fs::read(data.join("cas-token.key")).unwrap();
     let port = server.port();
     server.stop();
@@ -488,6 +532,16 @@ async fn restart_keeps_repos_tokens_and_capabilities() {
     assert_eq!(server.token, token, "the dev token changed on restart");
     assert_eq!(std::fs::read(data.join("cas-token.key")).unwrap(), key);
     assert_eq!(probe(&server, cas_token).await, before);
+    let (status, refreshed) = refresh(&href, None).await;
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(
+        probe(
+            &server,
+            refreshed["accessToken"].as_str().unwrap().to_owned()
+        )
+        .await,
+        before
+    );
     let clone = dir.path().join("clone");
     must(
         dir.path(),
@@ -625,6 +679,26 @@ async fn credentials_never_logged() {
         assert_eq!(status, 404);
         secrets.push(cas);
     }
+
+    // LFS: Basic credentials, a capability `href` (its `sig` is the
+    // credential) refreshed with an Authorization header it must ignore,
+    // and the CAS tokens both hand out.
+    let upload = lfs_upload_action(&server, "dev/logs", &token).await;
+    let href = upload["href"].as_str().unwrap().to_owned();
+    let sig = href.split("sig=").nth(1).unwrap().to_owned();
+    secrets.push(sig);
+    secrets.push(
+        upload["header"]["X-Xet-Access-Token"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    let ignored = format!("Basic {}", BASE64_STANDARD.encode(format!("git:{wrong}")));
+    let (status, refreshed) = refresh(&href, Some(&ignored)).await;
+    assert_eq!(status, 200, "{refreshed}");
+    secrets.push(refreshed["accessToken"].as_str().unwrap().to_owned());
+    let (status, _) = refresh(&href.replace("sig=", "sig=x"), Some(&ignored)).await;
+    assert_eq!(status, 403);
 
     let log = server.stop();
     assert!(

@@ -14,6 +14,7 @@ use axum::extract::State;
 use axum::http::{HeaderName, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{Action, Mode};
+use openxet_index::Repo;
 use serde_json::json;
 
 use crate::authz::{self, RepoAccess};
@@ -62,30 +63,76 @@ async fn token(
     if mode == Mode::Write {
         authz::require(&state, &access.who, Action::Write, &access.repo).await?;
     }
-    let now = state.clock.now();
-    let exp = now.saturating_add(state.cfg.token_ttl.as_secs());
-    let scope = format!("repo:{}", access.repo.id);
+    let exp = state
+        .clock
+        .now()
+        .saturating_add(state.cfg.token_ttl.as_secs());
+    issue(&state, &access.who.subject, &access.repo, mode, exp)?.response()
+}
+
+/// A CAS token for `repo`, as the token routes answer it.
+pub(crate) struct CasToken {
+    /// The signed token.
+    pub(crate) token: String,
+    /// Its expiry, Unix seconds.
+    pub(crate) exp: u64,
+    /// The CAS URL it is for, without a trailing slash.
+    pub(crate) cas_url: String,
+}
+
+/// A CAS token of `mode` for `repo`, for `subject`, expiring at `exp`:
+/// scoped to `repo:{id}` with the namespace as its tenant (design §5.4).
+///
+/// # Errors
+///
+/// [`HubError::Internal`] if the signer refuses the claims, which it does
+/// only for an `exp` not after now or past the token lifetime limit.
+pub(crate) fn issue(
+    state: &HubState,
+    subject: &str,
+    repo: &Repo,
+    mode: Mode,
+    exp: u64,
+) -> Result<CasToken, HubError> {
+    let scope = format!("repo:{}", repo.id);
     let token = state
         .signer
         .sign_with_tenant(
-            &access.who.subject,
+            subject,
             &scope,
-            Some(&access.repo.namespace),
+            Some(&repo.namespace),
             mode,
             exp,
-            now,
+            state.clock.now(),
         )
         .map_err(|e| HubError::Internal(Box::new(e)))?;
     // `hf_xet` appends `/v1/…` to the CAS URL, so it carries no trailing
     // slash, as huggingface.co's doesn't.
     let cas_url = state.cfg.cas_url.as_str().trim_end_matches('/').to_owned();
-    let header =
-        |text: &str| HeaderValue::try_from(text).map_err(|e| HubError::Internal(Box::new(e)));
-    let headers = [
-        (X_XET_CAS_URL, header(&cas_url)?),
-        (X_XET_ACCESS_TOKEN, header(&token)?),
-        (X_XET_TOKEN_EXPIRATION, header(&exp.to_string())?),
-    ];
-    let body = json!({ "accessToken": token, "exp": exp, "casUrl": cas_url });
-    Ok((headers, Json(body)).into_response())
+    Ok(CasToken {
+        token,
+        exp,
+        cas_url,
+    })
+}
+
+impl CasToken {
+    /// The token routes' answer: the token in the body and in the three
+    /// `X-Xet-*` headers, `exp` in Unix seconds (ADR 0005 item 3).
+    ///
+    /// # Errors
+    ///
+    /// [`HubError::Internal`] for a value that can't be a header, which a
+    /// signed token, a URL and a number never are.
+    pub(crate) fn response(self) -> Result<Response, HubError> {
+        let header =
+            |text: &str| HeaderValue::try_from(text).map_err(|e| HubError::Internal(Box::new(e)));
+        let headers = [
+            (X_XET_CAS_URL, header(&self.cas_url)?),
+            (X_XET_ACCESS_TOKEN, header(&self.token)?),
+            (X_XET_TOKEN_EXPIRATION, header(&self.exp.to_string())?),
+        ];
+        let body = json!({ "accessToken": self.token, "exp": self.exp, "casUrl": self.cas_url });
+        Ok((headers, Json(body)).into_response())
+    }
 }
