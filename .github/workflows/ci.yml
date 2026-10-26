@@ -261,6 +261,134 @@ jobs:
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
 
+  # Stock huggingface_hub and hf (the pinned versions) against openxet
+  # serve's Hub API, as alice and bob of compat/hub_harness.py's rules.
+  compat-hub:
+    name: compat (hub)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+          cache-dependency-glob: compat/uv.lock
+      - run: cargo build --locked -p openxet
+      - run: uv run --frozen --directory compat pytest -m hub
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+
+  # The runner's git over smart HTTP, against one node and against two
+  # nodes sharing a data directory.
+  compat-git:
+    name: compat (git)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+          cache-dependency-glob: compat/uv.lock
+      - run: git --version
+      - run: cargo build --locked -p openxet
+      - run: uv run --frozen --directory compat pytest -m git
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+
+  # ADR 0003's leg: repos on Gitea (compat/gitea/compose.yaml, pinned by
+  # digest), LFS objects on openxet, git-lfs 3.7.1 and git-xet 0.2.1 as
+  # spike S7 observed them; and jj-xet's contract.
+  compat-lfs:
+    name: compat (lfs)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+          cache-dependency-glob: compat/uv.lock
+      # Release binaries, checked against the SHA-256 each release
+      # publishes (git-lfs's sha256sums.asc, the git-xet release's asset
+      # digests); ahead of the runner's own git-lfs on PATH.
+      - name: Install git-lfs 3.7.1 and git-xet 0.2.1
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/lfs-clients"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO --retry 3 https://github.com/git-lfs/git-lfs/releases/download/v3.7.1/git-lfs-linux-amd64-v3.7.1.tar.gz
+          echo "1c0b6ee5200ca708c5cebebb18fdeb0e1c98f1af5c1a9cba205a4c0ab5a5ec08  git-lfs-linux-amd64-v3.7.1.tar.gz" | sha256sum -c -
+          tar -xzf git-lfs-linux-amd64-v3.7.1.tar.gz
+          install -m 0755 git-lfs-3.7.1/git-lfs "$bin/git-lfs"
+          curl -fsSLO --retry 3 https://github.com/huggingface/xet-core/releases/download/git-xet-v0.2.1/git-xet-linux-x86_64.zip
+          echo "e6354d55704cc838d1feed79ee27b9b89da7752ae98bd83df5797c180700fdb1  git-xet-linux-x86_64.zip" | sha256sum -c -
+          unzip -q git-xet-linux-x86_64.zip -d git-xet
+          install -m 0755 git-xet/git-xet "$bin/git-xet"
+          echo "$bin" >> "$GITHUB_PATH"
+      - run: git lfs version && git-xet --version
+      # The password protects a throwaway container on 127.0.0.1; it is
+      # masked in the log all the same.
+      - name: Start Gitea and seed its user
+        run: |
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          OPENXET_COMPAT_GITEA_PASSWORD="$password" compat/gitea/seed.sh > /dev/null
+          {
+            echo "OPENXET_COMPAT_GITEA_URL=http://127.0.0.1:3000"
+            echo "OPENXET_COMPAT_GITEA_USER=compat"
+            echo "OPENXET_COMPAT_GITEA_PASSWORD=$password"
+          } >> "$GITHUB_ENV"
+      - run: cargo build --locked -p openxet
+      - run: uv run --frozen --directory compat pytest -m lfs
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+      - name: Gitea's log
+        if: failure()
+        run: docker compose -f compat/gitea/compose.yaml logs
+
+  # The Git role's protocol tests against git 2.37.7, the oldest git it
+  # supports (ADR 0004 item 8), besides the runner's own.
+  git-floor:
+    name: git floor (2.37.7)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: nextest
+      - id: git-floor-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/openxet/git-2.37.7
+          key: git-2.37.7-${{ runner.os }}-${{ hashFiles('scripts/install-git-floor.sh') }}
+      - if: steps.git-floor-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev libexpat1-dev zlib1g-dev
+      - run: scripts/install-git-floor.sh "$HOME/.cache/openxet/git-2.37.7"
+      - run: OPENXET_TEST_GIT_237="$HOME/.cache/openxet/git-2.37.7/bin/git" cargo nextest run --locked -p openxet-git
+
   # Not a required check: it needs the nightly toolchain, whose moving
   # sanitizer and coverage flags make it non-hermetic (see GOVERNANCE.md).
   fuzz-smoke:

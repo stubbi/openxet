@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives import serialization
 from conftest import (
     DEDUP_ROUTE,
     HARNESS_ENV,
+    MiB,
     RECONSTRUCTION_ROUTE,
     SCRUBBED_PREFIXES,
     V1_RECONSTRUCTION_ROUTE,
@@ -32,11 +33,11 @@ from conftest import (
     isolated_env,
     openxet_serve,
     sha256,
+    write_noise,
 )
 
 pytestmark = pytest.mark.storage_only
 
-MiB = 1 << 20
 CLIENT_PATIENCE = 600
 
 # The client side of the storage-only API, as huggingface_hub drives it.
@@ -122,18 +123,6 @@ class Clients:
 @pytest.fixture
 def clients(openxet_bin, tmp_path) -> Clients:
     return Clients(openxet_bin, tmp_path / "clients")
-
-
-def write_noise(path: Path, size: int, seed: int) -> Path:
-    """Seeded pseudo-random bytes: incompressible, reproducible, never committed."""
-    rng = random.Random(seed)
-    with path.open("wb") as f:
-        left = size
-        while left:
-            n = min(left, 16 * MiB)
-            f.write(rng.randbytes(n))
-            left -= n
-    return path
 
 
 def run_openxet(openxet_bin: str, root: Path, *args) -> dict:

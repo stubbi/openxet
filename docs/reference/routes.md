@@ -84,6 +84,7 @@ These answers can come from any route:
 | `HEAD /v1/xorbs/default/{hash}` | read, private | Whether a xorb is stored, and its size |
 | `POST /v2/shards` | write | Register files, streaming progress (preferred by `hf_xet`) |
 | `POST /v1/shards` | write | Register files |
+| `POST /shards` | write | `POST /v1/shards` without the version, as `git-xet` 0.2.1 sends it |
 | `GET /v1/chunks/{prefix}/{hash}` | read, private | Global dedup query |
 | `GET /v2/reconstructions/{file}` | read, private | Download plan (preferred by `hf_xet`) |
 | `GET /v1/reconstructions/{file}` | read, private | Download plan, v1 shape |
@@ -204,7 +205,8 @@ stored and its files registered all the same, and the client's retry gets
 
 ### `POST /v1/shards`
 
-The same ingest, answered once: `200 {"result": 1}` if anything was new to
+Also served at `POST /shards`, which `git-xet` 0.2.1 calls, as
+huggingface.co's CAS accepts it. The same ingest, answered once: `200 {"result": 1}` if anything was new to
 the scope, `{"result": 0}` if not. Failures are statuses:
 
 | Status | `code` | Meaning |

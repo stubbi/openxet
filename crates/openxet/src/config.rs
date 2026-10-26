@@ -1000,7 +1000,9 @@ fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub>
     let token_ttl = c.duration(
         "hub.token_ttl",
         HubConfig::DEFAULT_TOKEN_TTL,
-        (Duration::from_mins(1), Duration::from_hours(24)),
+        // As low as 5s so a test can make git-xet, which refreshes a token
+        // expiring within 30 s, refresh at once.
+        (Duration::from_secs(5), Duration::from_hours(24)),
         "How long the CAS tokens the Hub hands clients live; clients refresh them before they \
          expire. 15m is the default.",
     );
@@ -2634,6 +2636,22 @@ mod tests {
         assert_eq!(hub.token_ttl, Duration::from_mins(30));
         assert_eq!(hub.capability_ttl, Duration::from_hours(2));
         assert_eq!(hub.page_size, 20);
+    }
+
+    #[test]
+    fn token_ttl_goes_down_to_five_seconds() {
+        // Short enough that git-xet, which refreshes a CAS token expiring
+        // within 30 s, refreshes at once: the compatibility suite's LFS leg
+        // exercises the refresh that way.
+        let config = load_toml("[hub]\ntoken_ttl = \"5s\"\n", &[])
+            .config
+            .unwrap();
+        let server = Url::parse("http://127.0.0.1:8080").unwrap();
+        assert_eq!(config.hub(&server).token_ttl, Duration::from_secs(5));
+
+        let loaded = load_toml("[hub]\ntoken_ttl = \"4s\"\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["hub.token_ttl"]);
+        assert!(loaded.problems[0].rule.contains("from 5s to 24h"));
     }
 
     #[test]

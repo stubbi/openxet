@@ -18,6 +18,9 @@ tmp_path_retention_policy = "failed"
 markers = [
     "agent: drives the openxet CLI as an agent would (needs OPENXET_BIN)",
     "docs: runs the documentation's examples against the built CLI (needs OPENXET_BIN)",
+    "git: stock git over smart HTTP against openxet serve (needs OPENXET_BIN)",
+    "hub: stock huggingface_hub and hf against openxet serve (needs OPENXET_BIN)",
+    "lfs: git-lfs and git-xet with repos on Gitea, and jj-xet's contract (needs OPENXET_BIN; the Gitea tests need compat/gitea)",
     "pinned: only valid when the locked client versions are installed",
     "storage_only: stock hf_xet against openxet serve, no Hub (needs OPENXET_BIN)",
 ]

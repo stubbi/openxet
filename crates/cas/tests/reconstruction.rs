@@ -908,7 +908,9 @@ fn aimed_at_scope_a(route: &Route) -> (Method, String, Vec<u8>) {
         // An upload's body is empty: with another scope's write token,
         // nothing an upload could do reaches scope A.
         ("POST" | "HEAD", XORB_PATH) => (xorb_path(&xorb), vec![]),
-        ("POST", "/v1/shards" | "/v2/shards") => (route.path.to_owned(), hf_xet_shard()),
+        ("POST", "/shards" | "/v1/shards" | "/v2/shards") => {
+            (route.path.to_owned(), hf_xet_shard())
+        }
         ("GET", DEDUP_PATH) => (
             format!("/v1/chunks/default/{}", hash_to_hex(&first_chunk)),
             vec![],
@@ -982,7 +984,7 @@ async fn credential_scoped_to_repo() {
                 (Access::Write, _, _) if !write => reply.assert_error(403, "insufficient_scope"),
                 (_, "POST", "/v1/telemetry") => assert_eq!(reply.status, 204, "{what}"),
                 (_, "POST", XORB_PATH) => reply.assert_error(400, "xorb_empty"),
-                (_, "POST", "/v1/shards") => {
+                (_, "POST", "/shards" | "/v1/shards") => {
                     reply.assert_error(400, "unknown_xorb");
                     assert!(reply.body.contains(unknown), "{what}: {}", reply.body);
                 }
