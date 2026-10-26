@@ -7,7 +7,7 @@
 
 use axum::Json;
 use axum::extract::{RawPathParams, State};
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use openxet_auth::Action;
 use openxet_index::{AuditEntry, IndexError, Repo};
 use serde_json::{Value, json};
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::authz::{self, RepoAccess};
 use crate::names::full_name;
 use crate::repos::meta_of;
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Doc, Routes, api, on, with_write};
 use crate::{HubError, HubState, param};
 
 /// The longest label, in bytes (ADR 0010 item 3).
@@ -63,12 +63,74 @@ pub(crate) fn routes() -> Routes {
     Routes::new()
         .route(
             "/api/openxet/v1/repos/{ns}/{name}/labels",
-            on(Method::GET, list).private(),
+            on(Method::GET, list_doc(), list).private(),
         )
         .route(
             "/api/openxet/v1/repos/{ns}/{name}/labels/{label}",
-            on(Method::PUT, add).on(Method::DELETE, remove).private(),
+            on(Method::PUT, add_doc(), add)
+                .on(Method::DELETE, remove_doc(), remove)
+                .private(),
         )
+}
+
+/// A labels route: it sees a repository whatever its labels.
+fn labels_doc(summary: &'static str) -> Doc {
+    api(Area::Openxet, summary)
+        .answer(
+            StatusCode::OK,
+            "The repository's labels.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["schema", "repo", "labels"],
+                    "properties": {
+                        "schema": {"type": "string", "enum": [SCHEMA]},
+                        "repo": {"type": "string", "description": "`{namespace}/{name}`."},
+                        "labels": {"type": "array", "items": {"type": "string"}}
+                    }
+                }),
+            )),
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`repo_not_found`: no such repository, or one the caller may not read; the two \
+             answer alike.",
+        )
+}
+
+/// A change of labels: needs `write`, and is recorded before it is
+/// answered.
+fn change_doc(summary: &'static str, describe: &'static str) -> Doc {
+    with_write(labels_doc(summary))
+        .describe(describe)
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`invalid_label`: the label is not a lowercase slug of `a`-`z`, `0`-`9` and \
+             `-`, 1 to 64 bytes, or the repository carries 32 already.",
+        )
+        .error(
+            StatusCode::CONFLICT,
+            "`labels_changed`: the labels changed concurrently; nothing was changed. Retry.",
+        )
+}
+
+fn list_doc() -> Doc {
+    labels_doc("List a repository's labels")
+}
+
+fn add_doc() -> Doc {
+    change_doc(
+        "Add a label",
+        "Adding a label the repository carries changes nothing.",
+    )
+}
+
+fn remove_doc() -> Doc {
+    change_doc(
+        "Remove a label",
+        "Removing a label the repository doesn't carry changes nothing.",
+    )
 }
 
 /// `GET …/labels`: `{"schema","repo","labels"}`. Needs `read`.

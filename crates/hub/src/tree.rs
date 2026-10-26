@@ -14,17 +14,17 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::{RawPathParams, RawQuery, State};
 use axum::http::header::LINK;
-use axum::http::{Method, Uri};
+use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use openxet_git::{CommitInfo, Entry, EntryKind, GitError, Pointer, Resolved, SnapshotRepo};
 use openxet_protocol::hash_to_hex;
 use serde_json::{Value, json};
 
 use crate::authz::RepoAccess;
-use crate::listing::{decode_cursor, next_link, page_limit};
+use crate::listing::{decode_cursor, next_link, page_limit, paged};
 use crate::refs::at_revision;
 use crate::repos::timestamp;
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, on, repo, with_body, with_revision};
 use crate::{HubError, HubState, param, read_body};
 
 /// The largest `paths-info` body, form-encoded paths.
@@ -43,11 +43,130 @@ pub(crate) fn routes() -> Routes {
     let paths_info = typed_paths!("/{ns}/{name}/paths-info/{rev}");
     for i in 0..tree_root.len() {
         routes = routes
-            .route(tree_root[i], on(Method::GET, tree).private())
-            .route(tree_path[i], on(Method::GET, tree).private())
-            .route(paths_info[i], on(Method::POST, paths_info_route).private());
+            .route(tree_root[i], on(Method::GET, tree_doc(), tree).private())
+            .route(tree_path[i], on(Method::GET, tree_doc(), tree).private())
+            .route(
+                paths_info[i],
+                on(Method::POST, paths_info_doc(), paths_info_route).private(),
+            );
     }
     routes
+}
+
+/// An entry of a tree listing or `paths-info`.
+fn entry_schema() -> Value {
+    let scan = json!({"type": "object", "properties": {"status": {"type": "string"}}});
+    json!({
+        "type": "object",
+        "required": ["type", "oid", "size", "path"],
+        "properties": {
+            "type": {"type": "string", "enum": ["file", "directory"]},
+            "oid": {"type": "string", "description": "The Git object id."},
+            "size": {"type": "integer", "description": "An LFS file's own size."},
+            "path": {"type": "string"},
+            "lfs": {
+                "type": "object",
+                "description": "For an LFS file.",
+                "properties": {
+                    "oid": {"type": "string", "description": "The file's SHA-256."},
+                    "size": {"type": "integer"},
+                    "pointerSize": {"type": "integer"}
+                }
+            },
+            "xetHash": {
+                "type": "string",
+                "description": "For an LFS file this repository registered: its Xet hash."
+            },
+            "lastCommit": {
+                "type": "object",
+                "description": "With `expand`.",
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "date": {"type": "string", "format": "date-time"}
+                }
+            },
+            "securityFileStatus": {
+                "type": "object",
+                "description": "With `expand`; OpenXet runs no scans, so each is `unscanned`.",
+                "properties": {
+                    "status": {"type": "string"},
+                    "protectAiScan": scan,
+                    "avScan": scan,
+                    "pickleImportScan": scan,
+                    "virusTotalScan": scan
+                }
+            }
+        }
+    })
+}
+
+fn entry_not_found(doc: Doc) -> Doc {
+    doc.error(
+        StatusCode::NOT_FOUND,
+        "`entry_not_found`: the path names nothing at the revision. `X-Error-Code: \
+         EntryNotFound`, `X-Repo-Commit`.",
+    )
+}
+
+fn tree_doc() -> Doc {
+    let doc = entry_not_found(with_revision(repo("List a folder")))
+        .describe(
+            "The folder's entries at the revision, or with `recursive` everything under it, \
+             ordered by path. Paths are read inside the commit's tree only.",
+        )
+        .query(
+            "recursive",
+            false,
+            &json!({"type": "boolean"}),
+            "Everything under the folder.",
+        )
+        .query(
+            "expand",
+            false,
+            &json!({"type": "boolean"}),
+            "Add `lastCommit` and `securityFileStatus`.",
+        )
+        .answer(
+            StatusCode::OK,
+            "A page of entries.",
+            Some((
+                "application/json",
+                json!({"type": "array", "items": entry_schema()}),
+            )),
+        );
+    paged(doc)
+}
+
+fn paths_info_doc() -> Doc {
+    with_body(with_revision(repo("Entries at paths")))
+        .describe(
+            "The entries at the paths, in request order, each path at most once; a path that \
+             names nothing is left out.",
+        )
+        .body(
+            "application/x-www-form-urlencoded",
+            &json!({
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Up to 1000; repeat the field once per path."
+                    },
+                    "expand": {"type": "boolean"}
+                }
+            }),
+            "The paths, form-encoded, at most 1 MiB.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The entries.",
+            Some((
+                "application/json",
+                json!({"type": "array", "items": entry_schema()}),
+            )),
+        )
 }
 
 /// Whether a boolean query parameter is on: `true` or `1`, as

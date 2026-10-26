@@ -17,7 +17,7 @@ use openxet_storage::{Key, XorbOwner};
 use serde::Serialize;
 use tracing::Instrument as _;
 
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, doc, on, with_body};
 use crate::{AppState, CasError, ReadAccess, WriteAccess, body, path};
 
 /// The only xorb prefix: what clients send (`HF_XET_DATA_DEFAULT_PREFIX`;
@@ -30,8 +30,74 @@ const PREFIX: &str = "default";
 pub(crate) fn routes() -> Routes {
     Routes::new().route(
         "/v1/xorbs/{prefix}/{hash}",
-        on(Method::POST, upload).on(Method::HEAD, head).private(),
+        on(Method::POST, upload_doc(), upload)
+            .on(Method::HEAD, head_doc(), head)
+            .private(),
     )
+}
+
+fn upload_doc() -> Doc {
+    with_body(doc("Upload a xorb", true))
+        .describe(
+            "One xorb, its chunks serialized as stock clients send them, with or without a \
+             footer (https://huggingface.co/docs/xet/xorb). It is validated, and its \
+             computed hash must be `{hash}`. Uploading again is safe. `{prefix}` is \
+             `default`.",
+        )
+        .body(
+            "application/octet-stream",
+            &openxet_http::binary("application/octet-stream"),
+            "The serialized xorb, at most 64.5 MiB.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Stored.",
+            Some((
+                "application/json",
+                serde_json::json!({
+                    "type": "object",
+                    "required": ["was_inserted"],
+                    "properties": {"was_inserted": {
+                        "type": "boolean",
+                        "description": "Whether the xorb was new to the caller's tenant."
+                    }}
+                }),
+            )),
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`xorb_hash_mismatch`, `xorb_malformed`, `xorb_empty`, `xorb_too_many_chunks`, \
+             `xorb_chunk_empty`, `xorb_chunk_too_long`, `xorb_chunk_too_short`, \
+             `xorb_truncated`, `xorb_trailing_bytes`: the body is not a valid xorb with \
+             this hash; the message names the rule and the chunk. Final.",
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`not_found`: `{prefix}` is not `default`.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`xorb_too_large`: the body is over 64.5 MiB. `exceeds_memory_budget`: the \
+             upload is larger than the server's whole memory budget.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
+        )
+}
+
+fn head_doc() -> Doc {
+    doc("Whether a xorb is stored", false)
+        .answer(
+            StatusCode::OK,
+            "Stored; `Content-Length` is its size.",
+            None,
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`xorb_not_found`: not visible to the caller's tenant. `not_found`: `{prefix}` \
+             is not `default`.",
+        )
 }
 
 /// The xorb named by the path, under [`PREFIX`] only

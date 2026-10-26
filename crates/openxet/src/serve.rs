@@ -42,6 +42,7 @@ use zeroize::Zeroizing;
 use crate::config::{self, Config, LogFormat, Overrides, Problem};
 use crate::error::{CliError, ExitCode};
 use crate::logging;
+use crate::openapi_cmd;
 use crate::output::{HumanDisplay, Output};
 use crate::{preflight, secret};
 
@@ -167,7 +168,11 @@ async fn serve(config: Config, output: Output) -> Result<(), CliError> {
     let hub_endpoint = hub.cfg.public_url.as_str().trim_end_matches('/').to_owned();
     let engine = Arc::clone(&hub.engine);
     let _ = app.set(compose(
-        vec![openxet_cas::mounted(cas), openxet_hub::mounted(hub)],
+        vec![
+            openxet_cas::mounted(cas),
+            openxet_hub::mounted(hub),
+            openapi_cmd::mounted(),
+        ],
         body_deadline,
     ));
     let maintenance = tokio::spawn(openxet_git::run_maintenance(engine, lease_holder()));

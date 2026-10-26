@@ -34,9 +34,102 @@ use crate::gateway::{
     X_XET_HASH, file_headers, file_url, header, requested_range, unsatisfiable, xet_links,
 };
 use crate::refs::at_revision;
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, on, repo, with_revision};
 use crate::tree::xet_hash;
 use crate::{HubError, HubState, param};
+
+fn resolve_doc() -> Doc {
+    let bytes = || {
+        Some((
+            "application/octet-stream",
+            openxet_http::binary("application/octet-stream"),
+        ))
+    };
+    with_revision(repo("Download a file"))
+        .describe(
+            "A file at a revision, as `hf_hub_download` and plain HTTP clients read it; \
+             `HEAD` answers the same without a body. A file stored in Git answers inline, \
+             `Range` included. A Xet file redirects to the file gateway, with the headers \
+             `huggingface_hub` reads. The model view has no prefix; the other types are \
+             under `/datasets`, `/spaces` and `/kernels`. The path is read inside the \
+             commit's tree only, so `.`, `..`, a folder or the root name no file.",
+        )
+        .header(
+            "Range",
+            false,
+            "One byte range: `bytes=start-end`, `bytes=start-` or `bytes=-length`.",
+        )
+        .answer(StatusCode::OK, "The file, stored in Git.", bytes())
+        .answer_header(StatusCode::OK, "ETag", "The blob's id.")
+        .answer_header(
+            StatusCode::OK,
+            "X-Repo-Commit",
+            "The commit the revision resolved to.",
+        )
+        .answer(
+            StatusCode::PARTIAL_CONTENT,
+            "The requested range of a file stored in Git.",
+            bytes(),
+        )
+        .answer_header(
+            StatusCode::PARTIAL_CONTENT,
+            "Content-Range",
+            "`bytes start-end/size`.",
+        )
+        .answer(
+            StatusCode::FOUND,
+            "A Xet file: read it from the gateway or the CAS.",
+            None,
+        )
+        .answer_header(
+            StatusCode::FOUND,
+            "Location",
+            "The file gateway URL of the file.",
+        )
+        .answer_header(
+            StatusCode::FOUND,
+            "X-Repo-Commit",
+            "The commit the revision resolved to.",
+        )
+        .answer_header(StatusCode::FOUND, "X-Linked-Size", "The file's size.")
+        .answer_header(
+            StatusCode::FOUND,
+            "X-Linked-ETag",
+            "The file's SHA-256, quoted.",
+        )
+        .answer_header(StatusCode::FOUND, "X-Xet-Hash", "The file's Xet hash.")
+        .answer_header(
+            StatusCode::FOUND,
+            "Link",
+            "The `xet-auth` token route and the `xet-reconstruction-info` CAS URL.",
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`entry_not_found`: the path names no file, with `X-Repo-Commit`. \
+             `lfs_object_missing`: the path holds an LFS pointer whose bytes were never \
+             uploaded here. Both `X-Error-Code: EntryNotFound`.",
+        )
+        .answer(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "The range starts past the end of the file. No body.",
+            None,
+        )
+        .answer_header(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "Content-Range",
+            "`bytes */{size}`.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`answer_too_large`: one read would hold more than an answer's share of the \
+             memory budget; ask by range.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`blob_too_large`: a Git blob too large to buffer; it won't fit later either. \
+             `memory_busy`: the memory budget stayed full. `busy`: too many reads at once.",
+        )
+}
 
 /// `X-Linked-Size` and `X-Linked-ETag`: the size and SHA-256 of the file a
 /// redirect leads to (S3 fixture `27-…-01`).
@@ -61,7 +154,7 @@ pub(crate) fn routes() -> Routes {
     ]
     .into_iter()
     .fold(Routes::new(), |routes, path| {
-        routes.route(path, on(Method::GET, resolve).private())
+        routes.route(path, on(Method::GET, resolve_doc(), resolve).private())
     })
 }
 

@@ -66,7 +66,7 @@ use openxet_protocol::{hash_from_hex, hash_to_hex};
 use self::transfer::{Transfer, bucket_opener};
 use crate::authz::{allowed, denied, user_for_token};
 use crate::error::X_REPO_COMMIT;
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Doc, Routes, basic, on};
 use crate::{HubError, HubState, View, param};
 
 /// `X-Xet-Hash`: the file's Xet hash, from which `huggingface_hub` and
@@ -77,8 +77,90 @@ pub(crate) const X_XET_HASH: HeaderName = HeaderName::from_static("x-xet-hash");
 pub(crate) fn routes() -> Routes {
     Routes::new().route(
         "/v1/transfer/files/{repo}/{file}",
-        on(Method::GET, gateway).private(),
+        on(Method::GET, gateway_doc(), gateway).private(),
     )
+}
+
+fn gateway_doc() -> Doc {
+    let bytes = || {
+        Some((
+            "application/octet-stream",
+            openxet_http::binary("application/octet-stream"),
+        ))
+    };
+    basic(Area::Gateway, "Read a Xet file")
+        .describe(
+            "A Xet file of a repository over plain HTTP, where `resolve` redirects and the \
+             LFS `basic` download `href` points; `HEAD` answers the same without a body. \
+             `{repo}` is the repository's id and `{file}` the file's Xet hash. A file is \
+             served only to the repository whose uploads registered it. A `401` offers \
+             `Basic` first, as `git-lfs` needs.",
+        )
+        .query(
+            "name",
+            false,
+            &serde_json::json!({"type": "string"}),
+            "The file name for `Content-Disposition`; the Xet hash if left out.",
+        )
+        .query(
+            "commit",
+            false,
+            &serde_json::json!({"type": "string"}),
+            "The commit `resolve` read the file at, repeated as `X-Repo-Commit`; \
+             informational.",
+        )
+        .header(
+            "Range",
+            false,
+            "One byte range: `bytes=start-end`, `bytes=start-` or `bytes=-length`.",
+        )
+        .header(
+            "If-Range",
+            false,
+            "The `ETag`: serve the range only if the file is unchanged.",
+        )
+        .answer(StatusCode::OK, "The file.", bytes())
+        .answer_header(
+            StatusCode::OK,
+            "ETag",
+            "The file's SHA-256 as this repository registered it, quoted; else its Xet hash.",
+        )
+        .answer_header(StatusCode::OK, "X-Xet-Hash", "The file's Xet hash.")
+        .answer(StatusCode::PARTIAL_CONTENT, "The requested range.", bytes())
+        .answer_header(
+            StatusCode::PARTIAL_CONTENT,
+            "Content-Range",
+            "`bytes start-end/size`.",
+        )
+        .answer(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "The range starts past the end of the file. No body.",
+            None,
+        )
+        .answer_header(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "Content-Range",
+            "`bytes */{size}`.",
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`repo_not_found`: no such repository, or one the caller may not read; the two \
+             answer alike. `file_not_stored`: the repository never registered the file. \
+             `X-Error-Code: EntryNotFound`.",
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`bad_request`: `{file}` is not a Xet hash, or `commit` is not a commit id.",
+        )
+        .error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "`answer_too_large`: one read would hold more than an answer's share of the \
+             memory budget; ask by range.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`memory_busy`: the memory budget stayed full. `Retry-After: 1`.",
+        )
 }
 
 /// The gateway's URL for `file` of `repo`, named `name`, as `resolve`

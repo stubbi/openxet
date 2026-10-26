@@ -38,7 +38,7 @@ use openxet_auth::TransferQuery;
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use openxet_storage::{Key, RangeStream, StorageError};
 
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Credential, Doc, Routes, on};
 use crate::{AppState, CasError, path};
 
 /// `GET /v1/transfer/xorbs/{hash}`.
@@ -46,10 +46,72 @@ pub(crate) fn routes() -> Routes {
     // `HEAD` has its own handler; without one, `get` would answer it too.
     Routes::new().route(
         "/v1/transfer/xorbs/{hash}",
-        on(Method::GET, transfer)
-            .on(Method::HEAD, head_refused)
+        on(Method::GET, transfer_doc(), transfer)
+            .on(Method::HEAD, head_doc(), head_refused)
             .private(),
     )
+}
+
+fn transfer_doc() -> Doc {
+    let mut doc = Doc::new(Area::Cas, "Bytes of a xorb", Credential::SignedUrl).describe(
+        "The data URLs a reconstruction hands out. The signed query is the credential: \
+         a URL is valid for one xorb, one byte range and until its `exp`, and only with \
+         exactly `Range: bytes={start}-{end}`. Use the URL exactly as returned; its query \
+         is never logged.",
+    );
+    for (name, description) in [
+        (
+            "range",
+            "`{start}-{end}`: the signed byte range, inclusive.",
+        ),
+        ("exp", "When the URL expires, in Unix seconds."),
+        ("sig", "The signature over the xorb, the range and `exp`."),
+    ] {
+        doc = doc.query(
+            name,
+            true,
+            &serde_json::json!({"type": "string"}),
+            description,
+        );
+    }
+    doc.header(
+        "Range",
+        true,
+        "Exactly `bytes={start}-{end}`, the signed range.",
+    )
+    .answer(
+        StatusCode::PARTIAL_CONTENT,
+        "Exactly the signed bytes, with `Content-Range: bytes {start}-{end}/{size}`.",
+        Some((
+            "application/octet-stream",
+            openxet_http::binary("application/octet-stream"),
+        )),
+    )
+    .error(
+        StatusCode::BAD_REQUEST,
+        "`invalid_transfer_url`: the query is missing `range`, `exp` or `sig`, or \
+             doesn't parse. `bad_range`: no `Range` header, or more than one. \
+             `invalid_path`, `invalid_hash`: the path is not a xorb hash.",
+    )
+    .error(
+        StatusCode::FORBIDDEN,
+        "`forbidden`: the signature doesn't match, the URL has expired or lies further \
+             ahead than this server allows, or `Range` isn't the signed range. Ask for a \
+             fresh reconstruction.",
+    )
+    .error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "`unavailable`: the bucket failed in a way a retry may fix.",
+    )
+}
+
+fn head_doc() -> Doc {
+    Doc::new(Area::Cas, "Refused: use GET", Credential::None)
+        .describe("A transfer URL serves `GET` only; `HEAD` is always refused.")
+        .error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "`method_not_allowed`. `Allow: GET`.",
+        )
 }
 
 /// The xorb named by the path ([`path::hash`]), checked before the

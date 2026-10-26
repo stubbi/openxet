@@ -5,13 +5,13 @@ use std::future::{Ready, ready};
 
 use axum::Json;
 use axum::body::Body;
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess, Who};
-use crate::routes::{Routes, on};
-use crate::{HubError, json_body};
+use crate::routes::{Area, Doc, Handlers, Routes, api, on, repo, with_body};
+use crate::{HubError, HubState, json_body};
 
 /// The largest `validate-yaml` body: room for a model card as large as a
 /// regular file may be (`hub.lfs_threshold` is at most 10 MiB), JSON-escaped.
@@ -19,40 +19,41 @@ const VALIDATE_YAML_BODY_LIMIT: usize = 16 << 20;
 
 /// The miscellaneous routes.
 pub(crate) fn routes() -> Routes {
+    use Method as M;
     let mut routes = Routes::new()
         .route(
             "/api/validate-yaml",
-            on(Method::POST, validate_yaml).private(),
+            on(M::POST, validate_yaml_doc(), validate_yaml).private(),
         )
         // The `hf` CLI fetches it at most once a day to detect AI agents and
         // ignores any failure (`utils/_detect_agent.py` lines 197–204).
         .route(
             "/api/agent-harnesses",
-            on(Method::GET, |_: Who| refuse("agent-harnesses")),
+            unserved(&[M::GET], "Agent harnesses", "agent-harnesses"),
         )
         .route(
             "/api/collections",
-            on(Method::GET, |_: Who| refuse("collections"))
-                .on(Method::POST, |_: Who| refuse("collections")),
+            unserved(&[M::GET, M::POST], "Collections", "collections"),
         )
         .route(
             "/api/collections/{*rest}",
-            on(Method::GET, |_: Who| refuse("collections"))
-                .on(Method::POST, |_: Who| refuse("collections"))
-                .on(Method::PATCH, |_: Who| refuse("collections"))
-                .on(Method::DELETE, |_: Who| refuse("collections")),
+            unserved(
+                &[M::GET, M::POST, M::PATCH, M::DELETE],
+                "A collection",
+                "collections",
+            ),
         )
         .route(
             "/api/users/{user}/likes",
-            on(Method::GET, |_: Who| refuse("likes")),
+            unserved(&[M::GET], "A user's likes", "likes"),
         )
         .route(
             "/api/models-tags-by-type",
-            on(Method::GET, |_: Who| refuse("model card tags")),
+            unserved(&[M::GET], "Model card tags", "model card tags"),
         )
         .route(
             "/api/datasets-tags-by-type",
-            on(Method::GET, |_: Who| refuse("dataset card tags")),
+            unserved(&[M::GET], "Dataset card tags", "dataset card tags"),
         );
     // On a repository, the `501` comes after the repository is resolved, so
     // these routes answer a repository the caller may not read exactly as
@@ -65,30 +66,91 @@ pub(crate) fn routes() -> Routes {
         routes = routes
             .route(
                 discussions[i],
-                on(Method::GET, |_: RepoAccess| refuse("discussions"))
-                    .on(Method::POST, |_: RepoAccess| refuse("discussions"))
-                    .private(),
+                unserved_repo(&[M::GET, M::POST], "Discussions", "discussions"),
             )
             .route(
                 discussion[i],
-                on(Method::GET, |_: RepoAccess| refuse("discussions"))
-                    .on(Method::POST, |_: RepoAccess| refuse("discussions"))
-                    .on(Method::PATCH, |_: RepoAccess| refuse("discussions"))
-                    .on(Method::DELETE, |_: RepoAccess| refuse("discussions"))
-                    .private(),
+                unserved_repo(
+                    &[M::GET, M::POST, M::PATCH, M::DELETE],
+                    "A discussion",
+                    "discussions",
+                ),
             )
             .route(
                 like[i],
-                on(Method::POST, |_: RepoAccess| refuse("likes"))
-                    .on(Method::DELETE, |_: RepoAccess| refuse("likes"))
-                    .private(),
+                unserved_repo(&[M::POST, M::DELETE], "Like", "likes"),
             )
-            .route(
-                likers[i],
-                on(Method::GET, |_: RepoAccess| refuse("likes")).private(),
-            );
+            .route(likers[i], unserved_repo(&[M::GET], "Likers", "likes"));
     }
     routes
+}
+
+const NOT_IMPLEMENTED: &str = "`not_implemented`: OpenXet doesn't implement this Hub \
+     endpoint; the message names it.";
+
+/// `methods` of a Hub endpoint OpenXet doesn't implement, doing `summary`:
+/// `501` naming `endpoint`, never a confusing `404` (design §6).
+fn unserved(methods: &[Method], summary: &'static str, endpoint: &'static str) -> Handlers {
+    let doc = api(Area::Hub, summary).error(StatusCode::NOT_IMPLEMENTED, NOT_IMPLEMENTED);
+    each(methods, &doc, &move |_: Who| refuse(endpoint))
+}
+
+/// [`unserved`] on a repository, answered after the repository is
+/// resolved.
+fn unserved_repo(methods: &[Method], summary: &'static str, endpoint: &'static str) -> Handlers {
+    let doc = repo(summary).error(StatusCode::NOT_IMPLEMENTED, NOT_IMPLEMENTED);
+    each(methods, &doc, &move |_: RepoAccess| refuse(endpoint)).private()
+}
+
+/// `handler`, described by `doc`, for each of `methods`.
+///
+/// # Panics
+///
+/// If `methods` is empty.
+fn each<H, T>(methods: &[Method], doc: &Doc, handler: &H) -> Handlers
+where
+    H: axum::handler::Handler<T, HubState> + Clone,
+    T: 'static,
+{
+    let (first, rest) = methods
+        .split_first()
+        .unwrap_or_else(|| unreachable!("no methods"));
+    rest.iter().fold(
+        on(first.clone(), doc.clone(), handler.clone()),
+        |handlers, method| handlers.on(method.clone(), doc.clone(), handler.clone()),
+    )
+}
+
+fn validate_yaml_doc() -> Doc {
+    with_body(api(Area::Hub, "Validate a model card"))
+        .describe(
+            "Every commit adding a `README.md` posts it here first. OpenXet checks the \
+             request's shape, not the card's metadata.",
+        )
+        .body(
+            "application/json",
+            &json!({
+                "type": "object",
+                "required": ["content"],
+                "properties": {"content": {"type": "string"}}
+            }),
+            "The card, at most 16 MiB.",
+        )
+        .answer(
+            StatusCode::OK,
+            "No errors and no warnings.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["errors", "warnings"],
+                    "properties": {
+                        "errors": {"type": "array"},
+                        "warnings": {"type": "array"}
+                    }
+                }),
+            )),
+        )
 }
 
 /// The handler answer of an endpoint openxet doesn't implement.

@@ -10,8 +10,9 @@ code in `crates/cas/src`; the route list is `served()` in
 being in the credential, scoping and echo test matrices (see
 [security tests](security-tests.md)).
 
-The Git LFS routes are in [Git LFS routes](lfs.md). The Hub API
-(`/api/...`) and Git routes are documented with the rest of M2.
+The Git LFS routes are in [Git LFS routes](lfs.md). Every route the server
+serves, the Hub API (`/api/...`) and Git routes included, is in the
+[OpenAPI document](openapi.md), `GET /openapi.json`.
 
 ## Conventions
 

@@ -10,23 +10,133 @@
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{RawPathParams, RawQuery, State};
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use openxet_auth::Action;
 use openxet_git::Op;
 use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess};
 use crate::ndjson::{Limits, MAX_COMMIT_OPS, parse_commit_ndjson};
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, on, repo, with_body, with_revision, with_write};
 use crate::{HubError, HubState, param, read_body};
 
 /// The commit route of every Hub type.
 pub(crate) fn routes() -> Routes {
     let mut routes = Routes::new();
     for path in typed_paths!("/{ns}/{name}/commit/{rev}") {
-        routes = routes.route(path, on(Method::POST, commit).private());
+        routes = routes.route(path, on(Method::POST, commit_doc(), commit).private());
     }
     routes
+}
+
+/// The commit body: one `{"key", "value"}` object per line.
+fn commit_body() -> Value {
+    let line = |key: &str, value: Value| {
+        json!({
+            "type": "object",
+            "required": ["key", "value"],
+            "properties": {"key": {"type": "string", "enum": [key]}, "value": value}
+        })
+    };
+    let path = || json!({"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}});
+    json!({
+        "description": "One `{\"key\", \"value\"}` object per line: a `header` first, then \
+            the operations.",
+        "oneOf": [
+            line("header", json!({
+                "type": "object",
+                "required": ["summary"],
+                "properties": {
+                    "summary": {"type": "string"},
+                    "description": {"type": "string"},
+                    "parentCommit": {
+                        "type": "string",
+                        "description": "The tip the commit expects; `412` if it moved."
+                    }
+                }
+            })),
+            line("file", json!({
+                "type": "object",
+                "required": ["path", "content", "encoding"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "encoding": {"type": "string", "enum": ["base64"]}
+                }
+            })),
+            line("lfsFile", json!({
+                "type": "object",
+                "required": ["path", "algo", "oid", "size"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "algo": {"type": "string", "enum": ["sha256"]},
+                    "oid": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "size": {"type": "integer", "minimum": 0}
+                }
+            })),
+            line("deletedFile", path()),
+            line("deletedFolder", path())
+        ]
+    })
+}
+
+fn commit_doc() -> Doc {
+    with_write(with_body(with_revision(repo("Commit"))))
+        .describe(
+            "A Git commit on the branch `{rev}`, built on its tip. An `lfsFile` must name a \
+             file uploaded to this repository through Xet, by its SHA-256 and size. At most \
+             `hub.max_commit_bytes` and 25,000 operations.",
+        )
+        .query(
+            "create_pr",
+            false,
+            &json!({"type": "boolean"}),
+            "Pull requests are not implemented: a true value answers `501`.",
+        )
+        .body(
+            "application/x-ndjson",
+            &commit_body(),
+            "The commit, as `huggingface_hub` sends it.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Committed.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["success", "commitOid", "commitUrl"],
+                    "properties": {
+                        "success": {"type": "boolean", "enum": [true]},
+                        "commitOid": {"type": "string"},
+                        "commitUrl": {"type": "string"},
+                        "hookOutput": {"type": "string"}
+                    }
+                }),
+            )),
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`invalid_write`: a bad path, or objects git refuses. An `lfsFile` not uploaded \
+             to this repository is `bad_request`.",
+        )
+        .error(
+            StatusCode::PRECONDITION_FAILED,
+            "`precondition_failed`: `parentCommit` is not the branch's tip.",
+        )
+        .error(
+            StatusCode::CONFLICT,
+            "`ref_conflict`: the branch moved while the commit was written.",
+        )
+        .error(
+            StatusCode::NOT_IMPLEMENTED,
+            "`not_implemented`: `create_pr`.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`busy`: the commit lost its branch to concurrent writers on every attempt. \
+             `Retry-After: 1`.",
+        )
 }
 
 const UPLOAD_HINT: &str = "Upload the file to this repository first: `hf upload` (or \

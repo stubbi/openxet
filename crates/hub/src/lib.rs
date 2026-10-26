@@ -76,6 +76,7 @@ mod preupload;
 mod refs;
 mod repos;
 mod resolve;
+mod routes;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod tokens;
@@ -238,15 +239,6 @@ impl HubState {
         self.clock = clock;
         self
     }
-}
-
-/// The Hub's routes are built with `openxet_http`'s route builder, the one
-/// way to add a route (ruling M2-R1).
-mod routes {
-    pub(crate) use openxet_http::on;
-
-    /// Hub routes under construction.
-    pub(crate) type Routes = openxet_http::Routes<crate::HubState>;
 }
 
 /// The Hub's routes, without state, fallback or middleware: those come from

@@ -37,6 +37,9 @@ once built.
   - `GET /healthz` and `GET /readyz`; readiness probes the index with a
     read and the bucket with a small write, and answers
     `503 unavailable` naming the failing one
+- The OpenAPI 3.1 document of every route the server serves, generated
+  from the routes themselves: `GET /openapi.json` and `openxet openapi`
+  ([OpenAPI document](docs/reference/openapi.md)).
 - Every security requirement of design §5.9 that applies to the CAS, each
   with its test ([security tests](docs/reference/security-tests.md)).
 - Reconstruction answers a 100k-term file within 50 ms at p99 on an idle

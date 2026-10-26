@@ -10,7 +10,7 @@
 use axum::Json;
 use axum::body::Body;
 use axum::extract::{RawPathParams, RawQuery, State};
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use openxet_auth::Action;
 use openxet_git::{Ident, Resolved, Revision, SnapshotRepo, TagInfo};
 use openxet_index::{Oid, RefUpdate};
@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::authz::{self, RepoAccess};
-use crate::routes::{Routes, on};
+use crate::routes::{Doc, Routes, on, repo, with_body, with_revision, with_write};
 use crate::tree::on_flag;
 use crate::{CONTROL_BODY_LIMIT, HubError, HubState, param, parse_json, read_body};
 
@@ -30,21 +30,145 @@ pub(crate) fn routes() -> Routes {
     let tag = typed_paths!("/{ns}/{name}/tag/{rev}");
     for i in 0..refs.len() {
         routes = routes
-            .route(refs[i], on(Method::GET, list).private())
+            .route(refs[i], on(Method::GET, list_doc(), list).private())
             .route(
                 branch[i],
-                on(Method::POST, create_branch)
-                    .on(Method::DELETE, delete_branch)
+                on(Method::POST, create_branch_doc(), create_branch)
+                    .on(Method::DELETE, delete_branch_doc(), delete_branch)
                     .private(),
             )
             .route(
                 tag[i],
-                on(Method::POST, create_tag)
-                    .on(Method::DELETE, delete_tag)
+                on(Method::POST, create_tag_doc(), create_tag)
+                    .on(Method::DELETE, delete_tag_doc(), delete_tag)
                     .private(),
             );
     }
     routes
+}
+
+fn list_doc() -> Doc {
+    let refs = json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["name", "ref", "targetCommit"],
+            "properties": {
+                "name": {"type": "string"},
+                "ref": {"type": "string", "description": "The full ref name."},
+                "targetCommit": {
+                    "type": "string",
+                    "description": "What the ref names: for an annotated tag, the tag object."
+                }
+            }
+        }
+    });
+    repo("List branches and tags")
+        .query(
+            "include_prs",
+            false,
+            &json!({"type": "boolean"}),
+            "Also list `refs/pr/*` as `pullRequests`.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The refs.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["tags", "branches", "converts"],
+                    "properties": {
+                        "tags": refs,
+                        "branches": refs,
+                        "converts": {"type": "array"},
+                        "pullRequests": refs
+                    }
+                }),
+            )),
+        )
+}
+
+/// A ref write's answers: it needs `write`, and the ref must be where the
+/// request expects it.
+fn ref_write(summary: &'static str) -> Doc {
+    with_write(repo(summary))
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`invalid_write`: a bad ref name, or a delete of `main`.",
+        )
+        .error(
+            StatusCode::CONFLICT,
+            "`ref_conflict`: the ref exists already, or isn't where the request read it.",
+        )
+        .error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "`busy`: too many writes in the repository at once. `Retry-After: 1`.",
+        )
+}
+
+fn success() -> (&'static str, Value) {
+    (
+        "application/json",
+        json!({
+            "type": "object",
+            "required": ["success"],
+            "properties": {"success": {"type": "boolean", "enum": [true]}}
+        }),
+    )
+}
+
+fn empty() -> (&'static str, Value) {
+    ("application/json", json!({"type": "object"}))
+}
+
+fn create_branch_doc() -> Doc {
+    with_body(with_revision(ref_write("Create a branch")))
+        .describe(
+            "Creates `{branch}` at `startingPoint`, by default `main`'s tip. \
+             `create_branch(exist_ok=True)` treats the `409` as done.",
+        )
+        .body(
+            "application/json",
+            &json!({
+                "type": "object",
+                "properties": {
+                    "startingPoint": {"type": "string", "description": "A revision."}
+                }
+            }),
+            "Optional; an empty body starts at `main`.",
+        )
+        .answer(StatusCode::OK, "Created.", Some(success()))
+}
+
+fn delete_branch_doc() -> Doc {
+    ref_write("Delete a branch")
+        .describe("`main` can't be deleted.")
+        .answer(StatusCode::OK, "Deleted.", Some(success()))
+}
+
+fn create_tag_doc() -> Doc {
+    with_body(with_revision(ref_write("Tag a revision")))
+        .describe("Tags `{rev}` with an annotated tag by the caller.")
+        .body(
+            "application/json",
+            &json!({
+                "type": "object",
+                "required": ["tag"],
+                "properties": {
+                    "tag": {"type": "string"},
+                    "message": {"type": "string"}
+                }
+            }),
+            "The tag.",
+        )
+        .answer(StatusCode::OK, "Tagged.", Some(empty()))
+}
+
+fn delete_tag_doc() -> Doc {
+    ref_write("Delete a tag")
+        .describe("`{rev}` is the tag's name.")
+        .answer(StatusCode::OK, "Deleted.", Some(empty()))
 }
 
 /// A revision as the client wrote it: a commit id when it is 40 hex

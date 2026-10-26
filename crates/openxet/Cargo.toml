@@ -48,11 +48,19 @@ libc = "0.2.191"
 assert_cmd = "2"
 bytes = "1.12.1"
 futures-util = "0.3.34"
+# `openapi.rs`: OpenAPI 3.1's own JSON Schema is draft 2020-12; without the
+# default features, which fetch remote references over HTTP.
+jsonschema = { version = "0.60.1", default-features = false }
+# `openapi.rs`: the routes the server serves, to compare with the document.
+openxet-cas = { path = "../cas", version = "0.0.0", features = ["test-support"] }
+openxet-hub = { path = "../hub", version = "0.0.0", features = ["test-support"] }
 predicates = "3"
 rustls = { version = "0.23.46", default-features = false, features = ["std"] }
 sha2 = "0.11.1"
 tempfile = "3"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+# `openapi.rs`: the document parses as utoipa's own model.
+utoipa = "6.0.0"
 
 [lints]
 workspace = true

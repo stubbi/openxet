@@ -9,7 +9,7 @@ use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderValue, Method};
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{Action, UserPrincipal};
 use openxet_git::{HubCommit, Ident, Op};
@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::authz::{self, RepoAccess, Who};
 use crate::names::{check_name, check_not_reserved, full_name};
 use crate::preupload::DEFAULT_GITATTRIBUTES;
-use crate::routes::{Routes, on};
+use crate::routes::{Area, Doc, Routes, api, on, with_body, with_write};
 use crate::{CONTROL_BODY_LIMIT, HubError, HubState, View, json_body, labels};
 
 /// Creates the repository `{namespace}/{name}` for `who`, carrying
@@ -273,8 +273,136 @@ async fn taken(
 /// [`crate::info`]'s.
 pub(crate) fn routes() -> Routes {
     Routes::new()
-        .route("/api/repos/create", on(Method::POST, create).private())
-        .route("/api/repos/delete", on(Method::DELETE, delete).private())
+        .route(
+            "/api/repos/create",
+            on(Method::POST, create_doc(), create).private(),
+        )
+        .route(
+            "/api/repos/delete",
+            on(Method::DELETE, delete_doc(), delete).private(),
+        )
+}
+
+/// The body both routes take: which repository.
+fn naming(more: Value) -> Value {
+    let mut properties = json!({
+        "name": {"type": "string", "description": "The repository's name."},
+        "organization": {
+            "type": "string",
+            "description": "The namespace; the caller's own name if left out."
+        },
+        "type": {
+            "type": "string",
+            "enum": ["model", "dataset", "space", "kernel"],
+            "description": "The label the repository is seen through; `model` if left out."
+        }
+    });
+    if let (Some(all), Value::Object(more)) = (properties.as_object_mut(), more) {
+        all.extend(more);
+    }
+    json!({"type": "object", "required": ["name"], "properties": properties})
+}
+
+fn create_doc() -> Doc {
+    with_body(api(Area::Hub, "Create a repository"))
+        .describe(
+            "Creates `{organization}/{name}` with an initial commit on `main`, labelled \
+             `type`. Creation is authorized on the namespace first, so a caller who may not \
+             create there gets the same `403` whether or not the name exists. Names are \
+             unique ignoring case and across labels.",
+        )
+        .body(
+            "application/json",
+            &naming(json!({"visibility": {"type": "string", "enum": ["public", "private"]}})),
+            "The repository to create.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Created.",
+            Some((
+                "application/json",
+                json!({
+                    "type": "object",
+                    "required": ["url", "name", "id"],
+                    "properties": {
+                        "url": {"type": "string", "description": "The repository's URL."},
+                        "name": {"type": "string", "description": "`{namespace}/{name}`."},
+                        "id": {"type": "string"},
+                        "filesCopyPending": {"type": "boolean"}
+                    }
+                }),
+            )),
+        )
+        .error(
+            StatusCode::BAD_REQUEST,
+            "`invalid_name`: the namespace or name breaks a naming rule; the hint names it. \
+             `invalid_label`: the label breaks a rule.",
+        )
+        .error(
+            StatusCode::FORBIDDEN,
+            "`forbidden`: the caller may not create in the namespace.",
+        )
+        .error(
+            StatusCode::CONFLICT,
+            "`name_taken`: the name is taken, ignoring case. The body's `url` is the \
+             repository's URL, which `create_repo(exist_ok=True)` reads; its labels are \
+             named only to a caller who may read it.",
+        )
+}
+
+fn delete_doc() -> Doc {
+    with_write(with_body(api(Area::Hub, "Delete a repository")))
+        .describe(
+            "Needs `write` on the repository and `create` in its namespace. The repository \
+             is gone at once; its data leaves through garbage collection.",
+        )
+        .body(
+            "application/json",
+            &naming(json!({})),
+            "The repository to delete.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Deleted: `OK`.",
+            Some(("text/plain", json!({"type": "string"}))),
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`repo_not_found`: no such repository, or one the caller may not read; \
+             `delete_repo(missing_ok=True)` treats it as done.",
+        )
+}
+
+/// [`repo_json`]'s shape: the fields the info and listing routes share.
+pub(crate) fn repo_schema(more: Value) -> Value {
+    let mut properties = json!({
+        "_id": {"type": "string"},
+        "id": {"type": "string", "description": "`{namespace}/{name}`."},
+        "author": {"type": "string", "description": "The namespace."},
+        "private": {"type": "boolean"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "downloads": {"type": "integer"},
+        "likes": {"type": "integer"},
+        "gated": {"type": "boolean"},
+        "disabled": {"type": "boolean"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "labels": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "OpenXet's labels (ADR 0010)."
+        },
+        "modelId": {"type": "string", "description": "Models only."},
+        "config": {"type": "object", "description": "Models only."},
+        "spaces": {"type": "array", "items": {"type": "string"}, "description": "Models only."}
+    });
+    if let (Some(all), Value::Object(more)) = (properties.as_object_mut(), more) {
+        all.extend(more);
+    }
+    json!({
+        "type": "object",
+        "required": ["_id", "id", "author", "private", "createdAt", "labels"],
+        "properties": properties
+    })
 }
 
 /// `POST /api/repos/create`'s body (`hf_api.py` line 4638).

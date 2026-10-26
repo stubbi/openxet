@@ -10,9 +10,10 @@ use axum::body::Body;
 use axum::extract::rejection::RawPathParamsRejection;
 use axum::extract::{MatchedPath, RawPathParams, State};
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, HeaderValue, Method};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use openxet_auth::{Action, Mode, UserPrincipal};
+use openxet_http::{Area, Doc};
 use openxet_index::Repo;
 use openxet_protocol::hash_to_hex;
 use serde::Deserialize;
@@ -21,7 +22,7 @@ use serde_json::{Value, json};
 use super::{Address, LFS_JSON, LfsError, lfs_body, lfs_url, who};
 use crate::authz::{self, RepoAccess};
 use crate::repos::create_repo_for_push;
-use crate::routes::{Routes, on};
+use crate::routes::{Routes, git_url, on, with_body, with_write};
 use crate::tokens::{self, CasToken};
 use crate::{HubError, HubState};
 
@@ -50,10 +51,139 @@ pub(super) fn routes() -> Routes {
     let verifies = git_paths!("/info/lfs/objects/verify");
     for (batch, verify) in batches.into_iter().zip(verifies) {
         routes = routes
-            .route(batch, on(Method::POST, batch_route).private())
-            .route(verify, on(Method::POST, verify_route).private());
+            .route(batch, on(Method::POST, batch_doc(), batch_route).private())
+            .route(
+                verify,
+                on(Method::POST, verify_doc(), verify_route).private(),
+            );
     }
     routes
+}
+
+/// An object as the batch API names it.
+fn object_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["oid", "size"],
+        "properties": {
+            "oid": {"type": "string", "description": "The file's SHA-256, lowercase hex."},
+            "size": {"type": "integer"}
+        }
+    })
+}
+
+/// The answers every LFS route under a Git URL gives.
+fn lfs_doc(summary: &'static str) -> Doc {
+    with_body(git_url(Area::Lfs, summary)).describe(
+        "Under every Git URL, `{name}` with or without `.git`, unprefixed (whatever the \
+         labels) or under `/datasets`, `/spaces` and `/kernels`. A `401` carries \
+         `WWW-Authenticate` and `LFS-Authenticate: Basic realm=\"openxet\"`, so `git-lfs` \
+         asks its credential helpers. Every answer is `Cache-Control: no-store`.",
+    )
+}
+
+fn batch_doc() -> Doc {
+    let action = json!({
+        "type": "object",
+        "required": ["href"],
+        "properties": {
+            "href": {"type": "string"},
+            "header": {"type": "object", "additionalProperties": {"type": "string"}},
+            "expires_in": {"type": "integer"}
+        }
+    });
+    with_write(lfs_doc("Git LFS batch"))
+        .body(
+            "application/vnd.git-lfs+json",
+            &json!({
+                "type": "object",
+                "required": ["operation", "objects"],
+                "properties": {
+                    "operation": {"type": "string", "enum": ["upload", "download"]},
+                    "transfers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Uploads offering `xet` answer `xet`; others get the \
+                            object error `501` naming `git-xet`. Downloads are `basic`."
+                    },
+                    "objects": {
+                        "type": "array",
+                        "items": object_schema(),
+                        "description": "At most 1,000."
+                    },
+                    "hash_algo": {"type": "string", "enum": ["sha256"]}
+                }
+            }),
+            "The batch, as `git-lfs` sends it, at most 1 MiB. An upload batch to a missing \
+             repository the caller may create in creates it.",
+        )
+        .answer(
+            StatusCode::OK,
+            "Each object with its actions or its error. An upload's `xet` actions carry a \
+             capability `href` and the CAS token in `X-Xet-*` headers; a download's `href` \
+             is the file gateway's.",
+            Some((
+                "application/vnd.git-lfs+json",
+                json!({
+                    "type": "object",
+                    "required": ["transfer", "objects", "hash_algo"],
+                    "properties": {
+                        "transfer": {"type": "string", "enum": ["xet", "basic"]},
+                        "hash_algo": {"type": "string", "enum": ["sha256"]},
+                        "objects": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["oid", "size"],
+                                "properties": {
+                                    "oid": {"type": "string"},
+                                    "size": {"type": "integer"},
+                                    "actions": {
+                                        "type": "object",
+                                        "properties": {
+                                            "upload": action,
+                                            "verify": action,
+                                            "download": action
+                                        }
+                                    },
+                                    "error": {
+                                        "type": "object",
+                                        "required": ["code", "message"],
+                                        "properties": {
+                                            "code": {"type": "integer", "enum": [404, 422, 501]},
+                                            "message": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            )),
+        )
+        .error(
+            StatusCode::CONFLICT,
+            "`unsupported_hash_algorithm`: `hash_algo` is not `sha256`.",
+        )
+}
+
+fn verify_doc() -> Doc {
+    with_write(lfs_doc("Git LFS verify"))
+        .body(
+            "application/vnd.git-lfs+json",
+            &object_schema(),
+            "The object an upload sent.",
+        )
+        .answer(
+            StatusCode::OK,
+            "The repository has the object.",
+            Some(("application/vnd.git-lfs+json", json!({"type": "object"}))),
+        )
+        .error(
+            StatusCode::NOT_FOUND,
+            "`object_not_uploaded`: the upload did not complete, so this is never a silent \
+             success.",
+        )
 }
 
 /// A batch request (the LFS batch API; S7 records `git-lfs` 3.5.1 and

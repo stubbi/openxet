@@ -37,6 +37,7 @@ JSON_COMMANDS = [
     ["label", "add", "{repo}", "eval-logs", "--json"],
     ["label", "remove", "{repo}", "model", "--dry-run", "--json"],
     ["label", "list", "{repo}", "--json"],
+    ["openapi", "--json"],
 ]
 
 NEEDS_SERVER = {"upload", "download", "purge", "label"}

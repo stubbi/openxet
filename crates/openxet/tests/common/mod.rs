@@ -163,24 +163,43 @@ impl Drop for Server {
     }
 }
 
-/// Runs `cmd` to completion, failing the test if it takes too long.
+/// Runs `cmd` to completion, failing the test if it takes too long. Its
+/// output is read while it runs, so a command printing more than a pipe
+/// holds doesn't block on a full pipe.
 pub fn run(cmd: &mut Command) -> Output {
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let drain = |mut pipe: Box<dyn std::io::Read + Send>| {
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().unwrap()));
+    let stderr = drain(Box::new(child.stderr.take().unwrap()));
     let deadline = Instant::now() + PATIENCE;
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
         }
         if Instant::now() > deadline {
             let _ = child.kill();
-            let out = child.wait_with_output().unwrap();
-            panic!("the command did not finish: {out:?}");
+            let _ = child.wait();
+            panic!(
+                "the command did not finish; stderr:\n{}",
+                String::from_utf8_lossy(&stderr.join().unwrap())
+            );
         }
         thread::sleep(Duration::from_millis(20));
+    };
+    Output {
+        status,
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
     }
 }
 
