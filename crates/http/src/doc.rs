@@ -168,8 +168,14 @@ struct Answer {
     headers: Vec<(&'static str, &'static str)>,
 }
 
+/// A parameter: where, its name, whether required, its schema and what it
+/// holds.
+type Param = (ParameterIn, &'static str, bool, Value, &'static str);
+
 /// The description of one operation: what it does, what it takes, and
-/// every status it answers. Every `4xx` and `5xx` answers with the error
+/// every status it answers. Building one is cheap: its schemas become the
+/// document's model only when the document is rendered, not each time the
+/// routes are built. Every `4xx` and `5xx` answers with the error
 /// body, so an error is described by its status and the `code`s it
 /// carries.
 ///
@@ -183,8 +189,8 @@ pub struct Doc {
     description: Option<&'static str>,
     credential: Credential,
     errors: ErrorShape,
-    parameters: Vec<Parameter>,
-    body: Option<RequestBody>,
+    parameters: Vec<Param>,
+    body: Option<(&'static str, Value, &'static str)>,
     answers: BTreeMap<u16, Answer>,
 }
 
@@ -239,61 +245,44 @@ impl Doc {
     /// A query parameter of `schema`.
     #[must_use]
     pub fn query(
-        self,
+        mut self,
         name: &'static str,
         required: bool,
         schema: &Value,
         description: &'static str,
     ) -> Self {
-        self.parameter(ParameterIn::Query, name, required, schema, description)
+        self.parameters.push((
+            ParameterIn::Query,
+            name,
+            required,
+            schema.clone(),
+            description,
+        ));
+        self
     }
 
     /// A request header, a string.
     #[must_use]
-    pub fn header(self, name: &'static str, required: bool, description: &'static str) -> Self {
-        self.parameter(
+    pub fn header(mut self, name: &'static str, required: bool, description: &'static str) -> Self {
+        self.parameters.push((
             ParameterIn::Header,
             name,
             required,
-            &json!({"type": "string"}),
+            json!({"type": "string"}),
             description,
-        )
-    }
-
-    fn parameter(
-        mut self,
-        location: ParameterIn,
-        name: &'static str,
-        required: bool,
-        schema: &Value,
-        description: &'static str,
-    ) -> Self {
-        self.parameters.push(
-            Parameter::builder()
-                .name(name)
-                .parameter_in(location)
-                .required(if required {
-                    Required::True
-                } else {
-                    Required::False
-                })
-                .description(Some(description))
-                .schema(Some(schema_of(schema)))
-                .build(),
-        );
+        ));
         self
     }
 
     /// The request body: `media_type` of `schema`.
     #[must_use]
-    pub fn body(mut self, media_type: &str, schema: &Value, description: &'static str) -> Self {
-        self.body = Some(
-            RequestBody::builder()
-                .description(Some(description))
-                .required(Some(Required::True))
-                .content(media_type, Content::new(Some(schema_of(schema))))
-                .build(),
-        );
+    pub fn body(
+        mut self,
+        media_type: &'static str,
+        schema: &Value,
+        description: &'static str,
+    ) -> Self {
+        self.body = Some((media_type, schema.clone(), description));
         self
     }
 
@@ -405,7 +394,28 @@ impl Doc {
                     .build()
             })
             .collect();
-        parameters.extend(self.parameters.iter().cloned());
+        parameters.extend(self.parameters.iter().map(
+            |(location, name, required, schema, description)| {
+                Parameter::builder()
+                    .name(*name)
+                    .parameter_in(location.clone())
+                    .required(if *required {
+                        Required::True
+                    } else {
+                        Required::False
+                    })
+                    .description(Some(*description))
+                    .schema(Some(schema_of(schema)))
+                    .build()
+            },
+        ));
+        let body = self.body.as_ref().map(|(media_type, schema, description)| {
+            RequestBody::builder()
+                .description(Some(*description))
+                .required(Some(Required::True))
+                .content(*media_type, Content::new(Some(schema_of(schema))))
+                .build()
+        });
 
         let mut operation = Operation::builder()
             .tag(self.area.name())
@@ -413,7 +423,7 @@ impl Doc {
             .description(self.description)
             .operation_id(Some(operation_id(method, path)))
             .parameters(Some(parameters))
-            .request_body(self.body.clone())
+            .request_body(body)
             .securities(Some(self.credential.requirements()))
             .build();
         for (status, answer) in &self.answers {

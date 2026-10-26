@@ -95,7 +95,10 @@ where
 /// description.
 pub struct Routes<S> {
     router: Router<S>,
-    paths: Paths,
+    /// Each route's path, method, description and whether it is private,
+    /// turned into the document only by [`Routes::into_paths`], so building
+    /// a router costs no more than its descriptions' values.
+    docs: Vec<(&'static str, Method, Doc, bool)>,
     #[cfg(feature = "test-support")]
     endpoints: Vec<Endpoint>,
 }
@@ -122,7 +125,7 @@ where
     pub fn new() -> Self {
         Self {
             router: Router::new(),
-            paths: Paths::new(),
+            docs: Vec::new(),
             #[cfg(feature = "test-support")]
             endpoints: Vec::new(),
         }
@@ -137,15 +140,13 @@ where
     /// builds them.
     #[must_use]
     pub fn route(mut self, path: &'static str, methods: Handlers<S>) -> Self {
-        let openapi_path = doc::openapi_path(path);
         for (method, doc) in methods.docs {
-            self.paths.add_path_operation(
-                &openapi_path,
-                vec![doc::http_method(&method)],
-                doc.operation(&method, path, methods.private),
-            );
             #[cfg(feature = "test-support")]
-            self.endpoints.push(Endpoint { method, path });
+            self.endpoints.push(Endpoint {
+                method: method.clone(),
+                path,
+            });
+            self.docs.push((path, method, doc, methods.private));
         }
         let router = if methods.private {
             private(methods.router)
@@ -164,7 +165,7 @@ where
     #[must_use]
     pub fn merge(mut self, other: Self) -> Self {
         self.router = self.router.merge(other.router);
-        self.paths.merge(other.paths);
+        self.docs.extend(other.docs);
         #[cfg(feature = "test-support")]
         self.endpoints.extend(other.endpoints);
         self
@@ -180,9 +181,22 @@ where
     }
 
     /// The description of every route, for [`crate::document`].
+    ///
+    /// # Panics
+    ///
+    /// If a description holds a schema the document's model can't carry
+    /// as written. The document's tests render every route.
     #[must_use]
     pub fn into_paths(self) -> Paths {
-        self.paths
+        let mut paths = Paths::new();
+        for (path, method, doc, private) in self.docs {
+            paths.add_path_operation(
+                doc::openapi_path(path),
+                vec![doc::http_method(&method)],
+                doc.operation(&method, path, private),
+            );
+        }
+        paths
     }
 
     /// Every method and path template these routes serve. Only with the
