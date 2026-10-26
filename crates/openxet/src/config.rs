@@ -160,6 +160,7 @@ pub struct Config {
     pub lfs_threshold: u64,
     pub max_commit_bytes: u64,
     pub token_ttl: Duration,
+    pub capability_ttl: Duration,
     pub page_size: usize,
     pub gateway_idle_timeout: Duration,
     /// `[git]` and `hub.commit_wait`: the Git engine's settings, its cache
@@ -195,6 +196,7 @@ impl Config {
             lfs_threshold: self.lfs_threshold,
             max_commit_bytes: self.max_commit_bytes,
             token_ttl: self.token_ttl,
+            capability_ttl: self.capability_ttl,
             page_size: self.page_size,
             gateway_idle_timeout: self.gateway_idle_timeout,
         }
@@ -268,6 +270,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("lfs_threshold", Kind::Str),
             ("max_commit_bytes", Kind::Str),
             ("token_ttl", Kind::Str),
+            ("capability_ttl", Kind::Str),
             ("page_size", Kind::Int),
             ("gateway_idle_timeout", Kind::Str),
             ("commit_wait", Kind::Str),
@@ -927,6 +930,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         lfs_threshold: hub.lfs_threshold,
         max_commit_bytes: hub.max_commit_bytes,
         token_ttl: hub.token_ttl,
+        capability_ttl: hub.capability_ttl,
         page_size: hub.page_size,
         gateway_idle_timeout: hub.gateway_idle_timeout,
         git: git?,
@@ -940,6 +944,7 @@ struct Hub {
     lfs_threshold: u64,
     max_commit_bytes: u64,
     token_ttl: Duration,
+    capability_ttl: Duration,
     page_size: usize,
     gateway_idle_timeout: Duration,
 }
@@ -1020,6 +1025,7 @@ fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub>
         );
         return None;
     }
+    let capability_ttl = capability_ttl(c, token_ttl);
     let max_page = u32::try_from(HubConfig::MAX_PAGE_SIZE).unwrap_or(u32::MAX);
     let page_size = int(
         c,
@@ -1043,9 +1049,45 @@ fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub>
         lfs_threshold: lfs_threshold?,
         max_commit_bytes: max_commit_bytes?,
         token_ttl: token_ttl?,
+        capability_ttl: capability_ttl?,
         page_size: usize::try_from(page_size?).ok()?,
         gateway_idle_timeout: gateway_idle_timeout?,
     })
+}
+
+/// `hub.capability_ttl`, checked against `token_ttl` when that is valid: a
+/// capability `href` must outlive the CAS token its batch answer carries
+/// (ADR 0005 item 10).
+fn capability_ttl(c: &mut Checker<'_>, token_ttl: Option<Duration>) -> Option<Duration> {
+    let capability_ttl = c.duration(
+        "hub.capability_ttl",
+        HubConfig::DEFAULT_CAPABILITY_TTL,
+        (Duration::from_mins(1), Duration::from_hours(24)),
+        "How long an LFS upload's capability href answers git-xet's token refreshes; an upload \
+         that runs longer must push again. 60m is the default.",
+    );
+    if let (Some(capability), Some(token)) = (capability_ttl, token_ttl)
+        && capability < token
+    {
+        let source = c
+            .raw
+            .values
+            .get("hub.capability_ttl")
+            .map_or(Source::Default, |(_, source)| source.clone());
+        c.raw.problem(
+            "hub.capability_ttl",
+            Some(duration::format(capability)),
+            &source,
+            format!(
+                "must be at least hub.token_ttl ({})",
+                duration::format(token)
+            ),
+            "A capability href must outlive the CAS token its batch answer carries (ADR 0005 \
+             item 10); raise hub.capability_ttl or lower hub.token_ttl.",
+        );
+        return None;
+    }
+    capability_ttl
 }
 
 /// `[git]` and `hub.commit_wait`, every key checked; `None` if any has a
@@ -2572,12 +2614,14 @@ mod tests {
         assert_eq!(hub.lfs_threshold, 1 << 20);
         assert_eq!(hub.max_commit_bytes, 64 << 20);
         assert_eq!(hub.token_ttl, Duration::from_mins(15));
+        assert_eq!(hub.capability_ttl, Duration::from_hours(1));
         assert_eq!(hub.page_size, 1000);
 
         let config = load_toml(
             "[hub]\npublic_url = \"https://hub.example.com\"\n\
              cas_url = \"https://cas.example.com\"\nlfs_threshold = \"64KiB\"\n\
-             max_commit_bytes = \"1MiB\"\ntoken_ttl = \"30m\"\npage_size = 50\n",
+             max_commit_bytes = \"1MiB\"\ntoken_ttl = \"30m\"\ncapability_ttl = \"2h\"\n\
+             page_size = 50\n",
             &[("OPENXET_HUB__PAGE_SIZE", "20")],
         )
         .config
@@ -2588,6 +2632,7 @@ mod tests {
         assert_eq!(hub.lfs_threshold, 64 << 10);
         assert_eq!(hub.max_commit_bytes, 1 << 20);
         assert_eq!(hub.token_ttl, Duration::from_mins(30));
+        assert_eq!(hub.capability_ttl, Duration::from_hours(2));
         assert_eq!(hub.page_size, 20);
     }
 
@@ -2620,6 +2665,15 @@ mod tests {
         );
         assert_eq!(problem_keys(&loaded), ["hub.max_commit_bytes"]);
         assert!(loaded.problems[0].rule.contains("twice hub.lfs_threshold"));
+
+        // A capability href outlives the CAS token its batch carries.
+        let loaded = load_toml("[hub]\ncapability_ttl = \"10m\"\n", &[]);
+        assert_eq!(problem_keys(&loaded), ["hub.capability_ttl"]);
+        assert!(
+            loaded.problems[0]
+                .rule
+                .contains("at least hub.token_ttl (15m)")
+        );
 
         // The server refuses CAS tokens longer-lived than the cap, its own
         // included.

@@ -1,0 +1,99 @@
+{
+  "source": "jj-xet 01b6173, tests/openxet.rs (its mock of openxet) and src/remote.rs (what the client reads), transcribed 2026-10-25 (ADR 0005). The mock's message texts and its relative download href are mock details no jj-xet test depends on: the client prints `message (hint: hint)` from any error body and never fetches the download href (ADR 0003, jj-xet compatibility). Format: `{name}` strings are placeholders the replayer fills (`{oid}`, `{size}`, `{unknown_oid}`, `{xet_hash}`); `<string>`, `<int>`, `<future-epoch>` and `<http-url>` match any value of that kind; `json` keys are dotted paths, numbers indexing lists. Replayed by `jj_xet_mock_expectations` in crates/hub/tests/lfs.rs.",
+  "cases": [
+    {
+      "name": "write token (cas_token(Access::Write); round_trip_through_openxet)",
+      "request": { "method": "GET", "path": "xet-write-token", "auth": "basic" },
+      "response": {
+        "status": 200,
+        "json": { "accessToken": "<string>", "exp": "<future-epoch>", "casUrl": "<http-url>" }
+      }
+    },
+    {
+      "name": "read token (cas_token(Access::Read); round_trip_through_openxet)",
+      "request": { "method": "GET", "path": "xet-read-token", "auth": "basic" },
+      "response": {
+        "status": 200,
+        "json": { "accessToken": "<string>", "exp": "<future-epoch>", "casUrl": "<http-url>" }
+      }
+    },
+    {
+      "name": "refresh repeats the same request (Refresher; short_lived_tokens_are_refreshed)",
+      "request": { "method": "GET", "path": "xet-write-token", "auth": "basic" },
+      "response": {
+        "status": 200,
+        "json": { "accessToken": "<string>", "exp": "<future-epoch>", "casUrl": "<http-url>" }
+      }
+    },
+    {
+      "name": "rejected token is a 401 the client reports to its credential helper (rejected_token_fails_snapshot_instead_of_committing_contents)",
+      "request": { "method": "GET", "path": "xet-write-token", "auth": "wrong-basic" },
+      "response": {
+        "status": 401,
+        "json": {
+          "schema": "openxet.error.v1",
+          "code": "<string>",
+          "message": "<string>",
+          "hint": "<string>"
+        }
+      }
+    },
+    {
+      "name": "no credential is a 401 (the client asks git's credential helpers)",
+      "request": { "method": "GET", "path": "xet-read-token", "auth": "none" },
+      "response": {
+        "status": 401,
+        "json": {
+          "schema": "openxet.error.v1",
+          "code": "<string>",
+          "message": "<string>",
+          "hint": "<string>"
+        }
+      }
+    },
+    {
+      "name": "download batch of a registered object carries X-Xet-Hash (lookup_xet_hash)",
+      "request": {
+        "method": "POST",
+        "path": "objects/batch",
+        "auth": "basic",
+        "json": {
+          "operation": "download",
+          "transfers": ["xet", "basic"],
+          "objects": [{ "oid": "{oid}", "size": "{size}" }],
+          "hash_algo": "sha256"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "transfer": "basic",
+          "objects.0.oid": "{oid}",
+          "objects.0.actions.download.header.X-Xet-Hash": "{xet_hash}"
+        }
+      }
+    },
+    {
+      "name": "download batch of an unknown object is an object error 404 (wrong_hashes_from_the_server_are_not_cached)",
+      "request": {
+        "method": "POST",
+        "path": "objects/batch",
+        "auth": "basic",
+        "json": {
+          "operation": "download",
+          "transfers": ["xet", "basic"],
+          "objects": [{ "oid": "{unknown_oid}", "size": 1 }],
+          "hash_algo": "sha256"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "transfer": "basic",
+          "objects.0.oid": "{unknown_oid}",
+          "objects.0.error.code": 404
+        }
+      }
+    }
+  ]
+}

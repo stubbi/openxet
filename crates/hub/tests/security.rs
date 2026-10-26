@@ -251,6 +251,11 @@ const NOT_REPOSITORY_ROUTES: &[(&str, &str)] = &[
         "/v1/transfer/files/{repo}/{file}",
         "addresses the repository by id; gateway_needs_credential_scoped_to_repo",
     ),
+    (
+        "/v1/capabilities/{repo}/{op}",
+        "the signature is the credential (ADR 0003 decision 2); a bad one is refused before \
+         any lookup; lfs.rs",
+    ),
 ];
 
 /// Asserts that `method template` answers Bob, who may not read

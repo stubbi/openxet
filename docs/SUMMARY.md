@@ -8,6 +8,7 @@
 - [Server configuration](reference/config.md)
 - [Command line](reference/cli.md)
 - [CAS routes](reference/routes.md)
+- [Git LFS routes](reference/lfs.md)
 - [Exit codes](reference/exit-codes.md)
 - [xet:// addresses](reference/xet-uri.md)
 - [Security tests](reference/security-tests.md)

@@ -22,8 +22,8 @@ use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use openxet_auth::{
-    Action, Authenticator, Authorizer, CasGrant, Glob, Mode, Rule, RulesAuthorizer, StaticToken,
-    TokenSigner, UrlSigner, UserProfile,
+    Action, Authenticator, Authorizer, CapabilitySigner, CasGrant, Glob, Mode, Rule,
+    RulesAuthorizer, StaticToken, TokenSigner, UrlSigner, UserProfile,
 };
 use openxet_cas::{AppState, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
@@ -417,6 +417,15 @@ async fn open(
     let key = transfer_key(config)?;
     let urls = UrlSigner::new(*key, config.url_lifetime)
         .map_err(|err| CliError::new("config", err.to_string(), "Fix cas.url_lifetime."))?;
+    // Capability `href`s are signed with the transfer key every node shares
+    // (ruling M1-R29), so any node answers one another issued.
+    let capabilities = CapabilitySigner::new(*key).map_err(|err| {
+        CliError::new(
+            "config",
+            err.to_string(),
+            "Replace the transfer key file with 32 random bytes.",
+        )
+    })?;
     let signer = cas_token_signer(config)?;
     let (auth, dev_token) = if let Some(auth) = &config.auth {
         (Arc::new(auth.with_jwt_key(signer.public_key())), None)
@@ -463,6 +472,7 @@ async fn open(
         Arc::new(engine),
         Arc::new(signer),
         SharedMemory::of(&cas),
+        Arc::new(capabilities),
     );
     Ok((cas, hub, dev_token))
 }
