@@ -180,7 +180,10 @@ fn upload_action(reply: &Reply) -> Value {
 fn assert_xet_upload(object: &Value, id: &str) {
     assert_eq!(object["oid"], HF_OID);
     assert_eq!(object["size"], 300_000);
-    assert_eq!(object["authenticated"], true);
+    // No `authenticated`: git-lfs v3.7.1 then sends its credential for
+    // the host with the verify (`tq/verify.go`, lines 51 to 55, calls
+    // `c.Do` without auth when it is true). git-xet 0.2.1 never reads it.
+    assert!(object.get("authenticated").is_none(), "{object}");
     let upload = &object["actions"]["upload"];
     let href = upload["href"].as_str().unwrap();
     let capability = format!("{PUBLIC_URL}/v1/capabilities/{id}/write?exp=");
@@ -259,7 +262,6 @@ async fn upload_batch_answers_xet_with_capability_href() {
                 "transfer",
                 "objects[].oid",
                 "objects[].size",
-                "objects[].authenticated",
                 "objects[].actions.upload.href",
                 "objects[].actions.upload.header",
                 "objects[].actions.verify.href",
@@ -275,6 +277,38 @@ async fn upload_batch_answers_xet_with_capability_href() {
         first["header"]["X-Xet-Session-Id"],
         second["header"]["X-Xet-Session-Id"]
     );
+}
+
+#[tokio::test]
+async fn xet_upload_verify_is_sent_with_the_host_credential() {
+    let hub = hub().await;
+    hub.create(ALICE, "alice", "m", None).await;
+    let router = with_cas(&hub);
+    upload_capture(&hub, &router, ALICE, "alice/m").await;
+    let size = a_bin_size(&hub, &repo_id(&hub, "alice", "m").await).await;
+    let reply = upload_hf_object(&hub, "alice/m", Auth::Basic(ALICE)).await;
+    let object = &reply.json()["objects"][0];
+    // git-lfs v3.7.1 `tq/verify.go` lines 51 to 55: with `authenticated`
+    // true it sends the verify through `c.Do`, with no credential, and the
+    // verify action carries none (§5.9 req 6), so every push would fail.
+    // Without it, git-lfs sends the verify through `DoWithAuth`.
+    assert!(object.get("authenticated").is_none(), "{object}");
+    let href = object["actions"]["verify"]["href"].as_str().unwrap();
+    let body = json!({"oid": A_BIN_SHA256, "size": size});
+    // `DoWithAuth`: the credential git-lfs holds for the host, as Basic.
+    let verified = lfs(
+        &hub,
+        Method::POST,
+        local(href),
+        Auth::Basic(ALICE),
+        Some(&body),
+    )
+    .await;
+    assert_eq!(verified.status, StatusCode::OK, "{}", verified.text());
+    // What `c.Do` would send: refused, which is why `authenticated` must
+    // stay out of upload answers.
+    let bare = lfs(&hub, Method::POST, local(href), Auth::None, Some(&body)).await;
+    assert_eq!(bare.status, StatusCode::UNAUTHORIZED, "{}", bare.text());
 }
 
 #[tokio::test]

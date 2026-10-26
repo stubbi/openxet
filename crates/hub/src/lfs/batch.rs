@@ -260,7 +260,10 @@ async fn download(
 /// action: a capability `href` for this repository's writes and the
 /// batch's CAS token in the five-header casing of ADR 0005 item 10 (all
 /// but `X-Xet-Hash`, which an upload doesn't know yet), and a `verify`
-/// action naming the endpoint, without a credential (§5.9 req 6). Without
+/// action naming the endpoint, without a credential (§5.9 req 6). No
+/// object carries `authenticated`: git-lfs v3.7.1 would then send the
+/// verify without its credential (`tq/verify.go`), and git-xet 0.2.1
+/// never reads it. Without
 /// `xet`, every other object gets the object error `501` of ruling M2-R10.
 async fn upload(
     state: &HubState,
@@ -285,7 +288,6 @@ async fn upload(
                         Some(actions) => actions.clone(),
                         None => actions.insert(xet_actions(state, access)?).clone(),
                     };
-                    answer["authenticated"] = true.into();
                     answer["actions"] = actions;
                 } else {
                     answer["error"] = json!({ "code": 501, "message": INSTALL_GIT_XET });

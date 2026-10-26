@@ -64,7 +64,6 @@ object error `422`.
 **Uploads that offer `xet`** answer `"transfer": "xet"`. An object the
 repository has gets no actions. Every other object gets:
 
-- `authenticated: true`
 - `actions.upload.href`: an absolute capability URL, see below
 - `actions.upload.header`: `X-Xet-Cas-Url`, `X-Xet-Access-Token`,
   `X-Xet-Token-Expiration` (Unix seconds, as a string) and
@@ -74,6 +73,10 @@ repository has gets no actions. Every other object gets:
 - `actions.upload.expires_in`: `hub.capability_ttl` in seconds
 - `actions.verify.href`: `{lfs-url}/objects/verify`, with no header:
   `git-lfs` sends the credential it holds for the host.
+
+No object carries `authenticated`, so `git-lfs` sends its credential for
+the host with the verify (git-lfs 3.7.1 sends it without one when
+`authenticated` is true). `git-xet` doesn't read the field.
 
 All objects of one batch share one capability, token and session.
 
@@ -132,7 +135,12 @@ capability was issued to, with a token living `hub.token_ttl` but never
 past the capability's `exp`. The `href` therefore outlives every token it
 issues. A capability that is altered, presented for another repository,
 operation or subject, or past its `exp`, is refused with `403
-capability_refused`; push again for a fresh one. Capabilities are signed
+capability_refused`; push again for a fresh one.
+
+A capability doesn't re-check the [rules](config.md#rules): a writer whose
+access is revoked can still refresh CAS tokens through a capability issued
+before the revocation until it expires, so `hub.capability_ttl` is also
+that window (ADR 0003 decision 2). Capabilities are signed
 with `transfer.key` ([config](config.md#keys-and-tokens-on-disk)), so any
 node sharing the key answers one another node issued.
 
