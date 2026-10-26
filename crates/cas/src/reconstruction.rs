@@ -73,7 +73,7 @@ const _: () = assert!(MAX_BATCH_FILES == 1000);
 /// The bytes a stored term takes once decoded: its [`openxet_index::Term`]
 /// (a 32-byte hash and three `u32`s) and its recorded byte range (two
 /// `u32`s).
-const DECODED_TERM_BYTES: u64 = 52;
+pub(crate) const DECODED_TERM_BYTES: u64 = 52;
 
 /// The largest batch body read, in bytes: [`MAX_BATCH_FILES`] keys of about
 /// 100 bytes each as the spec writes them, with room for whitespace.
@@ -341,11 +341,17 @@ async fn head_file(
     Ok((StatusCode::OK, [(CONTENT_LENGTH, record.size)]).into_response())
 }
 
-/// A reconstruction `Range`, before the file's size is known.
+/// A requested byte range (RFC 9110 §14.1.2), before the file's size is
+/// known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ByteRange {
+pub enum ByteRange {
     /// `bytes=start-end` (`end` inclusive) or `bytes=start-`.
-    From { start: u64, end: Option<u64> },
+    From {
+        /// The first byte.
+        start: u64,
+        /// The last byte, inclusive; `None` for the end of the file.
+        end: Option<u64>,
+    },
     /// `bytes=-length`: the last `length` bytes.
     Suffix(u64),
 }
@@ -353,9 +359,14 @@ pub(crate) enum ByteRange {
 /// The request's `Range` (RFC 9110 §14.1.2), which `hf_xet` always sends as
 /// `bytes=start-end` (S10 §1). Open-ended and suffix ranges are served as
 /// upstream's reference server serves them (`xet-client` 1.7.0,
-/// `local_server/handlers.rs`). More than one range, another unit, or a
-/// `start` after `end` is `400 invalid_range`.
-pub(crate) fn requested_range(headers: &HeaderMap) -> Result<Option<ByteRange>, CasError> {
+/// `local_server/handlers.rs`). The Hub's file gateway parses `Range` with
+/// it too.
+///
+/// # Errors
+///
+/// [`CasError::InvalidRange`] for more than one range, another unit, or a
+/// `start` after `end`: the reconstruction routes answer it `400`.
+pub fn requested_range(headers: &HeaderMap) -> Result<Option<ByteRange>, CasError> {
     let mut values = headers.get_all(RANGE).iter();
     let Some(value) = values.next() else {
         return Ok(None);
@@ -411,7 +422,9 @@ pub(crate) fn resolve(range: Option<ByteRange>, size: u64) -> Result<Option<(u64
 }
 
 /// The distinct xorbs `terms` name, in order of first use.
-fn distinct_xorbs<'a>(terms: impl IntoIterator<Item = &'a openxet_index::Term>) -> Vec<MerkleHash> {
+pub(crate) fn distinct_xorbs<'a>(
+    terms: impl IntoIterator<Item = &'a openxet_index::Term>,
+) -> Vec<MerkleHash> {
     let mut seen = XorbSet::default();
     terms
         .into_iter()

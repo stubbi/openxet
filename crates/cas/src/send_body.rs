@@ -25,12 +25,8 @@ const FRAME_BYTES: usize = 64 * 1024;
 
 /// `parts`, in order, as a response body holding `guard`, which is dropped
 /// with the parts when the body has been sent, is dropped, or `deadline`
-/// passes.
-pub(crate) fn send_body<G: Send + 'static>(
-    parts: Vec<Bytes>,
-    guard: G,
-    deadline: Duration,
-) -> Body {
+/// passes. The Hub sends a Git blob it reserved memory for with it.
+pub fn send_body<G: Send + 'static>(parts: Vec<Bytes>, guard: G, deadline: Duration) -> Body {
     let len = parts.iter().map(|part| part.len() as u64).sum();
     let parts: VecDeque<Bytes> = parts.into_iter().filter(|p| !p.is_empty()).collect();
     let state = if parts.is_empty() {

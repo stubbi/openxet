@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use openxet_auth::{Authenticator, Authorizer, TokenSigner};
+use openxet_cas::{MemoryBudget, SendDeadline};
 use openxet_git::Engine;
 #[cfg(feature = "test-support")]
 pub use openxet_http::Endpoint;
@@ -46,6 +47,7 @@ macro_rules! typed_paths {
 mod authz;
 mod commit;
 mod error;
+mod gateway;
 mod githttp;
 mod info;
 mod labels;
@@ -56,6 +58,7 @@ mod ndjson;
 mod preupload;
 mod refs;
 mod repos;
+mod resolve;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod tokens;
@@ -89,6 +92,10 @@ pub struct HubConfig {
     pub token_ttl: Duration,
     /// The most entries one listing page holds (ruling M2-R8).
     pub page_size: usize,
+    /// How long a file gateway body may go without sending a byte before
+    /// it is cut off and its memory released (ruling M1-R40): a slow but
+    /// steady client always finishes, a stalled one holds nothing past it.
+    pub gateway_idle_timeout: Duration,
 }
 
 impl HubConfig {
@@ -105,6 +112,9 @@ impl HubConfig {
     /// The largest, and default, [`HubConfig::page_size`]: 1,000 (ruling
     /// M2-R8).
     pub const MAX_PAGE_SIZE: usize = 1000;
+    /// The default [`HubConfig::gateway_idle_timeout`]: 30 seconds, the
+    /// base of the CAS's send deadline.
+    pub const DEFAULT_GATEWAY_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 }
 
 /// What every Hub handler shares. Cloning is cheap.
@@ -129,11 +139,41 @@ pub struct HubState {
     /// Signs the CAS tokens the token routes hand out: the server's own
     /// key (`{data_dir}/cas-token.key`), which the CAS verifies.
     pub signer: Arc<TokenSigner>,
+    /// The memory budget, and the send deadline of a buffered answer,
+    /// shared with the CAS.
+    pub memory: SharedMemory,
+}
+
+/// What bounds the memory of the Hub's reads, shared with the CAS so both
+/// draw on one pool (ruling M1-R40): `resolve` reserves a Git blob before
+/// inflating it, the file gateway its plan for as long as it streams.
+#[derive(Debug, Clone)]
+pub struct SharedMemory {
+    /// The process's memory budget: the CAS's, cloned, so the pool is one.
+    pub budget: MemoryBudget,
+    /// How long a buffered answer, a Git blob `resolve` serves inline, may
+    /// take to send before it is cut off and its reservation released.
+    pub send_deadline: SendDeadline,
+}
+
+impl SharedMemory {
+    /// The budget and send deadline of the CAS `cas`.
+    #[must_use]
+    pub fn of(cas: &openxet_cas::AppState) -> Self {
+        Self {
+            budget: cas.budget.clone(),
+            send_deadline: cas.cfg.send_deadline,
+        }
+    }
 }
 
 impl HubState {
     /// State with the system clock.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each is a distinct service `openxet serve` wires once"
+    )]
     pub fn new(
         index: Arc<dyn HubIndex>,
         bucket: Arc<dyn Bucket>,
@@ -142,6 +182,7 @@ impl HubState {
         cfg: HubConfig,
         engine: Arc<Engine>,
         signer: Arc<TokenSigner>,
+        memory: SharedMemory,
     ) -> Self {
         Self {
             index,
@@ -152,7 +193,15 @@ impl HubState {
             clock: Arc::new(SystemClock),
             engine,
             signer,
+            memory,
         }
+    }
+
+    /// The same state, drawing on `memory` instead.
+    #[must_use]
+    pub fn with_memory(mut self, memory: SharedMemory) -> Self {
+        self.memory = memory;
+        self
     }
 
     /// The same state, with `clock` instead.
@@ -187,6 +236,8 @@ pub fn routes() -> routes::Routes {
         .merge(commit::routes())
         .merge(refs::routes())
         .merge(tree::routes())
+        .merge(resolve::routes())
+        .merge(gateway::routes())
         .merge(listing::routes())
         .merge(labels::routes())
         .merge(misc::routes())

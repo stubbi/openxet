@@ -6,8 +6,9 @@
 #![allow(clippy::unwrap_used)]
 
 use openxet_protocol::{
-    MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS, ProtocolError,
-    chunk_hash, read_xorb_chunks, xorb_with_footer,
+    CHUNK_HEADER_BYTES, MAX_CHUNK_BYTES, MAX_XORB_BODY_BYTES, MAX_XORB_BYTES, MAX_XORB_CHUNKS,
+    ProtocolError, chunk_hash, decode_stored_chunk, read_xorb_chunks, stored_chunk_len,
+    xorb_with_footer,
 };
 // Only to build test bodies; production code reaches upstream through
 // openxet_protocol alone.
@@ -244,4 +245,55 @@ fn chunk_declaring_zero_bytes_is_rejected() {
         matches!(err, ProtocolError::XorbChunkEmpty { chunk: 1 }),
         "{err}"
     );
+}
+
+#[test]
+fn stored_chunks_decode_one_at_a_time() {
+    // The file gateway walks a stored range chunk by chunk: each header
+    // gives the chunk's stored length, and each chunk decodes alone, in
+    // every compression scheme stock clients write.
+    let data: Vec<Vec<u8>> = vec![
+        vec![1u8; 1000],
+        (0..5000u32).map(|i| (i % 251) as u8).collect(),
+        (0..4096u32).flat_map(u32::to_le_bytes).collect(),
+    ];
+    let mut body = Vec::new();
+    for (bytes, scheme) in data.iter().zip([
+        CompressionScheme::None,
+        CompressionScheme::LZ4,
+        CompressionScheme::ByteGrouping4LZ4,
+    ]) {
+        serialize_chunk(bytes, &mut body, scheme).unwrap();
+    }
+    let mut rest = &body[..];
+    for bytes in &data {
+        let header: [u8; CHUNK_HEADER_BYTES] = rest[..CHUNK_HEADER_BYTES].try_into().unwrap();
+        let len = stored_chunk_len(header).unwrap();
+        assert_eq!(&decode_stored_chunk(&rest[..len]).unwrap(), bytes);
+        rest = &rest[len..];
+    }
+    assert!(rest.is_empty());
+}
+
+#[test]
+fn a_stored_chunk_must_be_exactly_one_chunk() {
+    let one = chunk(&[3u8; 2000]);
+    assert!(matches!(
+        decode_stored_chunk(&one[..one.len() - 1]),
+        Err(ProtocolError::XorbTruncated { chunk: 0 })
+    ));
+    let two = [one.clone(), one].concat();
+    assert!(matches!(
+        decode_stored_chunk(&two),
+        Err(ProtocolError::MalformedXorb(_))
+    ));
+    let lying = raw_chunk(CompressionScheme::None, &[7; 100], 200);
+    assert!(matches!(
+        decode_stored_chunk(&lying),
+        Err(ProtocolError::XorbChunkTooShort { .. })
+    ));
+    let mut bad_scheme = chunk(&[1u8; 10]);
+    bad_scheme[4] = 0xee;
+    let header: [u8; CHUNK_HEADER_BYTES] = bad_scheme[..CHUNK_HEADER_BYTES].try_into().unwrap();
+    assert!(stored_chunk_len(header).is_err());
 }

@@ -102,6 +102,30 @@ pub enum Blob {
     },
 }
 
+/// A file [`Engine::locate_blob`](crate::Engine::locate_blob) found in a
+/// commit's tree, and its size. Only the engine makes one, so
+/// [`Engine::read_located`](crate::Engine::read_located) reads only blobs
+/// a tree walk reached (R22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocatedBlob {
+    pub(crate) oid: Oid,
+    pub(crate) size: u64,
+}
+
+impl LocatedBlob {
+    /// The blob's id.
+    #[must_use]
+    pub fn oid(&self) -> Oid {
+        self.oid
+    }
+
+    /// The blob's size in bytes, from its object header.
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
 /// A person in a commit or tag: who wrote it, or who committed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature {

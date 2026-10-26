@@ -4,6 +4,8 @@
 
 #![allow(dead_code, clippy::unwrap_used)]
 
+pub mod files;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -58,10 +60,11 @@ pub fn rules() -> Vec<openxet_auth::Rule> {
 }
 
 /// The Hub and the CAS of `hub`, over its index, bucket and credentials,
-/// composed into one router as `openxet serve` composes them.
+/// composed into one router as `openxet serve` composes them, sharing
+/// the Hub's memory budget.
 pub fn with_cas(hub: &TestHub) -> Router {
     let state = &hub.state;
-    let cas = AppState::new(
+    let mut cas = AppState::new(
         Arc::clone(&state.index) as Arc<dyn Index>,
         Arc::clone(&state.bucket),
         Arc::clone(&state.auth),
@@ -76,6 +79,8 @@ pub fn with_cas(hub: &TestHub) -> Router {
             memory_budget: MemoryBudget::DEFAULT_BYTES,
         },
     );
+    // One memory pool for both, as `openxet serve` shares it.
+    cas.budget = state.memory.budget.clone();
     openxet_http::compose(
         vec![
             openxet_hub::mounted(state.clone()),

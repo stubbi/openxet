@@ -19,7 +19,8 @@ use gix_attributes::glob::pattern::Case;
 use gix_attributes::glob::wildmatch::Mode as MatchMode;
 use gix_attributes::parse::{Kind, Lines};
 use openxet_auth::Action;
-use openxet_git::{Blob, GitError};
+use openxet_git::{Blob, GitError, SnapshotRepo};
+use openxet_index::Oid;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -79,15 +80,7 @@ async fn preupload(
     } else {
         drop(snap);
         let (snap, resolved) = at_revision(&state, &access, &rev).await?;
-        let patterns = match state
-            .engine
-            .read_blob(&snap, resolved.commit, ".gitattributes")
-            .await
-        {
-            Ok(Blob::Inline { bytes, .. }) => LfsPatterns::parse(&bytes),
-            Ok(Blob::Lfs { .. }) | Err(GitError::EntryNotFound { .. }) => LfsPatterns::default(),
-            Err(e) => return Err(e.into()),
-        };
+        let patterns = attributes(&state, &snap, resolved.commit).await?;
         (patterns, Some(resolved.commit))
     };
     let files: Vec<Value> = body
@@ -107,6 +100,55 @@ async fn preupload(
         "files": files,
         "commitOid": commit.map(|c| c.to_string()),
     })))
+}
+
+/// The size from which git ignores an attributes file: `ATTR_MAX_FILE_SIZE`
+/// in git's `attr.c`, 100 MiB (observed with git 2.39.5: a file of exactly
+/// 100 MiB is ignored with a warning, one byte less is read).
+const ATTR_MAX_FILE_SIZE: u64 = 100 << 20;
+
+/// Whether git reads an attributes file of `size` bytes.
+fn within_attr_cap(size: u64) -> bool {
+    size < ATTR_MAX_FILE_SIZE
+}
+
+/// The LFS patterns of `commit`'s root `.gitattributes`, read as git reads
+/// it: none when it is absent, an LFS pointer, or at least
+/// [`ATTR_MAX_FILE_SIZE`], which git ignores with a warning. Below that, its
+/// size is reserved from the memory budget before it is read (ruling
+/// M1-R40).
+///
+/// # Errors
+///
+/// [`HubError::MemoryBusy`] when the budget stays full,
+/// [`HubError::AnswerTooLarge`] past one answer's share, and the engine's
+/// failures.
+async fn attributes(
+    state: &HubState,
+    snap: &SnapshotRepo,
+    commit: Oid,
+) -> Result<LfsPatterns, HubError> {
+    let located = match state
+        .engine
+        .locate_blob(snap, commit, ".gitattributes")
+        .await
+    {
+        Ok(located) => located,
+        Err(GitError::EntryNotFound { .. }) => return Ok(LfsPatterns::default()),
+        Err(e) => return Err(e.into()),
+    };
+    if !within_attr_cap(located.size()) {
+        tracing::warn!(
+            size = located.size(),
+            "ignoring a .gitattributes of at least 100 MiB, as git does"
+        );
+        return Ok(LfsPatterns::default());
+    }
+    let _reserved = state.memory.budget.reserve_answer(located.size()).await?;
+    Ok(match state.engine.read_located(snap, located).await? {
+        Blob::Inline { bytes, .. } => LfsPatterns::parse(&bytes),
+        Blob::Lfs { .. } => LfsPatterns::default(),
+    })
 }
 
 /// The patterns of a `.gitattributes` and whether each sets `filter=lfs`,
@@ -159,7 +201,16 @@ impl LfsPatterns {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_GITATTRIBUTES, LfsPatterns};
+    use super::{ATTR_MAX_FILE_SIZE, DEFAULT_GITATTRIBUTES, LfsPatterns, within_attr_cap};
+
+    #[test]
+    fn attributes_at_gits_cap_are_ignored() {
+        assert_eq!(ATTR_MAX_FILE_SIZE, 104_857_600);
+        assert!(within_attr_cap(0));
+        assert!(within_attr_cap(ATTR_MAX_FILE_SIZE - 1));
+        assert!(!within_attr_cap(ATTR_MAX_FILE_SIZE));
+        assert!(!within_attr_cap(u64::MAX));
+    }
 
     #[test]
     fn default_patterns_route_as_git_lfs_would() {

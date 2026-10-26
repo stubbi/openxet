@@ -20,13 +20,15 @@ base64 = "0.23.1"
 bstr = { version = "1.13.1", default-features = false, features = ["std"] }
 # Inflates the request bodies git sends with `Content-Encoding: gzip`.
 flate2 = "1.1.10"
-futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 # `.gitattributes` lines and their patterns, as git reads them, for routing
 # a file to Xet by pattern (ruling M2-R4).
 gix-attributes = "0.37.1"
 http-body-util = "0.1.5"
 humantime = "2.4.0"
 openxet-auth = { path = "../auth", version = "0.0.0" }
+# The reconstruction planner the file gateway streams a file from.
+openxet-cas = { path = "../cas", version = "0.0.0" }
 openxet-git = { path = "../git", version = "0.0.0" }
 openxet-http = { path = "../http", version = "0.0.0" }
 openxet-index = { path = "../index", version = "0.0.0" }
@@ -37,6 +39,8 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 tempfile = { version = "3.27.0", optional = true }
 thiserror = "2"
+# The gateway body's send-deadline timer (ruling M1-R40).
+tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 tower = { version = "0.5.3", features = ["util"], optional = true }
 tracing = "0.1.44"
 url = "2.5.8"
@@ -44,10 +48,9 @@ zeroize = "1.9.1"
 
 [dev-dependencies]
 async-trait = "0.1.92"
-openxet-cas = { path = "../cas", version = "0.0.0" }
 openxet-hub = { path = ".", features = ["test-support"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
-tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "test-util", "time"] }
 
 [lints]
 workspace = true

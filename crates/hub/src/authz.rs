@@ -79,12 +79,22 @@ impl Who {
         } else {
             return Err(HubError::InvalidCredential);
         };
-        match state.auth.authenticate(&token, state.clock.now()) {
-            Ok(Credential::User(user) | Credential::Both(_, user)) => Ok(Self(user)),
-            Ok(Credential::Cas(_)) => Err(HubError::CasCredential),
-            // An empty token is a malformed credential, not none.
-            Err(_) => Err(HubError::InvalidCredential),
-        }
+        user_for_token(state, &token).map(Self)
+    }
+}
+
+/// The user `token` authenticates as.
+///
+/// # Errors
+///
+/// [`HubError::InvalidCredential`] for an unknown, malformed or expired
+/// token, and [`HubError::CasCredential`] for a CAS-only one.
+pub(crate) fn user_for_token(state: &HubState, token: &str) -> Result<UserPrincipal, HubError> {
+    match state.auth.authenticate(token, state.clock.now()) {
+        Ok(Credential::User(user) | Credential::Both(_, user)) => Ok(user),
+        Ok(Credential::Cas(_)) => Err(HubError::CasCredential),
+        // An empty token is a malformed credential, not none.
+        Err(_) => Err(HubError::InvalidCredential),
     }
 }
 

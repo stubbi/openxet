@@ -83,6 +83,19 @@ impl View {
         }
     }
 
+    /// The prefix of the view's Hub API routes, `/api/models` and so on;
+    /// `None` for [`View::Any`], which has none.
+    #[must_use]
+    pub fn api_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Model => Some("/api/models"),
+            Self::Dataset => Some("/api/datasets"),
+            Self::Space => Some("/api/spaces"),
+            Self::Kernel => Some("/api/kernels"),
+            Self::Any => None,
+        }
+    }
+
     /// Whether `repo` is visible through the view: it carries the view's
     /// label, or the view is [`View::Any`].
     #[must_use]
@@ -151,7 +164,12 @@ mod tests {
         for view in View::TYPED {
             assert_eq!(View::from_type(view.label()), Some(view));
             assert_eq!(View::from_label(view.noun()), Some(view));
+            assert_eq!(
+                view.api_prefix().map(str::to_owned),
+                Some(format!("/api/{}s", view.noun()))
+            );
         }
+        assert_eq!(View::Any.api_prefix(), None);
         assert_eq!(View::from_label("checkpoint"), None);
     }
 }

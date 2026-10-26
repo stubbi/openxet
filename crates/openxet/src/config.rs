@@ -161,6 +161,7 @@ pub struct Config {
     pub max_commit_bytes: u64,
     pub token_ttl: Duration,
     pub page_size: usize,
+    pub gateway_idle_timeout: Duration,
     /// `[git]` and `hub.commit_wait`: the Git engine's settings, its cache
     /// under `data_dir` by default (ruling M2-R16).
     pub git: GitConfig,
@@ -195,6 +196,7 @@ impl Config {
             max_commit_bytes: self.max_commit_bytes,
             token_ttl: self.token_ttl,
             page_size: self.page_size,
+            gateway_idle_timeout: self.gateway_idle_timeout,
         }
     }
 }
@@ -267,6 +269,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("max_commit_bytes", Kind::Str),
             ("token_ttl", Kind::Str),
             ("page_size", Kind::Int),
+            ("gateway_idle_timeout", Kind::Str),
             ("commit_wait", Kind::Str),
         ],
     ),
@@ -925,6 +928,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         max_commit_bytes: hub.max_commit_bytes,
         token_ttl: hub.token_ttl,
         page_size: hub.page_size,
+        gateway_idle_timeout: hub.gateway_idle_timeout,
         git: git?,
     })
 }
@@ -937,6 +941,7 @@ struct Hub {
     max_commit_bytes: u64,
     token_ttl: Duration,
     page_size: usize,
+    gateway_idle_timeout: Duration,
 }
 
 /// `[hub]`, every key checked; `None` if any has a problem. The token
@@ -1025,6 +1030,13 @@ fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub>
         "Listings answer at most this many entries per page and link the next (ruling M2-R8). \
          1000 is the default.",
     );
+    let gateway_idle_timeout = c.duration(
+        "hub.gateway_idle_timeout",
+        HubConfig::DEFAULT_GATEWAY_IDLE_TIMEOUT,
+        (Duration::from_secs(1), Duration::from_mins(10)),
+        "How long a file gateway download may go without sending a byte before it is cut off \
+         and its memory released; a slow but steady client always finishes. 30s is the default.",
+    );
     Some(Hub {
         public_url: public_url?,
         cas_url: cas_url?,
@@ -1032,6 +1044,7 @@ fn hub(c: &mut Checker<'_>, max_token_lifetime: Option<Duration>) -> Option<Hub>
         max_commit_bytes: max_commit_bytes?,
         token_ttl: token_ttl?,
         page_size: usize::try_from(page_size?).ok()?,
+        gateway_idle_timeout: gateway_idle_timeout?,
     })
 }
 
