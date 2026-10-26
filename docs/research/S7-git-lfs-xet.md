@@ -11,7 +11,7 @@
 - Servers:
   - huggingface.co
   - Gitea 1.24.7 (`gitea/gitea:1.24`, HTTPS and OpenSSH, `LFS_ALLOW_PURE_SSH=true`)
-  - an openxet-shaped LFS stub on another host, following ADR 0005
+  - an OpenXet-shaped LFS stub on another host, following ADR 0005
 - Source citations:
   - `git-xet` references are to `xet-core` tag `git-xet-v0.2.1`.
   - `git-lfs` references are to tags `v3.7.1` and `v3.5.1`.
@@ -132,7 +132,7 @@ Labels used below:
      - It parsed `{accessToken, exp, casUrl}`.
      - It uploaded and registered the shard, and the push succeeded (`g3`).
    - `git-lfs` is unaffected, because it keys `access` by the `lfs.url`
-     endpoint. The batch still used the openxet token (`g3`).
+     endpoint. The batch still used the OpenXet token (`g3`).
    - **When the refresh fires** (source `utils/src/auth.rs:11,121`):
      `git-xet` refreshes when `exp <= now + 30 s`. The stub's 5-second batch
      token forced an immediate refresh. With a longer CAS token, the `href`
@@ -141,7 +141,7 @@ Labels used below:
    - **Consequence:** ADR 0005 item 10 is necessary but not sufficient.
      - Without the `access=none` key, `git-xet` runs its own lookup
        (question 2) before calling the `href` (`g6`).
-     - openxet's policy therefore has two parts: capability routes never
+     - OpenXet's policy therefore has two parts: capability routes never
        authenticate by header, and `openxet setup git` configures access
        explicitly by writing the key.
 4. **`git-lfs-authenticate` returns JSON. `git-xet` needs `href` and
@@ -178,7 +178,7 @@ Labels used below:
      - With `git-xet` registered, the trace shows `packet 00 >
        transfer=ssh` and `tq: starting transfer adapter "ssh"`
        (`ssh/puressh-upload-lfs371.trace.txt`).
-   - **To get `xet` when the LFS endpoint is SSH** (openxet-hosted repos
+   - **To get `xet` when the LFS endpoint is SSH** (OpenXet-hosted repos
      over SSH; an HTTPS `lfs.url` never uses pure SSH), pure SSH must be
      off or fail.
      - `git-lfs` tries `git-lfs-transfer` first by default
@@ -201,29 +201,29 @@ Labels used below:
     **pull fails**. `git-lfs` does not fall back to `basic`.
   - A server can't tell `git-xet` from another agent named `xet`, so
     every download must be answered with `basic` (as huggingface.co does).
-  - An openxet download agent therefore needs its own transfer name
+  - An OpenXet download agent therefore needs its own transfer name
     (design §6.1).
 - **Downloads work through `basic` with the right credential** (observed,
-  `d1`). The stub got the openxet token on the batch, and the signed `basic`
+  `d1`). The stub got the OpenXet token on the batch, and the signed `basic`
   `href` was fetched with no Authorization.
 - **`git-xet` uses the `href` exactly as given** (observed). Ours had a
   query string (`?exp=…&sig=…`), and `git-xet` sent it unchanged. A
   query-signed capability URL works.
 
-## Implications for openxet
+## Implications for OpenXet
 
-- **`openxet setup git`** writes these to the clone's **git config**. It
+- **The `openxet setup git` command** writes these to the clone's **git config**. It
   can't use `.lfsconfig` for the second key, because `git-xet` doesn't read
   it.
   - `lfs.url`
   - `lfs.<endpoint-derived-from-the-remote>.access=none`, with which
     `git-xet` calls the capability `href` without a credential
 
-  It also stores the openxet token in the credential helper under the
-  openxet host, for `git-lfs`'s batch. Repos hosted on openxet and reached
+  It also stores the OpenXet token in the credential helper under the
+  OpenXet host, for `git-lfs`'s batch. Repos hosted on OpenXet and reached
   over SSH (§10.9) are different: their LFS endpoint is SSH, so pure SSH
   applies. There it sets `lfs.<remote>.sshtransfer=never` when `git-xet` is
-  installed, and no `access` key, because the remote is openxet itself.
+  installed, and no `access` key, because the remote is OpenXet itself.
 - **Batch responses:**
   - For uploads offering `xet`, answer `xet` with a signed capability
     `href`.
@@ -240,10 +240,10 @@ Labels used below:
   - outlive the transfer session
 - **The `git-lfs-authenticate` answer** includes `href`,
   `header.Authorization` and `expires_in` (and may add `expires_at`).
-  Otherwise `git-xet` fails against openxet-hosted repos over SSH (§10.9).
+  Otherwise `git-xet` fails against OpenXet-hosted repos over SSH (§10.9).
 - **`git-lfs-transfer`** (§10.1) is still worth serving for plain
   `git-lfs` users. It only applies when the LFS endpoint is SSH, which means
-  openxet-hosted repos over SSH; an HTTPS `lfs.url` never uses it
+  OpenXet-hosted repos over SSH; an HTTPS `lfs.url` never uses it
   (`lfsapi/lfsapi.go:60`). Its cost is that it hides `xet` from `git-xet`
   users there unless they set `sshtransfer=never`.
 - These are decided in ADR 0003, which amends ADR 0005 item 10.

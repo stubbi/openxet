@@ -1,6 +1,6 @@
 # Summary
 
-[openxet docs](README.md)
+[OpenXet docs](README.md)
 
 # User
 

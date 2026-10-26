@@ -23,12 +23,12 @@ What was checked on 2026-10-24, and against which versions:
   since 0.23.27, which added `prefer-post-quantum` to its default
   features (rustls release notes for v/0.23.22 and v/0.23.27; source of
   0.23.46, `src/crypto/aws_lc_rs/mod.rs`, `DEFAULT_KX_GROUPS`).
-- openxet's `Cargo.lock` has rustls 0.23.46, hyper-rustls 0.27.10 and
+- OpenXet's `Cargo.lock` has rustls 0.23.46, hyper-rustls 0.27.10 and
   reqwest 0.13.5 with the `aws-lc-rs` provider. reqwest depends on
   rustls without its default features, so `cargo tree -e features -i
-  rustls` shows `prefer-post-quantum` off in openxet's build: the hybrid
+  rustls` shows `prefer-post-quantum` off in OpenXet's build: the hybrid
   is offered last, after X25519. Cargo unifies features, so enabling it
-  once in the workspace applies to every rustls client openxet builds.
+  once in the workspace applies to every rustls client OpenXet builds.
 - The server speaks plain HTTP and leaves TLS to a proxy
   ([configuration](../reference/config.md)). OpenSSL 3.5.0 (2025-04-08)
   offers `X25519MLKEM768` and `X25519` as its default key shares (OpenSSL
@@ -62,7 +62,7 @@ What was checked on 2026-10-24, and against which versions:
 - ML-DSA for JOSE and COSE is published as RFC 9964 (May 2026, Standards
   Track; it was `draft-ietf-cose-dilithium`), with `alg` values
   `ML-DSA-44`, `ML-DSA-65` and `ML-DSA-87` and the `AKP` key type.
-  `aws-lc-rs` 1.18.2 (in openxet's lock file) exposes ML-DSA verification
+  `aws-lc-rs` 1.18.2 (in OpenXet's lock file) exposes ML-DSA verification
   in its stable `signature` module; RustCrypto's `ml-dsa` is at 0.1.1.
   Support in the JWT libraries platforms sign with was not surveyed.
 
@@ -78,14 +78,14 @@ adequate. Changing them would also break protocol exactness
 ## Decision
 
 1. **TLS.** Hybrid post-quantum key exchange (`X25519MLKEM768`) is on by
-   default wherever openxet makes or terminates TLS. The workspace
+   default wherever OpenXet makes or terminates TLS. The workspace
    enables rustls's `prefer-post-quantum`, and a test checks that the
    client and the server's outbound clients negotiate it (issue #66, M3).
    The operator docs recommend a TLS-terminating proxy that negotiates it.
 2. **SSH.** M4's SSH server offers `mlkem768x25519-sha256` first, then
    `curve25519-sha256`. `russh` 0.64.1 supports this; if M4 chooses it,
    its order is pinned explicitly. Whether to add
-   `sntrup761x25519-sha512` for OpenSSH 9.0–9.8 clients is decided in the
+   `sntrup761x25519-sha512` for OpenSSH 9.0 to 9.8 clients is decided in the
    M4 plan (issue #67, M4).
 3. **Tokens stay Ed25519 for now, with agile verification.** Each key in
    the key set is bound to one `alg`. A token is accepted only if its

@@ -1,0 +1,4 @@
+# Justified exceptions to scripts/check-brand.py, one per line:
+#   path | snippet
+# The snippet is text on the flagged line. Say why in a comment above each
+# entry; an entry that matches nothing fails the check.

@@ -14,14 +14,14 @@ REPO = Path(__file__).resolve().parent.parent
 
 # The controls reproduce mdBook 0.5.4's generated index.hbs markup.
 DOC_HTML = '''<!DOCTYPE HTML>
-<html lang="en"><head><title>Reference - openxet docs</title>
+<html lang="en"><head><title>Reference - OpenXet docs</title>
 <meta name="description" content="Generic book description">
 <script>const sample = '<meta name="description" content="leave this alone">';</script>
 </head><body>
 <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
 <label for="mdbook-sidebar-toggle-anchor" aria-label="Toggle Table of Contents"></label>
 <nav id="mdbook-sidebar"><noscript><iframe class="sidebar-iframe-outer" src="../toc.html"></iframe></noscript></nav>
-<h1 class="menu-title">openxet docs</h1>
+<h1 class="menu-title">OpenXet docs</h1>
 <input type="search" id="mdbook-searchbar" name="searchbar" aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
 <div id="mdbook-searchresults-outer"><div id="mdbook-searchresults-header"></div></div>
 <main><h1 id="commands">Commands</h1><p>Use <code>--json</code>.</p>
@@ -58,11 +58,11 @@ class SiteOutput(unittest.TestCase):
         shutil.copy(REPO / "scripts/generate-site-index.py", self.root / "scripts")
         shutil.copy(REPO / "site/llms-template.txt", self.root / "site")
         (self.root / "docs/SUMMARY.md").write_text(
-            "# Summary\n\n[openxet docs](README.md)\n\n# User\n\n- [Commands](reference/cli.md)\n",
+            "# Summary\n\n[OpenXet docs](README.md)\n\n# User\n\n- [Commands](reference/cli.md)\n",
             encoding="utf-8",
         )
-        self.write("docs/index.html", DOC_HTML)
-        self.write("docs/index.md", "# openxet docs\n\nStart a storage server and transfer a file.\n")
+        self.write("docs/index.html", DOC_HTML.replace("Reference - OpenXet docs", "OpenXet docs - OpenXet docs"))
+        self.write("docs/index.md", "# OpenXet docs\n\nStart a storage server and transfer a file.\n")
         self.write("docs/reference/cli.html", DOC_HTML)
         self.write("docs/reference/cli.md", '# Commands\n\n<!-- description: Use "--json" & inspect <errors> safely. -->\n')
         self.write("docs/toc.html", '<html><head><meta name="robots" content="noindex"></head><body>Contents</body></html>')
@@ -97,6 +97,19 @@ class SiteOutput(unittest.TestCase):
         self.assertIn("const sample = '<meta name=\"description\" content=\"leave this alone\">';", html)
         self.assertIn('<p>Use <code>--json</code>.</p>', html)
         self.assertEqual(len(doc.tags("errors")), 0)
+
+    def test_docs_home_title_is_the_book_title_alone(self):
+        doc = self.generated("docs/index.html")
+        html = (self.public / "docs/index.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count("<title>"), 1)
+        self.assertIn("<title>OpenXet docs</title>", html)
+        self.assertEqual(doc.tags("meta", property="og:title")[0]["content"], "OpenXet docs")
+        page = (self.public / "docs/reference/cli.html").read_text(encoding="utf-8")
+        self.assertIn("<title>Reference - OpenXet docs</title>", page)
+        self.assertEqual(self.generated("docs/reference/cli.html").tags("meta", property="og:title")[0]["content"],
+                         "Commands · OpenXet docs")
+        self.generate()
+        self.assertIn("<title>OpenXet docs</title>", (self.public / "docs/index.html").read_text(encoding="utf-8"))
 
     def test_llms_txt_lists_project_pages_under_optional(self):
         # llms.txt convention: "## Optional" holds links an agent may skip.

@@ -1,6 +1,6 @@
-# 0001: Build openxet from scratch on HF's xet-core crates
+# 0001: Build OpenXet from scratch on HF's xet-core crates
 
-<!-- description: openxet is a new codebase that takes the Xet format, hashing and chunking from Hugging Face's published xet-core crates, through its own protocol crate. -->
+<!-- description: OpenXet is a new codebase that takes the Xet format, hashing and chunking from Hugging Face's published xet-core crates, through its own protocol crate. -->
 
 - Status: accepted
 - Date: 2026-10-23
@@ -28,7 +28,7 @@ one, Shardline, against stock clients. Full results are in
 
 ## Decision
 
-1. Build openxet as a new codebase following the design. We don't fork or
+1. Build OpenXet as a new codebase following the design. We don't fork or
    build on an existing server.
 2. Format, hashing and chunking logic comes from Hugging Face's published
    crates (`xet-core-structures`, `xet-data`, pinned exact versions). We
@@ -56,7 +56,7 @@ one, Shardline, against stock clients. Full results are in
   (ADR 0006); the server keeps to `xet-core-structures`.
 - License hygiene: the crates are Apache-2.0, and our NOTICE credits them.
 - The `protocol` crate may compose upstream's public primitives with
-  openxet's own policy checks, for example validating each decompressed
+  OpenXet's own policy checks, for example validating each decompressed
   chunk length and the chunk limits of an uploaded xorb before calling
   upstream's serializer. It must not reimplement format logic: parsing,
   serialization, compression and hashing stay upstream's code.

@@ -26,7 +26,7 @@ named `foo/bar` would inherit them.
 **Who may read, write or create a repository?** Design §5.4 names an
 authenticator, which turns a credential into a principal (subject plus
 claims), and an authorizer, which decides per repository or namespace.
-OIDC, the webhook authorizer and openxet-issued access tokens are M3
+OIDC, the webhook authorizer and OpenXet-issued access tokens are M3
 work (design §12). M2 still needs stock clients to work end to end:
 `hf auth login` sends one token, and that token must open every
 repository its holder may use, not one scope.
@@ -114,7 +114,7 @@ repository its holder may use, not one scope.
   dedups against its base model in another repository of the same
   namespace (design §5.4).
 - Static tokens become M2's user credential. M3's OIDC subjects and
-  claims, openxet-issued access tokens and the webhook authorizer plug
+  claims, OpenXet-issued access tokens and the webhook authorizer plug
   into the same seam: an authenticator produces a `UserPrincipal`, an
   `Authorizer` answers `allows`.
 - Public repositories are an explicit `anonymous` grant, never a

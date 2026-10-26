@@ -1,6 +1,6 @@
 # 0010: Store data as two primitives, repositories and buckets
 
-<!-- description: openxet has two storage primitives, the versioned repository and the mutable bucket, each with generic labels; Hugging Face's repo types are labels the Hub layer reads and writes. -->
+<!-- description: OpenXet has two storage primitives, the versioned repository and the mutable bucket, each with generic labels; Hugging Face's repo types are labels the Hub layer reads and writes. -->
 
 - Status: accepted
 - Date: 2026-10-24
@@ -15,7 +15,7 @@ with the owner. Four of them behave identically: a Git history of
 commits and refs, with large files in Xet. The fifth, `bucket`, is
 different in kind: mutable objects under keys, with no Git history.
 
-openxet serves anyone storing large versioned or deduplicated files, not
+OpenXet serves anyone storing large versioned or deduplicated files, not
 only machine learning (design §1). Mirroring Hugging Face's artefact
 taxonomy would make a CI artefact store or a log archive pick between
 "model" and "dataset".
@@ -51,7 +51,7 @@ recorded by S3 (`compat/fixtures/hub/`):
   (fixtures `05-create-model-exists-conflict` and
   `06-create-model-exist-ok`). `create_repo(exist_ok=True)` swallows a
   `409` and returns `RepoUrl` from the body's `url`; with
-  `exist_ok=False` it raises (`hf_api.py` lines 4703–4723).
+  `exist_ok=False` it raises (`hf_api.py` lines 4703 to 4723).
 - Storage Buckets have their own API: `/api/buckets/{namespace}/{name}`
   for create, info and settings, `/api/buckets/{id}/tree`,
   `/paths-info` and `/batch`, downloads from
@@ -59,7 +59,7 @@ recorded by S3 (`compat/fixtures/hub/`):
   `/api/buckets/{id}/xet-{read|write}-token` with no revision. `bucket` is
   not in `REPO_TYPES`; it appears only as a URI type (`HfUriType`).
 
-The owner decided on 2026-10-24 that openxet has two storage primitives,
+The owner decided on 2026-10-24 that OpenXet has two storage primitives,
 and then that labels are generic, not a fixed set.
 
 ## Decision
@@ -76,9 +76,9 @@ and then that labels are generic, not a fixed set.
 3. **Labels are generic.** Repositories and buckets carry free-form,
    owner-defined labels: none, one or several, such as `model`,
    `dataset`, `checkpoint` or `eval-logs`.
-   - A label is a lowercase slug (`a`–`z`, `0`–`9` and `-`) of at most
+   - A label is a lowercase slug (`a` to `z`, `0` to `9` and `-`) of at most
      64 bytes, and an object carries at most 32.
-   - Labels can be added and removed at any time, through openxet's own
+   - Labels can be added and removed at any time, through OpenXet's own
      API and CLI, each change with an audit entry. They never change the
      address, and they change no behaviour: `space` runs nothing.
    - Hugging Face's types `model`, `dataset`, `space` and `kernel` are
@@ -104,7 +104,7 @@ and then that labels are generic, not a fixed set.
        `foo/bar` exists without the `dataset` label; add it with
        `openxet label add foo/bar dataset` (or the label API), or choose
        another name. `hf_raise_for_status` appends both to the raised
-       error's text (`utils/_http.py`, `_format`, lines 1035–1101: it
+       error's text (`utils/_http.py`, `_format`, lines 1035 to 1101: it
        reads `X-Error-Message` and the JSON `error`, deduplicates them and
        adds them after its own "Repository Not Found" text), so the hint
        reaches the user of `hf` and `huggingface_hub`.
@@ -117,10 +117,10 @@ and then that labels are generic, not a fixed set.
        repository exists.
    - The unprefixed resolve route and `/api/models/…` are the `model`
      view, as on huggingface.co. The unprefixed Git URL
-     `/{namespace}/{name}.git` is openxet's own address and serves the
+     `/{namespace}/{name}.git` is OpenXet's own address and serves the
      repository whatever its labels.
    - Buckets answer the Storage Buckets routes above, which have no
-     types; their labels are set through openxet's API.
+     types; their labels are set through OpenXet's API.
 5. **Names are unique across labels.** Unlike huggingface.co, a model
    and a dataset can't share `{namespace}/{name}`. Creating
    `datasets/foo/bar` while a repository `foo/bar` exists answers `409`
@@ -129,7 +129,7 @@ and then that labels are generic, not a fixed set.
    `409`; for a caller who can't read the existing repository it carries
    no labels. Its `url` is the requested view's own URL
    (`{public_url}/{type prefix}{namespace}/{name}`), which `RepoUrl`
-   parses (`hf_api.py` lines 545–571).
+   parses (`hf_api.py` lines 545 to 571).
    An importer or mirror (design §10.6) that meets two Hub repositories
    of different types under one name maps the second to `{name}-{type}`
    and reports the mapping.

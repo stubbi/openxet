@@ -1,6 +1,6 @@
-# openxet docs
+# OpenXet docs
 
-openxet stores large files and reuses their unchanged parts when you upload
+OpenXet stores large files and reuses their unchanged parts when you upload
 another version. It is an open-source server and client for the
 [Xet protocol](https://huggingface.co/docs/xet).
 
@@ -11,7 +11,7 @@ There is no release yet; the quickstart builds from source. The Hub API for
 identity providers, the web UI, and MCP are planned. Hosted sign-ups are not
 open yet.
 
-openxet is an independent project, not affiliated with or endorsed by
+OpenXet is an independent project, not affiliated with or endorsed by
 Hugging Face.
 
 - **Run it:** start with the [storage-only quickstart](quickstart-storage-only.md),

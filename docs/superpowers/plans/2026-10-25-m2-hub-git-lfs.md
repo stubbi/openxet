@@ -129,7 +129,7 @@ in the task that owns it.
    the compat test `test_upload_dedups_across_repos` (Task 19).
 2. **Two clients committing to one branch at once.** Both `hf upload`
    calls succeed, one after the other, with no lost commit; the loser
-   retries inside openxet from a fresh snapshot (ADR 0004 item 3). Pinned
+   retries inside OpenXet from a fresh snapshot (ADR 0004 item 3). Pinned
    by `concurrent_hub_commits_both_land` (Task 12).
 3. **A `git push` with a large blob that is not an LFS pointer.** It is
    accepted and kept as a Git object, the push output names the file and
@@ -156,7 +156,7 @@ in the task that owns it.
 - **M2-R1. Crate layout.** `openxet-http` (the route builder, request ids,
   the error body and the middleware stack, extracted from `openxet-cas`),
   `openxet-hub`, `openxet-git` and `openxet-uri` are new crates. The
-  authorizer lives in `openxet-auth`. `openxet serve` composes the CAS,
+  authorizer lives in `openxet-auth`. The `openxet serve` command composes the CAS,
   Hub and Git routes into one `axum::Router` with one fallback, one state
   per crate and one middleware stack (issue #46). `clippy.toml` also bans
   `Router::fallback` and `Router::fallback_service` outside the builder.
@@ -184,7 +184,7 @@ in the task that owns it.
   installs the rule `subjects = ["dev"], repos = ["*"], actions = ["read",
   "write", "create"]`. `whoami-v2` answers `name` from the subject (or the
   static token's `name`), `orgs` from the `orgs` claim. OIDC, the webhook
-  authorizer and openxet-issued access tokens come in M3; nothing here
+  authorizer and OpenXet-issued access tokens come in M3; nothing here
   prevents them.
 - **M2-R4. Routing a file to Xet.** `preupload` answers `lfs` when the
   file's size is at least `hub.lfs_threshold` (default `1MiB`, bounds
@@ -200,7 +200,7 @@ in the task that owns it.
   `openxet <noreply@openxet.com>`, on branch `main`, so `commits`, `refs`
   and `git clone` of a new repository behave as on huggingface.co.
 - **M2-R6. Hub error shape and the unknown-repository answer.** Hub
-  errors carry both HF's `error` field and openxet's structured fields
+  errors carry both HF's `error` field and OpenXet's structured fields
   (Global Constraints). The unknown-repository answer is one constant
   body and header set: `404`, `X-Error-Code: RepoNotFound`,
   `X-Error-Message: Repository not found`, body
@@ -220,8 +220,9 @@ in the task that owns it.
   registered to the repository's scope (M1's `file_scopes.sha256`),
   `deletedFile` and `deletedFolder` remove entries. The author is the
   subject (`{subject} <{subject}@users.noreply.openxet.com>` unless the
-  credential carries an `email` claim), the committer is openxet, the
-  message is `summary`, a blank line and `description`. `parentCommit`
+  credential carries an `email` claim), the committer is
+  `openxet <noreply@openxet.com>`, the message is `summary`, a blank line
+  and `description`. `parentCommit`
   mismatch answers `412 precondition_failed`. The response's `commitUrl`
   is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`.
 - **M2-R8. Listings paginate deterministically.** `tree`, `commits` and
@@ -251,7 +252,7 @@ in the task that owns it.
   accepted too. The first push to a missing repository creates it if the
   authorizer allows `create` in the namespace, with the `model` label as
   the Hub's default view does.
-- **M2-R12. Labels API.** openxet's own API lives under
+- **M2-R12. Labels API.** OpenXet's own API lives under
   `/api/openxet/v1/`: `GET /api/openxet/v1/repos/{ns}/{name}/labels`,
   `PUT …/labels/{label}`, `DELETE …/labels/{label}`. The CLI is
   `openxet label add|remove|list`. Each change writes the repository's
@@ -352,7 +353,7 @@ docs/  T21 (plus each task's reference pages)
   no-`git-xet` upload answer (M2-R10). §12 M2: link this plan. §17: one
   row per ruling.
 - [ ] **Step 3: Security map.** Replace each M2 `pending` row with the file
-  this plan assigns (Tasks 7–15), keeping the rows the checker expects; the
+  this plan assigns (Tasks 7 to 15), keeping the rows the checker expects; the
   checker tolerates files that don't exist yet only for `pending`, so
   mark them `pending (M2, <file>)` and let each task drop the `pending`.
   Check `python3 -I scripts/check-security-tests-map.py --help` for the
@@ -360,7 +361,7 @@ docs/  T21 (plus each task's reference pages)
   state.
 - [ ] **Step 4: Verify.** `scripts/build-site.sh` passes (navigation and
   descriptions); `git grep -n -i -E "weak|vulnerab|exploit" docs/adr/0012*`
-  shows only openxet's own policy.
+  shows only OpenXet's own policy.
 - [ ] **Step 5: Commit** as `docs(adr): 0012 repository identity and authorization rules; design M2 rulings`.
 
 ### Task 2: `openxet-http` and one router (issue #46)
@@ -467,7 +468,7 @@ impl CapabilitySigner {
   `Credential::cas()` and answer `403 insufficient_scope` with the hint
   "this is a user token; get a CAS token from the Hub token route" for a
   `User`-only credential.
-- [ ] **Step 4: Run** the auth, CAS and openxet suites. Expected: PASS;
+- [ ] **Step 4: Run** the auth, CAS and OpenXet suites. Expected: PASS;
   `credentials_never_logged` still passes.
 - [ ] **Step 5: Commit** as `feat(auth): user credentials, the rules authorizer and capability URLs (ADR 0012)`.
 
@@ -816,7 +817,7 @@ impl Engine {
     pub async fn read_blob(&self, snap: &SnapshotRepo, commit: Oid, path: &str) -> Result<Blob, GitError>;   // Blob { oid, bytes } or Pointer
     pub async fn log(&self, snap: &SnapshotRepo, from: Oid, cursor: Option<Oid>, limit: usize) -> Result<Vec<CommitInfo>, GitError>;
     pub async fn last_commit_for_paths(&self, snap: &SnapshotRepo, commit: Oid, paths: &[&str]) -> Result<Vec<Option<CommitInfo>>, GitError>;   // for expand=true
-    pub async fn hub_commit(&self, repo: RepoId, who: &UserPrincipal, req: HubCommit<'_>) -> Result<Oid, GitError>;   // ADR 0004 item 6 steps 1–6, retried 3× on Fenced/RefMismatch
+    pub async fn hub_commit(&self, repo: RepoId, who: &UserPrincipal, req: HubCommit<'_>) -> Result<Oid, GitError>;   // ADR 0004 item 6 steps 1 to 6, retried 3× on Fenced/RefMismatch
     pub async fn hub_ref_write(&self, repo: RepoId, who: &UserPrincipal, update: RefUpdate, tag: Option<TagInfo>) -> Result<(), GitError>;   // create/update/delete with the writer rule; annotated tags built with gix
 }
 pub struct HubCommit<'a> { pub branch: &'a str, pub parent: Option<Oid>, pub summary: &'a str, pub description: &'a str, pub ops: Vec<Op> }
@@ -882,7 +883,7 @@ pub async fn create_repo(state: &HubState, who: &UserPrincipal, ns: &str, name: 
   - `repos.rs`: `create_answers_s3_shape` (fixture `04`), `create_409_carries_url`
     (fixtures `05`, `06`), `create_in_foreign_namespace_403_names_namespace`
     (fixture `08`, text from S3 lesson 12), `delete_is_text_ok_and_404_shape`
-    (fixtures `91`–`93`), `untyped_create_adds_model_label`,
+    (fixtures `91` to `93`), `untyped_create_adds_model_label`,
     `names_validated` (each M2-R2 rule → `400` with the rule in the hint),
     `name_taken_case_insensitively_409`.
   - `views.rs`: `typed_listing_filters_by_label`,
@@ -940,9 +941,9 @@ pub async fn create_repo(state: &HubState, who: &UserPrincipal, ns: &str, name: 
     repository), `commit_parent_mismatch_412`, `commit_limits_enforced`,
     `commit_ndjson_accepts_python_separators`, `readme_commit_posts_validate_yaml_first`
     (fixture `09-…-01`, the stub answer), `branch_and_tag_shapes`
-    (fixtures `11`–`13`, `30`, `31`; `409` text for an existing branch),
+    (fixtures `11` to `13`, `30`, `31`; `409` text for an existing branch),
     `tag_target_is_the_annotated_tag_object` (fixture `14`).
-  - `read.rs`: `tree_shapes` (fixtures `16`–`19`; `lfs` and `xetHash`
+  - `read.rs`: `tree_shapes` (fixtures `16` to `19`; `lfs` and `xetHash`
     fields; `EntryNotFound` with the S3 text), `tree_expand_last_commit`
     (fixture `17`), `tree_path_edges` (Review Focus 4), `paths_info_omits_missing`
     (fixture `20`), `commits_newest_first_with_total` (fixture `21`),
@@ -984,7 +985,7 @@ pub async fn create_repo(state: &HubState, who: &UserPrincipal, ns: &str, name: 
   the reference file and a 3-xorb file), `gateway_needs_credential_scoped_to_repo`
   (a token for another repository gets the unknown-repo answer),
   `no_unauthenticated_reads` (the Hub extension of M1's test: every
-  Hub, gateway and LFS URL openxet emits, requested without a credential,
+  Hub, gateway and LFS URL OpenXet emits, requested without a credential,
   is refused), `duckdb_reads_through_resolve` (ignored unless `duckdb` is
   on `PATH`; documents S4's recipe).
 - [ ] **Step 2: Run.** Expected: FAIL.
@@ -1041,7 +1042,7 @@ pub async fn create_repo(state: &HubState, who: &UserPrincipal, ns: &str, name: 
 - Produces: `GET /{prefix}{ns}/{name}[.git]/info/refs?service=git-{upload|receive}-pack`,
   `POST …/git-upload-pack`, `POST …/git-receive-pack` (M2-R11), wired to
   `Engine::{advertise,upload_pack,receive_pack}`; the dumb-protocol paths
-  answer `404`. `openxet serve` mounts CAS, Hub and Git routes in one
+  answer `404`. The `openxet serve` command mounts CAS, Hub and Git routes in one
   router and prints the Hub endpoint lines in the banner (`HF_ENDPOINT=`,
   `hf auth login --token`, `git clone` example).
 - Consumes: Tasks 7, 8, 11.
@@ -1188,7 +1189,7 @@ pub struct Endpoints { .. }                          // credential selection by 
     `test_hub_commit_and_git_push_share_history`, `test_two_nodes_concurrent_push_one_winner`,
     `test_cold_node_clone_byte_identical`, `test_force_pushed_commit_not_fetchable_by_sha`.
   - `test_lfs_gitea.py` (`-m lfs`, ADR 0003's leg): a Gitea-hosted repo
-    with `lfs.url` on openxet and the two git config keys written as
+    with `lfs.url` on OpenXet and the two git config keys written as
     `openxet setup git` (M6) will write them; `test_git_xet_push_refresh_without_authorization`
     (a 5 s `token_ttl` forces the refresh; the server log shows the
     capability request with no `Authorization`), `test_git_lfs_pull_basic`,
@@ -1244,7 +1245,7 @@ pub struct Endpoints { .. }                          // credential selection by 
 ## Out of M2, by design
 
 Assigned to later milestones by the design, not deferred for convenience:
-- **M3:** OIDC and the webhook authorizer, openxet-issued access tokens
+- **M3:** OIDC and the webhook authorizer, OpenXet-issued access tokens
   and `openxet login`, Postgres (the `Repos` and `GitStore` traits are
   ready for it), presigned direct downloads, rate limits and quotas,
   delegated agent tokens.

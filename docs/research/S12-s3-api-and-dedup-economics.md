@@ -1,6 +1,6 @@
 # S12: An S3 API in front of buckets, and what dedup saves
 
-<!-- description: Whether an S3-compatible API over openxet buckets is feasible, what CDC dedup saves on multi-tenant data, a cost model against S3, R2, B2, Wasabi and Hetzner, and the security and billing consequences. -->
+<!-- description: Whether an S3-compatible API over OpenXet buckets is feasible, what CDC dedup saves on multi-tenant data, a cost model against S3, R2, B2, Wasabi and Hetzner, and the security and billing consequences. -->
 
 - Date: 2026-10-24. Every URL below was accessed on that date.
 - Status: the measurements and prices are a record. The recommendation
@@ -8,7 +8,7 @@
   decision; the design schedules nothing from it until then.
 - Question (from the user): "does an S3-compatible API in front of buckets
   mean we could host a very cost-efficient S3 multi-tenancy for our
-  users?" "Buckets" means openxet's planned generic bucket primitive
+  users?" "Buckets" means OpenXet's planned generic bucket primitive
   (mutable, non-versioned, next to the versioned repository; design §10.4
   describes it today as the `bucket` repo type). The question splits into:
   is it feasible, what does dedup save, what does it cost, what does it do
@@ -20,7 +20,7 @@
     `duckdb-httpfs` `77392a72` (the commit DuckDB v2.0.0 pins, as in
     [S4](S4-analytics-clients.md)).
   - `s3s` `main` on 2026-10-24 (crate 0.17.0, published 2026-09-24).
-  - `xet-data` and `xet-core-structures` 1.7.0, as pinned by openxet.
+  - `xet-data` and `xet-core-structures` 1.7.0, as pinned by OpenXet.
   - Price pages and price-list files listed in "Prices", read on
     2026-10-24.
 
@@ -50,7 +50,7 @@ Feasible, yes; "very cost-efficient" only for some workloads.
   added 10.2% new bytes (Measured), and HF's Gemma GGUF family stored
   191 GB in about 97 GB (published). It saves nothing on consecutive
   dense training checkpoints (0.0%, Measured on Pythia-70m), on
-  `.tar.gz`/`.tar.xz` archives (0.0–0.1%, Measured), or on client-side
+  `.tar.gz`/`.tar.xz` archives (0.0 to 0.1%, Measured), or on client-side
   encrypted backups. Generic S3 data is mostly already compressed, so its
   dedup is small.
 - **Cost (Estimated).** On a Hetzner Object Storage or B2 backend, at
@@ -60,9 +60,9 @@ Feasible, yes; "very cost-efficient" only for some workloads.
   things limit the savings: an S3 client gets no transfer dedup, every
   byte read goes through our nodes, and garbage collection's 28-day
   minimum grace keeps overwritten data stored for 28 days or more.
-- **Price band (Estimated).** **$12–15 per TB-month of tenant-deduplicated
-  bytes** ($0.012–0.015 per GB), with egress up to 1× stored included.
-  For a tenant whose own data dedups by 25–50%, that is $0.006–0.011 per
+- **Price band (Estimated).** **$12 to 15 per TB-month of tenant-deduplicated
+  bytes** ($0.012 to 0.015 per GB), with egress up to 1× stored included.
+  For a tenant whose own data dedups by 25 to 50%, that is $0.006 to 0.011 per
   logical GB. It beats S3 Standard ($23 + egress), Hugging Face private
   storage ($18, logical bytes) and R2 ($15) for dedup-friendly tenants.
   It does not beat B2 ($6.95) or Wasabi ($7.99) for data that doesn't
@@ -95,7 +95,7 @@ marked. "ETag use" is what the client does with the ETag value.
 | `s3fs` (fsspec: pandas, HF `datasets`, DVC) | Put, multipart, Get with `Range`, Head, ListObjectsV2, Copy, UploadPartCopy, DeleteObjects | Sends `If-Match` with the HEAD's ETag on reads (`s3fs/core.py:2637`); `checksum()` parses the ETag as hex with `int(etag.split("-")[0], 16)` (`:1844`), so a non-hex ETag raises. | None. |
 | DuckDB `httpfs` | Get with `Range`, Head, ListObjectsV2 for globs (`s3/s3_list.cpp:485`), multipart for `COPY … TO` | Sends `If-Match` with the ETag from the listing or HEAD on every ranged read, if the ETag is strong (`http/httpfs.cpp:283`, `http/http_request.cpp:18`). The ETag in a listing must equal the one GET returns. | None. Virtual-host addressing by default; path style with `URL_STYLE 'path'`. |
 | polars (`object_store`) | Put, multipart, Get with `Range`, Head, ListObjectsV2 (`aws/client.rs:999`), conditional Put (`If-None-Match: *`, `If-Match`) | Used for conditional requests only. | MD5 only for SSE-C keys (`aws/builder.rs:1547`). |
-| MLflow, PyTorch S3 loaders | Not read in source. MLflow's S3 artifact store uses `boto3`; HF `datasets` uses `s3fs` ([docs](https://huggingface.co/docs/datasets/filesystems)). | — | — |
+| MLflow, PyTorch S3 loaders | Not read in source. MLflow's S3 artifact store uses `boto3`; HF `datasets` uses `s3fs` ([docs](https://huggingface.co/docs/datasets/filesystems)). | n/a | n/a |
 
 What this means for the server (Verified from the table):
 - **`If-Match` on GET is required**, not optional: AWS CLI multipart
@@ -114,7 +114,7 @@ What this means for the server (Verified from the table):
 - **`aws-chunked` with trailing checksums must be parsed**, or AWS CLI ≥
   2.23 and recent `boto3` fail with default settings. huggingface.co asks
   users to set `request_checksum_calculation = when_required` instead
-  (same page). openxet should need no client configuration beyond the
+  (same page). OpenXet should need no client configuration beyond the
   endpoint and keys.
 - **User metadata** (`x-amz-meta-*`, 2 KB) is needed by rclone for
   modification times. huggingface.co does not store it (same page).
@@ -145,10 +145,10 @@ MD5 costs about 1.6 CPU-seconds per GB (Measured, see "Experiment"), about
 a third of chunking plus compression.
 
 **Credentials (Estimated design).** SigV4 is symmetric: the server needs
-the secret to verify a signature. openxet stores only token hashes (§5.4).
+the secret to verify a signature. OpenXet stores only token hashes (§5.4).
 Instead of storing S3 secrets, derive them:
 `secret = HMAC(master_key_v, access_key_id)`. The access key ID names the
-openxet token (and so its external identity, scopes and expiry) and the
+OpenXet token (and so its external identity, scopes and expiry) and the
 master-key version. Nodes then stay stateless, revocation works through the
 token, and keys rotate by version. `s3s`'s `S3Auth::get_secret_key`
 (`crates/s3s/src/auth/mod.rs:185`) fits this. huggingface.co does the same
@@ -157,17 +157,17 @@ permissions of the underlying access token" (Verified, same page).
 
 ### Prior art and licences
 
-| Project | Licence (Verified) | Language | Status (2026-10-24) | Use for openxet |
+| Project | Licence (Verified) | Language | Status (2026-10-24) | Use for OpenXet |
 |---|---|---|---|---|
-| huggingface.co `s3.hf.co` | proprietary | — | in production | The product shape to match: keys from Hub tokens, path-style URLs with the namespace in the endpoint, `302` to a CDN for reads, ListObjectsV2 only, no user metadata, 7-day multipart expiry ([docs](https://huggingface.co/docs/hub/storage-buckets-s3)). |
+| huggingface.co `s3.hf.co` | proprietary | n/a | in production | The product shape to match: keys from Hub tokens, path-style URLs with the namespace in the endpoint, `302` to a CDN for reads, ListObjectsV2 only, no user metadata, 7-day multipart expiry ([docs](https://huggingface.co/docs/hub/storage-buckets-s3)). |
 | `s3s` | Apache-2.0 | Rust | 0.17.0, about 615k downloads in 90 days on crates.io; used by RustFS | **Reuse** for routing, XML, SigV4 (header and presigned), `aws-chunked` and checksum trailers (`crates/s3s/src/stream/aws_chunked_stream.rs`). It calls itself experimental and leaves authentication and limits to the embedding service ([README](https://github.com/s3s-project/s3s)). It is a hyper service; axum can nest it. |
 | MinIO | AGPL-3.0 | Go | GitHub repository archived (last push 2026-04-24) | Neither licence nor status fits. Its users need a new home, which matters for design §1's "teams who keep large files in MinIO". |
-| Garage | AGPL-3.0 | Rust | active | Not linkable into openxet. It already works as a storage backend (§5.2), and its [compatibility table](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) is a useful checklist. |
+| Garage | AGPL-3.0 | Rust | active | Not linkable into OpenXet. It already works as a storage backend (§5.2), and its [compatibility table](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) is a useful checklist. |
 | SeaweedFS | Apache-2.0 | Go | active | Reference only; different language and storage model. |
 | JuiceFS gateway | Apache-2.0 | Go | active | Runs on MinIO's gateway code; returns no ETag unless `--keep-etag` ([docs](https://juicefs.com/docs/community/guide/gateway/)). Some S3 users work without ETags, but DuckDB and `s3fs` lose conditional reads. |
 | Ceph RGW | LGPL-2.1 or LGPL-3 ([COPYING](https://github.com/ceph/ceph/blob/main/COPYING)) | C++ | active | Semantics reference. `ceph/s3-tests` (MIT, archived on GitHub) is the usual S3 conformance suite and could seed a compat leg. |
 | versitygw | Apache-2.0 | Go | active | Closest architecture (an S3 gateway over a pluggable backend); reference only. |
-| Cloudflare R2 | proprietary | — | in production | Its [S3 API page](https://developers.cloudflare.com/r2/api/s3/api/) lists a similar implemented subset; multipart ETags mimic S3's since 2023-06-21 ([multipart](https://developers.cloudflare.com/r2/objects/multipart-objects/)). |
+| Cloudflare R2 | proprietary | n/a | in production | Its [S3 API page](https://developers.cloudflare.com/r2/api/s3/api/) lists a similar implemented subset; multipart ETags mimic S3's since 2023-06-21 ([multipart](https://developers.cloudflare.com/r2/objects/multipart-objects/)). |
 
 **Build or reuse: reuse `s3s` for the protocol layer and build the
 semantics.** The hard parts are ours anyway: keys over Xet files,
@@ -193,7 +193,7 @@ by us; its README says so.
 ### Experiment
 
 Method (Measured, 2026-10-24, Apple M3, macOS, shared host at load
-average 50–60):
+average 50 to 60):
 - A scratch Rust program (not committed) chunks each file with
   `xet_data::deduplication::Chunker::default()` from `xet-data` 1.7.0, the
   chunker stock `hf_xet` uses, and records each chunk's hash, length, and
@@ -282,11 +282,11 @@ reference rate of 2026-10-23, 1 EUR = 1.1193 USD
 |---|---|---|---|---|---|
 | AWS S3 Standard, us-east-1 | $23 (first 50 TB), $22, $21 (over 500 TB) | $90/TB for the first 10 TB, down to $50/TB over 150 TB; 100 GB/month free | PUT/COPY/POST/LIST $5 per million; GET $0.40 per million | none | AWS price list files, [S3](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json) (published 2026-10-15), [data transfer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/us-east-1/index.json) (2026-09-16) |
 | Cloudflare R2 Standard | $15 (Infrequent Access $10, $0.01/GB retrieval) | free | Class A $4.50, Class B $0.36 per million | IA: 30 days | [R2 pricing](https://developers.cloudflare.com/r2/pricing/) |
-| Backblaze B2 | $6.95 | free up to 3× stored, then $0.01/GB | Class A–C free | none; first 10 GB free | [B2 pricing](https://www.backblaze.com/cloud-storage/pricing) |
+| Backblaze B2 | $6.95 | free up to 3× stored, then $0.01/GB | Classes A to C free | none; first 10 GB free | [B2 pricing](https://www.backblaze.com/cloud-storage/pricing) |
 | Wasabi (pay as you go) | $7.99 | free while egress ≤ active storage | free | 1 TB per account; 90 days per object | [pricing](https://wasabi.com/pricing), [FAQ](https://wasabi.com/pricing/faq) |
 | Hetzner Object Storage | €6.49 base (includes 1 TB stored and 1 TB egress), then €0.0087/TB-hour ≈ €6.47 ≈ $7.24 | €1.00 ≈ $1.12 per TB | free | 64 KB billable object size | [Hetzner](https://www.hetzner.com/storage/object-storage/) |
-| Hugging Face buckets, private | $18; $16 over 50 TB; $14 over 200 TB; $12 over 500 TB | included up to 8:1 of storage | — | billed on deduplicated bytes only on Enterprise plans | [hf.co/storage](https://huggingface.co/storage), [storage limits](https://huggingface.co/docs/hub/storage-limits) |
-| Hugging Face buckets, public | $12; down to $8 over 500 TB | same | — | same | same |
+| Hugging Face buckets, private | $18; $16 over 50 TB; $14 over 200 TB; $12 over 500 TB | included up to 8:1 of storage | n/a | billed on deduplicated bytes only on Enterprise plans | [hf.co/storage](https://huggingface.co/storage), [storage limits](https://huggingface.co/docs/hub/storage-limits) |
+| Hugging Face buckets, public | $12; down to $8 over 500 TB | same | n/a | same | same |
 
 Compute for gateway nodes: Hetzner CCX33, 8 dedicated vCPUs, €138.99 ≈
 $155.57 per month with 30 TB of traffic included, €1.00 per further TB in
@@ -354,11 +354,11 @@ What drives it:
 
 - **Flat price per logical GB.** It must cover a tenant that doesn't
   dedup: about $11 per TB-month on Hetzner or B2 at E = 1. With a margin,
-  $0.012–0.015 per logical GB, which is R2's price: it beats S3 and
+  $0.012 to 0.015 per logical GB, which is R2's price: it beats S3 and
   Hugging Face private storage, but not B2, Wasabi or Hetzner. A flat
   price also attracts tenants with the least dedup.
-- **Price per deduplicated GB (recommended).** $12–15 per billed
-  TB-month, egress up to 1× stored included, $0.005–0.01 per GB beyond.
+- **Price per deduplicated GB (recommended).** $12 to 15 per billed
+  TB-month, egress up to 1× stored included, $0.005 to 0.01 per GB beyond.
   Gross margin at $15: about 26% for already-compressed data, 37% for
   weights, 65% for text (Estimated, E = 1, Hetzner). What a tenant pays
   per logical GB:
@@ -370,7 +370,7 @@ What drives it:
 | 50% (quant family, appended datasets, snapshots) | $0.0075 | $0.006 | also Wasabi; about B2 |
 | 80% (10 retained versions, 10% change each) | $0.003 | $0.0024 | everything listed |
 
-- **The band: $12–15 per TB-month of tenant-deduplicated bytes**, with
+- **The band: $12 to 15 per TB-month of tenant-deduplicated bytes**, with
   volume tiers inside it, as Hugging Face does. Lower than $11 loses money
   on tenants that don't dedup, unless the backend is cheaper than list
   price (committed-use contracts, or an operator's own disks under Garage
@@ -387,7 +387,7 @@ they already own.
 Xet's dedup query (`GET /v1/chunks/…`) answers whether a chunk exists;
 design §5.4 keys answers with HMAC and offers `per-scope` visibility for
 multi-tenant hosting. An S3 client never calls it: the server chunks and
-dedups for it. Two channels remain, and both are openxet's to design:
+dedups for it. Two channels remain, and both are OpenXet's to design:
 - **Write timing.** A PUT of bytes already stored skips the xorb write.
   For a 64 MB xorb the difference is visible. It is visible under
   `per-scope` too, because §5.4 keeps storage shared ("the upload of a
@@ -401,7 +401,7 @@ dedups for it. Two channels remain, and both are openxet's to design:
 |---|---|---|---|
 | Shared storage, stand-alone billing (recommended default) | all of `g` | timing of large PUTs only | none |
 | Shared storage, sharing credited in bills | all of `g` | existence, through the bill | rejected |
-| Pool per tenant (§10.7) for tenants that need it | none | nothing across tenants | `g` of their data: about 8% on hub-like public data (ZipLLM's duplicate files), Estimated 0–5% on private working data, which mostly dedups against its own versions |
+| Pool per tenant (§10.7) for tenants that need it | none | nothing across tenants | `g` of their data: about 8% on hub-like public data (ZipLLM's duplicate files), Estimated 0 to 5% on private working data, which mostly dedups against its own versions |
 
 `g` is the only thing per-tenant separation costs, because intra-tenant
 dedup (versions, checkpoints, snapshots) stays. On the experiment's
@@ -436,10 +436,10 @@ workloads that's where nearly all the savings came from.
 In scope, in **M5**, delivered with buckets:
 - It depends on M3 (Postgres, S3/GCS/Azure backends), M4 (server-side
   chunking, metering, GC) and the bucket primitive itself.
-- huggingface.co's buckets ship an S3 API, so an openxet bucket without
+- huggingface.co's buckets ship an S3 API, so an OpenXet bucket without
   one is a compatibility gap for users moving from the Hub. §1's MinIO
   users are a second audience, now that MinIO's repository is archived.
-- §12 defines M0–M7 as 1.0. "M8" would be the first post-1.0 milestone,
+- §12 defines M0 to M7 as 1.0. "M8" would be the first post-1.0 milestone,
   which the scope rule ("nothing deferred for convenience") argues
   against.
 
@@ -462,7 +462,7 @@ In scope, in **M5**, delivered with buckets:
   configurable period.
 - **Integrity:** verify `Content-MD5` and every `x-amz-checksum-*` on
   upload; store them and return them with `ChecksumMode`.
-- **Out of v1:** ACLs and bucket policies (the openxet authorizer
+- **Out of v1:** ACLs and bucket policies (the OpenXet authorizer
   decides), object versioning (§10.4 makes it optional; map later),
   lifecycle, tagging, SSE-C, Object Lock, Select, website hosting,
   notifications.
@@ -485,7 +485,7 @@ In scope, in **M5**, delivered with buckets:
   duration in billing (as Wasabi and R2 IA have) covers the cost.
 - **Small objects.** Each PUT costs a xorb write, a shard write and an
   index transaction, against one backend PUT for plain S3. On R2 that is
-  2–3× the Class A cost, and Hetzner bills 64 KB per tiny object. Writes
+  2 to 3× the Class A cost, and Hetzner bills 64 KB per tiny object. Writes
   must be durable before the 200, so small PUTs can't wait to be batched.
   Needs a benchmark target and probably a packing pass (an ADR, since it
   rewrites xorbs).
@@ -512,7 +512,7 @@ In scope, in **M5**, delivered with buckets:
 1. **S3 API surface:** the subset above, `s3s` as the protocol layer,
    addressing, and how S3 operations map onto bucket semantics (overwrite,
    delete, copy, conditional writes, list consistency).
-2. **S3 credentials:** access keys derived from openxet tokens with a
+2. **S3 credentials:** access keys derived from OpenXet tokens with a
    versioned master key; presigned URLs as delegated credentials, with
    capped expiry and revocation through the token, and the wording §5.9
    needs, since they are signed but not range-bound.

@@ -1,7 +1,7 @@
 # Server configuration
 
-`openxet serve` reads one TOML file (`--config FILE`), then environment
-variables, then command-line flags. Each layer overrides the one before it,
+The `openxet serve` command reads one TOML file (`--config FILE`), then
+environment variables, then command-line flags. Each layer overrides the one before it,
 key by key. With no file and no `[auth]` section, the server runs in
 [dev mode](#dev-mode).
 
@@ -22,7 +22,7 @@ invalid configuration with exit code 1 and error code `config`, and points
 at `config check`.
 
 `config check` never shows a value under `[auth]`: it prints `<redacted>`
-instead, in text and JSON alike. A value that looks like an openxet token
+instead, in text and JSON alike. A value that looks like an OpenXet token
 (`oxt_…`), such as a token pasted where its `sha256` belongs, is redacted
 wherever it appears, and the hint says to rotate the token and configure its
 hash.
@@ -57,7 +57,7 @@ unit: `KiB`, `MiB`, `GiB` or `TiB`, such as `512MiB` or `2GiB`.
 | `public_url` | `http://` and the bound address | absolute `http` or `https` URL of an origin root | The URL clients reach the server at. Every transfer URL is built from it. |
 | `data_dir` | `./openxet-data` | a directory | Holds `index.sqlite`, `bucket/`, `transfer.key`, `cas-token.key`, by default the Git cache `git-cache/` and, in dev mode, `dev-token`. Its filesystem must support hard links (ext4, XFS, Btrfs, ZFS, APFS, NTFS; not FAT or exFAT): the bucket writes its records with them, and `serve` refuses to start without them. |
 | `log_format` | `text` | `text` or `json` | Log lines on stderr. |
-| `log_level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | openxet's own log level. Other libraries log warnings and errors only. `debug` logs one line per request. |
+| `log_level` | `info` | `error`, `warn`, `info`, `debug` or `trace` | OpenXet's own log level. Other libraries log warnings and errors only. `debug` logs one line per request. |
 | `header_read_timeout` | `30s` | `1s` to `5m` | How long a connection may take to send a request line and headers. It also closes a keep-alive connection that sits idle this long; clients open a new one. |
 | `body_read_timeout` | `300s` | `1s` to `1h` | The longest gap allowed between two parts of a request body. It matches `hf_xet`'s own 300 s read timeout. |
 | `body_min_rate` | `4096` | `1` to `1048576` | The least average rate of a request body, in bytes per second, after a first `body_read_timeout`: a body of `n` bytes may take `body_read_timeout + n / body_min_rate`. The default lets a 64 MiB xorb take up to 4.6 hours over a very slow link. |
@@ -139,7 +139,7 @@ queue's place.
 `public_url` must be the origin root, with no path, query, fragment or user
 info. Clients append `/v1/...` to it and resolve `/v1/telemetry` against
 the origin (`docs/research/S10-cas-wire-contract.md`), so the CAS can't
-live under a path prefix. Behind a proxy that adds one, give openxet its own
+live under a path prefix. Behind a proxy that adds one, give OpenXet its own
 host name instead. A trailing `/` is allowed and ignored.
 
 ### `[cas]`
@@ -221,13 +221,13 @@ git runs as a child of `serve`, so a descriptor `serve` itself inherited
 from whatever started it without `FD_CLOEXEC` (an open log file, a
 socket) reaches every git child too. Start `serve` from a supervisor,
 such as systemd, that passes it only standard input, output and error.
-This is about the parent's descriptors; how openxet's own per-push hook
+This is about the parent's descriptors; how OpenXet's own per-push hook
 channel is kept to its git child, and its one platform limitation, is in
 [ADR 0004 item 7](../adr/0004-git-hosting-engine.md).
 
 | Key | Default | Bounds | Meaning |
 | --- | ------- | ------ | ------- |
-| `cache_dir` | `<data_dir>/git-cache` | a directory path | The node's Git cache: hydrated packs, per-request snapshots and the `proc-receive` hook (a link to the openxet binary). It must be on a filesystem with hard links. One process holds it at a time: a second `serve` given the same directory refuses to start, naming the key, so servers that share a data directory each need their own `cache_dir`. |
+| `cache_dir` | `<data_dir>/git-cache` | a directory path | The node's Git cache: hydrated packs, per-request snapshots and the `proc-receive` hook (a link to the `openxet` binary). It must be on a filesystem with hard links. One process holds it at a time: a second `serve` given the same directory refuses to start, naming the key, so servers that share a data directory each need their own `cache_dir`. |
 | `cache_max_bytes` | `20GiB` | `1GiB` to `1PiB` | The cache is evicted down to this size; an evicted pack is hydrated from the bucket again when a request needs it. |
 | `max_push_bytes` | `10GiB` | `1MiB` to `1TiB` | The largest pack one `git push` may send, counted after HTTP compression is undone. A push whose `Content-Length` is larger is refused with `413` before it is read; a longer streamed push is refused by git ("pack exceeds maximum allowed size"). Store large files with Git LFS instead. |
 | `max_plain_blob_bytes` | unset | `1KiB` to `1TiB` | A pushed blob larger than this that is not a Git LFS pointer is refused, and the message names `git lfs track`. Unset, any size is accepted. |
@@ -283,13 +283,13 @@ and `hf auth login --token …` lines for the `hf` CLI, and `git push` and
 `token_exp` is `2**62`: a static token never expires, and `hf_xet` needs an
 integer, so pass it as the token's `exp`. In configured mode the same line
 has `null` for `scope`, `mode`, `token` and `token_exp`. The banner on
-stdout is the only place openxet ever prints a credential; logs never hold
+stdout is the only place OpenXet ever prints a credential; logs never hold
 one.
 
 ## Keys and tokens on disk
 
 The data directory holds every scope's data, readable there without a
-credential, so on unix openxet keeps it private:
+credential, so on unix OpenXet keeps it private:
 
 - It creates `data_dir` and every directory under it with mode `0700`, and
   `index.sqlite` (with its `-wal`, `-shm` and `-lock` files), the bucket's
@@ -299,10 +299,10 @@ credential, so on unix openxet keeps it private:
   `serve` starts but logs a warning naming the `chmod 700` that fixes it,
   and `config check` lists it under `warnings`.
 
-openxet creates secret files whole (written to a temporary file, synced,
+OpenXet creates secret files whole (written to a temporary file, synced,
 then linked into place) and never overwrites them. Of two servers starting
 at once on one data directory, both use the first one's `dev-token` and
-`transfer.key`. openxet refuses to start if a secret file can be read by
+`transfer.key`. OpenXet refuses to start if a secret file can be read by
 group or other users, and names the `chmod 600` that fixes it. A crash
 between writing and linking can leave a temporary `.<name>.<16 hex>.tmp`
 file holding the secret; `serve` removes those older than an hour at its
@@ -341,7 +341,7 @@ invalidates the tokens already handed out; clients fetch new ones.
 
 ## Token format
 
-Tokens openxet generates (the dev token and `openxet token generate`) are
+Tokens OpenXet generates (the dev token and `openxet token generate`) are
 `oxt_` followed by 43 base64url characters: 32 bytes from the operating
 system's random number generator, unpadded. The fixed prefix lets secret
 scanners find a token committed by accident; this repository's own scan
@@ -381,8 +381,8 @@ claims = { orgs = ["acme"], groups = ["ml-team"] }  # optional; string lists tha
 - **Both:** a token with `scope` and any of `name`, `email` or `claims` is
   both credentials, for the same subject. The dev token is one.
 
-`openxet token generate --scope ci --mode write --subject ci-bot` prints a
-new CAS token and its entry; for a user token, leave out `scope` and `mode`
+Running `openxet token generate --scope ci --mode write --subject ci-bot`
+prints a new CAS token and its entry; for a user token, leave out `scope` and `mode`
 from that entry. Give each token its own `subject`, so the audit
 log tells them apart. A presented token is hashed and compared against
 every configured hash in constant time. `scope` and `subject` must not be
@@ -444,10 +444,11 @@ With `[auth]` and no rules, user credentials may do nothing.
 ## CAS tokens
 
 CAS tokens are Ed25519-signed JWTs (ADR 0007), for platforms that issue
-short-lived, scoped tokens. `openxet token keygen` writes a key pair (by default to
+short-lived, scoped tokens. The `openxet token keygen` command writes a key
+pair (by default to
 `$XDG_CONFIG_HOME/openxet/token.key`, or `~/.config/openxet/token.key`, and
 `token.key.pub` beside it) and `openxet token mint` signs one; any JWT library that does `EdDSA` can too.
-openxet accepts exactly this:
+OpenXet accepts exactly this:
 
 - **Keys:** `jwt_public_keys` lists one or more Ed25519 public keys in SPKI
   PEM (`-----BEGIN PUBLIC KEY-----`, RFC 8410). Signing keys are PKCS#8 PEM
@@ -457,14 +458,15 @@ openxet accepts exactly this:
   List several public keys to rotate: sign
   with the new key once every node trusts it, then remove the old one.
 - **`kid`:** the first 16 lowercase hex characters of the SHA-256 of the raw
-  32-byte public key. `openxet token keygen` and `config check` print it.
+  32-byte public key. The commands `openxet token keygen` and
+  `config check` print it.
 - **Header:** exactly `{"alg":"EdDSA","typ":"JWT","kid":"<kid>"}`. Any other
   algorithm or header parameter is refused.
 - **Claims:** `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and
   `iat` (Unix seconds), plus an optional `nbf` and an optional `tenant`
   (a string naming the [tenant](#tenants) the scope belongs to; without it
   the tenant is `scope:` and the scope). Any other claim, such as `aud`,
-  `iss` or `jti`, makes the token invalid, since openxet can't honour it. `sub`,
+  `iss` or `jti`, makes the token invalid, since OpenXet can't honour it. `sub`,
   `scope` and `tenant` follow the static-token rules above.
 - **Time:** a token is valid while `now < exp` and invalid from the `exp`
   second on, with no leeway (stock clients refresh 30 s before `exp`).
@@ -472,7 +474,7 @@ openxet accepts exactly this:
   ahead, and `iat` at most 5 minutes ahead (clock skew).
 - **Size:** at most 8 KiB.
 
-`openxet token mint` refuses a `--ttl` outside `1m` to `30d`; a server
+The `openxet token mint` command refuses a `--ttl` outside `1m` to `30d`; a server
 refuses a token beyond its own `max_token_lifetime`.
 
 ## Transfer URLs

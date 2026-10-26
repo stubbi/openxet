@@ -17,7 +17,7 @@ class PublicArtifact(unittest.TestCase):
         self.addCleanup(self.scratch.cleanup)
         self.public = Path(self.scratch.name) / "public"
         self.public.mkdir()
-        self.write("index.html", "<h1>openxet</h1>")
+        self.write("index.html", "<h1>OpenXet</h1>")
         self.write("docs/.nojekyll", "")
         self.write_security(datetime.now(timezone.utc) + timedelta(days=90))
 

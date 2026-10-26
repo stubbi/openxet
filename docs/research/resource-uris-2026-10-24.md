@@ -1,4 +1,4 @@
-# Resource URI schemes for openxet
+# Resource URI schemes for OpenXet
 
 <!-- description: Evidence behind the chosen future xet:// resource scheme, including HF URIs, legacy maintenance status, endpoint identity and remaining compatibility work. -->
 
@@ -17,10 +17,10 @@ to evaluate `openxet://` is superseded. `ox://` is not a second planned scheme.
 Specify and test compatibility rather than treating the name as a working parser.
 The work is scheduled as M2-URI and M6-URI in [product design §12](../superpowers/specs/2026-10-23-openxet-design.md#12-milestones-v1--all-of-them).
 
-A resource scheme can give openxet a consistent addressing experience across
+A resource scheme can give OpenXet a consistent addressing experience across
 its tools. It does not establish ownership of the underlying storage protocol:
 [RFC 7595 §3.8](https://www.rfc-editor.org/rfc/rfc7595.html#section-3.8)
-distinguishes a scheme name from a protocol. openxet's compatibility commitment
+distinguishes a scheme name from a protocol. OpenXet's compatibility commitment
 remains the published [Xet specification](https://huggingface.co/docs/xet/index),
 whose inspected version is 1.1.0.
 
@@ -39,7 +39,7 @@ its `parse_hf_uri(endpoint=...)` recognizes custom HTTP endpoints, while
 `to_url(endpoint=...)` supplies the endpoint when rendering a web URL.
 Its current [filesystem guide](https://huggingface.co/docs/huggingface_hub/guides/hf_file_system)
 and [bucket guide](https://huggingface.co/docs/hub/storage-buckets) describe their
-respective clients. These documents are not an openxet compatibility test.
+respective clients. These documents are not an OpenXet compatibility test.
 
 Legacy evidence: [pyxet README](https://github.com/xetdata/pyxet/tree/95196fa4a8ce328a37b53dac4f85f1adf5d8ba61),
 [URL parser](https://github.com/xetdata/pyxet/blob/95196fa4a8ce328a37b53dac4f85f1adf5d8ba61/python/pyxet/pyxet/url_parsing.py),
@@ -68,7 +68,7 @@ had no exact entry for `hf`, `xet`, `ox` or `openxet` when checked (451 rows).
 Absence does not establish that a name is unused or available without conflicts;
 `xet` above is a concrete counterexample. The name is now chosen; specify its
 semantics, evaluate legacy use and seek registration under
-[RFC 7595 §§4–7](https://www.rfc-editor.org/rfc/rfc7595.html#section-4).
+[RFC 7595 §§4 to 7](https://www.rfc-editor.org/rfc/rfc7595.html#section-4).
 
 ## Compatibility and endpoint rules to settle before implementation
 
@@ -84,7 +84,7 @@ already specifies an HTTPS read gateway as the common path. That gateway and
 Hub resource addressing remain planned beyond the released storage-only CAS;
 the [current CLI reference](../reference/cli.md) is the runnable contract.
 
-An illustrative shape, **not valid openxet syntax today**, is:
+An illustrative shape, **not valid OpenXet syntax today**, is:
 
 ```text
 xet://storage.example.org/datasets/team/corpus/data.parquet?revision=<commit>

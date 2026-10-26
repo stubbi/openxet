@@ -1,12 +1,12 @@
-# openxet hosted waitlist
+# OpenXet hosted waitlist
 
-This small service accepts launch-access requests from the static openxet site.
+This small service accepts launch-access requests from the static OpenXet site.
 It stores email addresses in a private managed D1 database. It creates no storage
 accounts, sends no email, and has no public list, search, export or admin route.
 
 The source runs through the Sites plugin's Vinext/Cloudflare Worker starter.
 Keep its Sites build integration and the project ID in `.openai/hosting.json`.
-The primary website remains in the openxet repository and on GitHub Pages.
+The primary website remains in the OpenXet repository and on GitHub Pages.
 Unused starter UI components, examples, styling dependencies and application
 wrappers have been removed. The imported Sites/Vinext build and preview
 integration remains intact; this service uses plain elements and its own CSS.

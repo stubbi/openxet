@@ -98,7 +98,7 @@ Notes on what some tests cover:
 
 - `no_unauthenticated_reads` requests every CAS route without a credential,
   then every data URL the CAS emits without its exact range. Its M2 half
-  requests every Hub, file gateway and LFS URL openxet emits without a
+  requests every Hub, file gateway and LFS URL OpenXet emits without a
   credential.
 - `anonymous_reads_only_with_rule` checks that a request with no
   credential reads a repository only when an `[[auth.rules]]` entry

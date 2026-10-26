@@ -33,7 +33,7 @@ tests in `crates/protocol/tests/reference_files.rs` and
   `hf_xet` 1.7.0 upload both pass every rule.
 
 Upstream's in-process test backend applies none of the verification rules
-(see "Upstream vs. openxet"). openxet is stricter, but only by rules that
+(see "Upstream vs. OpenXet"). OpenXet is stricter, but only by rules that
 upstream's own client satisfies by construction, which the two stock shards
 demonstrate.
 
@@ -93,14 +93,14 @@ empty file and the dedup prefix, both below). It also confirmed that
 `hf_xet` 1.7.0 sends the spec's footer-less form with verification and
 SHA-256 for every file.
 
-## Upstream vs. openxet
+## Upstream vs. OpenXet
 
 Upstream's in-process test backend (`xet-client` 1.7.0,
 `LocalClient::upload_shard`), which is not a network service, parses with
 `MDBMinimalShard::from_reader`, re-serializes and stores. That is all it
 does:
 
-| Check | `xet-core` in-process test backend (not a network service) | openxet |
+| Check | `xet-core` in-process test backend (not a network service) | OpenXet |
 |---|---|---|
 | Header version | not checked (`MDBShardFileHeader::deserialize` checks only the magic) | rule 1 |
 | Size limit | none (`from_reader` passes `None` budgets) | rule 2 |
@@ -126,7 +126,7 @@ can't be reconstructed, or that claim content they don't have.
 - **Footers on upload.** The spec says the footer "MUST be omitted", but the
   wasm build of `xet-data` 1.7.0 uploads `MDBInMemoryShard::to_bytes`
   (`processing/shard_interface/wasm.rs`): sections, lookup tables and a
-  footer. Upstream's in-process test backend accepts it. openxet accepts it too when the
+  footer. Upstream's in-process test backend accepts it. OpenXet accepts it too when the
   footer's size and offsets are consistent (rule 3), and discards the tail.
   The native client strips the footer and lookup tables
   (`read_shard_to_bytes_remove_footer`, `processing/shard_interface/native.rs`).
@@ -150,7 +150,7 @@ can't be reconstructed, or that claim content they don't have.
   the spec describes it as the serialized xorb length
   ([shard#caschunksequenceheader](https://huggingface.co/docs/xet/shard#caschunksequenceheader)).
   In the captured shard, `chunk_byte_range_start` is the chunk's offset in
-  uncompressed bytes, not in the serialized xorb. openxet takes neither from
+  uncompressed bytes, not in the serialized xorb. OpenXet takes neither from
   the client.
 - **Dedup prefix (outside S6, recorded for M1).** `hf_xet` 1.7.0 queries
   global dedup at `/v1/chunks/default/{hash}`. The spec says the only
@@ -166,7 +166,7 @@ can't be reconstructed, or that claim content they don't have.
   body without storing or forwarding anything (no telemetry, AGENTS.md
   non-negotiable 6).
 
-## Gaps where the spec is silent, and what openxet does
+## Gaps where the spec is silent, and what OpenXet does
 
 - **A footer declared in the header.** Accepted only if `footer_size` is
   upstream's footer size, the footer parses (version 1), and its
@@ -178,7 +178,7 @@ can't be reconstructed, or that claim content they don't have.
   verification. A shard holds up to ~700k segments (96 bytes each with
   verification), and each may span a whole xorb. With an 8192-chunk xorb
   that is ~5.7e9 referenced chunks: billions of hash operations, and ~229 GB
-  if the referenced chunk list were collected. openxet therefore:
+  if the referenced chunk list were collected. OpenXet therefore:
   - caps the total referenced chunks per shard (rule 10), default 2^24, about
     1 TiB of logical file data at the ~64 KiB average chunk size; a larger
     upload splits into more shards. The count is a saturating u64 sum of
@@ -209,7 +209,7 @@ can't be reconstructed, or that claim content they don't have.
     aggregation group cuts included). CI also runs the latter in a release
     build, where upstream's debug self-check is compiled out.
 - **Empty-file SHA-256.** With no segments, nothing ties the SHA-256 to
-  content. `hf_xet` 1.7.0 sends all zeros (the capture), so openxet accepts
+  content. `hf_xet` 1.7.0 sends all zeros (the capture), so OpenXet accepts
   absent, all zeros, or the real SHA-256 of zero bytes (`e3b0c442…`), and
   rejects anything else (rule 11). Otherwise an empty file could be
   registered under an arbitrary LFS oid.

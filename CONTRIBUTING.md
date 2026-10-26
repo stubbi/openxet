@@ -1,4 +1,4 @@
-# Contributing to openxet
+# Contributing to OpenXet
 
 Thanks for helping. Humans and AI agents are equally welcome. Agents should
 also read [`AGENTS.md`](AGENTS.md), which is the full working agreement;
@@ -65,7 +65,7 @@ Fuzzing needs the nightly toolchain (`rustup toolchain install nightly`) and
 `fuzz/seed.sh` copies the seeds from `testdata/` and writes the text
 targets' seeds; the corpus and any crash artifacts stay untracked. It also
 rewrites `fuzz/Cargo.lock` from the workspace's `Cargo.lock`, so fuzzing
-runs the dependency versions openxet ships; after changing `Cargo.lock`,
+runs the dependency versions OpenXet ships; after changing `Cargo.lock`,
 run it and commit `fuzz/Cargo.lock` too, or `fuzz-smoke` fails. On macOS the default AddressSanitizer build fails to
 link, so add `-s none` (`cargo +nightly fuzz run -s none <target>`); Linux and
 CI use the default. A crash input becomes a regression test in the

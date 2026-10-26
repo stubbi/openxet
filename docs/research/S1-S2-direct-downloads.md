@@ -60,11 +60,11 @@
     `SSL_CERT_FILE`.
   - So the local quickstart should default to `http://` on loopback.
 - **S2: the presign endpoint must be reachable from the client.** A
-  presigned URL carries, and SigV4 signs, the store host that openxet
+  presigned URL carries, and SigV4 signs, the store host that OpenXet
   presigned with. The client then connects to exactly that host. In the
   Linux runs the client shared MinIO's network namespace, so the stub
   presigned with `127.0.0.1:9000`; from the macOS host it was
-  `127.0.0.1:19000`. In a compose quickstart, openxet must presign with
+  `127.0.0.1:19000`. In a compose quickstart, OpenXet must presign with
   the store's client-facing address, not the in-network service name.
 
 ## Method
@@ -113,7 +113,7 @@ Fetch-entry shapes (`STUB_MODE`):
 
 | mode | terms | fetch entries per xorb | ranges per entry |
 |---|---|---|---|
-| a1 | 1 (chunks 0–796) | 1 | 1 (bytes 0–14737812), as huggingface.co returns it |
+| a1 | 1 (chunks 0 to 796) | 1 | 1 (bytes 0 to 14737812), as huggingface.co returns it |
 | a4 | 4 | 4 | 1 each |
 | b  | 4 | 2 | 2 non-adjacent each (pieces 0+2, 1+3) |
 | v1 | 4 | `/v2` → 404; `/v1` `fetch_info` with 4 entries | 1 each |
@@ -140,7 +140,7 @@ named in each row is that variant's log.
 | **c** https/https, `SSL_CERT_FILE` (Linux) | https | https | ✅ | (`linux-https-https-ca.jsonl`) |
 | **d** URLs expire before first use, fresh on refresh (expiry 20 s, first answer delayed 25 s) | http | http | ✅ in 31.3 s | 4× 403 → 1 reconstruction refresh → 4× 206 (`d-expired-once.jsonl`) |
 | **d** every URL already expired (expiry 1 s, every answer delayed 3 s) | http | http | ❌ after 165.9 s | 22 GETs → 403, 16 refreshes |
-| **d** URL expires mid-transfer (curl, not `hf_xet`) | – | – | ✅ | 5 s URL; transfer throttled to 1.5 MB/s → 206, all 14737813 bytes in 9.6 s |
+| **d** URL expires mid-transfer (curl, not `hf_xet`) | n/a | n/a | ✅ | 5 s URL; transfer throttled to 1.5 MB/s → 206, all 14737813 bytes in 9.6 s |
 
 Verbatim errors:
 
@@ -189,7 +189,7 @@ only the first answer delayed. It also failed, because the refreshed URLs
 expired too (observed). The reasons, from source and measurement:
 - On a 403, `hf_xet` refreshes **before** it sleeps
   (`remote_client.rs:633-638`). It then sleeps a pre-jitter 3, 9, 27, 81
-  and 243 s for attempts 1–5, each capped at `retry_max_duration` (6 min).
+  and 243 s for attempts 1 to 5, each capped at `retry_max_duration` (6 min).
   Jitter only shortens a sleep (`retry_wrapper.rs:272`, `485-497`; the
   upstream test `test_exponential_retry_strategy` pins 3/9/27/81/243 s).
 - The VM clock ran about 2 s ahead of the host (measured).
@@ -293,7 +293,7 @@ The exact commands and status/header lines are in
     discarded (`utils/_http.py:735-784`, `_is_same_or_hub_host`).
   - A cross-origin redirect stops there and uses the 302's headers. That is
     what huggingface.co does (302 to `us.aws.cdn.hf.co`).
-  - **If openxet redirects `resolve` to its own transfer role on the same
+  - **If OpenXet redirects `resolve` to its own transfer role on the same
     origin, the redirect target must repeat the Xet headers.**
 - `huggingface_hub` caches the read token until 60 s before `exp`
   (`XET_CONNECTION_INFO_SAFETY_PERIOD`).
@@ -309,7 +309,7 @@ The exact commands and status/header lines are in
   yet.
 - Follow-up (2026-10-23): the client flow that uses them is on tag
   `v1.8.0-dev0` and in the PyPI pre-release `hf-xet` 1.8.0.dev0, not in a
-  stable release. Design §3 records the API shape and §5.5 how openxet
+  stable release. Design §3 records the API shape and §5.5 how OpenXet
   will support it.
 
 ## Not verified here

@@ -288,11 +288,11 @@ wrap instead of hiding the result on narrow screens.
 Read top to bottom, the previous page said:
 
 1. **Large files. Lighter uploads.** True of every dedup product,
-   including huggingface.co itself. Nothing said openxet is a *server*,
+   including huggingface.co itself. Nothing said OpenXet is a *server*,
    that it is *Xet*, or that Hugging Face's own client works with it.
 2. An eight-part toy diagram, labelled illustrative, as the hero. It
    taught dedup, which Hugging Face's own Storage page already teaches,
-   and showed nothing openxet does.
+   and showed nothing OpenXet does.
 3. Three steps of dedup.
 4. Hosting choices, with the waitlist (a service that does not exist yet)
    as the featured card and the primary action.
@@ -314,7 +314,7 @@ separate agent-oriented Markdown page; the human HTML was checked with
 `curl`. Long subheads were cut by the fetch tool where marked "…".
 Observations describe the pages, not their conversion.
 
-| Site | Opener (H1 / subhead) | Order and argument | Proof, and where | CTA, self-host vs hosted | Hero visual | Lesson for openxet |
+| Site | Opener (H1 / subhead) | Order and argument | Proof, and where | CTA, self-host vs hosted | Hero visual | Lesson for OpenXet |
 |---|---|---|---|---|---|---|
 | [HF Storage](https://huggingface.co/storage) | "Storage Buckets" / "Store models, datasets, and artifacts with simple per-TB pricing." | Logos → fit for ML → dedup ("only changed bytes") → pricing vs S3 → data independent of compute → CDN → agents → security | Logos in hero; a terminal printing dedup savings in section 2; 8/8 vs 1/8 chunk diagram | "Create a Bucket"; hosted only | Text + logo strip; first strong visual is the dedup terminal | The terminal that prints savings and the before/after chunk diagram; no unmeasured "trusted by" |
 | [git-lfs.com](https://git-lfs.com) | "An open source Git extension for versioning large files" | Download → how it works → 3 commands → open source → features | Version number and runnable commands only | "Download v3.8.1" | Pointer diagram | Saying what it is plus "open source" in the H1 is enough for a tool |
@@ -341,7 +341,7 @@ Observations describe the pages, not their conversion.
 1. **Anchor the opener on something the visitor already knows.** Postgres
    (Supabase, Neon), SQLite (Turso), S3 (Tigris, R2), pip (uv), Git
    (git-lfs). Abstract slogans (Forgejo, lakeFS, MinIO) explain nothing.
-   For openxet the anchor is Xet and Hugging Face's client.
+   For OpenXet the anchor is Xet and Hugging Face's client.
 2. **The first proof is measured and carries its method.** uv opens with
    a captioned benchmark; HF Storage and XetHub show a real transfer.
    Without customers to name, a reproducible measurement is our proof.
@@ -417,7 +417,7 @@ keep working.
 Pick A, with the anchor carried by the category line ("Open-source Xet
 storage server") and the lead (names Hugging Face's `hf_xet`,
 "unmodified"). This follows pattern 1 within one glance without putting
-HF's name in the headline. **When `hf upload` works against openxet (M2),
+HF's name in the headline. **When `hf upload` works against OpenXet (M2),
 re-test D**: the stock `hf` CLI is the strongest anchor there is.
 
 ### Hero visual
@@ -441,7 +441,7 @@ recorded in the [competitive matrix](../competitive-matrix.md#2026-10-24-openxet
 The caption gives the exact byte count, the client version, the empty
 cache, "bars to scale", and links the method. It keeps the design
 system's grammar (blue stored, amber new, the whole file stays whole)
-and the single elevated object.
+and the single raised object.
 
 **Alternatives considered:**
 

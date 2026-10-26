@@ -4,9 +4,9 @@ Guidance for anyone, human or agent, changing this repository. Read it fully
 before your first change. When something here is wrong or missing, fixing
 it is part of your change.
 
-## What openxet is
+## What OpenXet is
 
-openxet is the open-source server and client for the Xet protocol, Hugging
+OpenXet is the open-source server and client for the Xet protocol, Hugging
 Face's chunk-deduplicated storage for large, versioned files (models and
 datasets are examples, not the definition). The official
 tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`, `git-lfs`,
@@ -42,7 +42,7 @@ of them worse:
 
 - **Self-hosters:** teams that can't or won't put data on huggingface.co.
   They want one command to a working setup and nothing to babysit.
-- **Platforms** (aqora first): they embed openxet's storage under their own
+- **Platforms** (aqora first): they embed OpenXet's storage under their own
   product, naming and permissions.
 - **openxet.com users:** they want the same thing without running anything.
   The hosted experience must be perfect: landing page to working `hf upload`
@@ -93,14 +93,14 @@ change would lower any of those measures, it isn't done.
 ## Non-negotiables
 
 1. **Protocol exactness.** Chunking, hashes, xorbs, shards and API behaviour
-   match the Xet spec and `xet-core` byte for byte. Data written by openxet is
+   match the Xet spec and `xet-core` byte for byte. Data written by OpenXet is
    readable by stock clients and huggingface.co tooling, and vice versa. Any
    divergence is a release blocker.
 2. **The object-store bucket is the source of truth.** The database is a rebuildable
    index. Losing the database must never lose data.
 3. **Nothing is deleted outside garbage collection,** which is explicit,
    logged, and has a grace period.
-4. **openxet never owns users.** No passwords, profiles or sign-up database.
+4. **OpenXet never owns users.** No passwords, profiles or sign-up database.
    Identity comes from the operator's systems. Our access tokens and SSH keys
    are always bound to an external identity.
 5. **Stateless nodes.** Any node can serve any request; scale by adding
@@ -192,6 +192,24 @@ goes into `docs/SUMMARY.md`, the docs site's navigation.
   cleverness.
 - Performance claims come with a benchmark. Speed regressions fail CI.
 
+## Brand
+
+The brand is **OpenXet** wherever text names the project, product or
+service: prose, headings, titles, link and alt text, help prose. Lowercase
+`openxet` is an identifier only: the `openxet` command and binary, crate
+and package names, `OPENXET_*` variables, paths, schema ids
+(`openxet.error.v1`), the domain `openxet.com` and every URL. Put a command
+or identifier in a code span, and never start a sentence with a bare
+command ("The `openxet serve` command ..."). `scripts/check-brand.py`
+enforces this; a justified exception goes in `scripts/check-brand.allow`.
+
+Public copy never uses an em dash or an en dash, and nothing may read as
+machine-written (owner ruling, 2026-10-25; design.md, Voice and
+vocabulary). This covers the site, docs, help text, errors, commit messages
+and PR text. `scripts/check-copy.py` checks the dashes and a short list of
+stock phrases; a justified exception goes in `scripts/check-copy.allow`
+with its reason.
+
 ## Commits
 
 Use Conventional Commits with a component scope, so `git log` reads per work
@@ -244,6 +262,10 @@ cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-captur
 OPENXET_LATENCY_GATE=measure OPENXET_LATENCY_GATE_BUILD=$(git rev-parse HEAD) cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # the same, printing the JSON lines without asserting (CI, on a pull request: base, then head)
 python3 -I scripts/check-latency-gate.py --base base.json --head head.json --head-build <commit> # a PR's gate run against its base's, ruling M2-R17 (CI gate on a pull request)
 python3 -I scripts/test_check_latency_gate.py              # the comparison script's tests (CI gate)
+python3 -I scripts/check-brand.py                          # the brand is written OpenXet in prose, outside code and identifiers (CI gate)
+python3 -I scripts/test_check_brand.py                     # the brand check's tests (CI gate)
+python3 -I scripts/check-copy.py                           # no em or en dashes and no stock phrasing in public copy (CI gate)
+python3 -I scripts/test_check_copy.py                      # the copy check's tests (CI gate)
 cargo bench -p openxet-cas --bench reconstruction          # reconstruction and URL-signing benchmarks
 cargo bench -p openxet-cas --bench xorb_ingest             # xorb ingest on a 64 MiB LZ4 xorb
 cargo bench -p openxet-cas --bench commit_throughput      # durable shard and index commits per second on local disk

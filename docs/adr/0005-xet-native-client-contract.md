@@ -13,7 +13,7 @@
 Design §6.1 serves `git-xet` through the Git LFS Batch API. A third-party
 Xet-native client, jj-xet (Jujutsu with Xet-backed large files), chunks and
 uploads before it knows any LFS oid, so it cannot start from a batch request.
-It was implemented against the contract below, which openxet's maintainers
+It was implemented against the contract below, which OpenXet's maintainers
 committed to on 2026-10-23. This ADR makes the contract binding, reviewable
 and testable.
 
@@ -39,7 +39,7 @@ captures.
 2. **Request.**
    - Header `Accept: application/json`.
    - Auth is HTTP Basic: the username is ignored and the password is an
-     openxet access token, which is git-credential-helper compatible.
+     OpenXet access token, which is git-credential-helper compatible.
      `Authorization: Bearer <access token>` is also accepted.
    - A batch capability `href` (see 10) needs no auth header.
 3. **200 response body:**
@@ -67,10 +67,10 @@ captures.
    0.2.1 does not download at all, and huggingface.co sends no `X-Xet-Hash`
    (ADR 0003).
 9. **Pointers.** Pointers are the canonical 3-key git-lfs pointer
-   (`version` / `oid` / `size`). openxet tolerates and preserves unknown keys,
+   (`version` / `oid` / `size`). OpenXet tolerates and preserves unknown keys,
    per the LFS spec, but never writes them. The LFS spec requires exactly one
    valid encoding; extra keys change Git blob ids and break mixed-tool repos.
-   openxet's own client uses the same format.
+   OpenXet's own client uses the same format.
 10. **Batch details** (`POST {lfs-url}/objects/batch`, transfers
     `["xet","basic"]`; amended by ADR 0003: uploads answer `xet`,
     downloads always answer `basic`).

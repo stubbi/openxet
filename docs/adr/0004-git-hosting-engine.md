@@ -1,6 +1,6 @@
-# 0004: Serve Git with the `git` binary over openxet-owned refs and bucket packs
+# 0004: Serve Git with the `git` binary over OpenXet-owned refs and bucket packs
 
-<!-- description: Git is served by the git binary over refs in openxet's database and packs in the bucket. -->
+<!-- description: Git is served by the git binary over refs in OpenXet's database and packs in the bucket. -->
 
 - Status: accepted
 - Date: 2026-10-23
@@ -33,7 +33,7 @@
 
 ## Context
 
-Design §10.9 makes openxet a Git host: smart HTTP and SSH, `upload-pack`
+Design §10.9 makes OpenXet a Git host: smart HTTP and SSH, `upload-pack`
 (protocol v2 where clients support it) and `receive-pack`, and one history
 shared by Git pushes and Hub API commits. §5.3 and AGENTS.md add three
 constraints:
@@ -66,7 +66,7 @@ results below are **observed**.
   | in-process gix prototype | 2.86 s | 178 MB | 6.5 s |
 
   A 100-commit fetch cost git 45 ms CPU and 33 MB, and gix 284 ms and
-  216 MB. git without bitmaps needed 1.2–1.6 s CPU for the full clone.
+  216 MB. git without bitmaps needed 1.2 to 1.6 s CPU for the full clone.
 - **Pushes.**
   - A one-commit push cost git about 120 ms CPU, all of it spawned
     processes. gix cost 13 ms.
@@ -89,16 +89,16 @@ results below are **observed**.
   - git served through `objects/info/alternates` into the node cache,
     including that cache's single-pack bitmap: 178 ms CPU, the same as
     local. A MIDX bitmap through alternates was not tested.
-  - A cold node hydrated 80 MB of packs from MinIO in 0.4–0.6 s.
+  - A cold node hydrated 80 MB of packs from MinIO in 0.4 to 0.6 s.
   - A geometric repack with a MIDX bitmap took 0.7 s for 19 packs, and
     left the base pack untouched.
 - **Reachability (source).** git's v2 `parse_want` accepts any object in
-  the odb, alternates included. git 2.37–2.44 also advertises and serves
+  the odb, alternates included. git 2.37 to 2.44 also advertises and serves
   the v2 `object-info` command unconditionally, which returns the size of
-  any OID in the odb. Reachability is therefore openxet's job (item 2).
+  any OID in the odb. Reachability is therefore OpenXet's job (item 2).
 - **Alternatives (source).**
   - JGit DFS fits the storage model best, but needs a JVM sidecar (start-up
-    alone 1.6–2.0 s CPU, about 77 MB, observed), and the DFS API is
+    alone 1.6 to 2.0 s CPU, about 77 MB, observed), and the DFS API is
     `internal`.
   - go-git v6 serves upload-pack and receive-pack only in beta, with no
     bitmaps and no thin packs.
@@ -111,7 +111,7 @@ results below are **observed**.
 ## Decision
 
 1. **The wire protocol is served by the `git` binary.**
-   - For each request, openxet builds a snapshot repo in a temp dir on
+   - For each request, OpenXet builds a snapshot repo in a temp dir on
      the cache's filesystem, from **one database snapshot**:
      - `packed-refs`, with the repo's refs
      - `objects/pack`, holding hard links to exactly the cached pack
@@ -122,12 +122,12 @@ results below are **observed**.
      bitmap are linked only when every pack they cover is in the set.
    - It then runs `git upload-pack` / `git receive-pack`: with
      `--stateless-rpc` over HTTP, without it over SSH.
-   - openxet never runs `git http-backend`; it is the HTTP layer itself.
+   - OpenXet never runs `git http-backend`; it is the HTTP layer itself.
    - Pinned config in every snapshot:
      - `uploadpack.allowAnySHA1InWant=false`
      - `uploadpack.allowReachableSHA1InWant=true`
      - `uploadpack.allowRefInWant=false`, so every want is an OID that
-       openxet checks
+       OpenXet checks
      - `uploadpack.allowFilter=false` until partial clone is designed
        and tested; turning it on needs its own ADR amendment
      - `core.alternateRefsCommand=true`, as defence in depth: snapshots
@@ -140,24 +140,24 @@ results below are **observed**.
      - `receive.procReceiveRefs=refs/`
      - `receive.fsckObjects=true`
      - `receive.unpackLimit=1`
-     - `core.hooksPath` set to openxet's own hook directory
+     - `core.hooksPath` set to OpenXet's own hook directory
      - `transfer.advertiseObjectInfo=false`,
        `uploadpack.advertiseBundleURIs=false`, `promisor.advertise=false`
        and `transfer.advertiseSID=false`. Older git ignores some of these
        keys (item 2 lists the versions), so they are defence in depth.
        The command allowlist in item 2 is the control that holds from
        2.37 on.
-2. **openxet answers the ref-independent parts in-process, and enforces
+2. **OpenXet answers the ref-independent parts in-process, and enforces
    reachability for every `fetch` want (R22).**
    - **In-process:** the protocol v2 capability advertisement and
      `ls-refs` (from the database). The advertisement is captured from the
      installed git at start-up, with the pinned config, and then filtered
      to the allowlist below.
    - **v2 command allowlist.** The interposer accepts exactly two
-     commands: `ls-refs`, which openxet answers, and `fetch`, whose wants
+     commands: `ls-refs`, which OpenXet answers, and `fetch`, whose wants
      it checks before forwarding. Any other `command=`, including
      `object-info`, `bundle-uri` and unknown names, gets an `ERR` from
-     openxet and never reaches git. The advertisement lists only `agent`,
+     OpenXet and never reaches git. The advertisement lists only `agent`,
      `ls-refs`, `fetch` (without `filter`), `server-option` and
      `object-format`. Adding a command needs an ADR amendment.
      - The same holds one level up. Over SSH, only `git-upload-pack` and
@@ -167,7 +167,7 @@ results below are **observed**.
      - **What git ≥ 2.37 serves by default** (source: git `serve.c`, the
        `capabilities[]` table, at tags v2.37.0 to v2.51.0):
        - `ls-refs` and `fetch`, always
-       - `object-info` in 2.37–2.44, always (`.advertise =
+       - `object-info` in 2.37 to 2.44, always (`.advertise =
          always_advertise`). It answers the size of any OID in the odb,
          with no reachability check: an existence and size oracle for
          unreachable objects. From 2.45 it is gated by
@@ -182,22 +182,22 @@ results below are **observed**.
      - git's `parse_command` dies with "invalid command" for a command
        whose advertise check is false, in every version from 2.37 to
        2.51. So on 2.45+ the pinned config also blocks `object-info`
-       inside git, but on 2.37–2.44 only openxet's allowlist does.
+       inside git, but on 2.37 to 2.44 only OpenXet's allowlist does.
    - **Why.** git's v2 `parse_want` only checks that the object exists in
      the odb. It does not check reachability, so
      `allowAnySHA1InWant=false` does not protect v2 (source: git v2.39.5
-     `upload-pack.c`, `parse_want`, lines 1413–1442). This is git's
+     `upload-pack.c`, `parse_want`, lines 1413 to 1442). This is git's
      documented design, not a defect: its fetch protocol is not meant to
      keep unshared objects from a peer (git `transfer-data-leaks.adoc`,
-     SECURITY), so access control on git reads is openxet's job.
-   - **Which requests.** openxet interposes on the request stream. It
+     SECURITY), so access control on git reads is OpenXet's job.
+   - **Which requests.** OpenXet interposes on the request stream. It
      checks wants before forwarding them to git, so git never sees an
      unchecked want. This covers:
      - every v2 `command=fetch`, including several commands in one
        stateful SSH session
      - the v0/v1 want lines over HTTP and SSH
 
-     Checking v0/v1 too means openxet does not depend on git's
+     Checking v0/v1 too means OpenXet does not depend on git's
      per-request `rev-list` for non-advertised wants, whose cost would
      be uneven across protocol versions.
    - **One walk per request.**
@@ -255,7 +255,7 @@ results below are **observed**.
      through quarantine. Other requests can't see it until it is
      `committed`.
    - The hook hands the commands and the new pack path to the parent
-     openxet process. openxet then:
+     OpenXet process. OpenXet then:
      1. validates the request (item 7)
      2. re-checks the commands and branch policy itself: each command's
         old value must equal the ref's value in the snapshot, which fences
@@ -295,18 +295,18 @@ results below are **observed**.
        the end of the pushed pack (`builtin/index-pack.c`,
        `fix_unresolved_deltas` → `append_obj_to_pack`, line 1430).
        Those appended bases are not sent objects.
-     - **How openxet tells them apart.** openxet is the transport layer,
+     - **How OpenXet tells them apart.** OpenXet is the transport layer,
        so it reads the incoming pack header's object count and counts
        the bytes of the client's pack. Appended objects are exactly the
        entries whose `.idx` offset lies past the end of the client's
        data, after its N entries.
-     - For a Hub commit, the sent objects are the ones openxet built
+     - For a Hub commit, the sent objects are the ones OpenXet built
        from the request. The Hub pack is written whole, with no thin
        bases.
      - **Every appended base must be reachable from the snapshot's
        refs.** A delta the client sent can copy bytes out of its base, so
        the content of a sent object can be derived from an unreachable
-       base. openxet checks each appended base in this order:
+       base. OpenXet checks each appended base in this order:
        1. **Fast paths.** The base is the root tree of, or the entry at
           the path where the client's delta uses it in, the tree of a
           boundary commit (`git rev-list --boundary N --not <snapshot
@@ -417,7 +417,7 @@ results below are **observed**.
    - **Retries.**
      - A push that fails the fence gets a retryable `ng`, and the client
        pushes again with a new pack.
-     - Hub writes retry inside openxet, up to 3 times. Each attempt takes
+     - Hub writes retry inside OpenXet, up to 3 times. Each attempt takes
        a fresh snapshot and, for commits, builds a new pack with a new
        row. A pack row is never reused across attempts. After that, the
        Hub API returns a retryable error.
@@ -432,7 +432,7 @@ results below are **observed**.
      - With the rule above, no content of an unreachable object can be
        made reachable or derived through a push.
      - What remains is existence. A push that names an unreachable
-       object fails in openxet's check, and one that names an absent
+       object fails in OpenXet's check, and one that names an absent
        object fails earlier, in git's connectivity check. The reason
        text is the same, but the timing and the stage of failure may
        still differ.
@@ -469,7 +469,7 @@ results below are **observed**.
      - It pins each pack's mtime to the row's `created_at`.
    - **Snapshot filesystem.** Snapshot directories live on the cache's
      filesystem, because hard links can't cross filesystems (`EXDEV`).
-     - At start-up, openxet checks this with `st_dev`, and with a probe
+     - At start-up, OpenXet checks this with `st_dev`, and with a probe
        link, and fails fast with an actionable error.
      - Also at start-up it sweeps leaked snapshot directories.
    - **Eviction.**
@@ -539,8 +539,8 @@ results below are **observed**.
        - `pack`: a `recovered` pack
        - `edge`: an object in a committed pack that a `recovered` pack's
          objects reference directly
-     - `openxet reindex` prints the table, and `openxet verify` reads it
-       and lists every entry as recoverable until it is resolved.
+     - The `openxet reindex` command prints the table, and `openxet verify`
+       reads it and lists every entry as recoverable until it is resolved.
      - **Keep roots.** Full repacks run normally. Before each one, the
        leaseholder adds every `commit`, `tag` and `edge` entry whose
        object is in the working copy as an extra keep ref (item 5).
@@ -555,7 +555,7 @@ results below are **observed**.
      - **Restore** (`openxet reindex restore <repo> <oid> <ref>`) makes
        an unplaced commit or annotated tag a ref. `<oid>` may be a commit
        or a tag OID.
-       - openxet takes a snapshot of the committed packs plus the
+       - OpenXet takes a snapshot of the committed packs plus the
          recovered packs that hold the object's closure, and checks
          connectivity against it.
        - The commit transaction (item 3) then moves those packs
@@ -588,7 +588,7 @@ results below are **observed**.
          grace period; this cannot be undone", separately from the
          recovered packs that GC deletes after the grace period. The
          operator docs use the same wording.
-     - **Visibility.** openxet exports the gauges
+     - **Visibility.** OpenXet exports the gauges
        `openxet_reindex_unplaced_entries{repo}` and
        `openxet_reindex_unplaced_oldest_seconds{repo}`.
        - A shipped alert fires when a repo has entries older than
@@ -819,7 +819,7 @@ results below are **observed**.
 7. **Hardening of the hook route and the git process.**
    - **Hook channel.** It is a pair of inherited pipes, one each way,
      with no filesystem path and no listener, over HTTP and SSH alike.
-     - openxet clears `FD_CLOEXEC` on those two descriptors for the git
+     - OpenXet clears `FD_CLOEXEC` on those two descriptors for the git
        child only, which passes them on to the hook.
      - The hook finds them through `OPENXET_HOOK_FD` (`{read},{write}`)
        and adopts them by opening `/dev/fd/N`.
@@ -837,20 +837,20 @@ results below are **observed**.
    - **Token.** Each request gets a single-use token, delivered as
      `OPENXET_HOOK_TOKEN`. It is bound to repo ID, principal and request
      ID, and expires when the request ends.
-   - **What openxet trusts.** It derives the repo and authorization only
+   - **What OpenXet trusts.** It derives the repo and authorization only
      from the token's request context, never from data the hook supplies.
    - **Pack path.** The path the hook reports must resolve (after
      `realpath`) inside that request's snapshot directory, or its
      quarantine directory, and nowhere else.
    - **Sanitised environment for every git process.** It starts empty and
      contains only these variables:
-     - `PATH`: a fixed list, the git exec dir and openxet's hook dir
+     - `PATH`: a fixed list, the git exec dir and OpenXet's hook dir
      - `HOME`: a private, empty directory
      - `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`
      - `GIT_PROTOCOL`: only a validated `version=0`, `version=1` or
        `version=2`
      - `OPENXET_HOOK_FD` and `OPENXET_HOOK_TOKEN`, for receive-pack only
-   - Hooks run from openxet's directory only, via `core.hooksPath`.
+   - Hooks run from OpenXet's directory only, via `core.hooksPath`.
    - **Paths.** Snapshot and cache paths derive from internal repo IDs,
      never from user-supplied names, so there is no path traversal.
    - **No cross-repo sharing.** Objects are never shared across repos,
@@ -861,10 +861,10 @@ results below are **observed**.
      - `proc-receive`: 2.29
      - MIDX bitmaps: 2.34
      - cruft packs: 2.37
-   - `openxet` checks the version at start-up and fails with an
+   - OpenXet checks the version at start-up and fails with an
      actionable error.
    - **Licence.** git (GPL-2.0-only) runs as a separate program over
-     pipes, never linked. That is aggregation, so openxet stays
+     pipes, never linked. That is aggregation, so OpenXet stays
      Apache-2.0. This is inferred from GPL-2.0 §2, not legal advice.
    - **Images.** Container images ship an unmodified distro git package
      and list it in their licence notice.
@@ -881,7 +881,7 @@ results below are **observed**.
     shallow, bitmaps, `fsckObjects` and quarantine. Partial clone is
     available once `allowFilter` is enabled through an ADR amendment.
   - Clone and fetch cost is the lowest measured.
-  - CAS, durability and statelessness are openxet code that is
+  - CAS, durability and statelessness are OpenXet code that is
     independent of the engine, so they are testable without git.
 - **Harder.**
   - Spawn-per-request cost:
@@ -892,7 +892,7 @@ results below are **observed**.
     - The in-process `ls-refs` keeps polling cheap.
   - A second binary in every deployment, with GPL-2.0 source obligations
     for images.
-  - openxet must parse v0/v1/v2 upload-pack wants and keep the
+  - OpenXet must parse v0/v1/v2 upload-pack wants and keep the
     reachability check in step with git's protocol. Fail-closed budgets
     can refuse rare deep wants in huge repos, and some honest thin pushes
     (item 3), until the bitmap follow-up (`git-reachability`) lands.
@@ -1037,7 +1037,7 @@ results below are **observed**.
   - `hook_pack_path_confined`: pack paths outside the request's snapshot
     or quarantine directory are rejected, including symlink and `..`
     escapes.
-  - `hook_policy_rechecked`: openxet refuses, whatever the hook relays,
+  - `hook_policy_rechecked`: OpenXet refuses, whatever the hook relays,
     an update whose old value isn't the ref's value in the snapshot (a
     stale update), a deletion of `main`, and a non-commit on a branch; a
     forced non-fast-forward update whose old value matches is accepted.
@@ -1123,7 +1123,7 @@ results below are **observed**.
     - the advertisement lists only `agent`, `ls-refs`, `fetch` without
       `filter`, `server-option` and `object-format`
     - `command=object-info`, `command=bundle-uri` and an unknown command
-      are refused by openxet and never reach git
+      are refused by OpenXet and never reach git
     - it runs against git 2.37 (where git itself serves `object-info`)
       and against the newest supported git
   - `repack_publish_lease_fenced`: a leaseholder whose lease expired or
@@ -1200,17 +1200,17 @@ results below are **observed**.
 - **gitoxide in-process for everything.** Lost on reads: 16x the CPU and
   2x the memory of git for a clone, and 6x the CPU for a fetch (observed).
   It also needs a server protocol stack, delta compression, bitmaps and
-  object validation that upstream keeps out of its crates. openxet would
+  object validation that upstream keeps out of its crates. OpenXet would
   maintain a fork-sized server alone.
 - **git for reads, gix for receive-pack (H2).** It saves about 100 ms CPU
-  per push. In exchange, openxet would own receive-pack's security
+  per push. In exchange, OpenXet would own receive-pack's security
   surface (object validation, report-status, push options, atomic
   pushes) that git already provides. Not worth it at v1 push volumes.
 - **gix for reads, git for pushes.** Worst of both: it keeps gix's clone
   cost.
 - **JGit with DFS as a sidecar.** Closest to the storage model, with
   bucket-backed packs, a block cache and reftable. It loses on "one
-  binary" (design §5.1, §9): a JVM runtime with about 77 MB and 1.6–2.0 s
+  binary" (design §5.1, §9): a JVM runtime with about 77 MB and 1.6 to 2.0 s
   CPU just to start, and an `internal` storage API with no stability
   promise.
 - **go-git v6 as a sidecar.** Server support is beta (2026-10-04), with no

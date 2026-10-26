@@ -1,6 +1,6 @@
-# openxet — Design
+# OpenXet design
 
-<!-- description: The approved design: scope, architecture, security requirements, milestones and the hosted service, and the source of truth for what openxet builds. -->
+<!-- description: The approved design: scope, architecture, security requirements, milestones and the hosted service, and the source of truth for what OpenXet builds. -->
 
 Date: 2026-10-23 · Status: approved; reconciled with the M0 spike results
 
@@ -13,11 +13,11 @@ the definition. The client side is open source
 (Xet Protocol Specification v1.1.0, https://huggingface.co/docs/xet). The server
 is not. Nobody can run Xet on their own infrastructure.
 
-**openxet is the open-source, self-hostable server for the Xet protocol.** The
+**OpenXet is the open-source, self-hostable server for the Xet protocol.** The
 official, unmodified Hugging Face clients (`hf_xet`, `huggingface_hub` /
 `hf` CLI, `git-xet`, `@huggingface/hub`) work against it. Git repos can live
 on any Git host (GitHub, GitLab, Gitea and others) and keep their large files
-in openxet (§6.1). It runs on storage
+in OpenXet (§6.1). It runs on storage
 and identity systems people already own.
 
 It is not a Hugging Face copy. It is plug-and-play infrastructure: small surface,
@@ -35,7 +35,7 @@ owner-defined **labels** (none, one or several, such as `checkpoint` or
 `eval-logs`). Hugging Face's repo types (`model`, `dataset`, `space`,
 `kernel`) are just the labels the Hub layer reads and writes: its typed
 routes (`/api/models/…`, `/api/datasets/…`) are views of the same
-repository, so stock clients work unchanged. openxet serves anyone
+repository, so stock clients work unchanged. OpenXet serves anyone
 storing large versioned or deduplicated files, so it doesn't mirror one
 field's artefact taxonomy.
 
@@ -77,7 +77,7 @@ skip very short matches (§1a).
   Build outputs and binaries were not measured.
 - **Backups and logs.** Append-only logs dedup well, as above.
   Uncompressed snapshots dedup partly (23% for a CPython point release). Compressed or client-side encrypted backups (restic,
-  Borg) dedup about 0%; for those openxet is plain storage.
+  Borg) dedup about 0%; for those OpenXet is plain storage.
 - **Agent-generated outputs.** Agents re-run, retry and rewrite. Outputs
   that repeat content dedup like any version series; S12 measured no
   agent workload, so we claim no number. The agent surfaces of §7.1 let
@@ -86,13 +86,13 @@ skip very short matches (§1a).
   authorizer webhook put Xet storage under their own naming and
   permissions (§5.4), with metering for their own billing (§5.7).
 
-Where dedup doesn't help, openxet still gives Hub and Git compatibility,
+Where dedup doesn't help, OpenXet still gives Hub and Git compatibility,
 the user's own object-store bucket and identity, and honest numbers:
 every repository and bucket page shows logical and stored bytes (§10.10).
 
 ### What success looks like
 
-- From zero to a working `hf upload` against openxet in under two minutes:
+- From zero to a working `hf upload` against OpenXet in under two minutes:
   one command, one environment variable.
 - Uploading a file again after a small in-place edit transfers megabytes,
   not gigabytes: in M1, a 1 MiB edit of a 1 GiB file
@@ -128,7 +128,7 @@ its proof in §16:
 
 ## 1a. User value model *(decided by the user)*
 
-What users get from openxet, and how each value is measured. The targets
+What users get from OpenXet, and how each value is measured. The targets
 are initial, like §5.8's, and revised with data. Each is checked by the
 benchmark suite or the compatibility suite (§8), and the measured numbers
 are published with every release. "Checked in" says where: targets that
@@ -136,20 +136,20 @@ fit a CI runner gate every PR, and those that need hosted infrastructure,
 10 GbE hardware or an external score (OpenSSF Scorecard) run on the
 release benchmark rig or as a release check.
 
-| Dimension | What it means to the user | How openxet delivers it | Target | Checked in |
+| Dimension | What it means to the user | How OpenXet delivers it | Target | Checked in |
 |---|---|---|---|---|
-| Speed | Uploads, downloads and listings never wait on openxet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | At 1,000 requests/s per node, against an index of 10⁷ files and 10⁷ xorbs: reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8). ≥ 9 Gbit/s sustained xorb ingest on one node | Release rig |
+| Speed | Uploads, downloads and listings never wait on OpenXet | Direct presigned downloads (ADR 0002), stateless nodes, a fast index, the cache tier (§10.5) | At 1,000 requests/s per node, against an index of 10⁷ files and 10⁷ xorbs: reconstruction p99 < 50 ms for files up to 100k terms; token, head and resolve p99 < 10 ms (§5.8). ≥ 9 Gbit/s sustained xorb ingest on one node | Release rig |
 | Dedup and efficiency | Only changed bytes move or get stored | Client-side chunking with global dedup; server-side chunking for every other client (§10.3); our client's Git LFS download agent (§6.1) | A 1 MB edit of a 10 GB file transfers ≤ 2 MB up with stock `hf_xet`, also from a second machine with an empty cache; ≤ 2 MB down with our client when the previous revision is in the local Xet chunk cache (§10.8 can seed it from an existing LFS checkout); storage overhead over unique compressed data ≤ 5% | Per-PR CI |
 | Compatibility | The tools they already use just work, in both directions with huggingface.co | Byte-exact formats on `xet-core`'s crates (ADR 0001); the Hub and LFS surfaces of §6 | 100% of the compatibility suite passes for the oldest supported, pinned and latest clients; zero divergence on the golden vectors | Per-PR CI; latest clients also nightly |
 | Reliability and integrity | Acknowledged data is never lost, corrupted or silently dropped | The object-store bucket is the source of truth (§5.3); every xorb and shard is verified on ingest (§5.9); deletion only through GC (§5.6) | Zero acknowledged writes lost under SIGKILL fault injection; `reindex` from the object-store bucket alone restores every file, with refs at most 60 s stale (RPO); `verify` has zero false positives and exits non-zero on real corruption | Per-PR CI |
 | Time to value | Working in minutes, with nothing to learn first | One binary, zero-config dev mode (§7), copy-ready commands | First `hf upload` of a ≥ 1 GiB file < 2 min from a clean machine self-hosted, < 60 s from the landing page on openxet.com (§15) | Release check (rig for self-hosted, the hosted service for openxet.com) |
-| Control and sovereignty | Their object-store bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own object-store bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by openxet reads with stock clients and huggingface.co tooling, and the reverse | Per-PR CI |
+| Control and sovereignty | Their object-store bucket, region and identity system; no lock-in | Storage and auth adapters (§5.3, §5.4); pools and residency (§10.7); bring-your-own object-store bucket on openxet.com | No byte crosses a pool boundary (residency test); data written by OpenXet reads with stock clients and huggingface.co tooling, and the reverse | Per-PR CI |
 | Security and privacy | Only the right people read or write, and nothing leaks | The requirements of §5.9, each with its test | Every §5.9 test passes; OpenSSF Scorecard ≥ 9 (§16) | Per-PR CI; Scorecard as a release check |
 | Reproducibility | A revision always returns the same bytes | Content-addressed files and Git commit OIDs; data keyed by commit is immutable | A download by commit OID is byte-identical across nodes, cache states and consecutive releases (sha256-checked in the upgrade tests) | Release check (upgrade tests) |
 | Cost transparency | Users see what they store, what dedup saved and what it costs | Logical and physical metering per scope and tenant (§5.7), shown in the web UI and `--json` | The sum of metered physical bytes across tenants is within 1% of object-store bucket bytes, excluding objects pending GC; per-tenant physical bytes are exact for dedicated-bucket and `per-tenant` tenants; savings shown on every repository and bucket page | Per-PR CI |
 | Agent UX | Agents use every surface without a human in the loop | §7.1: `--json` with versioned schemas, stable exit codes, structured errors with a hint, MCP | The agent leg passes with zero prompts, zero unparseable outputs and zero schema breaks | Per-PR CI |
 
-**Where openxet beats huggingface.co:**
+**Where OpenXet beats huggingface.co:**
 - Dedup for every client. Our client fetches only missing chunks on
   `git clone` / `git pull` (§6.1), and server-side chunking dedups uploads
   from clients that don't speak Xet (§10.3).
@@ -193,7 +193,7 @@ release benchmark rig or as a release check.
 - No HF-style product features: model cards, discussions, likes, search,
   running Spaces or inference. The only web UI is minimal self-service
   (§10.10).
-- No user accounts, passwords or user database. openxet never owns users.
+- No user accounts, passwords or user database. OpenXet never owns users.
 - No custom distributed object store (§5.3). This is a principle, not a
   deferral: durability is what object stores are for.
 
@@ -207,7 +207,7 @@ deferred for convenience. Everything below the principles above ships in 1.0.
   confusing config, or mandatory extra services.
 - **Not listening to users**: feedback that has nowhere to go or is not acted on.
 - Opinionated all-in-one: forcing its own auth, naming, UI or storage on people.
-- Silent incompatibility: anything that makes data written by openxet unreadable
+- Silent incompatibility: anything that makes data written by OpenXet unreadable
   by stock Xet clients, or vice versa.
 - Losing data. Deletion happens only through explicit, auditable garbage
   collection with a grace period.
@@ -234,15 +234,15 @@ test suite (§8) is the lasting source of truth.
   bugs.
 - **What stock `hf_xet` 1.7.0 actually sends** (S6, source and observed):
   - Global dedup queries go to `GET /v1/chunks/default/{hash}`, not the
-    spec's `default-merkledb`. openxet serves both.
-  - It sends `POST /v1/telemetry`. openxet accepts it and drops the body:
+    spec's `default-merkledb`. OpenXet serves both.
+  - It sends `POST /v1/telemetry`. OpenXet accepts it and drops the body:
     nothing is stored or forwarded (no telemetry, §7).
   - It tries `POST /v2/shards` first and falls back to `/v1/shards` on 404
     or 501.
   - An empty file is a file entry with 0 segments, an all-zero file hash
     and an all-zero sha256.
   - The wasm build uploads shards **with** lookup tables and a footer,
-    although the spec says the footer must be omitted. openxet accepts a
+    although the spec says the footer must be omitted. OpenXet accepts a
     consistent footer and discards the tail (S6 rule 3).
 - **The CAS wire contract** (S10, `hf_xet` 1.7.0, source and observed):
   - A storage-only upload and download uses seven routes: dedup query,
@@ -316,7 +316,7 @@ test suite (§8) is the lasting source of truth.
     release uses it; `hf-xet` 1.7.0 has no grant code (checked in the
     published wheels).
 
-  openxet answers `/v1/xorb-grants/*` with `404` until it supports grants,
+  OpenXet answers `/v1/xorb-grants/*` with `404` until it supports grants,
   never `501`, so these clients fall back. How it will support them is
   in §5.5.
 - **Downloads can bypass the server** (verified by spike S1,
@@ -327,7 +327,7 @@ test suite (§8) is the lasting source of truth.
   multi-range header. Presigned MinIO answered that with the whole object
   (observed with `hf_xet`). Anonymous public-object GETs on AWS S3 and Azure
   also returned the whole object, and GCS rejected them; presigned behaviour
-  on those three is unverified. openxet therefore emits **one range per
+  on those three is unverified. OpenXet therefore emits **one range per
   fetch entry, each with its own range-bound URL**. Stock `hf_xet`
   downloads correctly from such SigV4 presigned URLs on MinIO.
 - **Global dedup:** only "eligible" chunks are queryable: the first chunk of
@@ -340,10 +340,10 @@ test suite (§8) is the lasting source of truth.
   `/api/buckets/{namespace}/{name}`, its `tree`, `paths-info` and `batch`
   routes, `/buckets/{id}/resolve/{path}`, and
   `/api/buckets/{id}/xet-{read|write}-token` with no revision. `bucket` is
-  a URI type there, not one of `REPO_TYPES`. openxet serves them in v1 as
+  a URI type there, not one of `REPO_TYPES`. OpenXet serves them in v1 as
   its bucket primitive (§10.4).
 - **Repo types in `huggingface_hub` 2.2.0** are route prefixes, which
-  openxet serves as typed views of one repository (§6, ADR 0010):
+  OpenXet serves as typed views of one repository (§6, ADR 0010):
   - `/api/{type}s/…` for `model`, `dataset`, `space` and `kernel`, and
     the `datasets/`, `spaces/` and `kernels/` prefixes of resolve and Git
     URLs (`REPO_TYPES_URL_PREFIXES`).
@@ -366,7 +366,7 @@ test suite (§8) is the lasting source of truth.
 - Build both the storage core and the Hub-compat layer in v1, as two cleanly
   separated parts of one product. The storage core is usable alone.
 - Plug-and-play over all-in-one; not an HF clone.
-- openxet does not own users; identity and permissions come from the
+- OpenXet does not own users; identity and permissions come from the
   operator's existing systems.
 - Scaling is designed in from the beginning.
 - Storage is an adapter over existing object stores, not a built-in
@@ -385,9 +385,9 @@ test suite (§8) is the lasting source of truth.
   "all repo types including `bucket`" in ADR 0010), the cache tier, the
   HF pull-through mirror, multiple storage pools and residency, and the full
   distribution list (§9, §10).
-- openxet issues revocable access tokens (and SSH keys) bound to external
+- OpenXet issues revocable access tokens (and SSH keys) bound to external
   identities (§5.4).
-- The name is openxet.
+- The name is OpenXet.
 
 ## 5. Architecture
 
@@ -517,7 +517,7 @@ Durability details *(builder-check calls)*:
 
 ### 5.4 Identity, authorization and tenancy
 
-openxet never stores users. A request carries a credential; an
+OpenXet never stores users. A request carries a credential; an
 **authenticator** turns it into a principal (subject plus claims); an
 **authorizer** decides read or write on a repo or scope.
 
@@ -525,16 +525,16 @@ Authenticators (v1):
 - **OIDC/JWT**: validate tokens from any OIDC issuer via JWKS (Keycloak,
   Auth0, Okta, Entra, Google, GitHub Actions OIDC and others).
 - **Static tokens**: from config, for dev, CI and small setups.
-- **openxet access tokens** *(decided by the user)*: long-lived, revocable
+- **OpenXet access tokens** *(decided by the user)*: long-lived, revocable
   tokens for tools like `hf auth login`, each bound to an external identity.
   - A user proves who they are once through the operator's identity system,
     for example `openxet login` (OIDC device or browser flow), a minimal
     login page, or the platform's backend calling the admin API.
-  - openxet then issues a token. It stores only a hash plus the bound subject,
+  - OpenXet then issues a token. It stores only a hash plus the bound subject,
     claims snapshot, scopes, expiry and last use.
   - Authorization is re-evaluated against the authorizer on use, so revoking
     access upstream takes effect even if the token itself is still valid.
-  - openxet still owns no users: no passwords, profiles or sign-up.
+  - OpenXet still owns no users: no passwords, profiles or sign-up.
   - `whoami-v2` answers from the bound identity, with names and orgs mapped
     from claims via config or the webhook.
 - **Who may create repos:** decided by the authorizer, as a `create` action on
@@ -543,7 +543,7 @@ Authenticators (v1):
 Authorizers (v1):
 - **Config rules** on claims and repo patterns (e.g. group `ml-team` may
   write `org/*`).
-- **Webhook**: openxet asks the operator's backend "may subject X read/write
+- **Webhook**: OpenXet asks the operator's backend "may subject X read/write
   repo Y?", with a short-TTL cache. This is how platforms like aqora plug in.
 
 **User credentials** *(ruling M2-R3,
@@ -557,7 +557,7 @@ CAS routes take the CAS credential; Hub, Git and LFS routes take the user
 credential and ask the authorizer for `read` or `write` on the repository,
 or `create` on the namespace. `whoami-v2` answers `name` from the subject
 (or the static token's `name`) and `orgs` from the `orgs` claim. Until
-OIDC and openxet access tokens arrive in M3, static tokens are the user
+OIDC and OpenXet access tokens arrive in M3, static tokens are the user
 credential; both plug into the same seam.
 
 **Config rules** *(ruling M2-R3, ADR 0012)*: `[[auth.rules]]` entries
@@ -703,9 +703,9 @@ already stored writes only its small ownership record. Tests:
 
 - **Upload:** client → CAS (`POST xorbs` streamed and verified into the object
   store; `POST shards` verified and registered). This scales with node count.
-  Today every xorb byte goes through openxet (§3).
+  Today every xorb byte goes through OpenXet (§3).
   - **Xorb upload grants** are a tracked future item, not an ADR yet, since
-    no stable client uses them (§3). When clients ship them, openxet
+    no stable client uses them (§3). When clients ship them, OpenXet
     supports them with **verification before registration**: the grant
     URL is a presigned PUT to a staging key, bound to the declared length
     and CRC64-NVMe checksum where the store can enforce them. The commit
@@ -721,7 +721,7 @@ already stored writes only its small ownership record. Tests:
 - **Download:** client → CAS reconstruction (small JSON). Then either:
   - **(a)** direct from the object store via native presigned URLs, one
     range-bound URL per fetch entry (S1, ADR 0002); or
-  - **(b)** via the transfer role, with openxet-signed range URLs (also one
+  - **(b)** via the transfer role, with OpenXet-signed range URLs (also one
     range per entry, so no `multipart/byteranges`), for local disk, caching
     setups and any pool that fails the range-binding probe. The URL form is
     `{public_url}/v1/transfer/xorbs/{xorb}?range={start}-{end}&exp={unix}&sig={b64url}`,
@@ -732,7 +732,7 @@ already stored writes only its small ownership record. Tests:
 
   Mode (a) is gated per deployment and pool by a **range-binding
   enforcement probe**, not by a backend list (ADR 0002). It runs at
-  startup and in `openxet doctor` / `openxet config check`. openxet
+  startup and in `openxet doctor` / `openxet config check`. OpenXet
   presigns a GET for one range of a probe object and requires all three:
   the signed range returns `206`, a different range returns `403`, and no
   `Range` header returns a `4xx`. Only then does the pool serve direct
@@ -744,11 +744,11 @@ already stored writes only its small ownership record. Tests:
   is served too, for older clients.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`
-  support. This makes openxet readable by anything that speaks HTTP (curl,
+  support. This makes OpenXet readable by anything that speaks HTTP (curl,
   browsers, pandas, polars, DuckDB via the plain resolve URL) or `hf://`
   through fsspec `HfFileSystem`. DuckDB and polars hard-code
   huggingface.co in their own `hf://` handlers (spike S4,
-  `docs/research/S4-analytics-clients.md`), so they read openxet through
+  `docs/research/S4-analytics-clients.md`), so they read OpenXet through
   `https://{host}/{repo_type}/{repo}/resolve/{rev}/{path}`. The gateway
   must pass the conformance checklist in that note (HEAD, all three
   `Range` forms, `416`, `ETag`/`If-Range`, redirects, auth); private
@@ -773,7 +773,7 @@ already stored writes only its small ownership record. Tests:
 - **Storage-only default is safe:** files are never collected unless the
   operator enables pin-based retention for that tenant. An integrator who
   never pins loses nothing. *(builder-check call)*
-- `openxet gc --dry-run` reports what would be deleted. Every deletion is
+- Running `openxet gc --dry-run` reports what would be deleted. Every deletion is
   logged. Branch and commit deletion in the Hub layer only drops references;
   data goes only via GC.
 - **Git pack side files leave with what they describe** (ADR 0004 item 5):
@@ -791,7 +791,7 @@ API and metrics, because platforms need them for quotas and billing.
 
 ### 5.8 Scale targets (initial; validated by benchmarks, revised with data)
 
-- **Database topology for v1** *(builder-check call)*: openxet nodes scale
+- **Database topology for v1** *(builder-check call)*: OpenXet nodes scale
   out; Postgres scales up. That means one primary, read replicas for
   reconstruction and listing reads, and native partitioning by hash prefix.
   The index trait does not assume a single instance, so a sharded backend
@@ -836,7 +836,7 @@ step.
 
 | # | Requirement | Tests |
 |---|---|---|
-| 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL openxet emits without a credential; `signed_url_bound_to_range` |
+| 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL OpenXet emits without a credential; `signed_url_bound_to_range` |
 | 2 | **Credentials are scoped to one repository or bucket.** CAS tokens and capability `href`s are scoped to one repository or bucket; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's scope check; user credentials are authorized per repository or bucket on every Hub and CAS route. A foreign repository or bucket answers `403`, or `404` where the caller can't read it, never revealing a private one's existence. Repository and bucket creation is authorized per namespace (§5.4). A bucket `batch` that adds or copies a file by Xet hash names a file the caller can read, or gets the `404` of an unknown hash (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repository's or bucket's credential, bucket routes included; `repo_create_authorized_per_namespace`; `bucket_create_authorized_per_namespace`; `bucket_add_file_hash_must_be_readable`; `bucket_copy_file_requires_source_read`; `wrong_type_without_read_access_matches_unknown_repo`; `create_collision_authorized_first` |
 | 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-tenant`, §5.4) is available. In `per-tenant` mode every existence check (`HEAD` of xorbs, dedup lookups, shard xorb lookups) answers as absent for any xorb the caller's tenant doesn't own, and `HEAD` of files for any file not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_tenant_dedup_isolates_tenants`, `per_tenant_multi_xorb_answer_hides_foreign_xorbs`, `per_tenant_existence_checks_hide_other_tenants`, `per_tenant_scopes_of_one_tenant_share_dedup` |
@@ -897,7 +897,7 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   `https://openxet.example/datasets/{namespace}/{name}` and its implicit
   LFS endpoint. The unprefixed resolve route is the `model` view, as on
   huggingface.co; the unprefixed Git URL `/{namespace}/{name}.git` is
-  openxet's own address and serves the repository whatever its labels.
+  OpenXet's own address and serves the repository whatever its labels.
 - `POST /api/repos/create` with a `type` adds that type's label. A
   create with no `type` is the `model` view and adds the `model` label,
   as on huggingface.co: `create_repo` in `huggingface_hub` 2.2.0 sends
@@ -937,10 +937,10 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
     `create_repo(exist_ok=True)` returns `RepoUrl(d["url"],
     endpoint=…)` (`hf_api.py` line 4723), and `RepoUrl` parses it with
     `parse_hf_uri` against the client's endpoint, raising `HfUriError`
-    on a URL it can't parse (`hf_api.py` lines 545–571); `hf upload`
+    on a URL it can't parse (`hf_api.py` lines 545 to 571); `hf upload`
     then uses its `repo_id`. So `public_url` must be the endpoint
     clients use.
-- Labels are changed through openxet's own API and CLI, never the Hub
+- Labels are changed through OpenXet's own API and CLI, never the Hub
   API.
 - `huggingface_hub` 2.2.0 creates, reads and downloads `kernel`
   repositories but won't commit or upload to them (its commit and upload
@@ -990,8 +990,9 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   repository's scope, and `deletedFile` and `deletedFolder` remove
   entries. The author is the subject
   (`{subject} <{subject}@users.noreply.openxet.com>` unless the
-  credential carries an `email` claim), the committer is openxet, and
-  the message is `summary`, a blank line and `description`. A
+  credential carries an `email` claim), the committer is
+  `openxet <noreply@openxet.com>`, and the message is `summary`, a blank
+  line and `description`. A
   `parentCommit` mismatch answers `412 precondition_failed`; `commitUrl`
   is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`.
 - **Listings paginate deterministically** *(ruling M2-R8)*. `tree`,
@@ -1022,7 +1023,7 @@ fixtures, pinned by the compatibility suite. Spike S3 captured them for
   finishes and a stalled one holds nothing (M1-R40).
 
 **Errors** *(ruling M2-R6)*. A Hub error carries huggingface.co's `error`
-field and openxet's structured fields:
+field and OpenXet's structured fields:
 `{"error": <message>, "schema": "openxet.error.v1", "code", "message",
 "hint"}`, with `X-Error-Code` (huggingface.co's value, such as
 `RepoNotFound`, `RevisionNotFound` or `EntryNotFound`, where it defines
@@ -1060,7 +1061,7 @@ The M2 benchmark may revise the default, with the number. Answering
 `"uploadMode": "lfs"` is the server's only lever; `hf_xet` then takes the
 Xet path (S3). The compatibility test for this (competitive-matrix lesson
 1) uploads a file of at least 1 GiB whose name matches no `.gitattributes`
-pattern, so it proves openxet routes by size, not by pattern.
+pattern, so it proves OpenXet routes by size, not by pattern.
 
 **Explicitly not implemented:** model cards, search, likes, discussions,
 Spaces, inference, collections, org settings. Unimplemented endpoints
@@ -1074,12 +1075,12 @@ The point is Xet dedup for any Git repo, wherever it is hosted. A repo on
 GitHub, GitLab, Gitea or Bitbucket sets
 `git config lfs.url https://openxet.example/{namespace}/{repo}.git/info/lfs`
 (or commits it in `.lfsconfig`), and `git push` / `git pull` move large
-files through openxet with chunk-level dedup.
+files through OpenXet with chunk-level dedup.
 
 How it works (verified in `xet-core/git_xet` source, 2026-10-23):
 - `git-lfs` sends the Git LFS Batch API request with its registered transfer
   agents.
-- openxet answers uploads with transfer `xet`. Each object's `action`
+- OpenXet answers uploads with transfer `xet`. Each object's `action`
   carries `href` (the token refresh route) and headers `X-Xet-Cas-Url`,
   `X-Xet-Access-Token`, `X-Xet-Token-Expiration` and optionally
   `X-Xet-Session-Id`. huggingface.co does exactly this, and its `href` is
@@ -1092,7 +1093,7 @@ Server work is small because it reuses pieces v1 needs anyway:
 - the token route
 
 Rules for this endpoint:
-- Auth uses Git's normal credential flow: an openxet access token as the
+- Auth uses Git's normal credential flow: an OpenXet access token as the
   HTTP password.
 - LFS repos are scopes like Hub repos. Creating one is an authorizer
   `create` decision, so the first push can create it.
@@ -1100,7 +1101,7 @@ Rules for this endpoint:
   only ("custom transfer for download is not implemented yet"). But
   `git xet install` registers it for both directions, so `git-lfs` offers
   `xet` in download batches. A server that chooses `xet` there breaks
-  `git lfs pull` with no fallback (S7, observed). openxet therefore answers
+  `git lfs pull` with no fallback (S7, observed). OpenXet therefore answers
   every download with `basic`, as huggingface.co does:
   - absolute `href`s, never relative, served by the HTTP read gateway
     (§5.5)
@@ -1114,7 +1115,7 @@ Rules for this endpoint:
   `basic`, `git clone` / `git pull` fetch whole files. Two complementary
   fixes:
   1. **Our client is a Git LFS transfer agent for downloads** (§10.8).
-     `openxet setup git` registers it under its own transfer name (not
+     The `openxet setup git` command registers it under its own transfer name (not
      `xet`, which `git-xet` owns and can't download with), so Git fetches
      only the chunks missing from the local Xet cache. The cache is shared with `hf` and `hf_xet`
      (same `HF_XET_CACHE`). Uploads keep going through `git-xet` when it is
@@ -1154,7 +1155,7 @@ canonical 3-key form. The full contract is
   directory, prints a static token and the exact `export HF_ENDPOINT=… HF_TOKEN=…`
   lines, and works immediately.
 - **Config:** one TOML file, with every key overridable as `OPENXET_*`.
-  `openxet config check` validates and explains.
+  The `openxet config check` command validates and explains.
 - **Errors are actionable:** they say what happened and what to do next.
 - **Observability:**
   - Prometheus `/metrics` and OpenTelemetry traces.
@@ -1171,7 +1172,7 @@ canonical 3-key form. The full contract is
 
 ### 7.1 Humans and agents as first-class users *(decided by the user)*
 
-openxet is built for people **and** AI agents, and for the two working
+OpenXet is built for people **and** AI agents, and for the two working
 together. Each gets the best possible experience, and neither is a
 degraded mode of the other.
 
@@ -1245,13 +1246,13 @@ server, and fails on any prompt, unparseable output or unstable schema.
 - **Compatibility suite**, the most important test. CI runs real `hf_xet`,
   `huggingface_hub`/`hf` CLI, `huggingface.js` and `git` + `git-lfs` +
   `git-xet` with a Gitea remote (pinned and latest) against
-  openxet, across a matrix:
+  OpenXet, across a matrix:
   - SQLite with local disk
   - Postgres with MinIO
 
   It covers upload, re-upload dedup, range download, branch workflows and
   token refresh. A "third-party Xet client" leg replays the expectations of
-  jj-xet's `tests/openxet.rs` mock against openxet (ADR 0005). A nightly job
+  jj-xet's `tests/openxet.rs` mock against OpenXet (ADR 0005). A nightly job
   against latest upstream catches protocol drift early.
 - **Fault injection:** object store errors, DB failover, killed nodes
   mid-upload.
@@ -1297,13 +1298,13 @@ says which spec version and client versions are supported.
     - `http://` on loopback by default
     - TLS docs per platform: on macOS `hf_xet` ignores `SSL_CERT_FILE`, so
       a private CA must be trusted in the system store
-    - openxet presigns with a store endpoint the client can reach, not the
+    - OpenXet presigns with a store endpoint the client can reach, not the
       compose-internal service name
   - Terraform examples for AWS, GCP and Azure
   - library crates on crates.io for embedding the storage core
   - **The `git` role needs `git` ≥ 2.37 on `PATH`** (ADR 0004).
-    - openxet runs git as a separate program. That is aggregation, so
-      openxet stays Apache-2.0 (inferred, not legal advice).
+    - OpenXet runs git as a separate program. That is aggregation, so
+      OpenXet stays Apache-2.0 (inferred, not legal advice).
     - Container images ship the distro's unmodified git package, which is
       GPL-2.0, and list it in their licence notice.
     - Each image release publishes the exact git source package next to
@@ -1329,7 +1330,7 @@ says which spec version and client versions are supported.
 
 ### 10.1 Git over SSH
 
-- openxet runs an SSH endpoint, enabled by the `ssh` role. Identities are SSH
+- OpenXet runs an SSH endpoint, enabled by the `ssh` role. Identities are SSH
   public keys bound to an external identity, the same way access tokens are
   (§5.4). Keys are registered via `openxet login` or the admin API. No
   passwords and no users are stored.
@@ -1347,33 +1348,33 @@ says which spec version and client versions are supported.
   - It can't negotiate `xet`: the client always sends `transfer=ssh` and
     uses its built-in `ssh` adapter (S7, source and observed).
   - `git-lfs` prefers it whenever the LFS endpoint is SSH. So for
-    openxet-hosted repos over SSH, `openxet setup git` sets
+    OpenXet-hosted repos over SSH, `openxet setup git` sets
     `lfs.<url>.sshtransfer=never` when `git-xet` is installed, which sends
     those users through `git-lfs-authenticate` plus the HTTPS batch, where
     `xet` is offered (ADR 0003).
 - Git repos whose *remote* is on another host over SSH (e.g.
-  `git@github.com:…`) work as long as `lfs.url` points at openxet and
+  `git@github.com:…`) work as long as `lfs.url` points at OpenXet and
   `openxet setup git` has written the `access` key (§10.2).
 
 ### 10.2 `git-xet` with third-party Git hosts
 
-When `lfs.url` points at openxet and the remote lives elsewhere, openxet's
+When `lfs.url` points at OpenXet and the remote lives elsewhere, OpenXet's
 policy is: **capability routes never authenticate by header, and `openxet
 setup git` configures access explicitly**
 ([ADR 0003](../../adr/0003-git-xet-credential-strategy.md), S7). All three
 parts are v1:
 - **Server side:**
-  - The `href` refresh route openxet returns is a short-lived, signed,
+  - The `href` refresh route OpenXet returns is a short-lived, signed,
     single-repo capability URL, so the refresh needs no credential.
   - CAS tokens issued through the LFS path last for the transfer session.
-  - openxet never authenticates by, logs or echoes an `Authorization`
+  - OpenXet never authenticates by, logs or echoes an `Authorization`
     header on that route.
 - **Client setup:** `openxet setup git` writes the clone's git config:
   - `lfs.url`
   - `lfs.<endpoint derived from the remote>.access=none`, so `git-xet`
     calls the capability `href` without a credential; the `href` alone
     completes the refresh (S7, observed)
-  - the openxet token in the credential helper under the openxet host, for
+  - the OpenXet token in the credential helper under the OpenXet host, for
     `git-lfs`'s batch
 
   The `access` key must be in git config, because `git-xet` doesn't read
@@ -1385,7 +1386,7 @@ parts are v1:
 ### 10.3 Server-side chunking for non-Xet clients
 
 Plain `git-lfs` (basic transfer, HTTPS or SSH), older `huggingface_hub`
-without `hf_xet`, and any LFS client can **upload**. openxet chunks,
+without `hf_xet`, and any LFS client can **upload**. OpenXet chunks,
 deduplicates and writes xorbs and shards on ingest, using the same `xet-core`
 chunking, so the hashes are identical to client-side uploads.
 - Users get dedup in storage even if their client never heard of Xet. They
@@ -1401,9 +1402,9 @@ The two storage primitives of §1
 
 **Labels**, on repositories and buckets alike, are free-form and
 owner-defined: none, one or several, such as `model`, `dataset`,
-`checkpoint` or `eval-logs`. A label is a lowercase slug (`a`–`z`,
-`0`–`9` and `-`) of at most 64 bytes, at most 32 per object. Labels are
-added and removed through openxet's API and CLI, each change with an
+`checkpoint` or `eval-logs`. A label is a lowercase slug (`a` to `z`,
+`0` to `9` and `-`) of at most 64 bytes, at most 32 per object. Labels are
+added and removed through OpenXet's API and CLI, each change with an
 audit entry, and reach the object store before the change is
 acknowledged, so `reindex` restores them. They never change the address
 or any behaviour: a `space` label runs nothing. The Hub layer reads and
@@ -1516,7 +1517,7 @@ mechanics to be recorded in ADR 0006:*
     to the mirrored repo's scope.
 
   Re-packing keeps the file hash, which depends only on chunk hashes and
-  sizes. Clients only ever see openxet URLs and tokens.
+  sizes. Clients only ever see OpenXet URLs and tokens.
 - **No unverified chunks.** Until the window-merge proof test passes, a
   file's shard is registered only after the whole-file `X-Xet-Hash`
   check. Chunks fetched earlier stay staged and unreferenced.
@@ -1532,7 +1533,7 @@ mechanics to be recorded in ADR 0006:*
   revision, including `LICENSE`, `NOTICE` and the README, and never
   filters them out of `tree` or `resolve`.
 - **Authorise per caller.**
-  - Public, ungated repos: the openxet authorizer.
+  - Public, ungated repos: the OpenXet authorizer.
   - Gated and private repos: also an upstream check with the caller's own
     HF credential, failing closed. That credential (for example
     `X-HF-Upstream-Token`):
@@ -1553,7 +1554,7 @@ mechanics to be recorded in ADR 0006:*
     private or 404 answer hides it.
   - Repos HF removes are hidden, and their data is reclaimed only by GC.
 - **Mirrored namespaces are read-only.**
-- **Colliding names.** openxet names are unique across labels (§6), so a
+- **Colliding names.** OpenXet names are unique across labels (§6), so a
   mirror or import that meets two Hub repositories of different types
   under one name maps the second to `{name}-{type}` and reports it.
 - **Seeding.** `openxet mirror pull` pre-seeds through the same ingest
@@ -1576,20 +1577,20 @@ mechanics to be recorded in ADR 0006:*
 
 ### 10.8 Our own client *(decided by the user: v1, 100% compatible)*
 
-`openxet` ships a client: a CLI and a Rust library, with Python bindings.
+OpenXet ships a client: a CLI and a Rust library, with Python bindings.
 It is better to use than the stock tools and never incompatible with them.
 
 **The compatibility contract is non-negotiable:**
 - Byte-identical chunking, hashes, xorbs and shards. The client builds on
   `xet-core`'s `xet-data` / `xet-core-structures` rather than reimplementing
   them. Any divergence is a release-blocking bug.
-- It works against **huggingface.co itself** as well as openxet, via the same
+- It works against **huggingface.co itself** as well as OpenXet, via the same
   Hub and CAS APIs. Data uploaded by our client is readable by `hf`,
   `hf_xet`, `git-xet` and `huggingface.js`, and vice versa.
 - It reads and writes the standard HF cache layout (`HF_HOME`, `HF_XET_CACHE`)
   and honours `HF_ENDPOINT` / `HF_TOKEN`, so it coexists with `hf` on the
   same machine.
-- CI proves it in both directions: our client against openxet and against
+- CI proves it in both directions: our client against OpenXet and against
   huggingface.co (nightly, using a dedicated test org), plus cross-tool round
   trips (upload with ours, download with `hf`, and the reverse).
 
@@ -1610,13 +1611,13 @@ It is better to use than the stock tools and never incompatible with them.
   progress output is human and `--json`.
 - **Chunk-cache seeding:** `openxet` can seed the local Xet chunk cache
   from an existing Git LFS checkout, so the first `git pull` or download
-  after switching to openxet fetches only changed chunks (§1a).
-- **`login`:** the OIDC device/browser flow that issues openxet access tokens
+  after switching to OpenXet fetches only changed chunks (§1a).
+- **`login`:** the OIDC device/browser flow that issues OpenXet access tokens
   and SSH key registration (§5.4, §10.1).
 - **`setup git`:** one command configures `lfs.url`, credentials and
   `git-xet` for a repo (§10.2). It also registers `openxet` as the Git LFS
   transfer agent, so `git clone` / `git pull` download only missing chunks
-  (§6.1). It works against openxet and huggingface.co alike.
+  (§6.1). It works against OpenXet and huggingface.co alike.
 - **Diagnostics:** `doctor` checks connectivity, auth, clock skew and
   versions, then says what to fix.
 
@@ -1630,19 +1631,19 @@ binaries. The client must run on Windows; the server need not.
 works as it does on huggingface.co. The prefixed URLs
 (`https://openxet.example/datasets/org/data`) are typed views of the same
 repository (§6). This sits alongside §6.1, where the repo
-lives elsewhere and openxet is only its LFS store; both modes are supported.
+lives elsewhere and OpenXet is only its LFS store; both modes are supported.
 
 **Behaviour:**
 - **Protocols:** Git smart HTTP and SSH, both `upload-pack` and
   `receive-pack`, protocol v2 where clients support it. The LFS endpoint is
   implicit at `{repo}.git/info/lfs`, so `git-xet` and `git-lfs` work with no
   configuration. §10.2 doesn't apply, because the Git remote *is*
-  openxet.
+  OpenXet.
 - **Large files land in Xet automatically:**
   - Pushes with `git-xet` take the Xet path.
   - Plain `git-lfs` pushes go through server-side chunking (§10.3).
   - Large blobs pushed **without** LFS are kept as ordinary Git objects. They
-    don't silently corrupt history. openxet reports them and offers
+    don't silently corrupt history. OpenXet reports them and offers
     `openxet migrate-lfs`. Optionally, the operator can reject them above a
     size limit, with a clear message.
 - **One history:** Hub API commits and Git pushes write into the same Git
@@ -1661,9 +1662,9 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     - hard links to exactly the committed packs in the node's cache,
       with no alternates
   - The snapshot lives on the cache's filesystem, which start-up checks.
-  - openxet answers the protocol v2 capability advertisement and `ls-refs`
+  - OpenXet answers the protocol v2 capability advertisement and `ls-refs`
     in-process.
-  - openxet enforces reachability for every upload-pack want, v0 to v2
+  - OpenXet enforces reachability for every upload-pack want, v0 to v2
     (R22), because git's v2 `upload-pack` serves any object in the odb.
     It interposes on the request stream and checks wants before
     forwarding them to git.
@@ -1673,13 +1674,13 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     - Anything not found is refused (fail closed).
   - Objects are never shared across repos.
   - Ref updates go through a hardened `proc-receive` hook back into
-    openxet:
+    OpenXet:
     - an inherited socketpair fd (HTTP and SSH) and a single-use token
       bound to repo, principal and request
     - pack paths confined to the request's snapshot
-    - policy re-checked in openxet
+    - policy re-checked in OpenXet
     - a sanitised git environment
-  - openxet then publishes the pushed pack to the bucket as `pending`.
+  - OpenXet then publishes the pushed pack to the bucket as `pending`.
     Next it runs one transaction that does four things:
     - the ref CAS
     - marks the pack `committed`, only while it is still `pending`
@@ -1706,8 +1707,8 @@ lives elsewhere and openxet is only its LFS store; both modes are supported.
     follow-up, some honest thin pushes can be refused (ADR 0004 item 3);
     the refusal hints `git -c pack.window=0 push`, which sends no thin
     bases (over smart HTTP git ignores `--no-thin`).
-  - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37–2.44
-    serves `object-info` for any object, so openxet refuses it, along
+  - The v2 interposer allows only `ls-refs` and `fetch`. git 2.37 to 2.44
+    serves `object-info` for any object, so OpenXet refuses it, along
     with `bundle-uri` and unknown commands.
   - Each request reads refs and its pack set in one database snapshot,
     from the primary.
@@ -1776,18 +1777,18 @@ own UI and leave this role off.
 
 ## 11. Spikes (verify, don't assume)
 
-S1–S11 are answered: S1–S9 in M0, S10 and S11 for M1. S12 and S13 are
+S1 to S11 are answered: S1 to S9 in M0, S10 and S11 for M1. S12 and S13 are
 open: their measurements are a record, and their recommendations await
 the owner's decision. Each note records versions, method and what was
 observed versus inferred.
 
 - **S1** *(answered: yes, on MinIO;
-  [S1–S2](../../research/S1-S2-direct-downloads.md), ADR 0002)*: `hf_xet`
+  [S1 and S2](../../research/S1-S2-direct-downloads.md), ADR 0002)*: `hf_xet`
   downloads correctly when v2 reconstruction returns native S3 presigned
   URLs with one range per fetch entry.
 - **S2** *(answered: `http://` works for Hub, CAS and store; a private CA
   works via `SSL_CERT_FILE` on Linux but not for `hf_xet` on macOS;
-  [S1–S2](../../research/S1-S2-direct-downloads.md))*: `hf_xet` and
+  [S1 and S2](../../research/S1-S2-direct-downloads.md))*: `hf_xet` and
   `huggingface_hub` accept `http://` CAS and Hub endpoints for local dev, or
   what TLS setup the quickstart needs.
 - **S3** *(answered: 99 exchanges captured as fixtures in
@@ -1827,7 +1828,7 @@ observed versus inferred.
   over both HTTPS and SSH, and whether `git-lfs-transfer` (pure SSH) can
   negotiate the `xet` custom transfer.
 - **S8** *(answered: the Hub read surface plus CAS reconstruction, with
-  every URL and token re-issued by openxet; HF reconstructions can be
+  every URL and token re-issued by OpenXet; HF reconstructions can be
   fetched with per-repo 900 s read tokens, but their 3600 s,
   range-contained, `xip`-tagged URLs must not be cached or handed out, so
   the mirror ingests verified chunks into local xorbs; the legal texts
@@ -1838,7 +1839,7 @@ observed versus inferred.
   read-token behaviour, a mirror depends on, and the terms-of-use
   constraints for caching HF content.
 - **S9** *(answered: the `git` binary serves the protocol on per-request
-  snapshot repos, over openxet-owned database refs and bucket packs, with
+  snapshot repos, over OpenXet-owned database refs and bucket packs, with
   gix in-process off the wire path; gix 0.90 has no upload-pack or
   receive-pack server, no delta compression and no bitmaps, and cost 16x
   git's CPU to serve a 10k-commit clone; database CAS gave exactly one
@@ -1877,7 +1878,7 @@ as the "oldest" leg of the suite. M0 did not pin them. The M1 plan sets
 
 ## 12. Milestones (v1 = all of them)
 
-Release cut *(decided by the user)*: build straight through M0–M7 to `1.0`,
+Release cut *(decided by the user)*: build M0 through M7 straight to `1.0`,
 with no pause between milestones to wait for outside feedback. Real-world
 feedback takes time to arrive, so waiting on it would only stall the work.
 Until `1.0`, the compatibility suite, benchmarks and the measured
@@ -1890,7 +1891,7 @@ release of the open-source build: it runs the released build (§15).
 
 - **M0:**
   - repo, `AGENTS.md`, CI skeleton, ADR template
-  - spikes S1–S9
+  - spikes S1 to S9
 - **M1:** CAS core on SQLite with local disk and static tokens.
   - Storage-only mode passes `hf_xet` upload and download, plus the golden
     vectors.
@@ -1902,14 +1903,14 @@ release of the open-source build: it runs the released build (§15).
   ([plan](../plans/2026-10-25-m2-hub-git-lfs.md); rulings M2-R1 to M2-R17
   in §17).
   - `hf auth login`, `hf upload`, `hf download` and listing work unmodified.
-  - `git clone` / `git push` over HTTPS against openxet-hosted repos, sharing
+  - `git clone` / `git push` over HTTPS against OpenXet-hosted repos, sharing
     one history with Hub API commits (§10.9).
   - The Git LFS endpoint works: `git push` / `git clone` with `git-xet`
     against a Gitea-hosted repo, and `basic` download for clients without
     `git-xet`.
   - The pack-lifecycle prototype and the ADR 0004 test checklist.
   - Generic labels on repositories (§10.4, ADR 0010): add, remove and
-    list through openxet's API and CLI, with validation and audit
+    list through OpenXet's API and CLI, with validation and audit
     entries.
   - The typed-route views of §6 for `model`, `dataset`, `space` and
     `kernel`: typed create adds the label, typed listing filters by it,
@@ -1965,7 +1966,7 @@ release of the open-source build: it runs the released build (§15).
   - Index round trips outside the CPU permits, once the index is
     networked (issue #48).
   - Hybrid post-quantum TLS key exchange preferred in every rustls client
-    openxet builds, with a test of the negotiated group (ADR 0011, issue
+    OpenXet builds, with a test of the negotiated group (ADR 0011, issue
     [#66](https://github.com/stubbi/openxet/issues/66)).
   - A key-rotation drill for CAS token keys and the transfer key, under
     load (ADR 0011, issue [#65](https://github.com/stubbi/openxet/issues/65)).
@@ -2044,7 +2045,7 @@ release of the open-source build: it runs the released build (§15).
   only the hosted parts:
   - the 60 s journey from the landing page to a working `hf upload`,
     with sign-in through an identity provider only (GitHub, Google, SSO).
-    openxet never owns users, so this is the same OIDC and authorizer
+    OpenXet never owns users, so this is the same OIDC and authorizer
     seams self-hosters use;
   - billing on metering (§5.7), under the rule in §15;
   - load and capacity tests with the M3 harness against a
@@ -2064,7 +2065,7 @@ release of the open-source build: it runs the released build (§15).
 
 ## 14. Name
 
-The project starts as **openxet** *(decided by the user)*. Because it uses the
+The project starts as **OpenXet** *(decided by the user)*. Because it uses the
 "Xet" name, there is some trademark risk. Keep brand-specific strings in a few
 places (binary name, image name, docs domain) so a rename stays cheap if it
 is ever needed.
@@ -2084,8 +2085,8 @@ schedule the specification, compatibility audit and client delivery.
 ## 15. Hosted openxet.com *(decided by the user: we must have the perfect hosted experience)*
 
 openxet.com is a first-class product, not an afterthought. "Perfect" is
-measured by the same anti-goals as the open-source project: fast, effortless,
-and listening. Detailed design is its own brainstorming round (pricing, legal,
+measured by the same anti-goals as the open-source project: fast, little
+effort for the user, and acting on feedback. Detailed design is its own brainstorming round (pricing, legal,
 operations): spike S13 (draft PR #59) proposes it, and M8 (§12) delivers
 it once the owner approves pricing and positioning. These requirements are fixed now because they shape the core:
 
@@ -2095,7 +2096,7 @@ it once the owner approves pricing and positioning. These requirements are fixed
 - A free tier with no time limit, and no card needed to start.
 - Every page shows what the user gains: stored vs. uploaded bytes and the dedup
   savings, in money where possible.
-- Bring your own object-store bucket as a headline option: we operate openxet, and the data
+- Bring your own object-store bucket as a headline option: we operate OpenXet, and the data
   stays in the customer's S3/GCS/Azure account. An EU region is available from
   day one.
 - Git hosting, `git-xet`, `hf`, our client and the web UI all work on
@@ -2184,9 +2185,9 @@ decides, with superseded parts marked.
 | R24 | Objects a reindex can't place are persisted and protected, never discarded automatically, and never block repacks. | ADR 0004, S9 |
 | R25 | Xet reads by hash follow scope membership, not Git reachability; removing data takes GC or `openxet purge`. | §5.4 |
 | R26 | Public text never describes or hints at an unfixed third-party security weakness. | `AGENTS.md` |
-| R29 | Upload validation composes upstream primitives with openxet's own policy checks; format logic is never reimplemented. | ADR 0001, S5 |
+| R29 | Upload validation composes upstream primitives with OpenXet's own policy checks; format logic is never reimplemented. | ADR 0001, S5 |
 | R30 | Shard verification takes a synchronous chunk-table lookup, caps distinct referenced xorbs, and ignores unreferenced CAS-info xorbs. | S6 |
-| M1-R1 | The CAS is axum on tokio, the index is sqlx (SQLite now, Postgres in M3), and the local-disk store is openxet's own fsynced module; `object_store` serves S3, GCS and Azure from M3. | M1 plan |
+| M1-R1 | The CAS is axum on tokio, the index is sqlx (SQLite now, Postgres in M3), and the local-disk store is OpenXet's own fsynced module; `object_store` serves S3, GCS and Azure from M3. | M1 plan |
 | M1-R2 | CAS tokens are EdDSA JWTs verified against a public key set; static tokens are compared by SHA-256 in constant time. | §5.4, ADR 0007 |
 | M1-R3 | Signed transfer URLs bind xorb, range and expiry in an HMAC; a missing `Range` is `400`, any mismatch `403`. | §5.5, ADR 0002 |
 | M1-R4 | Dedup responses are synthesized from the newest visible xorb containing the chunk, keyed with a fresh random HMAC key and a 7-day `shard_key_expiry`. The single-xorb part is superseded by M1-R30. | §13, §5.6 |
@@ -2203,8 +2204,8 @@ decides, with superseded parts marked.
 | M1-R15 | New dependencies take their latest stable release unless a ruling pins one; the index uses sqlx 0.9 (amends M1-R1). | M1 plan |
 | M1-R16 | A file's size and terms are stored per (file, scope), and a scope reads only its own record; another scope's file reads exactly as one never stored. | §5.4 |
 | M1-R17 | Registration rejects terms naming a xorb that is missing or not visible to the caller, with one error that doesn't tell the two apart, so registration is no existence probe. | §5.4, §5.9 req 4 |
-| M1-R18 | CAS tokens are checked by openxet's own EdDSA-only compact JWS verifier on `ed25519-dalek`'s strict verification, with a strict header and a size cap, tested against RFC 8037 appendix A.4. The dependency tree carries no ignored security advisory. | ADR 0007 |
-| M1-R19 | CAS-token claims are `sub`, `scope`, `mode`, `exp`, `iat` and an optional, enforced `nbf`; any other claim is rejected, so a restriction openxet can't honour never fails open. Token lifetime is capped (24 h by default), `iat` may lie at most 5 min ahead, and a `sub` or `scope` that is empty, only whitespace or holds control characters is rejected, as is a `scope` over 1024 bytes. Its 24 h signed-URL cap is superseded by M1-R42. | §5.4, ADR 0007 |
+| M1-R18 | CAS tokens are checked by OpenXet's own EdDSA-only compact JWS verifier on `ed25519-dalek`'s strict verification, with a strict header and a size cap, tested against RFC 8037 appendix A.4. The dependency tree carries no ignored security advisory. | ADR 0007 |
+| M1-R19 | CAS-token claims are `sub`, `scope`, `mode`, `exp`, `iat` and an optional, enforced `nbf`; any other claim is rejected, so a restriction OpenXet can't honour never fails open. Token lifetime is capped (24 h by default), `iat` may lie at most 5 min ahead, and a `sub` or `scope` that is empty, only whitespace or holds control characters is rejected, as is a `scope` over 1024 bytes. Its 24 h signed-URL cap is superseded by M1-R42. | §5.4, ADR 0007 |
 | M1-R20 | Logs and spans record the matched route template, never the raw path or query, so no URL segment can leak a credential; a request is traced by its request id. | §5.9 req 6 |
 | M1-R21 | An object the index names but the bucket lacks answers `500` with an integrity log, not a retryable `503`: object stores are read-after-write consistent, so it means data loss or a bug, and a retry would hide it. | §5.3 |
 | M1-R22 | A refused request's body is drained up to the route's size limit before the answer, as a lingering close does, so a client sees the final `401` or `403` instead of a connection reset it would retry; the body read deadline bounds the cost. | §5.9 req 1, routes reference |
@@ -2231,18 +2232,18 @@ decides, with superseded parts marked.
 | M1-R43 | A credential that names no tenant is in tenant `scope:` followed by its scope, and no explicit tenant may start with `scope:`, so a scope named like a tenant never joins it. Migration 0005 and the bucket records use the same default. | §5.4, ADR 0007 |
 | M2-R1 | New crates `openxet-http` (the route builder, request ids, the error body and the middleware stack, extracted from `openxet-cas`), `openxet-hub`, `openxet-git` and `openxet-uri`; the authorizer lives in `openxet-auth`. `openxet serve` composes the CAS, Hub and Git routes into one router with one fallback, one state per crate and one middleware stack, and `clippy.toml` bans `Router::fallback` and `Router::fallback_service` outside the builder. | §5.2, §12 M2, issue #46 |
 | M2-R2 | A repository has an immutable UUIDv7 id, rendered as 32 lowercase hex characters. Its CAS scope is `repo:{id}`, its tenant is its namespace, and bucket keys for its data carry the id (`repos/{id}/…`); namespace and name live in its metadata record, so a rename rewrites one record. The scope prefix `repo:` is reserved: a configured static token with such a `scope` is a configuration problem, and a platform-signed CAS token with one is accepted, because the platform holding a signing key is trusted with any scope. Namespace and name each match `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$` and contain no `..`, the name doesn't end in `.git`, and `{namespace}/{name}` is unique case-insensitively, stored as written, across labels. The namespaces `models`, `datasets`, `spaces`, `kernels`, `buckets`, `api`, `v1`, `v2`, `openapi.json`, `healthz` and `readyz` are route prefixes, and the Hub refuses to create them. | §5.4, ADR 0012, ADR 0010 |
-| M2-R3 | A credential is a CAS credential (scope, tenant, mode), a user credential (subject plus claims) or both: a static token without `scope` is a user credential, one with `scope` a CAS credential, one with a `scope` and user fields both, as the dev token is. The `Authorizer` decides `read`, `write` and `create` per repository or namespace; M2's config-rules authorizer reads `[[auth.rules]]` (`subjects` and/or `claims`, either of which matching the principal is enough, subjects exactly with no wildcard; `repos` globs, matched ignoring ASCII case; `actions`, where `write` includes `read` and `create` is granted only by a pattern covering the whole namespace, `org/*` or `*`), and a request is allowed if any rule allows it. A rule naming the pseudo subject `anonymous` grants everyone, signed in or not; no rule names it by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`. `whoami-v2` answers `name` from the subject (or the static token's `name`) and `orgs` from the `orgs` claim. OIDC, the webhook authorizer and openxet access tokens come in M3. | §5.4, ADR 0012 |
+| M2-R3 | A credential is a CAS credential (scope, tenant, mode), a user credential (subject plus claims) or both: a static token without `scope` is a user credential, one with `scope` a CAS credential, one with a `scope` and user fields both, as the dev token is. The `Authorizer` decides `read`, `write` and `create` per repository or namespace; M2's config-rules authorizer reads `[[auth.rules]]` (`subjects` and/or `claims`, either of which matching the principal is enough, subjects exactly with no wildcard; `repos` globs, matched ignoring ASCII case; `actions`, where `write` includes `read` and `create` is granted only by a pattern covering the whole namespace, `org/*` or `*`), and a request is allowed if any rule allows it. A rule naming the pseudo subject `anonymous` grants everyone, signed in or not; no rule names it by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions = ["read", "write", "create"]`. `whoami-v2` answers `name` from the subject (or the static token's `name`) and `orgs` from the `orgs` claim. OIDC, the webhook authorizer and OpenXet access tokens come in M3. | §5.4, ADR 0012 |
 | M2-R4 | `preupload` answers `lfs` when a file is at least `hub.lfs_threshold` (default `1MiB`, bounds `1KiB` to `10MiB`) or its path matches an LFS pattern of the target revision's `.gitattributes`, and `regular` otherwise. A regular file's decoded content is at most `hub.lfs_threshold`; a commit's NDJSON body is at most `hub.max_commit_bytes` (default `64MiB`) and 25,000 operations. The M2 benchmark may revise the default, with the number. | §6 |
 | M2-R5 | `POST /api/repos/create` writes a server-generated `initial commit` on `main` holding huggingface.co's default `.gitattributes` (the S3 capture), authored and committed by `openxet <noreply@openxet.com>`. | §6, S3 |
 | M2-R6 | Hub errors are `{"error", "schema": "openxet.error.v1", "code", "message", "hint"}` with `X-Error-Code` and `X-Error-Message`; CAS routes keep the M1 body. The unknown-repository answer is one constant `404` (`RepoNotFound`, `Repository not found`, body and hint fixed) for a missing repository, one the caller may not read, and a typed view the caller may not read whose label the repository lacks. A missing credential is `401` with `WWW-Authenticate: Bearer realm="openxet"` and a message naming `hf auth login`; an invalid one is `401` with `Invalid credentials in Authorization header`. Amended in M2 Task 15: the JSON body is for API routes; the Git smart HTTP routes answer the same status and headers with the message and hint as `text/plain`, which git shows as `remote:` lines, their unknown-repository text equally constant, and their `401` offers `Basic` first. | §6, ADR 0010, S3 |
-| M2-R7 | A Hub commit is a real commit built with gix from the parent's tree: `file` operations become blobs, `lfsFile` operations canonical pointers whose sha256 is registered to the repository's scope, and deletes remove entries. The author is the subject (`{subject} <{subject}@users.noreply.openxet.com>` unless an `email` claim is present), the committer openxet, the message `summary`, a blank line and `description`; a `parentCommit` mismatch is `412 precondition_failed`; `commitUrl` is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`. | §6, ADR 0004 |
+| M2-R7 | A Hub commit is a real commit built with gix from the parent's tree: `file` operations become blobs, `lfsFile` operations canonical pointers whose sha256 is registered to the repository's scope, and deletes remove entries. The author is the subject (`{subject} <{subject}@users.noreply.openxet.com>` unless an `email` claim is present), the committer `openxet <noreply@openxet.com>`, the message `summary`, a blank line and `description`; a `parentCommit` mismatch is `412 precondition_failed`; `commitUrl` is `{public_url}/{prefix}{ns}/{name}/commit/{oid}`. | §6, ADR 0004 |
 | M2-R8 | `tree`, `commits` and the repository listings answer at most 1,000 entries per page, ordered by path or commit order, with `Link: <…?cursor=…>; rel="next"` when more follow; the cursor is the last entry's key, base64url-encoded, and `X-Total-Count` is set where S3 observed it. | §6, S3 |
 | M2-R9 | Xet files resolve with `302` to `{public_url}/v1/transfer/files/{repo id}/{xet hash}?name={filename}&commit={commit}`, served with the caller's credential (Bearer, or Basic with the token as the password; `401` challenges Basic first), HTTP `Range` (all three forms, `416` past the end), `ETag: "{sha256}"` (the Xet hash when none was registered), `If-Range`, `HEAD`, `Content-Disposition` and `Accept-Ranges`; LFS `basic` download `href`s are the same URL without `name` or `commit` and with no `authenticated` field. Small files are served inline from the Git blob with `ETag: "{blob sha1}"`, their size reserved from the memory budget before the blob is read. Amended in Task 13: `commit` added, since `huggingface_hub` reads `X-Repo-Commit` from the gateway after a same-origin redirect; the gateway echoes it as given (checked as a commit id only), so it is informational. | §5.5, §6, ADR 0003 |
 | M2-R10 | Until server-side chunking (M4), an LFS upload batch that doesn't offer `xet` answers each object with an object error `{"code": 501, …}` naming the `git-xet` install command, never a `basic` `href` that fails later. | §6.1, §10.3 |
 | M2-R11 | Smart HTTP is served at `/{prefix}{ns}/{name}.git/…` and without `.git`; a gzip request body is inflated, `Git-Protocol: version=2` selects v2, and the `Basic` (the token as the password) and `Bearer` schemes are accepted. The first push to a missing repository creates it, with the `model` label, if the authorizer allows `create` in the namespace. | §10.9, ADR 0004, ADR 0005 |
-| M2-R12 | openxet's own API lives under `/api/openxet/v1/`; labels are `GET …/repos/{ns}/{name}/labels`, `PUT` and `DELETE …/labels/{label}`, and `openxet label add`, `remove` and `list`. Each change writes the repository's metadata record to the bucket, then the index, then an `audit_log` row (`actor`, `action`, `repo`, `detail`, `at`), the table M4's audit API exposes. | §10.4, ADR 0010 |
-| M2-R13 | `openxet purge <file-hash>` (with the server config) writes `purges/{hash}` to the bucket, then deletes the file's rows from every scope, never dedup rows (those belong to the xorbs, whose bytes leave through GC), writes an `audit_log` row and prints what it removed; `reindex` (M4) skips purged hashes. It takes `--dry-run`, `--yes` and `--json` (`openxet.purge.v1`). | §5.4 |
+| M2-R12 | OpenXet's own API lives under `/api/openxet/v1/`; labels are `GET …/repos/{ns}/{name}/labels`, `PUT` and `DELETE …/labels/{label}`, and `openxet label add`, `remove` and `list`. Each change writes the repository's metadata record to the bucket, then the index, then an `audit_log` row (`actor`, `action`, `repo`, `detail`, `at`), the table M4's audit API exposes. | §10.4, ADR 0010 |
+| M2-R13 | Running `openxet purge <file-hash>` (with the server config) writes `purges/{hash}` to the bucket, then deletes the file's rows from every scope, never dedup rows (those belong to the xorbs, whose bytes leave through GC), writes an `audit_log` row and prints what it removed; `reindex` (M4) skips purged hashes. It takes `--dry-run`, `--yes` and `--json` (`openxet.purge.v1`). | §5.4 |
 | M2-R14 | `xet://{host}[:{port}]/[{kind}/]{namespace}/{name}[@{revision}][/{path}]`: no `{kind}` for a repository, `datasets`, `spaces` or `kernels` for a typed view, `buckets` for a bucket (resolved from M5); `@{revision}` is a ref or OID (names can't contain `@` under M2-R2, so nothing needs escaping); a percent-encoded UTF-8 path (RFC 3986); no userinfo. Hostless legacy forms and forms naming `xethub.com` are rejected with an error that says how to write the address, and nothing is sent to a default server. | ADR 0009 |
-| M2-R15 | `openxet openapi` prints the OpenAPI 3.1 document generated from the route builders' `utoipa` annotations; it is checked in at `docs/reference/openapi.json`, served at `GET /openapi.json`, and CI fails when the two differ. | §7.1 |
+| M2-R15 | The `openxet openapi` command prints the OpenAPI 3.1 document generated from the route builders' `utoipa` annotations; it is checked in at `docs/reference/openapi.json`, served at `GET /openapi.json`, and CI fails when the two differ. | §7.1 |
 | M2-R16 | Git budgets take ADR 0004's defaults (`git.reachability.max_commits` 200,000, `max_ms` 2,000, `max_concurrent_per_repo` 2, `max_concurrent_per_principal` 4; `git.thin_bases.max_objects` 2,000,000, `max_ms` 2,000), and the M2 benchmarks record the measured values that replace the thin-base placeholders. The node cache is `git.cache_dir` (default `{data_dir}/git-cache`) with snapshots under it, `git.cache_max_bytes` (default `20GiB`), and `git.max_plain_blob_bytes` is unset by default. | ADR 0004 |
 | M2-R17 | On a pull request the reconstruction latency gate is relative to the PR's base, the base branch's tip recorded in the event (`pull_request.base.sha`), measured in the same job on the same runner: both trees run the PR's measurement code (its gate test and fixture copied over the base's), each in a release build in its own target directory with `OPENXET_LATENCY_GATE=measure`, each printing one `openxet.latency-gate.v1` JSON line per shape (`build`, `shape`, `p50_ms`, `p99_ms`, `max_ms`, `runs`; `build` is the checkout's commit, fixed at compile time). `scripts/check-latency-gate.py` exits 2 when the head's `build` isn't the checked-out commit, both runs share a `build`, or a value isn't a finite non-negative number, and fails a shape when the PR's p99 is at or past 50 ms and more than 1.25 × the base's p99, or its p50 > max(1.25 × the base's p50, the base's p50 + 2 ms), writing both runs and the ratios to the job summary. On `main` the gate asserts p99 < 50 ms on the pushed commit alone (the default `assert` mode), reported, not required; the release rig (issue #55) enforces the absolute bar unconditionally. | §8, benchmarks reference, issue #83 |

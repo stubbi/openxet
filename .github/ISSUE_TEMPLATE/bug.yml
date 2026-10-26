@@ -15,7 +15,7 @@ body:
   - type: textarea
     id: version
     attributes:
-      label: openxet version
+      label: OpenXet version
       description: Output of `openxet version --json`.
       render: json
     validations:

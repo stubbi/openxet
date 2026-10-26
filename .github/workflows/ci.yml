@@ -36,6 +36,27 @@ jobs:
       # Uses only Node built-ins and the checked-in SQLite migrations.
       - run: npm test --prefix hosted/waitlist
 
+  # The brand is written OpenXet wherever text names the project, and
+  # lowercase openxet only as an identifier (AGENTS.md, Brand). Public copy
+  # has no em or en dashes and no stock AI phrasing (design.md, Voice).
+  brand:
+    name: brand
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Brand check script tests
+        run: python3 -I scripts/test_check_brand.py
+      - name: The brand is written OpenXet
+        run: python3 -I scripts/check-brand.py
+      - name: Copy check script tests
+        run: python3 -I scripts/test_check_copy.py
+      - name: No em or en dashes, no stock phrasing
+        run: python3 -I scripts/check-copy.py
+
   rust:
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}

@@ -1,4 +1,4 @@
-# openxet
+# OpenXet
 
 Open-source server and client for the [Xet protocol](https://huggingface.co/docs/xet),
 Hugging Face's chunk-deduplicated storage for large, versioned files.

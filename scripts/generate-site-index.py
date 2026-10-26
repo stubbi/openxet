@@ -120,9 +120,12 @@ class DocsPage(HTMLParser):
     unmodified bytes, including script strings that resemble HTML tags.
     """
 
-    def __init__(self, source: str, metadata: str = "", markdown: str = "", noindex=False):
+    def __init__(self, source: str, metadata: str = "", markdown: str = "", noindex=False, title: str = ""):
         super().__init__(convert_charrefs=False)
         self.source, self.metadata, self.markdown = source, metadata, markdown
+        # mdBook titles every page "<chapter> - <book>", so the home page,
+        # whose chapter is the book, would repeat it; `title` replaces it.
+        self.title, self.title_start = title, None
         self.noindex = noindex
         self.edits: list[tuple[int, int, str]] = []
         # HTMLParser's positions count LF only; splitlines also counts Unicode
@@ -150,6 +153,8 @@ class DocsPage(HTMLParser):
         position = self.position()
         if tag == "head":
             self.in_head = True
+        if tag == "title" and self.in_head and self.title:
+            self.title_start = position + len(original)
         if tag == "main":
             self.in_main = True
         if self.in_main and tag == "li":
@@ -200,6 +205,9 @@ class DocsPage(HTMLParser):
 
     def handle_endtag(self, tag):
         position = self.position()
+        if tag == "title" and self.title_start is not None:
+            self.edits.append((self.title_start, position - self.title_start, html_escape(self.title)))
+            self.title_start = None
         if self.in_main and tag == "li" and self.list_items:
             item = self.list_items.pop()
             label = " ".join("".join(item["text"]).split())
@@ -275,20 +283,21 @@ def finish_docs(docs: Path, parts) -> None:
                 raise ValueError(f"docs/{page} needs a description comment or an opening prose paragraph")
             canonical = f"{SITE}/docs/" + ("" if path == "index" else f"{path}.html")
             markdown = f"{SITE}/docs/{path}.md"
+            home_title = title if path == "index" else ""
             metadata = [
                 tag_html("meta", {"name": "description", "content": description}),
                 tag_html("link", {"rel": "canonical", "href": canonical}),
                 tag_html("link", {"rel": "alternate", "type": "text/markdown", "title": "Markdown", "href": markdown}),
             ]
             for name, value in {
-                "type": "website", "site_name": "openxet", "title": f"{title} · openxet docs",
+                "type": "website", "site_name": "OpenXet", "title": home_title or f"{title} · OpenXet docs",
                 "description": description, "url": canonical, "image": f"{SITE}/og.png",
-                "image:width": "1200", "image:height": "630", "image:alt": "openxet — storage for large files",
+                "image:width": "1200", "image:height": "630", "image:alt": "OpenXet: storage for large files",
             }.items():
                 metadata.append(tag_html("meta", {"property": f"og:{name}", "content": value}))
             metadata.append(tag_html("meta", {"name": "twitter:card", "content": "summary_large_image"}))
             html = docs / f"{path}.html"
-            html.write_text(DocsPage(html.read_text(encoding="utf-8"), "\n".join(metadata) + "\n", markdown).rendered(), encoding="utf-8")
+            html.write_text(DocsPage(html.read_text(encoding="utf-8"), "\n".join(metadata) + "\n", markdown, title=home_title).rendered(), encoding="utf-8")
     missing = docs / "404.html"
     if missing.exists():
         missing.write_text(DocsPage(missing.read_text(encoding="utf-8"), noindex=True).rendered(), encoding="utf-8")

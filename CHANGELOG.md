@@ -56,8 +56,8 @@ once built.
   `scope:` followed by the scope when it names none; explicit tenants may
   not start with `scope:`. `dedup_visibility = "per-tenant"` isolates
   tenants while the scopes of one tenant share dedup
-  ([config](docs/reference/config.md#tenants)). `openxet token mint` and
-  `token generate` take `--tenant`.
+  ([config](docs/reference/config.md#tenants)). The commands
+  `openxet token mint` and `token generate` take `--tenant`.
 - The bucket records which scope registered which shard, for which tenant,
   and which tenant uploaded which xorb, before the index does, so losing
   the index never loses anyone's access to their files: the index can be

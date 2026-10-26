@@ -1,12 +1,12 @@
 # Governance
 
-openxet is meant to be trustworthy beyond any one person. This document says
+OpenXet is meant to be trustworthy beyond any one person. This document says
 who decides what, how, and what is true today. The bar behind it is design
 §16 (`docs/superpowers/specs/2026-10-23-openxet-design.md`).
 
 ## Current status
 
-openxet has **one maintainer**, [@stubbi](https://github.com/stubbi). That is
+OpenXet has **one maintainer**, [@stubbi](https://github.com/stubbi). That is
 a bus-factor risk, and we treat it as one:
 
 - We will recruit additional maintainers, and aim to have at least two
