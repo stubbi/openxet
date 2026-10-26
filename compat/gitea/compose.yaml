@@ -1,0 +1,33 @@
+# Gitea for the compatibility suite's LFS leg (compat/README.md, "LFS
+# leg"): a third-party Git host whose repositories keep their LFS objects
+# on openxet through `lfs.url` (design §6.1, ADR 0003).
+#
+# gitea/gitea:1.24.7, the version spike S7 observed
+# (docs/research/S7-git-lfs-xet.md), pinned by the digest of its
+# multi-platform index (linux/amd64, linux/arm64). Verified on 2026-10-25:
+# the registry's Docker-Content-Digest for the 1.24.7 tag and the SHA-256
+# of the index it serves both equal the digest below.
+#
+# compat/gitea/seed.sh starts it and creates the user the leg pushes as.
+name: openxet-compat-gitea
+services:
+  gitea:
+    image: gitea/gitea:1.24.7@sha256:918955f16b1e91732af6c449bb2db3a34271748dbed1ccfbae48f8a2fb5480b8
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__ROOT_URL: http://127.0.0.1:${OPENXET_COMPAT_GITEA_PORT:-3000}/
+      GITEA__server__DISABLE_SSH: "true"
+      # LFS objects live on openxet; Gitea's own LFS store stays off, so a
+      # misdirected upload fails instead of landing on Gitea.
+      GITEA__server__LFS_START_SERVER: "false"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__log__LEVEL: Warn
+    ports:
+      - "127.0.0.1:${OPENXET_COMPAT_GITEA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 60

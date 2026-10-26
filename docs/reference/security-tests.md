@@ -37,9 +37,9 @@ uv run --directory compat pytest --collect-only -q > /tmp/compat-tests.txt
 scripts/check-security-tests-map.py --nextest /tmp/tests.json --pytest /tmp/compat-tests.txt
 ```
 
-Every server the compatibility suite starts, in both the `agent` and the
-`storage_only` legs, has its log scanned at teardown for every credential
-its clients sent (`assert_no_credential_in_log`).
+Every server the compatibility suite starts, in every leg, has its log
+scanned at teardown for every credential its clients sent
+(`assert_no_credential_in_log`).
 
 ## Requirements and their tests
 
@@ -49,11 +49,13 @@ its clients sent (`assert_no_credential_in_log`).
 | 1 | `signed_url_bound_to_range` | `crates/auth/tests/auth.rs` | M1 |
 | 1 | `no_unauthenticated_reads` | `crates/hub/tests/gateway.rs` | M2 (Hub and gateway URLs; LFS URLs with Task 14) |
 | 1 | `anonymous_reads_only_with_rule` | `crates/hub/tests/security.rs` | M2 |
+| 1 | `test_anonymous_private_download_is_401_shape` | `compat/tests/test_hub.py` | M2 (stock `huggingface_hub`) |
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
 | 2 | `unreadable_repo_matches_unknown_repo_on_every_route` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
 | 2 | `gateway_needs_credential_scoped_to_repo` | `crates/hub/tests/gateway.rs` | M2 (file gateway) |
 | 2 | `repo_create_authorized_per_namespace` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `wrong_type_without_read_access_matches_unknown_repo` | `crates/hub/tests/security.rs` | M2 |
+| 2 | `test_wrong_type_without_read_access_matches_unknown_repo` | `compat/tests/test_hub.py` | M2 (stock `huggingface_hub`) |
 | 2 | `create_collision_authorized_first` | `crates/hub/tests/security.rs` | M2 |
 | 2 | `upload_pack_needs_read_and_hides_private` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
 | 2 | `receive_pack_needs_write` | `crates/hub/tests/githttp.rs` | M2 (Git smart HTTP) |
@@ -91,6 +93,8 @@ its clients sent (`assert_no_credential_in_log`).
 | 8 | `writer_cannot_make_unreachable_reachable` | `crates/git/tests/thin_bases.rs` | M2 (pushes) |
 | 8 | `writer_cannot_make_unreachable_reachable` | `crates/git/tests/hub_objects.rs` | M2 (Hub ref writes and commits) |
 | 8 | `hub_ref_write_fenced` | `crates/git/tests/hub_objects.rs` | M2 |
+| 8 | `test_force_pushed_commit_not_fetchable_by_sha` | `compat/tests/test_git.py` | M2 (stock `git`, protocol v0 and v2) |
+| 8 | `test_two_nodes_concurrent_push_one_winner` | `compat/tests/test_git.py` | M2 (stock `git`, two nodes) |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/receive_pack.rs` | M2 (pushes) |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/hub_objects.rs` | M2 (Hub ref writes and commits) |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/repack.rs` | M2 (bucket ref log derivation and retention) |
@@ -176,4 +180,5 @@ requirement that the named tests don't.
 | 7 | `index_scope_tables_rebuild_from_the_bucket` | `crates/cas/tests/bucket_truth.rs` | Every acknowledged registration and ownership is in the bucket: the index's scope tables rebuild from it alone (ruling M1-R37). |
 | 6 | `auth_errors_never_contain_the_credential` | `crates/auth/tests/auth.rs` | Credential errors never carry the credential. |
 | 6 | `signed_urls_are_never_logged` | `crates/cas/tests/reconstruction.rs` | A transfer URL's signature never reaches the log. |
-| 6 | `assert_no_credential_in_log` | `compat/conftest.py` | The log of every server the compatibility suite starts, in the `agent` and `storage_only` legs, is scanned for the credentials its clients sent. |
+| 6 | `assert_no_credential_in_log` | `compat/conftest.py` | The log of every server the compatibility suite starts, in every leg, is scanned for the credentials its clients sent. |
+| 6 | `test_git_xet_push_refresh_without_authorization` | `compat/tests/test_lfs_gitea.py` | Stock `git-xet` refreshes its CAS token through a capability `href` with no Authorization header, and the server records only that none was present (ADR 0003 decision 2). |

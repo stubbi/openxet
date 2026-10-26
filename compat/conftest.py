@@ -9,6 +9,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import random
 import subprocess
 import sys
 import threading
@@ -23,6 +24,10 @@ DEFAULT_ENDPOINT = "https://huggingface.co"
 DEFAULT_NAME = "huggingface.co"
 NOT_INSTALLED = "not installed"
 DOWNLOAD_ATTEMPTS = 3
+MiB = 1 << 20
+
+# The Hub, Git and LFS legs' harnesses, whose fixtures every test module sees.
+pytest_plugins = ["hub_harness", "git_harness"]
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,18 @@ _PASSTHROUGH_ENV = (
 )
 
 
+def write_noise(path: Path, size: int, seed: int) -> Path:
+    """Seeded pseudo-random bytes: incompressible, reproducible, never committed."""
+    rng = random.Random(seed)
+    with path.open("wb") as f:
+        left = size
+        while left:
+            n = min(left, 16 * MiB)
+            f.write(rng.randbytes(n))
+            left -= n
+    return path
+
+
 def sha256(path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as f:
@@ -151,7 +168,9 @@ HARNESS_ENV = frozenset(
     {
         "HF_HUB_CACHE",
         "HF_HUB_DISABLE_TELEMETRY",
+        "HF_HUB_DISABLE_UPDATE_CHECK",
         "HF_XET_CACHE",
+        "OPENXET_COMPAT_GITEA_PASSWORD",
         "OPENXET_COMPAT_TOKEN",
         "OPENXET_COMPAT_TOKEN_EXP",
         "OPENXET_COMPAT_XET_CALLS",
@@ -231,7 +250,10 @@ def openxet_bin() -> str:
 
 @pytest.fixture(autouse=True)
 def _openxet_tests_need_binary(request):
-    if any(request.node.get_closest_marker(m) for m in ("agent", "storage_only", "docs")):
+    if any(
+        request.node.get_closest_marker(m)
+        for m in ("agent", "storage_only", "docs", "hub", "git", "lfs")
+    ):
         request.getfixturevalue("openxet_bin")
 
 
@@ -317,6 +339,15 @@ class OpenxetServer:
             for entry in self._requests("finished processing request", method, route, since)
         ]
 
+    def answered(self, since: int = 0) -> list[tuple[str, str, int]]:
+        """`(method, route template, status)` of every request answered
+        after `since`, for routes whose parameters tests can't predict."""
+        return [
+            (entry["span"]["method"], entry["span"]["route"], entry["fields"]["status"])
+            for entry in self.log()[since:]
+            if entry.get("fields", {}).get("message") == "finished processing request"
+        ]
+
     def settle(self) -> None:
         """Waits until the log holds every request answered before this call.
 
@@ -367,9 +398,12 @@ def _first_line(pipe, patience: float) -> bytes:
 
 
 @contextlib.contextmanager
-def openxet_serve(openxet_bin: str, root: Path, config: Path | None = None):
-    """Runs `openxet serve` with its data under `root` until the block exits."""
-    data_dir = root / "data"
+def openxet_serve(
+    openxet_bin: str, root: Path, config: Path | None = None, data_dir: Path | None = None
+):
+    """Runs `openxet serve` with its data under `root`, or in `data_dir`
+    when several servers share one, until the block exits."""
+    data_dir = data_dir or root / "data"
     args = [openxet_bin, "serve", "--data-dir", str(data_dir), "--port", "0"]
     args += ["--json", "--log-format", "json"]
     if config is not None:

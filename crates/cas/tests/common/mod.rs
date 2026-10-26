@@ -118,6 +118,14 @@ pub const ROUTES: &[Route] = &[
     },
     Route {
         method: Method::POST,
+        path: "/shards",
+        access: Access::Write,
+        // An empty body is not a shard.
+        authorized: 400,
+        authorized_code: Some("shard_malformed"),
+    },
+    Route {
+        method: Method::POST,
         path: "/v2/shards",
         access: Access::Write,
         // Content failures are `error` events in a `200` stream (S10 §4).
