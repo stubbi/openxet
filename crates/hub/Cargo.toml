@@ -44,6 +44,8 @@ tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
 tower = { version = "0.5.3", features = ["util"], optional = true }
 tracing = "0.1.44"
 url = "2.5.8"
+# The `X-Xet-Session-Id` of each LFS upload batch.
+uuid = { version = "1.29.0", features = ["v7"] }
 zeroize = "1.9.1"
 
 [dev-dependencies]
@@ -51,6 +53,7 @@ async-trait = "0.1.92"
 openxet-hub = { path = ".", features = ["test-support"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "test-util", "time"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 
 [lints]
 workspace = true

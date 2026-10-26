@@ -15,8 +15,8 @@ use axum::body::{Body, Bytes};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use openxet_auth::{
-    Action, Authenticator, Authorizer, Glob, Rule, RulesAuthorizer, StaticToken, TokenSigner,
-    UserProfile, generate_keypair,
+    Action, Authenticator, Authorizer, CapabilitySigner, Glob, Rule, RulesAuthorizer, StaticToken,
+    TokenSigner, UserProfile, generate_keypair,
 };
 use openxet_git::{Engine, GitConfig};
 use openxet_http::BodyDeadline;
@@ -34,6 +34,9 @@ use crate::{HubConfig, HubState, SharedMemory};
 /// The scheme of every test credential. A constant, so the repository's
 /// secret scanner can tell test tokens from leaks.
 pub const BEARER: &str = "Bearer";
+
+/// The transfer key every [`TestHub`] signs capabilities with.
+const CAPABILITY_KEY: [u8; 32] = [9; 32];
 
 /// The public URL of every [`TestHub`].
 pub const PUBLIC_URL: &str = "http://127.0.0.1:8080";
@@ -206,6 +209,7 @@ impl TestHub {
             lfs_threshold: HubConfig::DEFAULT_LFS_THRESHOLD,
             max_commit_bytes: HubConfig::DEFAULT_MAX_COMMIT_BYTES,
             token_ttl: HubConfig::DEFAULT_TOKEN_TTL,
+            capability_ttl: HubConfig::DEFAULT_CAPABILITY_TTL,
             page_size: HubConfig::MAX_PAGE_SIZE,
             gateway_idle_timeout: HubConfig::DEFAULT_GATEWAY_IDLE_TIMEOUT,
         }
@@ -252,6 +256,7 @@ impl TestHub {
                 budget: MemoryBudget::new(MemoryBudget::DEFAULT_BYTES),
                 send_deadline: SendDeadline::DEFAULT,
             },
+            Arc::new(CapabilitySigner::new(CAPABILITY_KEY).unwrap()),
         );
         Self::with_state(dir, state)
     }

@@ -75,7 +75,8 @@ its clients sent (`assert_no_credential_in_log`).
 | 5 | `shard_verify_work_capped` | `crates/cas/tests/shards.rs` | M1 |
 | 5 | `verification_errors_reveal_no_server_derived_values` | `crates/protocol/tests/verify_errors.rs` | M1 |
 | 5 | `foreign_writer_cannot_forge_shard_under_global` | `crates/cas/tests/shards.rs` | M1 |
-| 6 | `lfs_download_action_has_no_token` | pending (M2, `crates/hub/tests/lfs.rs`) | M2 |
+| 6 | `lfs_download_action_has_no_token` | `crates/hub/tests/lfs.rs` | M2 |
+| 6 | `capability_ignores_and_never_logs_authorization` | `crates/hub/tests/lfs.rs` | M2 (capability `href`s) |
 | 6 | `responses_never_echo_credential` | `crates/cas/tests/routes_misc.rs` | M1 |
 | 6 | `responses_never_echo_credential` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
 | 6 | `credentials_never_logged` | `crates/openxet/tests/serve.rs` | M1 |

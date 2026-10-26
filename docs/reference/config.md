@@ -180,6 +180,7 @@ the root of the same origin as the CAS.
 | `lfs_threshold` | `1MiB` | `1KiB` to `10MiB` | Files at least this large are uploaded through Xet; smaller ones travel inside the commit as Git blobs. |
 | `max_commit_bytes` | `64MiB` | `1MiB` to `1GiB`, and at least twice `lfs_threshold` | The largest commit body. A regular file travels base64-encoded inside it. |
 | `token_ttl` | `15m` | `1m` to `24h`, and at most `auth.max_token_lifetime` | How long the CAS tokens the Hub hands clients live. Clients refresh them before they expire. |
+| `capability_ttl` | `60m` | `1m` to `24h`, and at least `token_ttl` | How long the `href` of a Git LFS upload answers `git-xet`'s token refreshes, without a credential (ADR 0003). An upload that runs longer must be pushed again. The CAS tokens it hands out never outlive it. |
 | `page_size` | `1000` | `1` to `1000` | The most entries one listing page holds. A listing with more answers `Link: <…>; rel="next"`, which `huggingface_hub` follows. |
 | `gateway_idle_timeout` | `30s` | `1s` to `10m` | How long a download from the file gateway (`/v1/transfer/files/…`, where `resolve` redirects Xet files) may go without sending a byte before it is cut off and the memory it holds is released. A slow but steady client always finishes; only a stalled one is cut off. |
 | `commit_wait` | `30s` | `1s` to `10m` | How long a Hub commit waits for the commits to the same branch already running on this node. One that waits longer is refused as retryable (`503` with `Retry-After`), and `huggingface_hub` retries it. |
@@ -314,9 +315,10 @@ for it logs so at info level, naming the lock file, and again when it gets
 the lock; `/readyz` answers `503` meanwhile. It gives up after a minute.
 
 `transfer.key` holds 32 random bytes as 64 hex characters, and signs
-transfer URLs. Every node behind one `public_url` must share the same key;
-copy the file to each node. Replacing it invalidates every transfer URL
-already handed out.
+transfer URLs and the capability `href`s of [Git LFS](lfs.md) uploads.
+Every node behind one `public_url` must share the same key; copy the file
+to each node. Replacing it invalidates every transfer URL and capability
+`href` already handed out.
 
 - With the default `cas.transfer_key_file`, a missing key is generated. In
   dev mode this is silent. With `[auth]` configured, `serve` logs a warning
