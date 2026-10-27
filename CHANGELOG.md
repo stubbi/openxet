@@ -16,6 +16,14 @@ in CI.
 
 ### Added in M2
 
+- Hub token, resolve and tree answer within 10 ms at p99 on an idle node,
+  against 10,000 repositories and a 10,000-file repository; serving a
+  clone costs at most twice git's own CPU; both gated in CI
+  ([benchmarks](docs/reference/benchmarks.md)). A `tree` page of 1,000
+  Xet files went from 53 to 111 ms to 4 to 8 ms at p50 on CI.
+- `git.thin_bases.max_objects` defaults to 1,000,000, measured (it was a
+  2,000,000 placeholder); `git.thin_bases.max_ms` stays 2,000
+  ([config](docs/reference/config.md#gitthin_bases)).
 - The Hub API that `hf` and `huggingface_hub` call: `whoami`, repository
   create, delete, info and listing, `preupload`, the Xet token routes,
   commits with regular and Xet files, branches, tags, `refs`, `tree`,

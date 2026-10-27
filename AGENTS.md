@@ -232,16 +232,16 @@ One logical change per commit. Every commit builds and passes tests.
 ## Current state
 
 M1 complete: the storage-only CAS (`openxet serve`, `upload`, `download`;
-`docs/quickstart-storage-only.md`). M2 complete: the Hub API for stock
-`huggingface_hub` and `hf`, Git hosting over smart HTTP on one history with Hub commits, the
+`docs/quickstart-storage-only.md`). M2 complete: the Hub API for stock `huggingface_hub` and
+`hf`, Git hosting over smart HTTP on one history with Hub commits, the
 Git LFS endpoint for `git-xet`, generic labels and typed views, the
 `resolve` file gateway, the `xet://` contract (`crates/uri`),
 `openxet purge` and `openxet label`, and the OpenAPI document
 (`docs/quickstart-hub.md`; routes in `docs/reference/hub-routes.md`,
 `git-routes.md` and `lfs.md`). The compatibility suite runs the agent,
-storage-only, docs, Hub, Git and LFS legs in CI, beside the
-reconstruction, Hub metadata and Git fetch latency gates
-(`docs/reference/benchmarks.md`). M3 next: production
+storage-only, docs, Hub, Git and LFS legs in CI, beside the latency gates
+for reconstruction and the Hub's token, resolve and tree, the fetch gate
+and the thin-base budget (`docs/reference/benchmarks.md`). M3 next: production
 backends (Postgres; S3, GCS and Azure), OIDC and the webhook authorizer,
 OpenXet-issued tokens and rate limits, per design §12, once its plan is
 written in `docs/superpowers/plans/`. ADR 0001 decides to build from
