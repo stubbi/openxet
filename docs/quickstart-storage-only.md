@@ -1,14 +1,11 @@
 # Quickstart: storage only
 
-What runs today: the OpenXet storage server with Hugging Face's `hf_xet`
-client and the `openxet` command line. `git push`, `hf upload` and buckets
-arrive with the Hub API; this page is the path that works now.
-
 Run OpenXet's Xet storage server (the CAS) on your machine, then move a
 file through it with Hugging Face's own `hf_xet` and with the `openxet`
 command line. This is the storage layer on its own, the way a platform
-embeds it. The Hub API arrives in milestone M2, and with it `hf upload`,
-`huggingface_hub` and Git.
+embeds it: files are addressed by their Xet hash, with no repositories
+around them. For repositories with `hf upload`, `huggingface_hub` and
+`git`, follow the [Hub quickstart](quickstart-hub.md) instead.
 
 Every `bash` and `python` block on this page except the install block
 runs in CI, in order, exactly as written
@@ -155,3 +152,5 @@ you delete `openxet-data` instead, also clear the client cache
   URLs.
 - [Command line](reference/cli.md) and [exit codes](reference/exit-codes.md).
 - [CAS routes](reference/routes.md): every route, status and error code.
+- [Quickstart: hf and git](quickstart-hub.md): the same server with
+  repositories, `hf upload` and `git push`.

@@ -16,11 +16,13 @@ Seven legs:
   `hf_xet` with `openxet upload` / `download`, and signs CAS tokens with
   PyJWT as a platform would.
 - **Docs leg** (`-m docs`, `tests/test_docs_quickstart.py`): runs every
-  `bash` and `python` block of `docs/quickstart-storage-only.md`, in order,
-  as one script in an empty directory, and fails if it takes 2 minutes.
+  `bash` and `python` block of `docs/quickstart-storage-only.md` and of
+  `docs/quickstart-hub.md`, each in order, as one script in an empty
+  directory, and fails if one takes 2 minutes.
   The end-to-end time to first upload, install included (design §5.8), is
   measured per release. Blocks fenced as `bash install` are skipped: the built
-  `openxet` and this environment's `hf_xet` stand in for them.
+  `openxet` and this environment's `hf_xet`, `huggingface_hub` and `hf`
+  stand in for them, with the runner's `git`.
 - **Hub leg** (`-m hub`, `tests/test_hub.py`): stock `huggingface_hub` and
   the `hf` CLI against a configured `openxet serve` with two users, alice
   and bob, and the rules in `hub_harness.py`: login and `whoami`, uploads

@@ -1,12 +1,13 @@
-"""The storage-only quickstart runs as written (AGENTS.md: examples in docs run in CI).
+"""The quickstarts run as written (AGENTS.md: examples in docs run in CI).
 
-Every fenced `bash` and `python` block of docs/quickstart-storage-only.md
-runs in order, as one bash script in an empty directory, the way a reader
-pastes them into one terminal: variables and the background server carry
-from block to block, and a `python` block is fed to `python3` on stdin.
-Blocks fenced as `bash install` are skipped; CI provides what they
-install: the built `openxet` (OPENXET_BIN) and this environment's pinned
-`hf_xet` are first on PATH.
+Every fenced `bash` and `python` block of each quickstart runs in order,
+as one bash script in an empty directory, the way a reader pastes them
+into one terminal: variables and the background server carry from block
+to block, and a `python` block is fed to `python3` on stdin. Blocks
+fenced as `bash install` are skipped; CI provides what they install: the
+built `openxet` (OPENXET_BIN) and this environment's pinned `hf_xet`,
+`huggingface_hub` and its `hf` are first on PATH. The Hub quickstart also
+needs what it asks the reader to have: `git`, with a name and email.
 """
 
 import json
@@ -24,9 +25,33 @@ from conftest import assert_no_credential_in_log, isolated_env
 
 pytestmark = pytest.mark.docs
 
-QUICKSTART = Path(__file__).resolve().parents[2] / "docs" / "quickstart-storage-only.md"
+DOCS = Path(__file__).resolve().parents[2] / "docs"
 
-# A cap on steps 2 to 5, the walkthrough without the install. Design §5.8's
+# Each quickstart, and the steps it must keep running.
+QUICKSTARTS = {
+    "storage-only": (
+        DOCS / "quickstart-storage-only.md",
+        ("openxet serve", "import hf_xet", "openxet upload", "openxet download", "--json"),
+    ),
+    "hub": (
+        DOCS / "quickstart-hub.md",
+        ("openxet serve", "hf auth whoami", "hf upload", "hf download", "git clone", "push"),
+    ),
+}
+
+# The reader's git identity, which the Hub quickstart's commit needs; no
+# system configuration, so a runner's global Git LFS filters don't change
+# what the clone holds.
+GIT_ENV = dict(
+    GIT_CONFIG_NOSYSTEM="1",
+    GIT_TERMINAL_PROMPT="0",
+    GIT_AUTHOR_NAME="OpenXet docs",
+    GIT_AUTHOR_EMAIL="docs@users.noreply.openxet.com",
+    GIT_COMMITTER_NAME="OpenXet docs",
+    GIT_COMMITTER_EMAIL="docs@users.noreply.openxet.com",
+)
+
+# A cap on each walkthrough without its install. Design §5.8's
 # 2 minutes to first upload counts the install too; that end-to-end figure
 # is measured per release, not here.
 TARGET_SECONDS = 120
@@ -62,15 +87,18 @@ def test_fences_are_parsed_as_a_reader_sees_them():
     assert runnable_blocks(markdown) == [("bash", "echo one\n"), ("python", "print(2)\n")]
 
 
-def test_quickstart_runs_as_written(openxet_bin, tmp_path, record_measurement):
-    blocks = runnable_blocks(QUICKSTART.read_text())
+@pytest.mark.parametrize("name", sorted(QUICKSTARTS))
+def test_quickstart_runs_as_written(name, openxet_bin, tmp_path, record_measurement):
+    path, steps = QUICKSTARTS[name]
+    blocks = runnable_blocks(path.read_text())
     script = as_script(blocks)
-    for step in ("openxet serve", "import hf_xet", "openxet upload", "openxet download", "--json"):
-        assert step in script, f"the quickstart no longer runs `{step}`"
+    for step in steps:
+        assert step in script, f"the {name} quickstart no longer runs `{step}`"
 
     work = tmp_path / "work"
     work.mkdir()
-    env = isolated_env(tmp_path / "env")
+    env = isolated_env(tmp_path / "env", **GIT_ENV)
+    (tmp_path / "env" / "home").mkdir(parents=True, exist_ok=True)
     env["PATH"] = os.pathsep.join(
         [str(Path(openxet_bin).parent), str(Path(sys.executable).parent), env["PATH"]]
     )
@@ -108,10 +136,10 @@ def test_quickstart_runs_as_written(openxet_bin, tmp_path, record_measurement):
     if token:
         output = output.replace(token, "REDACTED")
     assert proc.returncode == 0 and elapsed < TARGET_SECONDS, (
-        f"the quickstart failed (exit {proc.returncode}) or took {elapsed:.0f} s "
+        f"the {name} quickstart failed (exit {proc.returncode}) or took {elapsed:.0f} s "
         f"of {TARGET_SECONDS} s:\n{output}"
     )
-    record_measurement("storage-only quickstart, start to finish", round(elapsed * 1000), "ms")
+    record_measurement(f"{name} quickstart, start to finish", round(elapsed * 1000), "ms")
 
     # The doc reads the token from serve.json; nothing it runs prints it,
     # and the server never logs it.
