@@ -5,12 +5,67 @@ What changes for users and operators, newest first. The format follows
 
 ## Unreleased
 
-The storage-only Xet CAS (milestone M1). Stock `hf_xet` 1.7.0 and newer
-upload to and download from it directly; the
-[quickstart](docs/quickstart-storage-only.md) runs it in under a second
-once built.
+The storage-only Xet CAS (milestone M1), and on top of it the Hub API,
+Git hosting and Git LFS (milestone M2). Stock `hf` and `huggingface_hub`
+2.2.0 and newer upload, download and list repositories; `git clone` and
+`git push` work over HTTPS on the same history; and stock `hf_xet` 1.7.0
+and newer uploads to and downloads from the CAS directly. The
+[hf and git quickstart](docs/quickstart-hub.md) and the
+[storage-only quickstart](docs/quickstart-storage-only.md) run as written
+in CI.
 
-### Added
+### Added in M2
+
+- The Hub API that `hf` and `huggingface_hub` call: `whoami`, repository
+  create, delete, info and listing, `preupload`, the Xet token routes,
+  commits with regular and Xet files, branches, tags, `refs`, `tree`,
+  `paths-info`, `commits`, and `resolve` for downloads
+  ([Hub routes](docs/reference/hub-routes.md)). Answers match
+  huggingface.co's field for field; Hub endpoints OpenXet doesn't
+  implement answer `501` naming themselves.
+- Git hosting over smart HTTP: clone, fetch and push with stock `git`,
+  protocol v0 and v2, with Hub commits and pushes on one history. The
+  first push to a missing repository creates it. Every ref change, pushed
+  or committed through the Hub, goes through one fenced transaction; a
+  fetch serves only objects reachable from the repository's refs; packs
+  live in the bucket, refs in the index, and each node keeps a cache
+  ([Git hosting](docs/guides/git-hosting.md),
+  [Git routes](docs/reference/git-routes.md)).
+- A push that adds a file of 10 MiB or more outside Git LFS names it and
+  suggests `git lfs track`; `git.max_plain_blob_bytes` can refuse such
+  files, and `git.max_push_bytes` (10 GiB) bounds a push.
+- The Git LFS endpoint of every repository: uploads through `git-xet`
+  with self-refreshing capability URLs, downloads for plain `git-lfs`
+  through the file gateway, and token routes for Xet-native clients.
+  Plain `git-lfs` uploads are refused up front with a message naming
+  `git-xet` ([Git LFS routes](docs/reference/lfs.md),
+  [Git LFS for any Git host](docs/guides/lfs-for-any-repo.md)).
+- The file gateway, `/v1/transfer/files/…`, which serves a repository's
+  Xet files over plain HTTP with `Range`, `If-Range`, `ETag` and `HEAD`,
+  to the repository's readers.
+- User credentials and rules: a static token without `scope` acts for its
+  `subject` on the Hub, Git and LFS routes, with optional `name`, `email`
+  and `claims`, and `[[auth.rules]]` grant `read`, `write` and `create`
+  per repository pattern, including to `anonymous`
+  ([config](docs/reference/config.md#rules)). A repository the caller may
+  not read answers exactly as one that doesn't exist.
+- Labels and typed views: every repository carries generic labels;
+  `model`, `dataset`, `space` and `kernel` select the Hub's typed routes.
+  `openxet label add`, `remove` and `list`, and the labels API under
+  `/api/openxet/v1/`, change and list them, each change recorded in an
+  audit row ([command line](docs/reference/cli.md#openxet-label)).
+- `openxet purge <file-hash>` unregisters a file from every scope, with
+  `--dry-run`, `--yes` and `--json`
+  ([command line](docs/reference/cli.md#openxet-purge)).
+- The `xet://` address specification, with its parser and formatter in
+  the `openxet-uri` crate ([xet:// addresses](docs/reference/xet-uri.md)).
+- The `[hub]` and `[git]` configuration sections
+  ([config](docs/reference/config.md#hub)).
+- The compatibility suite's Hub, Git and LFS legs run stock
+  `huggingface_hub` 2.2.0, `git`, `git-lfs` 3.7.1 and `git-xet` 0.2.1
+  (with Gitea) against `openxet serve` in CI.
+
+### Added in M1
 
 - `openxet serve`: the Xet CAS on local disk with a SQLite index. Without
   a configuration file it runs in dev mode and prints one write token;
@@ -67,6 +122,14 @@ once built.
   rebuilt from the bucket alone.
 
 ### Upgrading
+
+- `openxet serve` now needs `git` 2.37 or newer on its `PATH`, and
+  refuses to start, naming what to install, without it. Its data
+  directory gains `git-cache/`, unless `git.cache_dir` names another
+  place.
+- Index migrations 0006 and 0007 add the tables for repositories, refs,
+  packs, labels, purges and the audit log, and leave the tables M1
+  created unchanged.
 
 - `dedup_visibility = "per-scope"` is now `"per-tenant"`; the old value is
   refused at startup with a hint. With no tenant configured, each scope

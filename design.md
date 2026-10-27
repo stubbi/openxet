@@ -150,7 +150,7 @@ launches.
 
 | State | Primary action | Identity / pricing | Technical truth |
 |---|---|---|---|
-| **Current: waitlist** | Get started → quickstart (filled). Start on openxet.com → `/waitlist/` (outlined, in the header and beside the primary) | No active hosted sign-up, sign-in or checkout; no invented prices | M1 storage-only server/client works; Hub/Git and hosted service remain planned; the landing page is written as launched (ruling above) |
+| **Current: waitlist** | Get started → quickstart (filled). Start on openxet.com → `/waitlist/` (outlined, in the header and beside the primary) | No active hosted sign-up, sign-in or checkout; no invented prices | M1 storage server and M2 Hub API, Git hosting and Git LFS work (source build); the hosted service remains planned; the landing page is written as launched (ruling above) |
 | Hosted launch | Start free → `https://app.openxet.com/signup` | External identity provider; published limits, pricing and terms | Enable only after the real onboarding and stock-client tests pass |
 | Returning hosted user | Sign in → `https://app.openxet.com/signin` | Same external identity and granted scopes | Return to the user's selected workspace |
 | Service problem | Status and recovery action | Preserve inputs and authentication context safely | Never imply a successful write before acknowledgement |
@@ -164,7 +164,7 @@ redirect only after launch. Pricing appears in navigation only when publishable.
 
 ### Claims and their evidence
 
-These are the claims most likely to confuse a visitor, reviewed 2026-10-24.
+These are the claims most likely to confuse a visitor, reviewed 2026-10-27.
 They are pointers to authoritative material, not a second capability registry.
 Before changing public copy, check its source and tested version. Update HTML,
 Markdown and structured data together; link measurements rather than copying
@@ -175,7 +175,8 @@ numbers that will drift. A missing implementation or test stays **planned**.
 | Storage-only server on local disk and SQLite; source build required | Available preview, M1 | [Quickstart](docs/quickstart-storage-only.md), [configuration](docs/reference/config.md), [changelog](docs/changelog.md) |
 | Reuse already stored file data; `hf_xet` 1.7.0+ and `openxet` upload/download | Available in the documented storage workflow | [Executable quickstart](docs/quickstart-storage-only.md), [CLI byte-counter definitions](docs/reference/cli.md#openxet-upload) |
 | Scoped credentials, signed transfer URLs and versioned CLI errors | Implemented boundaries; do not imply a security certification | [Configuration](docs/reference/config.md), [security test map](docs/reference/security-tests.md), [exit codes](docs/reference/exit-codes.md) |
-| Hosted service, Hub/Git/LFS, external identity and MCP | Planned; no active hosted signup | [Product design](docs/superpowers/specs/2026-10-23-openxet-design.md), checked against current reference docs |
+| Hub API for `hf` and `huggingface_hub`, Git over HTTPS and Git LFS with `git-xet`, on local disk; static tokens and rules | Available preview, M2 | [Hub quickstart](docs/quickstart-hub.md), [Git hosting](docs/guides/git-hosting.md), [Hub routes](docs/reference/hub-routes.md) |
+| Hosted service, buckets, cloud backends, external identity and MCP | Planned; no active hosted signup | [Product design](docs/superpowers/specs/2026-10-23-openxet-design.md), checked against current reference docs |
 | Hosted uses the shared open-source implementation | Architectural commitment for launch | [Product design §15](docs/superpowers/specs/2026-10-23-openxet-design.md#15-hosted-openxetcom-decided-by-the-user-we-must-have-the-perfect-hosted-experience) |
 
 ### Resource addresses: selected future contract

@@ -4,11 +4,16 @@
 
 # User
 
+- [Quickstart: hf and git](quickstart-hub.md)
 - [Quickstart: storage only](quickstart-storage-only.md)
+- [Git hosting](guides/git-hosting.md)
+- [Git LFS for any Git host](guides/lfs-for-any-repo.md)
 - [Server configuration](reference/config.md)
 - [Command line](reference/cli.md)
-- [CAS routes](reference/routes.md)
+- [Hub routes](reference/hub-routes.md)
+- [Git routes](reference/git-routes.md)
 - [Git LFS routes](reference/lfs.md)
+- [CAS routes](reference/routes.md)
 - [OpenAPI document](reference/openapi.md)
 - [Exit codes](reference/exit-codes.md)
 - [xet:// addresses](reference/xet-uri.md)

@@ -4,22 +4,33 @@ OpenXet stores large files and reuses their unchanged parts when you upload
 another version. It is an open-source server and client for the
 [Xet protocol](https://huggingface.co/docs/xet).
 
-**What works today:** the storage-only server runs on local disk with SQLite.
-You can upload and download with stock `hf_xet` or the `openxet` command line.
-There is no release yet; the quickstart builds from source. The Hub API for
-`hf upload` and `huggingface_hub`, Git and LFS support, cloud storage, external
-identity providers, the web UI, and MCP are planned. Hosted sign-ups are not
-open yet.
+**What works today:** the server runs on local disk with SQLite. Stock `hf`
+and `huggingface_hub` create repositories, upload, download and list them;
+`git clone` and `git push` work over HTTPS on the same history; Git LFS
+files go through `git-xet`; and stock `hf_xet` and the `openxet` command
+line move files by their Xet hash. Access is set by static tokens and rules
+in the server's configuration. There is no release yet; the quickstarts
+build from source. Cloud storage, Postgres, external identity providers,
+buckets, Git over SSH, the web UI and MCP are planned. Hosted sign-ups are
+not open yet.
 
 OpenXet is an independent project, not affiliated with or endorsed by
 Hugging Face.
 
-- **Run it:** start with the [storage-only quickstart](quickstart-storage-only.md),
-  then [configure the server](reference/config.md).
+- **Run it:** start with the [hf and git quickstart](quickstart-hub.md),
+  then [configure the server](reference/config.md) with real users and
+  [rules](reference/config.md#rules). The
+  [storage-only quickstart](quickstart-storage-only.md) shows the storage
+  layer on its own.
+- **Host Git repositories:** [Git hosting](guides/git-hosting.md), and
+  [Git LFS for any Git host](guides/lfs-for-any-repo.md) to keep the
+  repository elsewhere and its large files here.
 - **Script it:** every [command](reference/cli.md) takes `--json`, and the
   [exit codes](reference/exit-codes.md) are stable.
-- **Integrate with it:** the [CAS routes](reference/routes.md) are the API
-  stock clients call.
+- **Integrate with it:** the [Hub](reference/hub-routes.md),
+  [Git](reference/git-routes.md), [Git LFS](reference/lfs.md) and
+  [CAS](reference/routes.md) routes are the API stock clients call, and the
+  [OpenAPI document](reference/openapi.md) describes every one.
 - **What changed:** the [changelog](../CHANGELOG.md).
 - **Why it is built this way:** the [design](superpowers/specs/2026-10-23-openxet-design.md),
   the architecture decisions and the research notes, under Project.

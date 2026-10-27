@@ -109,11 +109,11 @@ jobs:
         run: |
           uv venv "$RUNNER_TEMP/clients"
           uv pip install --python "$RUNNER_TEMP/clients" --prerelease "$PRERELEASE" \
-            hf-xet httpx==0.28.1 pytest==9.1.1 pyjwt==2.15.1 cryptography==50.0.2
+            hf-xet huggingface_hub httpx==0.28.1 pytest==9.1.1 pyjwt==2.15.1 cryptography==50.0.2
           uv pip list --python "$RUNNER_TEMP/clients" | grep -i '^hf-xet '
-      # The quickstart tells readers to install `hf_xet>=1.7.0`, so it runs
-      # with the newest release too.
-      - name: Run the storage-only leg and the quickstart
+      # The quickstarts tell readers to install `hf_xet>=1.7.0` and
+      # `huggingface_hub>=2.2.0`, so they run with the newest releases too.
+      - name: Run the storage-only leg and the quickstarts
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
         run: >
