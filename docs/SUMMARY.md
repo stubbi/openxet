@@ -28,6 +28,7 @@
 - [Design](superpowers/specs/2026-10-23-openxet-design.md)
 - [Agent workspaces design (proposed)](superpowers/specs/2026-10-27-agent-workspaces-design.md)
 - [M2 plan: Hub API, Git hosting and LFS](superpowers/plans/2026-10-25-m2-hub-git-lfs.md)
+- [Agent workspaces plan: measure, local store and provider](superpowers/plans/2026-10-27-agent-workspaces-local.md)
 - [Resource URI delivery milestones](superpowers/plans/2026-10-24-resource-uri-milestones.md)
 - [Architecture decisions]()
   - [0001: Build from scratch on xet-core](adr/0001-build-from-scratch-on-xet-core.md)
