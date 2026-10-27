@@ -3,7 +3,6 @@
 //! doesn't know, since the spec allows them.
 
 use std::collections::HashSet;
-use std::fmt::Write as _;
 
 /// The spec URL a pointer's `version` line names.
 const SPEC: &str = "https://git-lfs.github.com/spec/v1";
@@ -30,12 +29,12 @@ impl Pointer {
     /// `lfs.oid` write it.
     #[must_use]
     pub fn sha256_hex(&self) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
         self.sha256
             .iter()
-            .fold(String::with_capacity(64), |mut s, b| {
-                let _ = write!(s, "{b:02x}");
-                s
-            })
+            .flat_map(|b| [DIGITS[usize::from(b >> 4)], DIGITS[usize::from(b & 0xf)]])
+            .map(char::from)
+            .collect()
     }
 }
 

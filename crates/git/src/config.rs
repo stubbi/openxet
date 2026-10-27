@@ -30,10 +30,14 @@ impl Budget {
         max_concurrent_per_principal: Some(4),
     };
 
-    /// `git.thin_bases`'s defaults (ADR 0004 item 3), placeholders until
-    /// the M2 benchmark measures them (ruling M2-R16).
+    /// `git.thin_bases`'s defaults (ADR 0004 item 3), measured by
+    /// `tests/thin_bases_budget.rs` (ruling M2-R16): the walk lists 479 to
+    /// 969 objects per millisecond on the measured machines, so within the
+    /// 2 s it passes 1,000,000 objects on all but the slowest, and the
+    /// object budget, the same on every node, binds first. That is 11
+    /// times the 90,074 objects of the 10k-commit test repository.
     pub const THIN_BASES: Self = Self {
-        max_objects: 2_000_000,
+        max_objects: 1_000_000,
         max_time: Duration::from_secs(2),
         max_concurrent_per_repo: None,
         max_concurrent_per_principal: None,

@@ -30,6 +30,9 @@
   lifetime, and discard is one transaction whose lost packs keep a full
   grace period; reindex holds the repack lease, and maintenance finishes
   stale deletion claims
+- Amended: 2026-10-26, in M2 Task 20: item 3's `git.thin_bases`
+  defaults are measured, no longer placeholders (`max_objects`
+  1,000,000, `max_ms` 2,000)
 
 ## Context
 
@@ -318,11 +321,20 @@ results below are **observed**.
           of the objects reachable from the snapshot's refs, trees and
           blobs included. It has its own budget, separate from R22's
           walk budget:
-          - `git.thin_bases.max_objects` and `git.thin_bases.max_ms`.
-            Their defaults, 2,000,000 objects and 2,000 ms, are
-            placeholders: about 10x the object count of S9's
-            10,001-commit test repo (218,574 objects), and R22's time
-            limit. The M2 benchmark sets the real values.
+          - `git.thin_bases.max_objects` and `git.thin_bases.max_ms`,
+            by default 1,000,000 objects and 2,000 ms, measured in M2
+            Task 20 (`crates/git/tests/thin_bases_budget.rs`,
+            [benchmarks](../reference/benchmarks.md#thin-base-budget)).
+            Over the 10,001-commit test repository (90,074 objects) the
+            walk placed a root-commit base after 90,022 objects; a full
+            `rev-list --objects` took 93 to 188 ms on CI's Linux runners
+            and 110 ms on the local Apple M3 (479 to 969 objects per ms),
+            and a push through the walk 113 to 215 ms. 2,000 ms, R22's
+            limit, leaves that push 9 to 17 times its time. In 2,000 ms
+            the walk covers 0.96 to 1.94 million objects on those
+            machines, so 1,000,000 objects binds first on all but the
+            slowest, and nodes answer a push alike; it is 11 times that
+            repository and 4.6 times S9's (218,574 objects).
           - The fallback walk shares R22's concurrency limits
             (`git.reachability.max_concurrent_per_repo` and
             `max_concurrent_per_principal`), so concurrent pushes can't

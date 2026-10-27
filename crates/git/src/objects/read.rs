@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -19,7 +20,10 @@ use gix::traverse::commit::simple::CommitTimeOrder;
 use openxet_index::Oid;
 
 use super::pointer::{MAX_POINTER_BYTES, parse_pointer};
-use super::{Blob, CommitInfo, Entry, EntryKind, LocatedBlob, Resolved, Revision, Signature};
+use super::{
+    Blob, CommitInfo, Entry, EntryKind, HelperPermits, LocatedBlob, Resolved, Revision, Signature,
+    TreeListing, TreePage,
+};
 use crate::reach::{from_gix, open, peel, to_gix};
 use crate::snapshot::HEAD_REF;
 use crate::{Engine, GitError, SnapshotRepo, blocking};
@@ -84,15 +88,60 @@ impl Engine {
         path: &str,
         recursive: bool,
     ) -> Result<Vec<Entry>, GitError> {
+        let page = TreePage {
+            after: None,
+            limit: usize::MAX,
+        };
+        Ok(self
+            .read_tree_page(snap, commit, path, recursive, page)
+            .await?
+            .entries)
+    }
+
+    /// One page of [`Engine::read_tree`]'s listing: the entries whose path
+    /// sorts after `page.after`, at most `page.limit`. Only the page's
+    /// blobs are read for their size and LFS pointer, so a page of a large
+    /// folder costs the page, not the folder.
+    ///
+    /// # Errors
+    ///
+    /// As [`Engine::read_tree`].
+    pub async fn read_tree_page(
+        &self,
+        snap: &SnapshotRepo,
+        commit: Oid,
+        path: &str,
+        recursive: bool,
+        page: TreePage<'_>,
+    ) -> Result<TreeListing, GitError> {
         let comps = read_components(path).ok_or_else(|| entry_not_found(path))?;
         let dir = snap.dir.path().to_path_buf();
         let path = path.to_owned();
+        let after = page.after.map(str::to_owned);
+        let limit = page.limit;
+        let helpers = Arc::clone(&self.page_helpers);
         blocking(move || {
             let repo = open_snapshot(&dir)?;
             let root = commit_tree(&repo, commit)?;
             match find_path(&repo, root, &comps)? {
                 Some((mode, tree)) if mode.is_tree() => {
-                    list(&repo, tree, &comps.join("/"), recursive)
+                    let prefix = comps.join("/");
+                    if !recursive
+                        && let Some(listing) =
+                            folder_page(&repo, &helpers, tree, &prefix, after.as_deref(), limit)?
+                    {
+                        return Ok(listing);
+                    }
+                    let listed = list(&repo, tree, &prefix, recursive)?;
+                    let start = after.map_or(0, |after| {
+                        listed.partition_point(|e| e.path.as_bytes() <= after.as_bytes())
+                    });
+                    let end = listed.len().min(start.saturating_add(limit));
+                    let entries = describe_all(&repo, &helpers, &listed[start..end])?;
+                    Ok(TreeListing {
+                        entries,
+                        more: end < listed.len(),
+                    })
                 }
                 _ => Err(entry_not_found(&path)),
             }
@@ -466,13 +515,145 @@ fn find_path(
     Ok(Some(current))
 }
 
-/// The entries under tree `root`, at `prefix`, ordered by path.
+/// One page of the folder `tree` at `prefix`, sorting its entries in place
+/// and making paths only for the page: a page of a folder of thousands of
+/// files then costs the page. `None` if a name isn't UTF-8, whose lossy
+/// path may sort differently from its bytes; [`list`] handles that folder.
+fn folder_page(
+    repo: &gix::Repository,
+    helpers: &HelperPermits,
+    tree: ObjectId,
+    prefix: &str,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<Option<TreeListing>, GitError> {
+    let tree = repo.find_tree(tree).map_err(objects_err)?;
+    let decoded = tree.decode().map_err(objects_err)?;
+    let mut items: Vec<_> = decoded
+        .entries
+        .iter()
+        .filter(|e| !e.mode.is_commit())
+        .collect();
+    if items
+        .iter()
+        .any(|e| std::str::from_utf8(e.filename).is_err())
+    {
+        return Ok(None);
+    }
+    // Every path is `{prefix}/{name}` (or `{name}` at the root), so paths
+    // sort as names do.
+    items.sort_unstable_by(|a, b| a.filename.cmp(b.filename));
+    let sep: &[u8] = if prefix.is_empty() { b"" } else { b"/" };
+    let start = after.map_or(0, |after| {
+        items.partition_point(|e| {
+            let path = prefix.as_bytes().iter().chain(sep).chain(e.filename.iter());
+            path.cmp(after.as_bytes().iter()) != std::cmp::Ordering::Greater
+        })
+    });
+    let end = items.len().min(start.saturating_add(limit));
+    let page: Vec<Listed> = items[start..end]
+        .iter()
+        .map(|e| {
+            let name = String::from_utf8_lossy(e.filename);
+            Listed {
+                path: if prefix.is_empty() {
+                    name.into_owned()
+                } else {
+                    format!("{prefix}/{name}")
+                },
+                id: e.oid.to_owned(),
+                tree: e.mode.is_tree(),
+            }
+        })
+        .collect();
+    let entries = describe_all(repo, helpers, &page)?;
+    Ok(Some(TreeListing {
+        entries,
+        more: end < items.len(),
+    }))
+}
+
+/// The most threads one page's blobs are read on, its own included.
+const DESCRIBE_THREADS: usize = 4;
+/// The fewest entries worth a thread of their own.
+const DESCRIBE_PER_THREAD: usize = 128;
+
+/// `listed`, each file's size and LFS pointer read from its blob. A large
+/// page is read on up to [`DESCRIBE_THREADS`] threads, the helpers taken
+/// from the process-wide `helpers` without waiting: its blobs are
+/// independent, and inflating 1,000 pointer blobs one after another was
+/// the largest part of a `tree` page (M2 Task 20, design §5.8). With no
+/// helper free, the page is read on this thread alone.
+fn describe_all(
+    repo: &gix::Repository,
+    helpers: &HelperPermits,
+    listed: &[Listed],
+) -> Result<Vec<Entry>, GitError> {
+    let wanted = (listed.len() / DESCRIBE_PER_THREAD).clamp(1, DESCRIBE_THREADS) - 1;
+    let taken = helpers.take(wanted);
+    let chunk = listed.len().div_ceil(taken.count() + 1).max(1);
+    let mut parts = listed.chunks(chunk);
+    let Some(first) = parts.next() else {
+        return Ok(Vec::new());
+    };
+    std::thread::scope(|scope| {
+        let helpers: Vec<_> = parts
+            .map(|part| {
+                // A clone shares the open object store (gix's `parallel`).
+                let repo = repo.clone();
+                scope.spawn(move || {
+                    part.iter()
+                        .map(|l| l.describe(&repo))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect();
+        let mut out = Vec::with_capacity(listed.len());
+        for l in first {
+            out.push(l.describe(repo)?);
+        }
+        for helper in helpers {
+            match helper.join() {
+                Ok(entries) => out.extend(entries?),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// A tree entry as its tree lists it, before its blob is read.
+struct Listed {
+    path: String,
+    id: ObjectId,
+    tree: bool,
+}
+
+impl Listed {
+    /// The entry, a file's size and LFS pointer read from its blob.
+    fn describe(&self, repo: &gix::Repository) -> Result<Entry, GitError> {
+        let oid = oid_of(self.id)?;
+        let kind = if self.tree {
+            EntryKind::Dir { oid }
+        } else {
+            let (size, lfs) = blob_info(repo, self.id)?;
+            EntryKind::File { oid, size, lfs }
+        };
+        Ok(Entry {
+            path: self.path.clone(),
+            kind,
+        })
+    }
+}
+
+/// The entries under tree `root`, at `prefix`, ordered by path, without
+/// reading their blobs.
 fn list(
     repo: &gix::Repository,
     root: ObjectId,
     prefix: &str,
     recursive: bool,
-) -> Result<Vec<Entry>, GitError> {
+) -> Result<Vec<Listed>, GitError> {
     let mut out = Vec::new();
     let mut stack = vec![(root, prefix.to_owned())];
     while let Some((id, prefix)) = stack.pop() {
@@ -486,24 +667,12 @@ fn list(
                 format!("{prefix}/{name}")
             };
             let id = e.oid.to_owned();
-            if e.mode.is_tree() {
-                if recursive {
-                    stack.push((id, path.clone()));
-                }
-                out.push(Entry {
-                    path,
-                    kind: EntryKind::Dir { oid: oid_of(id)? },
-                });
-            } else if !e.mode.is_commit() {
-                let (size, lfs) = blob_info(repo, id)?;
-                out.push(Entry {
-                    path,
-                    kind: EntryKind::File {
-                        oid: oid_of(id)?,
-                        size,
-                        lfs,
-                    },
-                });
+            let tree = e.mode.is_tree();
+            if tree && recursive {
+                stack.push((id, path.clone()));
+            }
+            if !e.mode.is_commit() {
+                out.push(Listed { path, id, tree });
             }
         }
     }

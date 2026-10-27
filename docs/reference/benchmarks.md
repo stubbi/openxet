@@ -7,9 +7,14 @@ benchmark, and a speed regression fails CI.
 | What | Kind | Command |
 |---|---|---|
 | Reconstruction latency, design §5.8 | CI gate (Linux runner): against the base on a pull request, absolute on `main` (ruling M2-R17); locally, needs a quiet machine | `cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture` |
+| Hub token, resolve and tree latency, design §5.8 | CI gate (Linux runner), compared like the reconstruction gate (ruling M2-R17); locally, needs a quiet machine | `cargo nextest run --release -p openxet-hub -E 'binary(hub_latency_gate)' --no-capture` |
+| Serving a clone: OpenXet's CPU against git's | CI gate (Linux runner), both measured in the same run | `cargo nextest run --release -p openxet-git -E 'binary(fetch_gate)' --no-capture` |
+| The thin-base walk and `git.thin_bases`' defaults | CI gate (Linux runner) | `cargo nextest run --release -p openxet-git -E 'binary(thin_bases_budget)' --no-capture` |
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 | Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
+| Hub metadata reads, the gate's and the rest | a plain run, for humans | `cargo bench -p openxet-hub --bench metadata` |
+| S9's fetch replay: clone and incremental fetch | a plain run, for humans | `cargo bench -p openxet-git --bench fetch` |
 | Memory under attack, ruling M1-R40 | script, for humans; needs `cargo build --release -p openxet` | `python3 scripts/measure-memory-bounds.py --openxet "$PWD/target/release/openxet" --scenario reconstruct --connections 64 --memory-budget 1GiB` |
 | Stock client throughput, `503`s and peak memory | script, for humans; needs `cargo build --release -p openxet` | `uv run --frozen --directory compat python ../scripts/measure-storage-only.py --openxet "$PWD/target/release/openxet" --size-mib 4096` |
 
@@ -24,7 +29,8 @@ too much for criterion's statistics to fail a build on.
   other builds during every run here (load average 4 to 27 on 8 cores), so
   local numbers are noisy, tails most of all. Where a number moved only
   because of load, the text says so.
-- **CI:** GitHub's `ubuntu-latest` (4 vCPU, an AMD EPYC 7763 or 9V45)
+- **CI:** GitHub's `ubuntu-latest` (4 vCPU, an AMD EPYC 7763, 9V45 or 9V74,
+  or an Intel Xeon 6973P-C or Platinum 8573C)
   and `macos-latest` (3 vCPU Apple M1 VM) runners, release profile, from
   the `rust` job's log.
 
@@ -230,6 +236,214 @@ Where the unmerged full answer's time goes now, locally (load 12, 3
 writers, medians of 201): file record 2.6 ms (1.8 ms SQLite read, 0.7 ms
 decode), window 0.1 ms, layouts 0.01 ms, plan 1.1 ms, catalog 1.8 ms, the
 writers 7.5 ms, then handing the 42 MB body over.
+## Hub metadata latency gate
+
+`crates/hub/tests/hub_latency_gate.rs` asks for p99 < 10 ms on token,
+resolve (`HEAD`) and tree (design §5.8), against an index of 10,000
+repositories, one of which holds 10,000 files. The shape is pinned
+(`crates/hub/tests/fixture/metadata.rs`) so the gate can't pass on an easy
+repository:
+
+- 9,000 Xet files in the root, each an LFS pointer whose SHA-256 is
+  registered to the repository, so every one a `tree` page lists needs its
+  `xetHash` from the index
+- 1,000 small regular files under `configs/`, which `resolve` serves from
+  their Git blob
+- the other 9,999 repositories are index rows; the token route reads only
+  a repository's row
+
+Each kind is asked 1,000 times, one at a time, in process through the whole
+router, the Git engine (a per-request snapshot, ADR 0004 item 1) and a
+SQLite index on disk, timed to the body's last byte:
+
+- `token`: `GET /api/models/{repo}/xet-read-token/main`, a random
+  repository of the 10,000
+- `resolve head xet`: `HEAD /{repo}/resolve/main/{path}` of a random Xet
+  file, a `302` to the file gateway
+- `resolve head regular`: the same for a random regular file, a `200`
+- `tree`: `GET /api/models/{repo}/tree/main`, the root's first page of
+  1,000 entries: `.gitattributes`, `configs` and 998 Xet files
+
+It prints the reconstruction gate's `openxet.latency-gate.v1` lines and
+reads the same variables, so CI gates it the same way (ruling M2-R17): on
+a pull request against the base, measured on the same runner, with
+`scripts/check-latency-gate.py --p99-limit-ms 10 --title "Hub metadata
+latency gate"`; on `main` absolute. A pull request whose base measured
+`tree` at p99 70 ms holds the PR to 10 ms, as the absolute bar applies
+whenever the PR misses it by more than a quarter of the base.
+
+p50 / p99 in ms:
+
+<!-- table-caption: Hub metadata latency by implementation stage (p50 / p99, ms) -->
+
+| Request | Before (CI Linux, EPYC 9V45) | Before (CI Linux, Xeon 8573C) | Paged listing and batched lookups (CI Linux, EPYC 9V45) | The same (CI Linux, Xeon 8573C) | Now (CI Linux, 10 runs) |
+|---|---|---|---|---|---|
+| token | 0.06 / 0.08 | 0.1 / 0.1 | 0.07 / 0.09 | 0.1 / 0.1 | **0.1 / 0.1 to 0.2** |
+| resolve head xet | 1.70 / 1.83 | 2.4 / 2.6 | 1.82 / 1.97 | 2.3 / 2.6 | **1.6 to 2.8 / 1.8 to 3.4** |
+| resolve head regular | 1.76 / 3.25 | 2.3 / 2.7 | 1.78 / 1.97 | 2.4 / 2.5 | **1.7 to 2.8 / 1.9 to 3.2** |
+| tree | 58.7 / 70.5 | 101.7 / 107.7 | 6.90 / 9.67 | 7.8 / 9.9 | **4.1 to 7.7 / 4.6 to 9.5** |
+
+- "Before" is `main` at the time, measured by this gate as CI's base run.
+  A `tree` page read every blob of the folder (9,001) for its size and
+  pointer, then looked each Xet file up in the index one query at a time.
+- "Paged listing and batched lookups" reads blobs only for the page
+  (`Engine::read_tree_page`), looks the page's Xet files up in batches
+  (`Repos::xet_files_by_sha256`), formats ids with a lookup table instead
+  of a `write!` per byte, and serializes entries from a struct instead of
+  building a `serde_json::Value` each. On the slower runner it passed with
+  0.1 ms to spare, and four of ten absolute runs on the EPYC 7763 and
+  9V74 missed 10 ms at p99 (10.4 to 11.8 ms).
+- "Now" also sorts a folder's entries in place and makes paths only for
+  the page; reads a large page's blobs on up to four threads sharing one
+  object store (gix's `parallel` feature), the helpers taken without
+  waiting from one pool of a thread per CPU for the whole process, so under
+  load a page reads on its own thread instead of adding threads; and sends the page's SHA-256s
+  to SQLite as one JSON parameter and takes the matches back as one JSON
+  row.
+
+Where a `tree` page's time went on the EPYC 7763 before the last two
+changes (medians of 1,000, phases timed in a throwaway build): 0.75 ms for
+the snapshot and the revision, 1.0 ms to inflate and decode the 9,001-entry
+root tree, 1.6 ms to read the page's blobs, 2.7 ms for the index lookup,
+0.65 ms to serialize. The lookup is SQLite's: binding 998 parameters and
+returning 998 rows through sqlx cost about as much as the seeks, and one
+JSON parameter in and one row out took 1.3 ms to 1.0 ms locally; four
+concurrent quarter batches were no faster, as the CAS found for layout
+reads. Every Git-backed read also pays the snapshot, about 2 ms of a
+`resolve` locally; reusing snapshots across reads is
+<https://github.com/stubbi/openxet/issues/107>.
+
+**The ten CI runs.** Ten parallel jobs on `ubuntu-latest`, each measuring
+the base (`main` at `30b6fc2`, with this gate's code) and the head as a
+pull request does, all passing the comparison and, read as `main` reads
+them, all under 10 ms at p99. p50 / p99 in ms:
+
+<!-- table-caption: Hub metadata latency in ten Linux CI runs (p50 / p99, ms) -->
+
+| Run | CPU | token | resolve head xet | resolve head regular | tree | tree on the base |
+|---|---|---|---|---|---|---|
+| 1 | EPYC 9V74 | 0.1 / 0.1 | 2.8 / 2.9 | 2.8 / 3.2 | 7.7 / 8.7 | 93.7 / 99.9 |
+| 2 | EPYC 7763 | 0.1 / 0.2 | 2.7 / 3.4 | 2.7 / 2.8 | 7.2 / 9.5 | 105.2 / 132.9 |
+| 3 | EPYC 7763 | 0.1 / 0.2 | 2.7 / 3.2 | 2.7 / 2.8 | 7.1 / 8.2 | 107.9 / 133.1 |
+| 4 | EPYC 9V74 | 0.1 / 0.1 | 2.1 / 2.6 | 2.1 / 2.2 | 5.6 / 5.9 | 72.1 / 76.7 |
+| 5 | EPYC 9V74 | 0.1 / 0.1 | 2.1 / 2.2 | 2.2 / 2.7 | 5.8 / 7.2 | 72.1 / 83.5 |
+| 6 | EPYC 7763 | 0.1 / 0.2 | 2.7 / 2.9 | 2.7 / 3.0 | 7.4 / 8.0 | 110.9 / 131.9 |
+| 7 | EPYC 9V74 | 0.1 / 0.1 | 2.2 / 2.8 | 2.2 / 3.2 | 5.9 / 8.0 | 74.6 / 85.7 |
+| 8 | EPYC 9V45 | 0.1 / 0.1 | 1.6 / 1.8 | 1.7 / 1.9 | 4.1 / 4.6 | 52.8 / 57.3 |
+| 9 | EPYC 7763 | 0.1 / 0.2 | 2.6 / 2.8 | 2.6 / 2.7 | 7.1 / 7.8 | 97.8 / 104.4 |
+| 10 | EPYC 9V45 | 0.1 / 0.1 | 1.8 / 1.9 | 1.8 / 1.9 | 5.0 / 7.0 | 65.6 / 86.6 |
+
+`tree` on the EPYC 7763, the most common machine type, has 0.5 to 2 ms
+of p99 margin; a loaded runner can take that, which is what the
+comparison with the base (ruling M2-R17) absorbs on a pull request.
+
+`cargo bench -p openxet-hub --bench metadata` times the same fixture's
+other reads. Local, Apple M3, load average 8, at the "paged listing" stage;
+p50 / p99 / max in ms:
+
+<!-- table-caption: Hub metadata reads on the gate's fixture (p50 / p99 / max, ms) -->
+
+| Request | p50 | p99 | max |
+|---|---|---|---|
+| token (read) | 0.03 | 0.67 | 1.27 |
+| token (write) | 0.03 | 0.11 | 1.10 |
+| resolve HEAD, Xet file | 3.64 | 6.68 | 30.15 |
+| resolve HEAD, regular file | 3.77 | 8.41 | 47.44 |
+| resolve GET, regular file | 3.86 | 11.91 | 21.88 |
+| tree, root's first page | 8.29 | 13.52 | 47.51 |
+| tree, first page with expand | 268.75 | 341.58 | 494.59 |
+| tree, recursive first page | 5.10 | 5.82 | 52.75 |
+| paths-info, 100 Xet files | 15.96 | 23.25 | 57.78 |
+
+`expand=true` decodes the folder's tree once per listed path to find each
+path's last commit, 270 ms a page here; that is
+<https://github.com/stubbi/openxet/issues/106>. The gate doesn't measure it,
+as design §5.8 bars token, resolve and tree.
+
+**What the gate doesn't prove.** One request at a time on an idle node,
+against a SQLite index of 10,000 repositories. Design §5.8's target holds
+at 1,000 requests/s per node against an index of 10⁷ files, which the
+release rig measures (<https://github.com/stubbi/openxet/issues/55>).
+
+## Fetch gate
+
+`crates/git/tests/fetch_gate.rs` replays spike S9's server-only fetch
+(`crates/git/tests/fixture/clone_replay.rs`): one protocol v2 `fetch`
+request for a clone, served by OpenXet's upload-pack (snapshot, R22 checks
+of the wants, `git upload-pack` in the snapshot, the response streamed
+through) and by `git upload-pack --stateless-rpc` alone on the same
+repository, each response read whole and discarded. The repository is
+`testdata/build-fixture.sh`'s `tf10k` of 10,001 commits, repacked into one
+pack with a bitmap as S9's was, about 7 MB. Each side's CPU is what the
+operating system charged: for OpenXet, the test process and every git it
+started (`getrusage` `RUSAGE_SELF` plus `RUSAGE_CHILDREN`, as S9 counted
+it); for git, its process tree. After a warm-up of each (OpenXet's first
+request hydrates its node cache), 7 alternating runs; the medians must
+stay within 2× (design §16 "Speed"). Measuring git in the same run makes
+the bar the runner's own, so a slow runner can't fail it.
+
+<!-- table-caption: Clone of the 10,001-commit fixture: server CPU -->
+
+| Machine | git, ms CPU | OpenXet, ms CPU | Ratio |
+|---|---|---|---|
+| Local, Apple M3 | 19.1 | 23.9 | 1.25 |
+| CI Linux, EPYC 9V45 | 18.4 | 20.8 | 1.13 |
+| CI Linux, Xeon 8573C | 24.2 | 26.9 | 1.11 |
+| CI Linux, ten runs (EPYC 7763, 9V45, 9V74) | 16.3 to 29.8 | 18.5 to 33.9 | 1.11 to 1.17 |
+
+S9 measured git at 178 ms for its `tf10k`, the real `huggingface/transformers`
+history (218,574 objects, a 72.7 MB pack); the fixture's files are small,
+so its pack is a tenth of that and the snapshot's fixed cost weighs more in
+the ratio. `cargo bench -p openxet-git --bench fetch` adds a fetch 100
+commits behind `main`. Local, Apple M3, medians of 9:
+
+<!-- table-caption: S9's fetch replay on the 10,001-commit fixture -->
+
+| Request | Engine | Server CPU ms | Server wall ms | Bytes sent |
+|---|---|---|---|---|
+| Full clone | git | 22.1 | 21.7 | 6,965,735 |
+| Full clone | OpenXet | 26.6 | 22.8 | 6,962,895 |
+| Fetch 100 commits (thin) | git | 13.6 | 15.6 | 69,389 |
+| Fetch 100 commits (thin) | OpenXet | 15.7 | 17.1 | 69,384 |
+
+The byte counts differ by side-band framing only: git's pack writes fall
+differently from run to run, and the gate allows 1%.
+
+## Thin-base budget
+
+A push's thin-pack bases are placed by one tree lookup each where they
+can be, and otherwise by one walk of everything the snapshot's refs reach,
+under `git.thin_bases.max_objects` and `max_ms` (ADR 0004 item 3).
+`crates/git/tests/thin_bases_budget.rs` pushes, to the 10,001-commit
+fixture, a commit sent as a delta against the root commit's version of a
+file every later commit rewrote: no boundary or tip tree holds that base,
+so only the walk finds it, and the walk lists the root commit's objects
+last.
+
+<!-- table-caption: The thin-base walk over the 10,001-commit fixture -->
+
+| Machine | Objects the refs reach | Walked before the base | Full `rev-list --objects` | Objects per ms | Push through the walk (median of 5) |
+|---|---|---|---|---|---|
+| Local, Apple M3 (load 8) | 90,074 | 90,022 | 110 ms | 819 | 215 ms |
+| CI Linux, EPYC 9V45 | 90,074 | 90,022 | 109 ms | 823 | 126 ms |
+| CI Linux, Xeon 8573C | 90,074 | 90,022 | 144 ms | 625 | 166 ms |
+| CI Linux, ten runs (EPYC 7763, 9V45, 9V74) | 90,074 | 90,022 | 93 to 166 ms | 542 to 969 | 113 to 194 ms |
+| CI Linux, slowest seen (EPYC 7763) | 90,074 | 90,022 | 188 ms | 479 | 194 ms |
+
+The defaults, from these numbers:
+
+- **`max_ms` stays 2,000**, R22's limit: a push through the walk of this
+  repository takes 113 to 215 ms, so it has 9 to 17 times its time.
+- **`max_objects` is 1,000,000** (it was a 2,000,000 placeholder): at 479
+  to 969 objects per ms, 2,000 ms walks 0.96 to 1.94 million objects, so
+  the object budget, the one that doesn't depend on the machine, binds
+  first on all but the slowest runner seen, and every node gives the same
+  answer for the same push. It is 11 times this repository and 4.6 times
+  S9's real `tf10k` (218,574 objects).
+
+The test asserts both: the full walk fits `max_objects`, and the push
+through it finishes within `max_ms`.
+
 ## Criterion: reconstruction
 
 `crates/cas/benches/reconstruction.rs`. One full-file

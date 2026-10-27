@@ -81,7 +81,7 @@ pub use maintain::{
 };
 pub use objects::{
     Blob, CommitInfo, Entry, EntryKind, HubCommit, Ident, LocatedBlob, Op, Pointer, Resolved,
-    Revision, Signature, TagInfo, canonical_pointer, parse_pointer,
+    Revision, Signature, TagInfo, TreeListing, TreePage, canonical_pointer, parse_pointer,
 };
 #[cfg(feature = "fault-injection")]
 pub use objects::{FAULT_OMIT_BLOBS_ACTOR, HubWriteHold};
@@ -406,6 +406,8 @@ pub struct Engine {
     #[cfg(feature = "fault-injection")]
     hooks: fault::Hooks,
     hub: objects::HubWrites,
+    /// The helper threads `tree` pages read blobs on, bounded process-wide.
+    page_helpers: Arc<objects::HelperPermits>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -465,6 +467,7 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             hooks: fault::Hooks::default(),
             hub: objects::HubWrites::default(),
+            page_helpers: Arc::new(objects::HelperPermits::per_cpu()),
         };
         engine.v2_advertisement = engine.capture_advertisement(Service::UploadPack, 2).await?;
         engine.empty_receive_advertisement = ls_refs::with_openxet_agent(
@@ -502,6 +505,14 @@ impl Engine {
     #[must_use]
     pub fn v2_advertisement(&self) -> &[u8] {
         &self.v2_advertisement
+    }
+
+    /// The process-wide limit on `tree` page helper threads, and the most
+    /// ever in use at once. Test-only.
+    #[cfg(feature = "fault-injection")]
+    #[must_use]
+    pub fn page_helpers(&self) -> (usize, usize) {
+        (self.page_helpers.limit(), self.page_helpers.peak())
     }
 
     /// Builds a snapshot repository of `repo` from one database snapshot

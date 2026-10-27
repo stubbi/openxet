@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use openxet_index::{
     AuditEntry, ChunkTable, FileRecord, FileSummary, HubIndex, Index, IndexError, NewFile, Page,
-    Registrant, Repo, RepoFilter, RepoId, Repos, SqliteIndex, Term, Visibility,
+    Registrant, Repo, RepoFilter, RepoId, Repos, SqliteIndex, Term, Visibility, XetFile,
 };
 use openxet_protocol::{MerkleHash, chunk_hash};
 use tempfile::TempDir;
@@ -344,6 +344,48 @@ async fn file_by_sha256_is_per_scope() {
         ok(index.file_by_sha256("repo:a", &sha).await),
         Some(f.record)
     );
+}
+
+/// The batch form answers each SHA-256 as `file_by_sha256` does, across
+/// query batches.
+#[tokio::test]
+async fn xet_files_by_sha256_answers_like_file_by_sha256() {
+    let dir = ok(TempDir::new());
+    let (index, _) = open(&dir).await;
+    let (xorb, t) = put(&index, "x", 4, "repo:a").await;
+    let files: Vec<NewFile> = (0..1_200)
+        .map(|i| file(&format!("f{i}"), xorb, &t, i % 3, 4))
+        .collect();
+    register(&index, "shard", &files, "repo:a", 1).await;
+    let first = &files[0];
+    let sha = first.sha256.unwrap_or_else(|| panic!("sha"));
+    let mut liar = file("liar", xorb, &t, 0, 1);
+    liar.sha256 = Some(sha);
+    register(&index, "shard2", std::slice::from_ref(&liar), "repo:a", 2).await;
+
+    let mut asked: Vec<[u8; 32]> = files.iter().filter_map(|f| f.sha256).collect();
+    asked.push([9; 32]);
+    asked.push(sha);
+    let found = ok(index.xet_files_by_sha256("repo:a", &asked).await);
+    assert_eq!(found.len(), files.len(), "{:?}", found.get(&[9; 32]));
+    for f in &files {
+        let sha = f.sha256.unwrap_or_else(|| panic!("sha"));
+        let single =
+            ok(index.file_by_sha256("repo:a", &sha).await).unwrap_or_else(|| panic!("registered"));
+        assert_eq!(
+            found.get(&sha),
+            Some(&XetFile {
+                hash: single.hash,
+                size: single.size,
+            })
+        );
+    }
+    assert_eq!(
+        found[&sha].hash, first.record.hash,
+        "the earliest registration"
+    );
+    assert!(ok(index.xet_files_by_sha256("repo:b", &asked).await).is_empty());
+    assert!(ok(index.xet_files_by_sha256("repo:a", &[]).await).is_empty());
 }
 
 #[tokio::test]
