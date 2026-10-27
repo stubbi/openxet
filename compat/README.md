@@ -34,13 +34,17 @@ Seven legs:
   one history, two nodes on one data directory racing to push, a node with
   an empty Git cache, and a force-pushed commit no longer fetchable by its
   id.
-- **LFS leg** (`-m lfs`, `tests/test_lfs_gitea.py`, `tests/test_jj_xet.py`):
+- **LFS leg** (`-m lfs`, `tests/test_lfs_gitea.py`, `tests/test_lfs_openxet.py`,
+  `tests/test_jj_xet.py`):
   repositories on Gitea with their LFS objects on openxet through
   `lfs.url` (ADR 0003): `git-xet` pushes and refreshes its token through
   the capability `href` with no credential, `git-lfs` pulls over `basic`,
-  and plain `git-lfs` gets the `git-xet` install hint. `test_jj_xet.py`
+  and plain `git-lfs` gets the `git-xet` install hint.
+  `test_lfs_openxet.py` pushes a kernel repository's large file to an
+  OpenXet-hosted repository with `git xet install`ed (design §12) and reads
+  it back with `hf_hub_download` and a fresh clone. `test_jj_xet.py`
   replays jj-xet's expectations of openxet
-  (`fixtures/lfs/jj-xet-expectations.json`) and needs no Gitea.
+  (`fixtures/lfs/jj-xet-expectations.json`). Neither needs Gitea.
 
 Client version floor: `hf_xet==1.7.0`. It is the oldest `hf_xet` openxet
 supports (ruling M1-R9), and the version this suite pins, so the floor is
