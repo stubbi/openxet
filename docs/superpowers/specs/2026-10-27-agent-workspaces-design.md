@@ -2,7 +2,7 @@
 
 <!-- description: Design for OpenXet's next direction after M2: storage built first for AI agents, where many agents get full writable workspaces at once, the disk stays almost flat, nothing needs manual cleanup, and the human sets the limits. -->
 
-- Status: proposed, for the owner's approval
+- Status: approved by the owner on 2026-10-27
 - Date: 2026-10-27
 - Builds on: the approved design (`2026-10-23-openxet-design.md`), Codex's
   draft vision (PR #103: `2026-10-25-openxet-agent-storage-vision.md`,
@@ -39,11 +39,29 @@ ships something useful on its own.
 
 Decided by the owner:
 
-1. **The disk stays almost flat** when N agents work in parallel on the same
-   project.
+1. **The disk stays almost flat while N agents build in parallel** on the
+   same project: at the peak of the concurrent builds, not only after they
+   finish (the owner, 2026-10-27).
 2. **Nothing needs manual cleanup.**
 3. **A build inside an agent workspace is at most 10% slower** than the same
    build on the plain local disk.
+
+*Made measurable by Claude:* "almost flat" means that at the peak of six
+concurrent builds of this repository, each workspace beyond the first adds
+at most 10% of one build's footprint, and total use never exceeds the disk
+budget the human set. Section 6.4's measurement shows chunk dedup alone
+leaves about half of each extra build, so meeting the bar *during* builds
+needs more than dedup after the fact:
+- **Path-stable builds.** Much of the difference between sibling builds is
+  the workspace path embedded in outputs. Workspaces build under a stable
+  path (the mount point, or `--remap-path-prefix` and equivalents), so
+  sibling builds produce identical bytes.
+- **Write-time dedup.** Writes into hot directories are chunked and
+  deduplicated as they land, not by a later sweep.
+- **Backpressure.** When a build would push use past the budget, the
+  provider evicts cold reconstructible data from idle workspaces first; if
+  that is not enough, new workspaces wait rather than fill the disk, and
+  the wait is reported to the agent as a structured, retryable error.
 
 Each of these becomes a measured gate in CI, like the reconstruction and Hub
 latency gates, with its benchmark recorded in `docs/reference/benchmarks.md`.
@@ -174,13 +192,18 @@ normal directory, reads come from the local chunk cache, writes land on
 local disk first, and chunking, dedup and upload happen in the background,
 so the build never waits on OpenXet.
 
+*Decided by the owner (2026-10-27):* a one-time **Network Volumes**
+permission per app is an acceptable setup cost on macOS. macFUSE is not
+required, and FSKit is a later option, not a prerequisite.
+
 The open question is speed on macOS. The 2026-10-26 spike found:
 - A kext-free user-space NFS loopback mount (the approach XetHub's
   `xet-mount` used, via the `nfsserve` crate) mounts without admin rights.
 - macOS gates every network volume behind the **Network Volumes** privacy
   permission, granted per app (terminal, IDE, agent app). Denied, reads fail
-  with a bare `EPERM`. The mount command must detect this and name the
-  setting.
+  with a bare `EPERM`. The mount command detects this, names the setting
+  and the app to grant it to, and exits with a stable code an agent can
+  relay to its human.
 - Apple's FSKit offers path-based file systems only from macOS 26, behind a
   signed app extension the user enables. Not an option on macOS 15.
 - No build timing through the mount yet: blocked on the permission.
