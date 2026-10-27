@@ -26,7 +26,7 @@
 - [Website and interface design](design.md)
 - [Hosted waitlist operations](hosted-waitlist.md)
 - [Design](superpowers/specs/2026-10-23-openxet-design.md)
-- [Agent workspaces design (proposed)](superpowers/specs/2026-10-27-agent-workspaces-design.md)
+- [Agent workspaces design](superpowers/specs/2026-10-27-agent-workspaces-design.md)
 - [M2 plan: Hub API, Git hosting and LFS](superpowers/plans/2026-10-25-m2-hub-git-lfs.md)
 - [Agent workspaces plan: measure, local store and provider](superpowers/plans/2026-10-27-agent-workspaces-local.md)
 - [Resource URI delivery milestones](superpowers/plans/2026-10-24-resource-uri-milestones.md)
