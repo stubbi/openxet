@@ -52,6 +52,15 @@ def test_git_xet_push_to_openxet_hosted_kernel(hub, lfs_clients, tmp_path):
     mark = hub.server.mark()
     push = git.run("push", "origin", "main", cwd=work)
     assert push.returncode == 0, push.stderr
+    # git-lfs's pre-push asks `locks/verify` first. OpenXet has no locking
+    # API, and its 404 makes git-lfs 3.7.1 disable lock verification
+    # quietly (`SearchLocksVerifiable` in locking/locks.go treats 404 like
+    # 501); any other refusal would print this advice on every push.
+    assert "does not support the Git LFS locking API" not in push.stderr, push.stderr
+    # The quiet path records itself in the clone (`disableFor` in
+    # commands/lockverifier.go), so this is git-lfs's answer, not silence.
+    verify = git("config", "--get", f"lfs.{remote}/info/lfs.locksverify", cwd=work)
+    assert verify.strip() == "false", verify
     hub.server.settle()
     answered = hub.server.answered(mark)
     batches = [s for m, r, s in answered if m == "POST" and r.endswith(BATCH_ROUTE_SUFFIX)]
