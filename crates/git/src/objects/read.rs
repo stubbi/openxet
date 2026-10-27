@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -20,8 +21,8 @@ use openxet_index::Oid;
 
 use super::pointer::{MAX_POINTER_BYTES, parse_pointer};
 use super::{
-    Blob, CommitInfo, Entry, EntryKind, LocatedBlob, Resolved, Revision, Signature, TreeListing,
-    TreePage,
+    Blob, CommitInfo, Entry, EntryKind, HelperPermits, LocatedBlob, Resolved, Revision, Signature,
+    TreeListing, TreePage,
 };
 use crate::reach::{from_gix, open, peel, to_gix};
 use crate::snapshot::HEAD_REF;
@@ -118,6 +119,7 @@ impl Engine {
         let path = path.to_owned();
         let after = page.after.map(str::to_owned);
         let limit = page.limit;
+        let helpers = Arc::clone(&self.page_helpers);
         blocking(move || {
             let repo = open_snapshot(&dir)?;
             let root = commit_tree(&repo, commit)?;
@@ -126,7 +128,7 @@ impl Engine {
                     let prefix = comps.join("/");
                     if !recursive
                         && let Some(listing) =
-                            folder_page(&repo, tree, &prefix, after.as_deref(), limit)?
+                            folder_page(&repo, &helpers, tree, &prefix, after.as_deref(), limit)?
                     {
                         return Ok(listing);
                     }
@@ -135,7 +137,7 @@ impl Engine {
                         listed.partition_point(|e| e.path.as_bytes() <= after.as_bytes())
                     });
                     let end = listed.len().min(start.saturating_add(limit));
-                    let entries = describe_all(&repo, &listed[start..end])?;
+                    let entries = describe_all(&repo, &helpers, &listed[start..end])?;
                     Ok(TreeListing {
                         entries,
                         more: end < listed.len(),
@@ -519,6 +521,7 @@ fn find_path(
 /// path may sort differently from its bytes; [`list`] handles that folder.
 fn folder_page(
     repo: &gix::Repository,
+    helpers: &HelperPermits,
     tree: ObjectId,
     prefix: &str,
     after: Option<&str>,
@@ -563,25 +566,32 @@ fn folder_page(
             }
         })
         .collect();
-    let entries = describe_all(repo, &page)?;
+    let entries = describe_all(repo, helpers, &page)?;
     Ok(Some(TreeListing {
         entries,
         more: end < items.len(),
     }))
 }
 
-/// The most threads one page's blobs are read on.
+/// The most threads one page's blobs are read on, its own included.
 const DESCRIBE_THREADS: usize = 4;
 /// The fewest entries worth a thread of their own.
 const DESCRIBE_PER_THREAD: usize = 128;
 
 /// `listed`, each file's size and LFS pointer read from its blob. A large
-/// page is read on up to [`DESCRIBE_THREADS`] threads: its blobs are
+/// page is read on up to [`DESCRIBE_THREADS`] threads, the helpers taken
+/// from the process-wide `helpers` without waiting: its blobs are
 /// independent, and inflating 1,000 pointer blobs one after another was
-/// the largest part of a `tree` page (M2 Task 20, design §5.8).
-fn describe_all(repo: &gix::Repository, listed: &[Listed]) -> Result<Vec<Entry>, GitError> {
-    let threads = (listed.len() / DESCRIBE_PER_THREAD).clamp(1, DESCRIBE_THREADS);
-    let chunk = listed.len().div_ceil(threads).max(1);
+/// the largest part of a `tree` page (M2 Task 20, design §5.8). With no
+/// helper free, the page is read on this thread alone.
+fn describe_all(
+    repo: &gix::Repository,
+    helpers: &HelperPermits,
+    listed: &[Listed],
+) -> Result<Vec<Entry>, GitError> {
+    let wanted = (listed.len() / DESCRIBE_PER_THREAD).clamp(1, DESCRIBE_THREADS) - 1;
+    let taken = helpers.take(wanted);
+    let chunk = listed.len().div_ceil(taken.count() + 1).max(1);
     let mut parts = listed.chunks(chunk);
     let Some(first) = parts.next() else {
         return Ok(Vec::new());

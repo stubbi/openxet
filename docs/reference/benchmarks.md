@@ -295,7 +295,9 @@ p50 / p99 in ms:
   9V74 missed 10 ms at p99 (10.4 to 11.8 ms).
 - "Now" also sorts a folder's entries in place and makes paths only for
   the page; reads a large page's blobs on up to four threads sharing one
-  object store (gix's `parallel` feature); and sends the page's SHA-256s
+  object store (gix's `parallel` feature), the helpers taken without
+  waiting from one pool of a thread per CPU for the whole process, so under
+  load a page reads on its own thread instead of adding threads; and sends the page's SHA-256s
   to SQLite as one JSON parameter and takes the matches back as one JSON
   row.
 

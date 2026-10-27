@@ -39,8 +39,6 @@ pub struct FileSummary {
     pub sha256: Option<[u8; 32]>,
 }
 
-/// Which repositories [`Repos::list_repos`] returns. Each `Some` narrows
-/// the listing; both `None` lists every repository.
 /// The Xet file a SHA-256 names in one scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XetFile {
@@ -50,6 +48,8 @@ pub struct XetFile {
     pub size: u64,
 }
 
+/// Which repositories [`Repos::list_repos`] returns. Each `Some` narrows
+/// the listing; both `None` lists every repository.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RepoFilter {
     /// Only repositories carrying this label, compared exactly.

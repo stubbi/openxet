@@ -12,6 +12,7 @@
 //!
 //! [`SnapshotRepo`]: crate::SnapshotRepo
 
+mod helpers;
 mod pack;
 mod pointer;
 mod read;
@@ -22,6 +23,7 @@ use bytes::Bytes;
 use openxet_auth::UserPrincipal;
 use openxet_index::Oid;
 
+pub(crate) use helpers::HelperPermits;
 pub use pointer::{Pointer, canonical_pointer, parse_pointer};
 pub(crate) use write::HubWrites;
 #[cfg(feature = "fault-injection")]

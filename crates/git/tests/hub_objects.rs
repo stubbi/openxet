@@ -911,6 +911,34 @@ async fn large_tree_page_keeps_order_and_entries() {
         })
         .collect();
     assert_eq!(listed, expected);
+
+    // Many pages at once share one process-wide pool of helper threads:
+    // past it, a page reads on its own thread, so threads never grow with
+    // the number of requests, and every page still lists the same entries.
+    let pages = (0..24).map(|_| {
+        let (node, snap) = (Arc::clone(&node), &snap);
+        async move {
+            node.read_tree_page(
+                snap,
+                commit,
+                "big",
+                false,
+                TreePage {
+                    after: None,
+                    limit: 700,
+                },
+            )
+            .await
+        }
+    });
+    for concurrent in futures_util::future::join_all(pages).await {
+        assert_eq!(ok(concurrent).entries, page.entries);
+    }
+    let (limit, peak) = node.page_helpers();
+    assert!(
+        peak <= limit,
+        "{peak} helper threads at once, past the limit of {limit}"
+    );
 }
 
 #[tokio::test]
