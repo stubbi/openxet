@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
-"""Compares a pull request's reconstruction latency gate run with its base's,
-measured in the same CI job on the same runner (ruling M2-R17, issue #83).
-The base is the base branch's tip recorded in the `pull_request` event.
+"""Compares a pull request's latency gate run with its base's, measured in
+the same CI job on the same runner (ruling M2-R17, issue #83). The base is
+the base branch's tip recorded in the `pull_request` event.
 
-Each input holds the JSON lines `crates/cas/tests/latency_gate.rs` prints,
-one per shape, schema `openxet.latency-gate.v1`; lines that don't start with
-`{` are skipped. Both runs use HEAD's measurement code: CI copies HEAD's gate
+Each input holds the JSON lines a latency gate prints, one per shape, schema
+`openxet.latency-gate.v1`: the reconstruction gate
+(`crates/cas/tests/latency_gate.rs`, design §5.8's 50 ms, the default bar)
+or the Hub metadata gate (`crates/hub/tests/hub_latency_gate.rs`, 10 ms,
+`--p99-limit-ms 10`). Lines that don't start with `{` are skipped. Both runs use HEAD's measurement code: CI copies HEAD's gate
 test and its fixture into the base checkout, so only the measured library
 differs. Each line's `build` is the commit its test binary was compiled from
 (`OPENXET_LATENCY_GATE_BUILD` at build time); the head's must equal
 `--head-build` and the base's must differ, so two runs of one build can't
 pass as a comparison. A shape fails when
 
-    head.p99 >= 50 ms  and  head.p99 > 1.25 x base.p99,  or
+    head.p99 >= bar  and  head.p99 > 1.25 x base.p99,  or
     head.p50 > max(1.25 x base.p50, base.p50 + 2 ms)
 
-so a runner slow enough to miss design §5.8's 50 ms on the base doesn't fail
-an unchanged PR, while a runner that can meet 50 ms still holds the PR to it,
-failing at 50 ms as the test's assert mode does. The 2 ms p50 floor keeps a
-shape whose p50 is a few milliseconds from failing on scheduler noise
-between the two runs. A shape the base didn't measure (a base that can't
-build HEAD's test, or a new shape) is held to the absolute 50 ms alone; a
-shape the base measured and the head didn't fails.
+so a runner slow enough to miss design §5.8's bar on the base doesn't fail
+an unchanged PR, while a runner that can meet the bar still holds the PR to
+it, failing at the bar as the test's assert mode does. The 2 ms p50 floor
+keeps a shape whose p50 is a few milliseconds from failing on scheduler
+noise between the two runs. A shape the base didn't measure (a base that
+can't build HEAD's test, or a new shape) is held to the absolute bar alone;
+a shape the base measured and the head didn't fails.
 
 Prints a table of both runs and the ratios, and appends it to
 `$GITHUB_STEP_SUMMARY` when that is set. Exits 0 on a pass, 1 on a
@@ -36,7 +38,7 @@ import sys
 from pathlib import Path
 
 SCHEMA = "openxet.latency-gate.v1"
-#: Design §5.8.
+#: Design §5.8: reconstruction's bar, the default.
 P99_LIMIT_MS = 50.0
 #: Ruling M2-R17.
 MAX_RATIO = 1.25
@@ -106,11 +108,20 @@ def load(path: Path) -> tuple[dict[str, dict], str | None]:
     return runs, next(iter(builds), None)
 
 
+def positive_ms(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a positive number of milliseconds")
+    return value
+
+
 def ratio(head: float, base: float) -> str:
     return f"{head / base:.2f}" if base > 0 else "n/a"
 
 
-def compare(base: dict[str, dict], head: dict[str, dict]) -> tuple[list[str], list[str]]:
+def compare(
+    base: dict[str, dict], head: dict[str, dict], p99_limit: float = P99_LIMIT_MS
+) -> tuple[list[str], list[str]]:
     """(table lines, failures)."""
     table = [
         "| Shape | Base p50 / p99 (ms) | Head p50 / p99 (ms) | p50 ratio | p99 ratio | p99 bar (ms) | Result |",
@@ -122,13 +133,13 @@ def compare(base: dict[str, dict], head: dict[str, dict]) -> tuple[list[str], li
         b = base.get(shape)
         problems = []
         if b is None:
-            p99_bar = P99_LIMIT_MS
-            p99_over = h99 >= P99_LIMIT_MS
+            p99_bar = p99_limit
+            p99_over = h99 >= p99_limit
             base_cell, r50, r99 = "not measured (absolute bar only)", "n/a", "n/a"
         else:
             b50, b99 = float(b["p50_ms"]), float(b["p99_ms"])
-            p99_bar = max(P99_LIMIT_MS, MAX_RATIO * b99)
-            p99_over = h99 >= P99_LIMIT_MS and h99 > MAX_RATIO * b99
+            p99_bar = max(p99_limit, MAX_RATIO * b99)
+            p99_over = h99 >= p99_limit and h99 > MAX_RATIO * b99
             base_cell = f"{b50:.1f} / {b99:.1f}"
             r50, r99 = ratio(h50, b50), ratio(h99, b99)
             p50_bar = max(MAX_RATIO * b50, b50 + P50_FLOOR_MS)
@@ -158,7 +169,19 @@ def main(argv: list[str], env: dict[str, str]) -> int:
         required=True,
         help="the commit the head run must come from (in CI, the checked-out merge commit)",
     )
+    parser.add_argument(
+        "--p99-limit-ms",
+        type=positive_ms,
+        default=P99_LIMIT_MS,
+        help=f"the absolute p99 bar in ms (default {P99_LIMIT_MS:g}, design §5.8's reconstruction bar)",
+    )
+    parser.add_argument(
+        "--title",
+        default="Reconstruction latency gate",
+        help="the report's heading",
+    )
     args = parser.parse_args(argv)
+    limit = args.p99_limit_ms
     try:
         (base, base_build), (head, head_build) = load(args.base), load(args.head)
         if not head:
@@ -180,9 +203,9 @@ def main(argv: list[str], env: dict[str, str]) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    table, failures = compare(base, head)
+    table, failures = compare(base, head, limit)
     rule = (
-        f"A shape fails when head p99 >= {P99_LIMIT_MS:g} ms and > {MAX_RATIO} x base p99, "
+        f"A shape fails when head p99 >= {limit:g} ms and > {MAX_RATIO} x base p99, "
         f"or head p50 > max({MAX_RATIO} x base p50, base p50 + {P50_FLOOR_MS:g} ms) "
         "(ruling M2-R17)."
     )
@@ -193,10 +216,10 @@ def main(argv: list[str], env: dict[str, str]) -> int:
     if not base:
         verdict += (
             "\nThe base printed no measurements, so every shape is held "
-            f"to the absolute {P99_LIMIT_MS:g} ms bar.\n"
+            f"to the absolute {limit:g} ms bar.\n"
         )
     builds = f"Base build `{base_build or 'none'}`, head build `{head_build}`.\n\n"
-    report = "## Reconstruction latency gate\n\n" + builds + "\n".join(table) + f"\n\n{rule}\n\n{verdict}"
+    report = f"## {args.title}\n\n" + builds + "\n".join(table) + f"\n\n{rule}\n\n{verdict}"
     print(report)
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary:

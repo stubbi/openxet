@@ -45,8 +45,8 @@ CI runs both quickstarts as written on every change.
   [OpenAPI document](docs/reference/openapi.md)
 - [Security tests](docs/reference/security-tests.md): each security
   requirement and the test that enforces it
-- [Benchmarks](docs/reference/benchmarks.md): the latency gate and the
-  benchmarks, with their last results
+- [Benchmarks](docs/reference/benchmarks.md): the latency, fetch and
+  thin-base gates and the benchmarks, with their last results
 - [Changelog](CHANGELOG.md)
 - [Design](docs/superpowers/specs/2026-10-23-openxet-design.md),
   [architecture decisions](docs/adr/) and the

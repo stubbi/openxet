@@ -132,14 +132,35 @@ pub struct Oid(pub [u8; 20]);
 #[error("expected {0} hex characters")]
 pub struct ParseIdError(usize);
 
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+/// Lowercase hex, written in one call: a `tree` page formats thousands of
+/// ids, and a `write!` per byte cost more than reading the tree did.
 fn write_hex(f: &mut std::fmt::Formatter<'_>, bytes: &[u8]) -> std::fmt::Result {
-    for b in bytes {
-        write!(f, "{b:02x}")?;
+    let mut buf = [0u8; 64];
+    let out = buf.get_mut(..bytes.len() * 2).ok_or(std::fmt::Error)?;
+    for (pair, b) in out.chunks_exact_mut(2).zip(bytes) {
+        pair[0] = HEX_DIGITS[usize::from(b >> 4)];
+        pair[1] = HEX_DIGITS[usize::from(b & 0xf)];
     }
-    Ok(())
+    f.write_str(std::str::from_utf8(out).map_err(|_| std::fmt::Error)?)
 }
 
-fn parse_hex<const N: usize>(s: &str) -> Result<[u8; N], ParseIdError> {
+/// `bytes` as lowercase hex.
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .flat_map(|b| {
+            [
+                HEX_DIGITS[usize::from(b >> 4)],
+                HEX_DIGITS[usize::from(b & 0xf)],
+            ]
+        })
+        .map(char::from)
+        .collect()
+}
+
+pub(crate) fn parse_hex<const N: usize>(s: &str) -> Result<[u8; N], ParseIdError> {
     // Checked up front: `from_str_radix` alone would take a `+` sign.
     if s.len() != N * 2 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(ParseIdError(N * 2));

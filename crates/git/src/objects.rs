@@ -12,6 +12,7 @@
 //!
 //! [`SnapshotRepo`]: crate::SnapshotRepo
 
+mod helpers;
 mod pack;
 mod pointer;
 mod read;
@@ -22,6 +23,7 @@ use bytes::Bytes;
 use openxet_auth::UserPrincipal;
 use openxet_index::Oid;
 
+pub(crate) use helpers::HelperPermits;
 pub use pointer::{Pointer, canonical_pointer, parse_pointer};
 pub(crate) use write::HubWrites;
 #[cfg(feature = "fault-injection")]
@@ -62,6 +64,25 @@ pub struct Entry {
     pub path: String,
     /// What it is.
     pub kind: EntryKind,
+}
+
+/// Which page of a tree listing to read: the entries whose path sorts
+/// after `after` (by bytes), at most `limit` of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreePage<'a> {
+    /// The last path of the previous page; `None` for the first page.
+    pub after: Option<&'a str>,
+    /// The most entries the page holds.
+    pub limit: usize,
+}
+
+/// One page of a tree listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeListing {
+    /// The page's entries, ordered by path.
+    pub entries: Vec<Entry>,
+    /// Whether entries follow the page.
+    pub more: bool,
 }
 
 /// A file or a folder.

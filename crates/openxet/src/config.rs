@@ -1183,7 +1183,7 @@ fn git(c: &mut Checker<'_>, data_dir: Option<&Path>) -> Option<GitConfig> {
         c,
         "git.thin_bases.max_objects",
         thin.max_objects,
-        "The most objects a push's thin-base check may visit. 2000000 is the default.",
+        "The most objects a push's thin-base check may visit. 1000000 is the default.",
     );
     let thin_ms = budget_int(
         c,
