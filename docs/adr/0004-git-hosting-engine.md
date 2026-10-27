@@ -924,61 +924,85 @@ results below are **observed**.
     interleaving asserts I1 (item 3) and that nothing R22 refuses is
     served.
   - Each rule below must be covered by at least one test:
-    - [ ] pack state machine: `pending` → `committed` | `lost` | `expired`;
+    - [x] pack state machine: `pending` → `committed` | `lost` | `expired`;
       `committed` → `superseded`; reindex → `committed` | `recovered`;
       `recovered` → `committed` | `lost`, by operator action only. Every
       transition is guarded by its `WHERE state =` clause.
-    - [ ] the commit transaction holds ref CAS, pack commit, the
+      Tests: `mark_pack_is_guarded`, `packs_list_every_state_and_delete_is_guarded`, `reindex_restore_and_discard` (`crates/index/tests/git_store.rs`); `failed_commit_marks_pack_lost` (`crates/git/tests/receive_pack.rs`); `pending_packs_aged_out_by_gc` (`crates/git/tests/repack.rs`).
+    - [x] the commit transaction holds ref CAS, pack commit, the
       `full_repack_gen` check and the `ref_log` insert, atomically, for
       every ref writer. Any failure, the fence included, ends in `lost`
       or, after a crash, in `pending` and then `expired`.
-    - [ ] Hub ref writes and Hub commits obey the fence and the committed
+      Tests: `commit_applies_all_updates_or_none`, `commit_fenced_by_full_repack_gen`, `commit_writes_one_ref_log_row_per_update` (`crates/index/tests/git_store.rs`); `ref_log_in_cas_transaction`, `failed_commit_marks_pack_lost`, `publish_then_cas_survives_faults` (`crates/git/tests/receive_pack.rs`, `hub_objects.rs`, `repack.rs`); `pending_packs_aged_out_by_gc` (`crates/git/tests/repack.rs`).
+    - [x] Hub ref writes and Hub commits obey the fence and the committed
       set: gix reads and writes only on the request snapshot, Hub commits
       pass a connectivity check against it before the commit
       transaction, and Hub ref creates and updates target only objects
       R22 accepts
-    - [ ] the writer reachability rule, for pushes and Hub writes alike:
+      Tests: `hub_ref_write_fenced`, `hub_commit_on_snapshot`, `hub_commit_refusals_change_nothing`, `writer_cannot_make_unreachable_reachable` (`crates/git/tests/hub_objects.rs`).
+    - [x] the writer reachability rule, for pushes and Hub writes alike:
       only client-sent objects count, and every `--fix-thin` base must be
       reachable from the snapshot's refs: path-matched fast paths in
       boundary-commit and ref-tip trees, then a full walk under its own
       budget, failing closed with the thin-pack hint
-    - [ ] the known-limitation clients (bitmap-enabled, shallow, stale)
+      Tests: `writer_cannot_make_unreachable_reachable`, `stock_thin_push_takes_the_fast_path`, `fallback_walk_places_deep_bases_within_budget` (`crates/git/tests/thin_bases.rs`); `push_cannot_use_foreign_pending_objects` (`crates/git/tests/receive_pack.rs`); `push_cannot_use_superseded_objects` (`crates/git/tests/repack.rs`); `writer_cannot_make_unreachable_reachable` (`crates/git/tests/hub_objects.rs`).
+    - [x] the known-limitation clients (bitmap-enabled, shallow, stale)
       either push or are refused with the hint, and succeed as the hint
       says
-    - [ ] Hub reads by OID pass R22
-    - [ ] the v2 command allowlist: only `ls-refs` and `fetch`
-    - [ ] the lease epoch check at every repack publish
+      Tests: `known_limitation_clients` (`crates/git/tests/thin_bases.rs`).
+    - [x] Hub reads by OID pass R22
+      Tests: `hub_read_by_sha_obeys_r22` (`crates/git/tests/hub_objects.rs`).
+    - [x] the v2 command allowlist: only `ls-refs` and `fetch`
+      Tests: `v2_command_allowlist` (`crates/git/tests/upload_pack.rs`); `advertisement_filtered_to_the_allowlist` (`crates/git/src/ls_refs.rs`).
+    - [x] the lease epoch check at every repack publish
+      Tests: `repack_publish_lease_fenced` (`crates/git/tests/repack.rs`); `publish_repack_rejects_stale_epoch_and_advanced_ref_log`, `lease_epoch_increases_and_expires` (`crates/index/tests/git_store.rs`).
     - [ ] `recovered` packs are never exposed, never repack inputs and
       never collected. `reindex_unplaced` entries (`commit`, `tag`,
       `pack`, `edge`) persist, become keep roots and never block a full
       repack. Only restore or discard clears them, and they have a
       metric and an alert.
-    - [ ] unplaced annotated tags stay protected across full repacks,
+      Tests: `recovered_packs_never_exposed`, `reindex_unplaced_persisted`, `reindex_hold_never_blocks_repack` (`crates/git/tests/reindex.rs`); `unplaced_rows_persist_and_clear_by_coverage` (`crates/index/tests/git_store.rs`). Open: the metric and the alert ([#113](https://github.com/stubbi/openxet/issues/113)).
+    - [x] unplaced annotated tags stay protected across full repacks,
       and `restore` accepts a tag OID
-    - [ ] `discard --dry-run` labels committed-pack objects as deleted at
+      Tests: `reindex_unplaced_persisted` (`crates/git/tests/reindex.rs`: the tag of a tree survives a full repack, and `reindex_restore` takes the tag's OID).
+    - [x] `discard --dry-run` labels committed-pack objects as deleted at
       the next full repack with no grace period, and discard behaves so
-    - [ ] `ref_log` has the retention of item 3, and the bucket ref log is
+      Tests: `reindex_unplaced_persisted`, `discard_releases_committed_objects` (`crates/git/tests/reindex.rs`).
+    - [x] `ref_log` has the retention of item 3, and the bucket ref log is
       derived from it, for every ref writer
-    - [ ] new snapshots expose exactly the `committed` packs of one
+      Tests: `ref_log_in_cas_transaction` (`crates/git/tests/receive_pack.rs`, `hub_objects.rs`, and `repack.rs` for derivation and retention); `ref_log_head_and_prune` (`crates/index/tests/git_store.rs`).
+    - [x] new snapshots expose exactly the `committed` packs of one
       database snapshot, refs included. In-flight requests keep their
       links.
-    - [ ] a push's own pack is visible only through its quarantine
-    - [ ] hydration pins mtimes, and the leaseholder re-pins before a
+      Tests: `snapshot_exposes_only_its_pack_set` (in-flight links kept), `snapshot_serves_its_refs` (`crates/git/tests/snapshots.rs`); `snapshot_reads_refs_and_committed_packs_only` (`crates/index/tests/git_store.rs`).
+    - [x] a push's own pack is visible only through its quarantine
+      Tests: `push_cannot_use_foreign_pending_objects`, `push_round_trip` (`crates/git/tests/receive_pack.rs`); `hub_commit_retries_while_its_pack_is_being_deleted` (`crates/git/tests/hub_objects.rs`).
+    - [x] hydration pins mtimes, and the leaseholder re-pins before a
       repack
-    - [ ] keep refs cover the `ref_log` grace window during every repack
-    - [ ] geometric repacks drop nothing and take no fence
-    - [ ] full-repack fence in both directions: the `full_repack_gen` bump,
+      Tests: `hydrated_pack_mtime_pinned` (`crates/git/tests/snapshots.rs`, `crates/git/tests/repack.rs`).
+    - [x] keep refs cover the `ref_log` grace window during every repack
+      Tests: `keep_refs_cover_ref_log_window` (`crates/git/tests/repack.rs`).
+    - [x] geometric repacks drop nothing and take no fence
+      Tests: `geometric_repack_drops_nothing_and_takes_no_fence` (`crates/git/tests/repack.rs`).
+    - [x] full-repack fence in both directions: the `full_repack_gen` bump,
       and the publish abort on `ref_log` advance
-    - [ ] `.mtimes`, `.rev` and MIDX files travel through the bucket
-    - [ ] GC deletes pack side files with their pack and superseded MIDX
+      Tests: `full_repack_fence_both_directions` (`crates/git/tests/repack.rs`); `commit_fenced_by_full_repack_gen` (`crates/index/tests/git_store.rs`).
+    - [x] `.mtimes`, `.rev` and MIDX files travel through the bucket
+      Tests: `mtimes_rev_midx_travel_through_bucket` (`crates/git/tests/repack.rs`); `midx_linked_only_when_covered` (`crates/git/tests/snapshots.rs`).
+    - [x] GC deletes pack side files with their pack and superseded MIDX
       generations after the grace period, leaving no orphan
-    - [ ] GC deletes only superseded, lost and expired packs past the
+      Tests: `gc_removes_pack_side_files` (`crates/git/tests/repack.rs`).
+    - [x] GC deletes only superseded, lost and expired packs past the
       grace period. Superseded bucket objects survive their grace period.
-    - [ ] snapshot root on the cache filesystem, a sweep at start-up, and
+      Tests: `sweep_deletes_only_past_grace`, `sweep_keeps_files_another_row_names` (`crates/git/tests/repack.rs`).
+    - [x] snapshot root on the cache filesystem, a sweep at start-up, and
       link-count-aware eviction
-    - [ ] R22 reachability within its budget
-    - [ ] `reindex` rebuilds refs, `ref_log` and the pack list from the
+      Tests: `snapshot_dir_same_filesystem`, `stale_snapshots_swept`, `eviction_counts_links` (`crates/git/tests/snapshots.rs`).
+    - [x] R22 reachability within its budget
+      Tests: `reachability_budget_enforced`, `time_budget_stops_a_running_walk`, `concurrent_walks_hold_the_slots`, `over_the_limit_is_retryable` (`crates/git/tests/reachability.rs`).
+    - [x] `reindex` rebuilds refs, `ref_log` and the pack list from the
       bucket, and lists unplaced commits as recoverable
+      Tests: `reindex_unplaced_persisted`, `ref_fallback_stops_at_recreation`, `reindex_excludes_repacks_and_sweeps` (`crates/git/tests/reindex.rs`).
 - **Must stay true, with the tests that enforce it:**
   - `publish_then_cas_survives_faults`, a fault-injection test. It kills
     the node, or interleaves operations, at these points:
