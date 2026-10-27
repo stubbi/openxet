@@ -8,11 +8,11 @@ runs when one of its tests fails.
 A test is planned for the milestone that builds the surface it guards:
 M1 for the CAS, M2 for the Hub and Git, M5 for buckets, caches and the
 mirror.
-Pending rows name tests that are not written yet; their surface does not
-exist yet either. A row marked `pending (M2, <file>)` names the file its
-milestone's plan puts the test in
-([M2 plan](../superpowers/plans/2026-10-25-m2-hub-git-lfs.md)); the task
-that writes the test drops the `pending`.
+Every M0, M1 and M2 row names the test that enforces it. Pending rows
+name tests that are not written yet, for surfaces that don't exist yet
+either (buckets, caches and the mirror, M5). A row marked
+`pending (M5, <file>)` names the file its milestone's plan puts the test
+in; the task that writes the test drops the `pending`.
 
 `scripts/check-security-tests-map.py` checks this page in CI against the
 tests that actually run:
@@ -31,6 +31,10 @@ cargo nextest run --workspace
 uv run --directory compat pytest tests/test_fixture_redaction.py
 OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m agent
 OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m storage_only
+OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m hub
+OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m git
+eval "$(compat/gitea/seed.sh)"   # the LFS leg's Gitea
+OPENXET_BIN=$PWD/target/debug/openxet uv run --directory compat pytest -m lfs
 # The map check, against the tests that run:
 cargo nextest list --workspace --message-format json > /tmp/tests.json
 uv run --directory compat pytest --collect-only -q > /tmp/compat-tests.txt
@@ -47,7 +51,7 @@ scanned at teardown for every credential its clients sent
 | --- | --- | --- | --- |
 | 1 | `no_unauthenticated_reads` | `crates/cas/tests/reconstruction.rs` | M1 |
 | 1 | `signed_url_bound_to_range` | `crates/auth/tests/auth.rs` | M1 |
-| 1 | `no_unauthenticated_reads` | `crates/hub/tests/gateway.rs` | M2 (Hub and gateway URLs; LFS URLs with Task 14) |
+| 1 | `no_unauthenticated_reads` | `crates/hub/tests/gateway.rs` | M2 (Hub and gateway URLs) |
 | 1 | `anonymous_reads_only_with_rule` | `crates/hub/tests/security.rs` | M2 |
 | 1 | `test_anonymous_private_download_is_401_shape` | `compat/tests/test_hub.py` | M2 (stock `huggingface_hub`) |
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
@@ -103,8 +107,13 @@ Notes on what some tests cover:
 
 - `no_unauthenticated_reads` requests every CAS route without a credential,
   then every data URL the CAS emits without its exact range. Its M2 half
-  requests every Hub, file gateway and LFS URL OpenXet emits without a
-  credential.
+  requests every URL the Hub answers with, the file gateway's included,
+  without a credential. LFS `basic` download `href`s are file gateway
+  URLs; an LFS verify `href` sent without the host's credential is refused
+  in `xet_upload_verify_is_sent_with_the_host_credential`, and the LFS
+  batch and token routes without one in `lfs_token_routes_match_adr_0005`
+  and `first_push_without_create_creates_nothing`
+  (`crates/hub/tests/lfs.rs`).
 - `anonymous_reads_only_with_rule` checks that a request with no
   credential reads a repository only when an `[[auth.rules]]` entry
   grants `anonymous` read on it (ruling M2-R3).

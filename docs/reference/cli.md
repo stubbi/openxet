@@ -9,7 +9,7 @@ with `--json`, or without a terminal, no command reads stdin.
 | Command | Does | `--json` schema |
 | ------- | ---- | --------------- |
 | `openxet version` | Prints version and build information | `openxet.version.v1` |
-| `openxet serve` | Serves the Xet CAS | `openxet.serve.v1` |
+| `openxet serve` | Serves the Xet CAS, the Hub API and Git | `openxet.serve.v1` |
 | `openxet config check` | Validates and explains the server configuration | `openxet.config-check.v1` |
 | `openxet token keygen` | Writes a key pair for signing CAS tokens | `openxet.token-keygen.v1` |
 | `openxet token mint` | Signs a CAS token | `openxet.token-mint.v1` |
@@ -26,10 +26,12 @@ with `--json`, or without a terminal, no command reads stdin.
 openxet serve [--config FILE] [--data-dir DIR] [--port N] [--log-format text|json] [--json]
 ```
 
-Serves the CAS until `SIGTERM` or `SIGINT` (see
-[Lifecycle](config.md#lifecycle)). Without `--config`, or with a file that
-has no `[auth]` section, it runs in [dev mode](config.md#dev-mode) and
-prints a token. `--port 0` picks a free port; the ready line names it.
+Serves the CAS, the Hub API, Git smart HTTP and Git LFS on one port until
+`SIGTERM` or `SIGINT` (see [Lifecycle](config.md#lifecycle)). Without
+`--config`, or with a file that has no `[auth]` section, it runs in
+[dev mode](config.md#dev-mode) and prints a token. `--port 0` picks a free
+port; the ready line names it. It needs `git` 2.37 or newer on its `PATH`,
+and refuses to start, naming what to install, without it.
 
 Once the server is ready, stdout gets the banner, or with `--json` one
 line:
@@ -38,8 +40,10 @@ line:
 {"schema":"openxet.serve.v1","version":"0.0.0","endpoint":"http://127.0.0.1:8080","data_dir":"./openxet-data","scope":"default","mode":"write","token":"oxt_REDACTED","token_exp":4611686018427387904}
 ```
 
-`data_dir` is absolute. `scope`, `mode`, `token` and `token_exp` are `null`
-outside dev mode. Logs
+`endpoint` is the CAS's URL, and the Hub's (`HF_ENDPOINT`) unless
+`hub.public_url` names another ([config](config.md#hub)). `data_dir` is
+absolute. `scope`, `mode`, `token` and `token_exp` are `null` outside dev
+mode. Logs
 go to stderr. Exit codes: 0 after a graceful stop, 1 if startup fails (the
 error names what to fix) or after a second stop signal.
 

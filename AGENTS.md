@@ -232,13 +232,20 @@ One logical change per commit. Every commit builds and passes tests.
 ## Current state
 
 M1 complete: the storage-only CAS (`openxet serve`, `upload`, `download`;
-`docs/quickstart-storage-only.md`), with the compatibility suite's agent,
-storage-only and docs legs and the reconstruction latency gate in CI
-(`docs/reference/benchmarks.md`), and every CAS route in
-`docs/reference/routes.md`. M2 next: the Hub API, Git and LFS, per
-`docs/superpowers/plans/` once its plan is written. The design is approved,
-and ADR 0001 decides to build from scratch on `xet-core`'s crates (after
-evaluating existing Xet servers; see `docs/competitive-matrix.md`).
+`docs/quickstart-storage-only.md`). M2 complete except Task 20's
+benchmarks and latency gates: the Hub API for stock `huggingface_hub` and
+`hf`, Git hosting over smart HTTP on one history with Hub commits, the
+Git LFS endpoint for `git-xet`, generic labels and typed views, the
+`resolve` file gateway, the `xet://` contract (`crates/uri`),
+`openxet purge` and `openxet label`, and the OpenAPI document
+(`docs/quickstart-hub.md`; routes in `docs/reference/hub-routes.md`,
+`git-routes.md` and `lfs.md`). The compatibility suite runs the agent,
+storage-only, docs, Hub, Git and LFS legs in CI. M3 next: production
+backends (Postgres; S3, GCS and Azure), OIDC and the webhook authorizer,
+OpenXet-issued tokens and rate limits, per design §12, once its plan is
+written in `docs/superpowers/plans/`. ADR 0001 decides to build from
+scratch on `xet-core`'s crates (after evaluating existing Xet servers;
+see `docs/competitive-matrix.md`).
 
 ## Commands
 
@@ -286,7 +293,7 @@ cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace'
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
-OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # docs/quickstart-storage-only.md runs as written (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # both quickstarts run as written (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m hub          # stock huggingface_hub and hf against openxet's Hub API (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m git          # stock git over smart HTTP, one node and two (CI gate)
 eval "$(compat/gitea/seed.sh)"                             # start the LFS leg's Gitea (Docker or colima) and export its variables

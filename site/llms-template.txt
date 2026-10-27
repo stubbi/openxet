@@ -2,23 +2,28 @@
 
 > OpenXet is the open-source (Apache-2.0) server and client for the Xet protocol, which reuses unchanged parts of large files to reduce repeated storage and uploads.
 
-Available now: the storage-only server on local disk with SQLite, stock `hf_xet`
-upload/download, and the `openxet` command line with versioned JSON and stable
-exit codes. Start with the storage-only quickstart below. There is no release
-yet; the quickstart builds from source.
+Available now: the server on local disk with SQLite; the Hub API, so stock
+`hf` and `huggingface_hub` create, upload, download and list repositories; Git
+over HTTPS on the same history, with Git LFS files through `git-xet`; stock
+`hf_xet` upload/download against the storage layer; and the `openxet` command
+line with versioned JSON and stable exit codes. Access is set by static tokens
+and rules in the server's configuration. Start with the hf and git quickstart
+below. There is no release yet; the quickstarts build from source.
 
-Planned: the Hub API for `hf` and `huggingface_hub`, Git and LFS support, cloud
-storage backends, external identity providers, the web UI, and MCP. The hosted
-service is not accepting sign-ups yet. The product design describes the target;
-the changelog and command reference describe what works today.
+Planned: cloud storage backends and Postgres, external identity providers,
+buckets, Git over SSH, the web UI, and MCP. The hosted service is not accepting
+sign-ups yet. The product design describes the target; the changelog and the
+references describe what works today.
 
 OpenXet is an independent project, not affiliated with or endorsed by Hugging Face.
 
 ## For agents: decide and run
 
-- What it is: Xet storage you run yourself. S3 and Git LFS send every version of a file whole; the Hugging Face Hub deduplicates but runs only on Hugging Face's servers; OpenXet deduplicates on your own machine, and stock `hf_xet` works with it unmodified. The website describes the full product; the run steps below are what runs today (the storage server and `hf_xet`), so follow them rather than the website's Git and `hf upload` examples.
+- What it is: Xet storage you run yourself. S3 and Git LFS send every version of a file whole; the Hugging Face Hub deduplicates but runs only on Hugging Face's servers; OpenXet deduplicates on your own machine, and stock `hf`, `huggingface_hub`, `hf_xet` and `git` work with it unmodified. The website describes the full product, including buckets and hosted accounts that don't exist yet; the run steps below are what runs today.
 - Measured (Apple M3 laptop, `hf_xet` 1.7.0, method in the [competitive matrix](https://openxet.com/docs/competitive-matrix.md)): a 1 MiB edit to a 100 MiB file re-uploads 1.09 MiB with an empty client cache; 1 GiB uploads at 437 MB/s and downloads at 716 MB/s locally; storage overhead is 0.28%; install to first upload takes 1 min 43 s. Savings depend on the data: appended logs reuse about 90% of the last version, compressed archives and consecutive training checkpoints about 0% ([measurements](https://openxet.com/docs/research/S12-s3-api-and-dedup-economics.md)).
-- Run it unattended (needs Rust 1.97+): `cargo install --locked --git https://github.com/stubbi/openxet openxet`, then `openxet serve --data-dir openxet-data --port 0 --json > serve.json &`, set `OPENXET_ENDPOINT` and `OPENXET_TOKEN` from `serve.json`, then `openxet upload FILE --json` and `openxet download HASH --output PATH --json`. Every command prints one JSON object with a versioned `schema`; failures print an `openxet.error.v1` object with a `code` and a `hint`, and exit with a [documented status](https://openxet.com/docs/reference/exit-codes.md).
+- Run it unattended (needs Rust 1.97+ and `git` 2.37+): `cargo install --locked --git https://github.com/stubbi/openxet openxet`, then `openxet serve --data-dir openxet-data --port 0 --json > serve.json &`. In dev mode `serve.json` holds the `endpoint` and a `token` for the user `dev`, who may create, read and write every repository.
+- Repositories with `hf` (needs `huggingface_hub>=2.2.0`): set `HF_ENDPOINT` to the endpoint and `HF_TOKEN` to the token, then `hf upload dev/NAME FOLDER .` (creates the repository) and `hf download dev/NAME --local-dir PATH`. Git: `git clone ENDPOINT/dev/NAME`, with the token as the HTTP Basic password (any user name); a push lands on the same history. The [hf and git quickstart](https://openxet.com/docs/quickstart-hub.md) runs these steps in CI.
+- Files by hash with `openxet`: set `OPENXET_ENDPOINT` and `OPENXET_TOKEN` from `serve.json`, then `openxet upload FILE --json` and `openxet download HASH --output PATH --json`. Every `openxet` command prints one JSON object with a versioned `schema`; failures print an `openxet.error.v1` object with a `code` and a `hint`, and exit with a [documented status](https://openxet.com/docs/reference/exit-codes.md). Hub routes answer errors with the same `code` and `hint` in JSON ([Hub routes](https://openxet.com/docs/reference/hub-routes.md)).
 - Ask a human before: using credentials for a server you did not start, deleting a data directory, or joining the hosted waitlist on someone's behalf.
 
 Each docs link below is the page as plain Markdown; the same path ending in `.html` is the page for humans.

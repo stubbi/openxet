@@ -10,30 +10,39 @@ The goal: the official tools (`hf`, `huggingface_hub`, `hf_xet`, `git-xet`,
 bucket, identity stays in your login system, and only changed chunks move.
 A hosted version will be available at [openxet.com](https://openxet.com).
 
-> **Status: the storage server works; the Hub API is next.** Milestone M1
-> is done: `openxet serve` is a Xet CAS that stock `hf_xet` (1.7.0 and
-> newer) uploads to and downloads from directly, with global dedup,
-> verified uploads, scoped tokens and signed, range-bound download URLs.
-> Reconstruction answers a 100k-term file within 50 ms at p99 on an idle
-> node, gated in CI. It runs on local disk with a SQLite index. Next, M2
-> adds the Hub API, so
-> `hf upload`, `huggingface_hub` and Git work too; S3, GCS, Azure and
-> Postgres come in M3. There is no release yet.
+> **Status: the storage server and the Hub API work.** `openxet serve` is
+> a Xet CAS that stock `hf_xet` (1.7.0 and newer) uploads to and downloads
+> from directly, with global dedup, verified uploads, scoped tokens and
+> signed, range-bound download URLs. On top of it, stock `hf` and
+> `huggingface_hub` (2.2.0 and newer) create repositories, upload, download
+> and list them, and `git clone` and `git push` work over HTTPS on the same
+> history, with large files through Git LFS and `git-xet`. Reconstruction
+> answers a 100k-term file within 50 ms at p99 on an idle node, gated in
+> CI. It runs on local disk with a SQLite index; S3, GCS, Azure and
+> Postgres come next, in M3. There is no release yet.
 
 ## Try it
 
-[Quickstart](docs/quickstart-storage-only.md): start a server and upload
-and download a file with `hf_xet` and with the `openxet` command line.
-Once `openxet` is built, the whole walkthrough takes under a second; CI
-runs it on every change.
+- [Quickstart: hf and git](docs/quickstart-hub.md): start a server, upload
+  a folder with `hf upload`, download it, then clone, change and push it
+  with `git`.
+- [Quickstart: storage only](docs/quickstart-storage-only.md): the storage
+  layer on its own, with `hf_xet` and the `openxet` command line.
+
+CI runs both quickstarts as written on every change.
 
 ## Documentation
 
-- [Quickstart](docs/quickstart-storage-only.md)
+- Quickstarts: [hf and git](docs/quickstart-hub.md) and
+  [storage only](docs/quickstart-storage-only.md)
+- Guides: [Git hosting](docs/guides/git-hosting.md) and
+  [Git LFS for any Git host](docs/guides/lfs-for-any-repo.md)
 - [Server configuration](docs/reference/config.md),
   [command line](docs/reference/cli.md),
-  [exit codes](docs/reference/exit-codes.md) and
-  [CAS routes](docs/reference/routes.md)
+  [exit codes](docs/reference/exit-codes.md), and the routes:
+  [Hub](docs/reference/hub-routes.md), [Git](docs/reference/git-routes.md),
+  [Git LFS](docs/reference/lfs.md), [CAS](docs/reference/routes.md) and the
+  [OpenAPI document](docs/reference/openapi.md)
 - [Security tests](docs/reference/security-tests.md): each security
   requirement and the test that enforces it
 - [Benchmarks](docs/reference/benchmarks.md): the latency gate and the
