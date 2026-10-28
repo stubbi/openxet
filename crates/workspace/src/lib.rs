@@ -42,7 +42,8 @@ pub use hooks::{
 pub use paths::{ProjectId, STATE_DIR_ENV, state_dir};
 pub use registry::{Registry, Workspace, WorkspaceId};
 pub use seed::{
-    SeedReport, SeedSkip, nearest_sibling, reflink_supported, seed, seed_with, seedable_bytes,
+    SETTLE_CAP, SeedReport, SeedSkip, SettleWait, nearest_sibling, reflink_supported, seed,
+    seed_with, seedable_bytes, wait_until_settled,
 };
 pub use space::{
     Budget, IDLE_AFTER, Volume, allocated_bytes, default_floor, is_idle, user_config_path, volume,

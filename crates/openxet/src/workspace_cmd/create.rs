@@ -2,12 +2,13 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use openxet_workspace::{
-    Presets, ProjectId, Registry, SeedReport, SeedSkip, Workspace, WorkspaceError, WorkspaceId,
-    active_workspaces, add_worktree, branch_exists, delete_branch, free_to_floor, main_worktree,
-    nearest_sibling, remove_worktree, resolve_commit, seed, seedable_bytes,
+    Presets, ProjectId, Registry, SETTLE_CAP, SeedReport, SeedSkip, SettleWait, Workspace,
+    WorkspaceError, WorkspaceId, active_workspaces, add_worktree, branch_exists, delete_branch,
+    free_to_floor, main_worktree, nearest_sibling, remove_worktree, resolve_commit, seed,
+    seedable_bytes, wait_until_settled,
 };
 use serde::Serialize;
 
@@ -56,6 +57,12 @@ pub struct Created {
     /// Why seeding failed, for `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     seed_error: Option<String>,
+    /// How long seeding waited for the sibling's newest build outputs to
+    /// settle, or for its Cargo build to finish.
+    seed_waited_ms: u64,
+    /// Whether the sibling was still building when the wait gave up, so
+    /// only the outputs settled by then were cloned.
+    seed_unsettled: bool,
     /// Whether this command started the workspace daemon, which was not
     /// running.
     daemon_started: bool,
@@ -94,6 +101,18 @@ impl HumanDisplay for Created {
             ),
             (None, Some(from)) if self.dry_run => format!(
                 "Would clone {} of build outputs from {from}.",
+                human_bytes(self.seeded_bytes)
+            ),
+            (None, Some(from)) if self.seed_unsettled => format!(
+                "{from} was still building after {} s, so only the {} of build outputs settled \
+                 by then were cloned, sharing their disk blocks; the first build makes the rest.",
+                self.seed_waited_ms / 1000,
+                human_bytes(self.seeded_bytes)
+            ),
+            (None, Some(from)) if self.seed_waited_ms >= 1000 => format!(
+                "Waited {:.1} s for {from}'s newest build outputs to settle, then cloned {} of \
+                 them, sharing their disk blocks.",
+                Duration::from_millis(self.seed_waited_ms).as_secs_f64(),
                 human_bytes(self.seeded_bytes)
             ),
             (None, Some(from)) => format!(
@@ -160,6 +179,8 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
             Some(SeedSkip::Failed(reason)) => Some(reason),
             _ => None,
         },
+        seed_waited_ms: 0,
+        seed_unsettled: false,
         daemon_started: false,
         daemon_error: None,
         dry_run,
@@ -184,7 +205,7 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
     // Seeded before it is registered, so the daemon starts watching it only
     // afterwards and never takes the seed's clones for new files to
     // deduplicate.
-    let (report, from) = seed_from_sibling(&registry, &project, &path, &base).await;
+    let (report, from, wait) = seed_from_sibling(&registry, &project, &path, &base).await;
     let now = SystemTime::now();
     let workspace = Workspace {
         id: WorkspaceId::generate(),
@@ -203,6 +224,10 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
         return Err(error(err));
     }
     let mut created = result(&path, report, from, false);
+    if let Some(wait) = wait {
+        created.seed_waited_ms = u64::try_from(wait.waited.as_millis()).unwrap_or(u64::MAX);
+        created.seed_unsettled = !wait.settled;
+    }
     if context.start_daemon {
         match daemon::start(&context.state_dir) {
             Ok(started) => created.daemon_started = started,
@@ -252,18 +277,25 @@ async fn seed_from_sibling(
     project: &ProjectId,
     path: &Path,
     base: &str,
-) -> (SeedReport, Option<PathBuf>) {
+) -> (SeedReport, Option<PathBuf>, Option<SettleWait>) {
     let failed = |err: WorkspaceError| SeedReport {
         cloned_bytes: 0,
         skipped: Some(SeedSkip::Failed(err.to_string())),
     };
     let presets = match Presets::load(path) {
         Ok(presets) => presets,
-        Err(err) => return (failed(err), None),
+        Err(err) => return (failed(err), None, None),
     };
     match nearest_sibling(registry, project, path, base).await {
-        Ok(from) => (seed(path, from.as_deref(), &presets), from),
-        Err(err) => (failed(err), None),
+        // Seeding right after a sibling's build would skip its newest
+        // outputs, which are still in the settle window, and the first
+        // build would remake them.
+        Ok(Some(from)) => {
+            let wait = wait_until_settled(&from, &presets, SETTLE_CAP);
+            (seed(path, Some(&from), &presets), Some(from), Some(wait))
+        }
+        Ok(None) => (seed(path, None, &presets), None, None),
+        Err(err) => (failed(err), None, None),
     }
 }
 
@@ -348,6 +380,24 @@ mod tests {
         }
         let registry = Registry::open(&fx.context.state_dir).await.unwrap();
         assert_eq!(registry.list(None).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_waits_for_a_sibling_build_output_to_settle() {
+        let fx = Fixture::new();
+        let first = create(&args("first"), &fx.context).await.unwrap();
+        let first_path = PathBuf::from(&first.path);
+        fs::create_dir_all(first_path.join("target/debug")).unwrap();
+        fs::write(first_path.join("target/debug/just-linked"), vec![5u8; 8192]).unwrap();
+
+        let second = create(&args("second"), &fx.context).await.unwrap();
+
+        assert!(second.seed_waited_ms >= 1500, "{}", second.seed_waited_ms);
+        assert!(!second.seed_unsettled);
+        if openxet_workspace::reflink_supported(&fx.main) {
+            assert_eq!(second.seeded_bytes, 8192, "the settled file is cloned");
+            assert!(second.human().contains("Waited"));
+        }
     }
 
     #[tokio::test]
