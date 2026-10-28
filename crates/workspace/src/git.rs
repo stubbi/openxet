@@ -208,6 +208,77 @@ pub fn main_worktree(dir: &Path) -> Result<PathBuf, WorkspaceError> {
         })
 }
 
+/// The root of the worktree `dir` is in (`git rev-parse --show-toplevel`).
+///
+/// # Errors
+///
+/// [`WorkspaceError::NotARepository`] if `dir` is in no worktree, and
+/// [`WorkspaceError::Git`] if Git fails otherwise.
+pub fn worktree_root(dir: &Path) -> Result<PathBuf, WorkspaceError> {
+    let args = ["rev-parse", "--show-toplevel"];
+    let output = run(dir, &args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // The last is what Git says inside a bare repository, which has no
+        // worktree to adopt.
+        if stderr.contains("not a git repository")
+            || stderr.contains("cannot change to")
+            || stderr.contains("must be run in a work tree")
+        {
+            return Err(WorkspaceError::NotARepository {
+                path: dir.to_path_buf(),
+            });
+        }
+        return Err(failed(&args, &output));
+    }
+    let mut out = output.stdout;
+    if out.last() == Some(&b'\n') {
+        out.pop();
+    }
+    Ok(PathBuf::from(OsStr::from_bytes(&out)))
+}
+
+/// The branch checked out in the worktree `dir`, or `None` when its `HEAD`
+/// is detached.
+pub(crate) fn current_branch(dir: &Path) -> Result<Option<String>, WorkspaceError> {
+    let branch = stdout_line(dir, &["branch", "--show-current"])?;
+    Ok(Some(branch).filter(|branch| !branch.is_empty()))
+}
+
+/// One entry of `git worktree list --porcelain`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListedWorktree {
+    pub path: PathBuf,
+    /// The repository's own Git directory, for a bare repository.
+    pub bare: bool,
+    /// Git found its directory gone (`prunable`).
+    pub prunable: bool,
+}
+
+/// Every worktree of the repository `dir` is in, the main worktree first
+/// (git-worktree(1), "Porcelain Format": with `-z`, one NUL-terminated
+/// attribute per line and an empty line between worktrees).
+pub(crate) fn list_worktrees(dir: &Path) -> Result<Vec<ListedWorktree>, WorkspaceError> {
+    let listed = stdout(dir, &["worktree", "list", "--porcelain", "-z"])?;
+    let mut worktrees: Vec<ListedWorktree> = Vec::new();
+    for line in listed.split(|&b| b == 0) {
+        if let Some(path) = line.strip_prefix(b"worktree ") {
+            worktrees.push(ListedWorktree {
+                path: PathBuf::from(OsStr::from_bytes(path)),
+                bare: false,
+                prunable: false,
+            });
+        } else if let Some(current) = worktrees.last_mut() {
+            if line == b"bare" {
+                current.bare = true;
+            } else if line == b"prunable" || line.starts_with(b"prunable ") {
+                current.prunable = true;
+            }
+        }
+    }
+    Ok(worktrees)
+}
+
 /// The commit checked out in the worktree `dir`, or `None` before its first
 /// commit.
 pub(crate) fn head(dir: &Path) -> Option<String> {

@@ -294,6 +294,10 @@ mod tests {
             r#"["workspace", "list""#,
             r#"["workspace", "status""#,
             r#"["workspace", "remove""#,
+            r#"["workspace", "adopt""#,
+            r#"["workspace", "hook", "claude-create""#,
+            r#"["workspace", "hook", "claude-remove""#,
+            r#"["workspace", "install", "claude""#,
         ] {
             assert!(
                 listed.iter().any(|l| l == invocation),
