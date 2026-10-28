@@ -67,6 +67,7 @@
     {"input": "xet://:8080/team/corpus", "code": "missing_host"},
     {"input": "xet://hub..example.org/team/corpus", "code": "invalid_host"},
     {"input": "xet://-hub.example.org/team/corpus", "code": "invalid_host"},
+    {"input": "xet://xn--0.example.org/team/corpus", "code": "invalid_host"},
     {"input": "xet://hub.example.org./team/corpus", "code": "invalid_host"},
     {"input": "xet://127.1/team/corpus", "code": "invalid_host"},
     {"input": "xet://127.000.0.1/team/corpus", "code": "invalid_host"},
