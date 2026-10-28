@@ -481,10 +481,14 @@ with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
 | Local 1 | 45.2 MiB | 88.1 MiB | 1.950 (fails) | 1.1 MiB of 50.9 MiB (fails) | 0.960 (workspace 0.078 s, plain 0.081 s) | 1.018 (workspace 0.403 s, plain 0.396 s) |
 | Local 2 | 47.6 MiB | 45.3 MiB | 0.950 | 0.6 MiB of 50.9 MiB (fails) | not run | not run |
 | Local 3 | 47.7 MiB | 45.6 MiB | 0.956 | 0.5 MiB of 50.9 MiB (fails by 27 KiB) | not run | not run |
+| CI, PR #128 | 77.1 MiB | 203.9 MiB | 2.643 (fails) | 1.4 MiB under 426.3 MiB (passes) | 1.000 (0.032 s each) | 1.000 (0.215 s each) |
 
 Local is the machine above, on a sparse APFS image, with other sessions'
-builds running (8 `rustc` and `cargo` processes at the start). CI numbers
-come from the `workspaces-gate` job's log.
+builds running (8 `rustc` and `cargo` processes at the start). CI is the
+`workspaces-gate` job on `ubuntu-latest`, XFS with reflink on a loop
+file; the whole marker took 30 s there, so the five workspaces were created
+within moments of `ws1`'s build ending. Its per-workspace build logs are not
+in the job's output, so which units rebuilt there was not checked.
 
 What the local runs show:
 
