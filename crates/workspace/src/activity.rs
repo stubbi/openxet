@@ -54,7 +54,7 @@ fn process_cwds() -> Option<Vec<PathBuf>> {
 }
 
 /// Every visible process's current directory, from the `/proc/<pid>/cwd`
-/// links (proc_pid_cwd(5)). Other users' processes can't be read and are
+/// links (`proc_pid_cwd(5)`). Other users' processes can't be read and are
 /// left out.
 #[cfg(target_os = "linux")]
 fn process_cwds() -> Option<Vec<PathBuf>> {
