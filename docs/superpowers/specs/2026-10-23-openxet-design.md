@@ -1176,6 +1176,9 @@ OpenXet is built for people **and** AI agents, and for the two working
 together. Each gets the best possible experience, and neither is a
 degraded mode of the other.
 
+Day to day, agents are the primary user and the human sets their limits;
+every guarantee below stays ([ADR 0014](../../adr/0014-agents-are-the-primary-daily-user.md)).
+
 **For humans:**
 - Readable output, progress bars and helpful prompts. Safe defaults with
   confirmation before destructive actions.
@@ -1887,6 +1890,9 @@ built, so anyone can try it early, but no milestone waits on that. The work
 is built by the user with coding agents, so the plan sequences milestones
 but sets no calendar dates. M8 is the hosted service on openxet.com, not a
 release of the open-source build: it runs the released build (§15).
+
+Agent workspaces come after M2 and before M3 to M8, with M3 interleaved as
+[ADR 0013](../../adr/0013-agent-workspaces-come-next.md) says.
 
 
 - **M0:**
