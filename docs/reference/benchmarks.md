@@ -489,6 +489,7 @@ with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
 | Local, with PR #133, 1 | 44.2 MiB | 44.8 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.548 | 0.660 |
 | Local, with PR #133, 2 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.986 | 0.802 |
 | Local, with PR #133, 3 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.988 | 1.169 (fails) |
+| CI, with PR #133 | 85.8 MiB | 80.7 MiB | 0.941 | 2.2 MiB under 426.4 MiB | 1.000 | 1.000 |
 
 Local is the machine above, on a sparse APFS image, with other sessions'
 builds running. CI is the `workspaces-gate` job on `ubuntu-latest`, XFS
@@ -505,7 +506,8 @@ What the runs show:
   19% of a build, each). With PR #133, `create` waits for the sibling to
   settle: `ws2` waited 1.8 to 2.1 s, the others under 0.1 s, all 15 seeded
   workspaces of the three runs compiled 0 units, and the peak of six is 1.01
-  builds.
+  builds. In CI, `ws2` waited 2.0 s, no seeded workspace compiled a unit,
+  and the peak is 0.94 builds.
 - **What is left after removal is the registry's write-ahead log.** In a
   reproduction of the test, SQLite's WAL grew from 82 KiB to 569 KiB and
   the database file from 4 KiB to 48 KiB; together they are the 0.5 MiB
