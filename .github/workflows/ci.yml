@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xfsprogs
+          sudo apt-get install -y --no-install-recommends xfsprogs inotify-tools
           image="$RUNNER_TEMP/workspaces.img"
           volume="$RUNNER_TEMP/workspaces-volume"
           truncate -s 20G "$image"

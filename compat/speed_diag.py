@@ -31,7 +31,7 @@ def timed_build(p, checkout):
     return wall, compiled
 
 
-def run(daemon: bool, label: str):
+def run(mode: str, label: str):
     root = Path(tempfile.mkdtemp(dir=volume))
     home = Path(tempfile.mkdtemp())
     procs = tw.Processes()
@@ -40,8 +40,18 @@ def run(daemon: bool, label: str):
         plain = root / "plain"
         p.git(root, "clone", "--quiet", "--local", str(p.repo), str(plain))
         ws = Path(p.create("timed")["path"])
-        if daemon:
+        if mode == "on":
             p.start_daemon()
+        elif mode == "on-nice":
+            log = (p.logs / "daemon.log").open("ab")
+            procs.start(["nice", "-n", "19", p.openxet_bin, "workspace", "daemon"],
+                        env=p.env, cwd="/", stdout=log, stderr=log)
+            time.sleep(2)
+            assert p.openxet("workspace", "status")["daemon_running"]
+        elif mode == "inotifywait":
+            procs.start(["inotifywait", "-m", "-r", "-q", "-e", "open,modify,close_write,create,delete,moved_to,moved_from,attrib", str(ws)],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(2)
         t0 = time.perf_counter()
         p.build(plain)
         p.build(ws)
@@ -74,5 +84,5 @@ def run(daemon: bool, label: str):
 
 
 for r in range(repeats):
-    run(True, f"daemon-on#{r}")
-    run(False, f"daemon-off#{r}")
+    for mode in ("on", "on-nice", "inotifywait", "off"):
+        run(mode, f"{mode}#{r}")
