@@ -37,10 +37,13 @@ def run(mode: str, label: str):
     procs = tw.Processes()
     try:
         p = tw.Project(os.environ["OPENXET_BIN"], root, home / "home", procs)
+        if mode == "on-state-elsewhere":
+            # The registry off the measured volume, on the runner's own disk.
+            p.env["OPENXET_WORKSPACE_STATE"] = str(home / "state")
         plain = root / "plain"
         p.git(root, "clone", "--quiet", "--local", str(p.repo), str(plain))
         ws = Path(p.create("timed")["path"])
-        if mode == "on":
+        if mode in ("on", "on-state-elsewhere"):
             p.start_daemon()
         elif mode == "on-nice":
             log = (p.logs / "daemon.log").open("ab")
@@ -63,8 +66,15 @@ def run(mode: str, label: str):
                 return db.execute("select count(*) from canonical_files").fetchone()[0]
             finally:
                 db.close()
+        def cpu():
+            if not procs.children:
+                return 0.0
+            fields = Path(f"/proc/{procs.children[0].pid}/stat").read_text().rsplit(")", 1)[1].split()
+            return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+
         for kind, prepare in (("no-op", lambda c: None), ("incremental", lambda c: os.utime(c / tw.TOUCHED))):
             t = {plain: [], ws: []}
+            cpu_before = cpu()
             for i in range(5):
                 order = (plain, ws) if i % 2 == 0 else (ws, plain)
                 for c in order:
@@ -78,11 +88,12 @@ def run(mode: str, label: str):
                     print(f"{label} {kind} round {i} {side}: at {at:.2f}s wall {wall:.3f} "
                           f"hashed +{after - before} files {compiled}", flush=True)
             print(f"SUMMARY {label} {kind}: plain {t[plain]} workspace {t[ws]} ratio "
-                  f"{statistics.median(t[ws]) / statistics.median(t[plain]):.3f}", flush=True)
+                  f"{statistics.median(t[ws]) / statistics.median(t[plain]):.3f} "
+                  f"watcher cpu {cpu() - cpu_before:.2f}s", flush=True)
     finally:
         procs.stop_all()
 
 
 for r in range(repeats):
-    for mode in ("on", "on-nice", "inotifywait", "off"):
+    for mode in ("on", "on-state-elsewhere", "inotifywait", "off"):
         run(mode, f"{mode}#{r}")
