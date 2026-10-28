@@ -10,6 +10,7 @@ benchmark, and a speed regression fails CI.
 | Hub token, resolve and tree latency, design §5.8 | CI gate (Linux runner), compared like the reconstruction gate (ruling M2-R17); locally, needs a quiet machine | `cargo nextest run --release -p openxet-hub -E 'binary(hub_latency_gate)' --no-capture` |
 | Serving a clone: OpenXet's CPU against git's | CI gate (Linux runner), both measured in the same run | `cargo nextest run --release -p openxet-git -E 'binary(fetch_gate)' --no-capture` |
 | The thin-base walk and `git.thin_bases`' defaults | CI gate (Linux runner) | `cargo nextest run --release -p openxet-git -E 'binary(thin_bases_budget)' --no-capture` |
+| Agent workspaces: disk at the peak of six concurrent builds, build speed, spec 2026-10-27 §2 | CI gate (Linux runner, XFS loop volume); locally, needs a volume with clones that nothing else writes to | `OPENXET_BIN=$PWD/target/debug/openxet OPENXET_COMPAT_WORKSPACE_VOLUME=<dir> uv run --frozen --directory compat pytest -m workspaces -s` |
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 | Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
@@ -443,6 +444,83 @@ The defaults, from these numbers:
 
 The test asserts both: the full walk fits `max_objects`, and the push
 through it finishes within `max_ms`.
+
+## Agent workspaces gate
+
+The success test of the [agent workspaces
+spec](../superpowers/specs/2026-10-27-agent-workspaces-design.md) (§2), on
+`compat/fixtures/workspace-project`: three crates on `serde` with `derive`,
+`serde_json` and `itoa` (14 units, build scripts and a proc macro), built
+offline from vendored sources outside every checkout.
+`compat/tests/test_workspaces.py`:
+
+- **Flat disk.** The registry is opened first (`openxet workspace
+  status`), since it stays on any machine that uses workspaces; the claim
+  is that removing workspaces leaves none of their data. Then `openxet
+  workspace create` makes `ws1`, which is built alone; the volume's peak
+  used bytes over the time just before that build is one build's
+  footprint. Five more workspaces are created (each seeded by clone from
+  the nearest sibling), the daemon is started, and all six build at once.
+  The peak used bytes over the baseline taken before `ws1` existed must
+  stay within 1.5 builds (1 plus 5 times 10%), and after `openxet
+  workspace remove` of all six, used bytes must come back within 1% of
+  that baseline. The test prints how long each seed waited and the units
+  each workspace's builds compiled (Cargo's JSON messages, `fresh` false).
+- **Build speed.** A workspace and a plain `git clone --local` of the same
+  repository, each built once, then 5 no-op builds and 5 builds after
+  touching `crates/model/src/lib.rs` in each, alternating which goes first.
+  The median in the workspace must be at most 1.10 times the plain clone's.
+
+Used bytes are the volume's (`statvfs`), sampled every 200 ms, not `du`,
+which counts every clone in full. The measured volume must hold nothing
+else: CI's `workspaces-gate` job mounts a fresh 20 GiB XFS loop volume made
+with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
+(`hdiutil create -size 20g -fs APFS -type SPARSE`) mounted and named by
+`OPENXET_COMPAT_WORKSPACE_VOLUME`.
+
+<!-- table-caption: The agent workspaces gate, 2026-10-28 -->
+
+| Run | Solo build | Peak of six over baseline | Share of one build (bar 1.50) | Left after removal (bar 1% of baseline) | No-op ratio (bar 1.10) | Incremental ratio (bar 1.10) |
+|---|---|---|---|---|---|---|
+| Local, before PR #133, 1 | 45.2 MiB | 88.1 MiB | 1.950 (fails) | 1.1 MiB of 50.9 MiB (fails) | 0.960 | 1.018 |
+| Local, before PR #133, 2 | 47.6 MiB | 45.3 MiB | 0.950 | 0.6 MiB of 50.9 MiB (fails) | not run | not run |
+| Local, before PR #133, 3 | 47.7 MiB | 45.6 MiB | 0.956 | 0.5 MiB of 50.9 MiB (fails) | not run | not run |
+| CI, before PR #133 | 77.1 MiB | 203.9 MiB | 2.643 (fails) | 1.4 MiB under 426.3 MiB | 1.000 | 1.000 |
+| Local, with PR #133, 1 | 44.2 MiB | 44.8 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.548 | 0.660 |
+| Local, with PR #133, 2 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.986 | 0.802 |
+| Local, with PR #133, 3 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.988 | 1.169 (fails) |
+| CI, with PR #133 | 85.8 MiB | 80.7 MiB | 0.941 | 2.2 MiB under 426.4 MiB | 1.000 | 1.000 |
+
+Local is the machine above, on a sparse APFS image, with other sessions'
+builds running. CI is the `workspaces-gate` job on `ubuntu-latest`, XFS
+with reflink on a loop file. Before PR #133, the registry was not opened
+before the baseline.
+
+What the runs show:
+
+- **Seeding has to wait for the sibling's build to settle.** Seeding never
+  clones a file modified in the last 2 s, and the test creates `ws2` right
+  after `ws1`'s build. Before PR #133 the newest outputs were left out, and
+  Cargo rebuilt the crates they belong to in every seeded workspace (in
+  local run 1, `serde`, `model`, `codec` and `report`, about 8.6 MiB, or
+  19% of a build, each). With PR #133, `create` waits for the sibling to
+  settle: `ws2` waited 1.8 to 2.1 s, the others under 0.1 s, all 15 seeded
+  workspaces of the three runs compiled 0 units, and the peak of six is 1.01
+  builds. In CI, `ws2` waited 2.0 s, no seeded workspace compiled a unit,
+  and the peak is 0.94 builds.
+- **What is left after removal is the registry's write-ahead log.** In a
+  reproduction of the test, SQLite's WAL grew from 82 KiB to 569 KiB and
+  the database file from 4 KiB to 48 KiB; together they are the 0.5 MiB
+  left. No row is left: the workspace and dedup tables are empty after
+  removal. The daemon's log is two lines (started, stopped).
+- **The CI job is the gate for build speed; local runs are indicative.**
+  On a shared machine, local medians swing from 40 to 410 ms, so a single
+  ratio can cross 1.10 without a regression. That happened in local run 3:
+  incremental builds took 0.41 s in the workspace and 0.35 s in the plain
+  clone. The other local runs gave 0.66 and 0.80, and CI's runner, whose
+  times spread far less, gave 1.000. A local failure on a busy host, with
+  CI green, is load, not a regression. This is how the latency gate treats
+  slow runners.
 
 ## Criterion: reconstruction
 
