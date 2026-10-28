@@ -225,7 +225,9 @@ class Project:
     def start_build(self, checkout: Path) -> subprocess.Popen:
         log = (self.logs / f"build-{checkout.name}.log").open("ab")
         return self.processes.start(
-            ["cargo", "build", "--offline", "--locked"],
+            # JSON on stdout names each unit and whether it was fresh;
+            # diagnostics stay human on stderr.
+            ["cargo", "build", "--offline", "--locked", "--message-format", "json-render-diagnostics"],
             cwd=checkout,
             env=self.env,
             stdout=log,
@@ -236,6 +238,21 @@ class Project:
         assert build.wait(timeout=BUILD_TIMEOUT) == 0, (
             self.logs / f"build-{checkout.name}.log"
         ).read_text()[-4000:]
+
+    def compiled(self, checkout: Path) -> list[str]:
+        """The units Cargo compiled, rather than found fresh, in every build
+        so far in `checkout`."""
+        units = []
+        for line in (self.logs / f"build-{checkout.name}.log").read_text().splitlines():
+            if not line.startswith("{"):
+                continue
+            message = json.loads(line)
+            if message.get("reason") == "compiler-artifact" and not message["fresh"]:
+                # `registry+https://...#serde@1.0.229` or `path+file://...#model@0.1.0`
+                package = message["package_id"].rpartition("#")[2].partition("@")[0]
+                build_script = " (build script)" if "custom-build" in message["target"]["kind"] else ""
+                units.append(package + build_script)
+        return units
 
     def build(self, checkout: Path) -> float:
         """Wall-clock seconds of one `cargo build` in `checkout`."""
@@ -268,6 +285,11 @@ def project(openxet_bin, volume_dir, tmp_path, processes):
 
 def test_six_concurrent_builds_stay_almost_flat(project):
     volume = project.root
+    # The registry (SQLite and its WAL) is made on first use and stays, as it
+    # does on any machine that uses workspaces; the claim is that removing
+    # the workspaces leaves none of their data behind, not that OpenXet
+    # keeps no state. So it exists before the baseline.
+    project.openxet("workspace", "status")
     baseline = used_bytes(volume)
 
     first = project.create("ws1")
@@ -297,6 +319,13 @@ def test_six_concurrent_builds_stay_almost_flat(project):
     after = settled_used(volume, baseline, tolerance)
 
     budget = (1 + (WORKSPACES - 1) * EXTRA_SHARE) * footprint
+    waits = ", ".join(f"{c['name']} {c['seed_waited_ms']} ms" for c in others)
+    units = "\n".join(
+        f"  {checkout.name}: {len(compiled)} compiled {compiled}"
+        for checkout in checkouts
+        for compiled in [project.compiled(checkout)]
+    )
+    print(f"\nworkspaces gate: seeding waited {waits}\nunits compiled per workspace:\n{units}")
     print(
         f"\nworkspaces gate: solo build {mib(footprint)}, peak of {WORKSPACES} concurrent builds "
         f"{mib(grown)} over the baseline ({grown / footprint:.3f} of one build, budget "
@@ -305,7 +334,8 @@ def test_six_concurrent_builds_stay_almost_flat(project):
     )
     assert grown <= budget, (
         f"the peak of {WORKSPACES} concurrent builds grew used bytes by {mib(grown)}, over "
-        f"{mib(budget)}: 1 + {WORKSPACES - 1} x {EXTRA_SHARE} of one build's {mib(footprint)}"
+        f"{mib(budget)}: 1 + {WORKSPACES - 1} x {EXTRA_SHARE} of one build's {mib(footprint)}; "
+        f"units compiled per workspace:\n{units}"
     )
     assert abs(after - baseline) <= tolerance, (
         f"after removing every workspace, used bytes are {mib(after - baseline)} off the "

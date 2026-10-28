@@ -454,14 +454,18 @@ spec](../superpowers/specs/2026-10-27-agent-workspaces-design.md) (§2), on
 offline from vendored sources outside every checkout.
 `compat/tests/test_workspaces.py`:
 
-- **Flat disk.** `openxet workspace create` makes `ws1`, which is built
-  alone; the volume's peak used bytes over the time just before that build
-  is one build's footprint. Five more workspaces are created (each seeded
-  by clone from the nearest sibling), the daemon is started, and all six
-  build at once. The peak used bytes over the baseline taken before `ws1`
-  existed must stay within 1.5 builds (1 plus 5 times 10%), and after
-  `openxet workspace remove` of all six, used bytes must come back within 1%
-  of that baseline.
+- **Flat disk.** The registry is opened first (`openxet workspace
+  status`), since it stays on any machine that uses workspaces; the claim
+  is that removing workspaces leaves none of their data. Then `openxet
+  workspace create` makes `ws1`, which is built alone; the volume's peak
+  used bytes over the time just before that build is one build's
+  footprint. Five more workspaces are created (each seeded by clone from
+  the nearest sibling), the daemon is started, and all six build at once.
+  The peak used bytes over the baseline taken before `ws1` existed must
+  stay within 1.5 builds (1 plus 5 times 10%), and after `openxet
+  workspace remove` of all six, used bytes must come back within 1% of
+  that baseline. The test prints how long each seed waited and the units
+  each workspace's builds compiled (Cargo's JSON messages, `fresh` false).
 - **Build speed.** A workspace and a plain `git clone --local` of the same
   repository, each built once, then 5 no-op builds and 5 builds after
   touching `crates/model/src/lib.rs` in each, alternating which goes first.
@@ -478,38 +482,40 @@ with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
 
 | Run | Solo build | Peak of six over baseline | Share of one build (bar 1.50) | Left after removal (bar 1% of baseline) | No-op ratio (bar 1.10) | Incremental ratio (bar 1.10) |
 |---|---|---|---|---|---|---|
-| Local 1 | 45.2 MiB | 88.1 MiB | 1.950 (fails) | 1.1 MiB of 50.9 MiB (fails) | 0.960 (workspace 0.078 s, plain 0.081 s) | 1.018 (workspace 0.403 s, plain 0.396 s) |
-| Local 2 | 47.6 MiB | 45.3 MiB | 0.950 | 0.6 MiB of 50.9 MiB (fails) | not run | not run |
-| Local 3 | 47.7 MiB | 45.6 MiB | 0.956 | 0.5 MiB of 50.9 MiB (fails by 27 KiB) | not run | not run |
-| CI, PR #128 | 77.1 MiB | 203.9 MiB | 2.643 (fails) | 1.4 MiB under 426.3 MiB (passes) | 1.000 (0.032 s each) | 1.000 (0.215 s each) |
+| Local, before PR #133, 1 | 45.2 MiB | 88.1 MiB | 1.950 (fails) | 1.1 MiB of 50.9 MiB (fails) | 0.960 | 1.018 |
+| Local, before PR #133, 2 | 47.6 MiB | 45.3 MiB | 0.950 | 0.6 MiB of 50.9 MiB (fails) | not run | not run |
+| Local, before PR #133, 3 | 47.7 MiB | 45.6 MiB | 0.956 | 0.5 MiB of 50.9 MiB (fails) | not run | not run |
+| CI, before PR #133 | 77.1 MiB | 203.9 MiB | 2.643 (fails) | 1.4 MiB under 426.3 MiB | 1.000 | 1.000 |
+| Local, with PR #133, 1 | 44.2 MiB | 44.8 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.548 | 0.660 |
+| Local, with PR #133, 2 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.986 | 0.802 |
+| Local, with PR #133, 3 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.988 | 1.169 (fails) |
 
 Local is the machine above, on a sparse APFS image, with other sessions'
-builds running (8 `rustc` and `cargo` processes at the start). CI is the
-`workspaces-gate` job on `ubuntu-latest`, XFS with reflink on a loop
-file; the whole marker took 30 s there, so the five workspaces were created
-within moments of `ws1`'s build ending. Its per-workspace build logs are not
-in the job's output, so which units rebuilt there was not checked.
+builds running. CI is the `workspaces-gate` job on `ubuntu-latest`, XFS
+with reflink on a loop file. Before PR #133, the registry was not opened
+before the baseline.
 
-What the local runs show:
+What the runs show:
 
-- **The disk bar holds when the seed is complete and fails when it
-  isn't.** In runs 2 and 3 the five seeded workspaces built as no-ops, and
-  the peak of all six stayed under one solo build's (whose peak includes
-  files Cargo deletes before it ends). In run 1 every seeded workspace
-  recompiled `serde`, `model`, `codec` and `report`, whose outputs embed the
-  workspace path, so each added about 8.6 MiB (19% of a build). The
-  workspaces were created within seconds of `ws1`'s build ending, and seeding
-  skips files modified in the last 2 s; in a reproduction outside the test,
-  a workspace created right after the build rebuilt only `report`, and one
-  created later rebuilt nothing. Why `serde` rebuilt in run 1 was not
-  isolated.
-- **The 1% return fails on OpenXet's own state.** The registry (SQLite,
-  with its WAL), the daemon's log and Git's metadata are made after the
-  baseline and outlive the workspaces: about 0.2 MiB without the daemon, 0.5
-  to 1.1 MiB with it. No build output remains. On this image the baseline
-  is 50.9 MiB, so 1% is 0.5 MiB.
-- **Build speed is within the bar.** Medians differ by under 4% either way,
-  inside the run-to-run spread of a shared machine.
+- **Seeding has to wait for the sibling's build to settle.** Seeding never
+  clones a file modified in the last 2 s, and the test creates `ws2` right
+  after `ws1`'s build. Before PR #133 the newest outputs were left out, and
+  Cargo rebuilt the crates they belong to in every seeded workspace (in
+  local run 1, `serde`, `model`, `codec` and `report`, about 8.6 MiB, or
+  19% of a build, each). With PR #133, `create` waits for the sibling to
+  settle: `ws2` waited 1.8 to 2.1 s, the others under 0.1 s, all 15 seeded
+  workspaces of the three runs compiled 0 units, and the peak of six is 1.01
+  builds.
+- **What is left after removal is the registry's write-ahead log.** In a
+  reproduction of the test, SQLite's WAL grew from 82 KiB to 569 KiB and
+  the database file from 4 KiB to 48 KiB; together they are the 0.5 MiB
+  left. No row is left: the workspace and dedup tables are empty after
+  removal. The daemon's log is two lines (started, stopped).
+- **Build speed passed in two of three runs.** Medians are 40 to 410 ms
+  on a shared machine. In run 3, incremental builds took 0.41 s in the
+  workspace and 0.35 s in the plain clone. It was not isolated whether the
+  daemon's work on freshly written files or the machine's load made the
+  difference.
 
 ## Criterion: reconstruction
 
