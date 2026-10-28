@@ -3008,6 +3008,7 @@ dependencies = [
  "openxet-index",
  "openxet-protocol",
  "openxet-storage",
+ "openxet-workspace",
  "predicates",
  "reqwest",
  "rustls",
@@ -3249,6 +3250,8 @@ dependencies = [
 name = "openxet-workspace"
 version = "0.0.0"
 dependencies = [
+ "reflink-copy",
+ "rustix",
  "serde",
  "sqlx",
  "tempfile",
@@ -3645,6 +3648,18 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "serde_json",
+]
+
+[[package]]
+name = "reflink-copy"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9dd7ab4af0363d5ccfd2838d782a28196cf32a5cc2e4fe3c5dc83f2be588b8b"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "rustix",
+ "windows",
 ]
 
 [[package]]

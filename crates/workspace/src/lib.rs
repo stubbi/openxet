@@ -14,8 +14,18 @@ mod error;
 mod git;
 mod paths;
 mod registry;
+mod seed;
+mod space;
 
 pub use classify::{Class, PROJECT_CONFIG, Presets, classify, reconstructible_dirs};
 pub use error::WorkspaceError;
+pub use git::{
+    UnsavedWork, add_worktree, branch_exists, delete_branch, main_worktree, remove_worktree,
+    resolve_commit, unsaved_work,
+};
 pub use paths::{ProjectId, STATE_DIR_ENV, state_dir};
 pub use registry::{Registry, Workspace, WorkspaceId};
+pub use seed::{
+    SeedReport, SeedSkip, nearest_sibling, reflink_supported, seed, seed_with, seedable_bytes,
+};
+pub use space::{IDLE_AFTER, Volume, allocated_bytes, default_floor, is_idle, volume};
