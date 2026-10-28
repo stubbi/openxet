@@ -31,12 +31,14 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
-/// The real volume, but empty: a test machine's free space must not
-/// decide whether `create` passes the floor.
-fn roomy(path: &Path) -> Result<Volume, WorkspaceError> {
-    openxet_workspace::volume(path).map(|real| Volume {
-        free_bytes: real.total_bytes,
-        ..real
+/// An empty 1 TiB volume: neither a test machine's free space nor its size
+/// may decide whether `create` passes the floor (a CI runner's temporary
+/// volume can be smaller than the 20 GiB default floor).
+#[allow(clippy::unnecessary_wraps)] // The signature `Context::volume` takes.
+fn roomy(_: &Path) -> Result<Volume, WorkspaceError> {
+    Ok(Volume {
+        free_bytes: 1 << 40,
+        total_bytes: 1 << 40,
     })
 }
 
