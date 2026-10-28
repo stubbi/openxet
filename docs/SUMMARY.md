@@ -62,4 +62,5 @@
   - [S12: S3 API and dedup economics](research/S12-s3-api-and-dedup-economics.md)
   - [S14: Landing page messaging](research/S14-landing-messaging.md)
   - [S15: Agent storage feasibility](research/S15-agent-storage-feasibility.md)
+  - [S16: Workspace disk and build measurements](research/S16-workspace-disk.md)
 - [Competitive matrix](competitive-matrix.md)
