@@ -1,0 +1,58 @@
+{
+  "schema": "openxet.feasibility-probes.v1",
+  "environment": {
+    "os": "Darwin",
+    "macos": "15.6.1",
+    "python": "3.14.6",
+    "git": "git version 2.39.5 (Apple Git-154)"
+  },
+  "git_restore": {
+    "status": "passed",
+    "fixture": "linked worktree restored into an independent repository",
+    "preserved": [
+      "unpushed commit",
+      "branch",
+      "index",
+      "staged binary change",
+      "unstaged edit",
+      "untracked file",
+      "selected ignored file",
+      "mode",
+      "symlink"
+    ],
+    "scope": "same-host file-state round trip; no crash, live-writer or cross-OS proof"
+  },
+  "clone_isolation": {
+    "status": "passed",
+    "source_bytes": 8388608,
+    "distinct_inodes": true,
+    "writes_are_isolated": true,
+    "scope": "single-file API behavior; no allocation ratio or directory-performance claim"
+  },
+  "selective_parquet": {
+    "status": "passed",
+    "duckdb": "v1.3.2 (Ossivalis) 0b83e5d2f6",
+    "fixture_rows": 200000,
+    "result_rows": 4096,
+    "parquet_bytes": 4492137,
+    "http_body_bytes": 145145,
+    "range_gets": 4,
+    "scope": "DuckDB over a synthetic HTTP range server, not OpenXet or a mount"
+  },
+  "source_verification": {
+    "xet_data": {
+      "version": "1.7.0",
+      "archive_url": "https://static.crates.io/crates/xet-data/xet-data-1.7.0.crate",
+      "archive_sha256": "1287a1657fb67de846030f6605a9960dcdad401c467b490657e6e909d2e0d1c0",
+      "matches_cargo_lock": true,
+      "download_session_matches_local_source": true,
+      "public_range_writer_present": true,
+      "method": "Archive downloaded from crates.io, SHA-256 checked against Cargo.lock, relevant source compared byte-for-byte"
+    },
+    "apple": {
+      "generic_url_resource_introduced_macos": "26.0",
+      "unary_extension_introduced_macos": "15.4",
+      "method": "Read metadata.platforms from Apple developer documentation JSON for each symbol"
+    }
+  }
+}
