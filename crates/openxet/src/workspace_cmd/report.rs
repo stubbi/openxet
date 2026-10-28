@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use openxet_workspace::{
-    Presets, ProjectId, Registry, WorkspaceError, allocated_bytes, default_floor, is_idle,
-    reconstructible_dirs, reflink_supported, volume,
+    Presets, ProjectId, Registry, WorkspaceError, allocated_bytes, daemon_running, is_idle,
+    reconstructible_dirs, reflink_supported,
 };
 use serde::Serialize;
 
@@ -118,8 +118,8 @@ pub struct Status {
     /// directory, or outside a repository the registry's.
     volume_path: String,
     volume_free_bytes: u64,
-    /// The free space kept free: the larger of 20 GiB and a tenth of the
-    /// volume.
+    /// The free space kept free: `floor` in the user's workspace config,
+    /// else the larger of 20 GiB and a tenth of the volume.
     floor_bytes: u64,
     /// Whether files on the volume can be cloned. Without clones, workspaces
     /// are not seeded.
@@ -127,6 +127,9 @@ pub struct Status {
     daemon_running: bool,
     /// How many workspaces are registered, in every repository.
     workspaces: usize,
+    /// Bytes of files the daemon has replaced by clones of an identical
+    /// file, in total; files rewritten or evicted since are not subtracted.
+    deduplicated_bytes: u64,
 }
 
 impl HumanDisplay for Status {
@@ -140,14 +143,16 @@ impl HumanDisplay for Status {
         let daemon = if self.daemon_running {
             "Daemon: running."
         } else {
-            "Daemon: not running."
+            "Daemon: not running; `openxet workspace create` starts it."
         };
         format!(
-            "Volume of {}: {} free, floor {}.\n{clones}\n{daemon}\nWorkspaces: {} registered.",
+            "Volume of {}: {} free, floor {}.\n{clones}\n{daemon}\nWorkspaces: {} registered.\n\
+             Deduplicated: {} replaced by clones.",
             self.volume_path,
             human_bytes(self.volume_free_bytes),
             human_bytes(self.floor_bytes),
-            self.workspaces
+            self.workspaces,
+            human_bytes(self.deduplicated_bytes)
         )
     }
 }
@@ -160,16 +165,16 @@ pub(super) async fn status(context: &Context) -> Result<Status, CliError> {
     // and writable, which the clone probe needs.
     let dir = ProjectId::discover(&context.cwd)
         .map_or_else(|_| context.state_dir.clone(), |p| PathBuf::from(p.as_str()));
-    let here = volume(&dir).map_err(error)?;
+    let here = (context.volume)(&dir).map_err(error)?;
     Ok(Status {
         schema: "openxet.workspace.status.v1",
         volume_path: dir.display().to_string(),
         volume_free_bytes: here.free_bytes,
-        floor_bytes: default_floor(here.total_bytes),
+        floor_bytes: context.budget()?.floor_for(here),
         reflink_supported: reflink_supported(&dir),
-        // The daemon (plan 2026-10-27, Task 6) does not exist yet.
-        daemon_running: false,
+        daemon_running: daemon_running(&context.state_dir),
         workspaces,
+        deduplicated_bytes: registry.deduplicated_bytes().await.map_err(error)?,
     })
 }
 
@@ -216,5 +221,29 @@ mod tests {
         assert!(status.floor_bytes >= 20 << 30);
         assert!(!status.daemon_running);
         assert_eq!(status.workspaces, 0);
+        assert_eq!(status.deduplicated_bytes, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reports_a_running_daemon() {
+        let fx = Fixture::new();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let state = fx.context.state_dir.clone();
+        let daemon = tokio::spawn(async move {
+            openxet_workspace::run_daemon(&state, openxet_workspace::Budget::default(), async {
+                let _ = stopped.await;
+            })
+            .await
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !status(&fx.context).await.unwrap().daemon_running {
+            assert!(std::time::Instant::now() < deadline, "the daemon never ran");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        stop.send(()).unwrap();
+        daemon.await.unwrap().unwrap();
+
+        assert!(!status(&fx.context).await.unwrap().daemon_running);
     }
 }

@@ -21,7 +21,7 @@ with `--json`, or without a terminal, no command reads stdin.
 | `openxet openapi` | Prints the server's OpenAPI document | `openxet.openapi.v1` |
 | `openxet workspace create` | Creates a worktree seeded with a sibling's build outputs | `openxet.workspace.created.v1` |
 | `openxet workspace list` | Lists the registered workspaces | `openxet.workspace.list.v1` |
-| `openxet workspace status` | Reports free space, the floor and clone support | `openxet.workspace.status.v1` |
+| `openxet workspace status` | Reports free space, the floor, clone support, the daemon and bytes deduplicated | `openxet.workspace.status.v1` |
 | `openxet workspace remove` | Removes a workspace unless that would lose work | `openxet.workspace.removed.v1` |
 
 ## `openxet serve`
@@ -373,7 +373,7 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
 ```
 
 ```json
-{"schema":"openxet.workspace.created.v1","path":"/src/app/.claude/worktrees/fix-login","name":"fix-login","branch":"fix-login","base":"5a75a74c4895e47467abf0be132cd566787186da","seeded_bytes":39847205,"seeded_from":"/src/app/.claude/worktrees/parser","seed_skipped":null,"dry_run":false}
+{"schema":"openxet.workspace.created.v1","path":"/src/app/.claude/worktrees/fix-login","name":"fix-login","branch":"fix-login","base":"5a75a74c4895e47467abf0be132cd566787186da","seeded_bytes":39847205,"seeded_from":"/src/app/.claude/worktrees/parser","seed_skipped":null,"daemon_started":false,"dry_run":false}
 ```
 
 - **Create.** `create` adds a worktree of the repository `--repo` is in
@@ -383,7 +383,13 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   default a random `adjective-noun-xxxx`. The worktree goes to `--path`,
   else `<repo>/.claude/worktrees/<name>` if `<repo>/.claude` exists, else
   `<repo>/../<repo name>-worktrees/<name>`, where `<repo>` is the main
-  worktree. An existing path or branch exits 2 with `exists`.
+  worktree. An existing path or branch exits 2 with `exists`. When free
+  space on the volume is under the floor, `create` first evicts idle
+  workspaces' build outputs as the daemon would; if that is not enough it
+  exits 1 with `disk_budget`, creating nothing, so agents back off rather
+  than fill the disk. `create` starts the daemon when none is running
+  (`daemon_started`), unless `OPENXET_WORKSPACE_DAEMON` is `off`; if it
+  can't, `daemon_error` says why and the workspace is created anyway.
 - **Seeding.** The reconstructible directories (`target`, `node_modules`
   and those `.openxet/workspace.toml` lists) start as copy-on-write clones
   of a sibling's: of the registered workspaces and the main worktree that
@@ -409,9 +415,40 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
 - **Status.** `status` reports the volume of the current repository's Git
   directory (outside a repository, of the state directory):
   `volume_path`, `volume_free_bytes`, `floor_bytes` (the free space to
-  keep, the larger of 20 GiB and a tenth of the volume),
-  `reflink_supported`, `daemon_running` and `workspaces`, the number
-  registered.
+  keep, see the budget below), `reflink_supported`, `daemon_running`,
+  `workspaces` (the number registered) and `deduplicated_bytes`: the
+  bytes of files the daemon has replaced by clones of an identical file,
+  in total. Files rewritten or evicted since are not subtracted, so it is
+  what dedup has saved, not what it saves now.
+- **Daemon.** One daemon per user (per state directory) runs in the
+  background and logs to `daemon.log` in the state directory. It watches
+  every registered workspace: any file change counts as activity
+  (`last_active`). A file under a reconstructible directory that no change
+  has touched for 2 seconds is deduplicated: when a workspace already has
+  a file of the same size and BLAKE3 hash, it is replaced by a
+  copy-on-write clone of that file, keeping its own mtime and
+  permissions, so Cargo still finds it fresh. Files under 64 KiB, and files outside the reconstructible
+  directories, are never touched. Every 5 seconds it checks free space on
+  each volume with a workspace: under the floor, it evicts the
+  reconstructible directories of idle workspaces (no process has its
+  current directory inside, and no activity for 10 minutes), least
+  recently active first, until free space is 5% over the floor. Cargo's
+  `incremental/` directories go first, in every idle workspace, then whole
+  directories. Every 10 minutes it evicts the reconstructible directories
+  of workspaces idle for the TTL. Eviction never touches tracked files,
+  untracked files or ignored paths outside the reconstructible
+  directories. The daemon exits after 10 minutes with no registered
+  workspace; the next `create` starts it again.
+- **Budget.** The floor is the larger of 20 GiB and a tenth of the
+  volume, and the TTL 24 hours, unless `~/.config/openxet/workspace.toml`
+  (or `$XDG_CONFIG_HOME/openxet/workspace.toml`) sets them:
+
+  ```toml
+  floor = "50 GiB"   # bytes, or a whole number of B, KiB, MiB, GiB or TiB
+  idle_ttl = "12h"   # a whole number of s, m, h or d
+  ```
+
+  An invalid file fails `create`, `status` and the daemon with `config`.
 - **Remove.** `remove` deletes the worktree with everything in it, its
   branch (`deleted_branch`) and its registration. `freed_bytes` counts
   clones shared with other workspaces in full, so at most that much is

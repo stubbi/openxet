@@ -83,6 +83,15 @@ pub enum WorkspaceError {
         /// The free-space floor.
         floor_bytes: u64,
     },
+    /// Another daemon already serves this state directory.
+    #[error(
+        "another OpenXet workspace daemon holds {}, so it is already running",
+        .lock.display()
+    )]
+    DaemonRunning {
+        /// The daemon's lock file.
+        lock: PathBuf,
+    },
     /// A file operation failed.
     #[error("{}: {source}", .path.display())]
     Io {
@@ -107,6 +116,7 @@ impl WorkspaceError {
             Self::UnsavedWork { .. } => "unsaved_work",
             Self::UnknownRevision(_) => "unknown_revision",
             Self::DiskBudget { .. } => "disk_budget",
+            Self::DaemonRunning { .. } => "daemon_running",
             Self::Io { .. } => "io",
         }
     }

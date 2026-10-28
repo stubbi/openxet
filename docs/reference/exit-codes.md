@@ -27,7 +27,7 @@ lines.
 | ------ | ---- | ---- |
 | `usage` | 2 | The arguments don't parse, including an argument that isn't UTF-8. |
 | `io` | 1 | The result couldn't be written to stdout, e.g. a closed pipe, or a file couldn't be read or written (including a downloaded file). |
-| `config` | 1 | The configuration has problems. `openxet config check` lists each one ([config](config.md)). From a `workspace` command: the repository's `.openxet/workspace.toml` is invalid. |
+| `config` | 1 | The configuration has problems. `openxet config check` lists each one ([config](config.md)). From a `workspace` command: the repository's `.openxet/workspace.toml` or your `~/.config/openxet/workspace.toml` is invalid. |
 | `address_in_use` | 1 | `serve` couldn't listen: another process has the port. The hint names `--port`. |
 | `bind` | 1 | `serve` couldn't listen for another reason, such as a privileged port. |
 | `data_dir` | 1 | `serve` couldn't create the data directory. |
@@ -41,6 +41,7 @@ lines.
 | `not_a_repository` | 1 | `workspace create` or `list --repo` was run outside a Git repository. The hint names `--repo`. |
 | `not_a_workspace` | 1 | `workspace remove` was given a path no workspace is registered at. The hint names `workspace list`. |
 | `unsaved_work` | 1 | `workspace remove` would lose work that exists nowhere else. `files` lists each item with its `problem`: `uncommitted`, `untracked`, `ignored` or `unpushed` (its `path` is the branch). Nothing was removed; the hint names `--discard`. |
+| `disk_budget` | 1 | `workspace create` found free space under the floor even after evicting idle workspaces' build outputs. The message gives both in bytes; nothing was created. The hint says to retry in a minute or remove idle workspaces. |
 | `registry` | 1 | The workspace registry couldn't be opened, migrated or read. |
 | `git` | 1 | A Git command a `workspace` command ran failed; the message is Git's. |
 | `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |
