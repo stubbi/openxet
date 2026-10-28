@@ -67,7 +67,7 @@ def run(mode: str, label: str):
             finally:
                 db.close()
         def cpu():
-            if not procs.children:
+            if mode == "off" or not procs.children:
                 return 0.0
             fields = Path(f"/proc/{procs.children[0].pid}/stat").read_text().rsplit(")", 1)[1].split()
             return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
