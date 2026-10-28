@@ -4,13 +4,14 @@
 //! without losing work.
 
 mod create;
+mod daemon;
 mod names;
 mod remove;
 mod report;
 
 use std::path::{Path, PathBuf};
 
-use openxet_workspace::WorkspaceError;
+use openxet_workspace::{Budget, Volume, WorkspaceError};
 
 use crate::error::{CliError, ExitCode};
 use crate::output::Output;
@@ -26,6 +27,9 @@ pub enum WorkspaceCommand {
     Status,
     /// Remove a workspace and its branch, refusing if that would lose work
     Remove(remove::RemoveArgs),
+    /// Run the per-user daemon that `create` starts in the background
+    #[command(hide = true)]
+    Daemon,
 }
 
 /// Where the command runs: the registry's directory and the directory
@@ -34,6 +38,22 @@ pub enum WorkspaceCommand {
 pub(crate) struct Context {
     pub state_dir: PathBuf,
     pub cwd: PathBuf,
+    /// The human's limits (`~/.config/openxet/workspace.toml`); `None` for
+    /// the defaults.
+    pub config: Option<PathBuf>,
+    /// Measures the volume a path is on.
+    pub volume: fn(&Path) -> Result<Volume, WorkspaceError>,
+    /// Whether `create` starts the daemon when none runs.
+    pub start_daemon: bool,
+}
+
+impl Context {
+    fn budget(&self) -> Result<Budget, CliError> {
+        self.config.as_deref().map_or_else(
+            || Ok(Budget::default()),
+            |path| Budget::load(path).map_err(|err| workspace_error(&err)),
+        )
+    }
 }
 
 pub fn run(command: &WorkspaceCommand, output: Output) -> Result<(), CliError> {
@@ -46,6 +66,9 @@ pub fn run(command: &WorkspaceCommand, output: Output) -> Result<(), CliError> {
                 "Run the command from a directory that exists and that you may read.",
             )
         })?,
+        config: openxet_workspace::user_config_path(),
+        volume: openxet_workspace::volume,
+        start_daemon: std::env::var_os(daemon::DAEMON_ENV).is_none_or(|value| value != "off"),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -66,6 +89,7 @@ pub fn run(command: &WorkspaceCommand, output: Output) -> Result<(), CliError> {
             WorkspaceCommand::List(args) => emit(output, &report::list(args, &context).await?),
             WorkspaceCommand::Status => emit(output, &report::status(&context).await?),
             WorkspaceCommand::Remove(args) => emit(output, &remove::remove(args, &context).await?),
+            WorkspaceCommand::Daemon => daemon::run(&context).await,
         }
     })
 }
@@ -111,13 +135,19 @@ pub(crate) fn workspace_error(err: &WorkspaceError) -> CliError {
             ExitCode::FAILURE,
         ),
         WorkspaceError::Config { .. } => (
-            "Fix `.openxet/workspace.toml` in the repository, then run the command again.",
+            "Fix the file the message names (the repository's `.openxet/workspace.toml` or your \
+             `~/.config/openxet/workspace.toml`), then run the command again.",
             ExitCode::FAILURE,
         ),
         WorkspaceError::UnsavedWork { .. } => (remove::UNSAVED_HINT, ExitCode::FAILURE),
         WorkspaceError::DiskBudget { .. } => (
             "Retry in a minute, or remove idle workspaces with `openxet workspace list` and \
              `remove`.",
+            ExitCode::FAILURE,
+        ),
+        WorkspaceError::DaemonRunning { .. } => (
+            "Nothing to do: one daemon per user serves every workspace, and `openxet workspace \
+             status` shows it running.",
             ExitCode::FAILURE,
         ),
         WorkspaceError::Io { .. } => (

@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import subprocess
+from pathlib import Path
 
 import httpx
 import pytest
@@ -85,6 +86,17 @@ def git_checkout(path):
     return path
 
 
+def workspace_env(root):
+    """The environment for `openxet workspace`: no background daemon, which
+    would outlive the test, and a 1 GiB free-space floor, so a CI runner
+    with less than the default 20 GiB free still creates workspaces."""
+    env = isolated_env(root, OPENXET_WORKSPACE_DAEMON="off")
+    config = Path(env["HOME"]) / ".config" / "openxet" / "workspace.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text('floor = "1 GiB"\n')
+    return env
+
+
 def expand(openxet_bin, args, tmp_path, env):
     if any("{key}" in a for a in args):
         key = tmp_path / "mint.key"
@@ -156,6 +168,8 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
     # until the timeout and fail here.
     with contextlib.ExitStack() as stack:
         env = isolated_env(tmp_path / "env")
+        if args[0] == "workspace":
+            env = workspace_env(tmp_path / "env")
         if args[0] in NEEDS_SERVER:
             env = stack.enter_context(dev_server(openxet_bin, tmp_path))
             (tmp_path / "upload.bin").write_bytes(os.urandom(4096))

@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use openxet_workspace::{Volume, WorkspaceError};
+
 use super::Context;
 
 /// Runs `git -C dir args` with a fixed identity and none of the
@@ -27,6 +29,15 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+/// The real volume, but empty: a test machine's free space must not
+/// decide whether `create` passes the floor.
+fn roomy(path: &Path) -> Result<Volume, WorkspaceError> {
+    openxet_workspace::volume(path).map(|real| Volume {
+        free_bytes: real.total_bytes,
+        ..real
+    })
 }
 
 pub struct Fixture {
@@ -57,6 +68,9 @@ impl Fixture {
         let context = Context {
             state_dir: root.join("state"),
             cwd: main.clone(),
+            config: None,
+            volume: roomy,
+            start_daemon: false,
         };
         Self {
             _dir: dir,

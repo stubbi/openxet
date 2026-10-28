@@ -17,6 +17,9 @@ use crate::{ProjectId, WorkspaceError};
 /// The registry's file name inside the state directory.
 const DATABASE: &str = "registry.sqlite3";
 
+/// The `counters` row of [`Registry::deduplicated_bytes`].
+const DEDUPLICATED_BYTES: &str = "deduplicated_bytes";
+
 /// How long a write waits for another process's write lock before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -262,6 +265,41 @@ impl Registry {
         .execute(&self.writer)
         .await?;
         Ok(())
+    }
+
+    /// Adds `bytes` to the total the daemon has replaced by clones.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkspaceError::Database`] if the write fails.
+    pub async fn add_deduplicated_bytes(&self, bytes: u64) -> Result<(), WorkspaceError> {
+        sqlx::query(
+            "INSERT INTO counters (name, value) VALUES (?1, ?2) \
+             ON CONFLICT (name) DO UPDATE SET value = value + excluded.value",
+        )
+        .bind(DEDUPLICATED_BYTES)
+        .bind(to_i64(bytes, "byte count")?)
+        .execute(&self.writer)
+        .await?;
+        Ok(())
+    }
+
+    /// The bytes of files the daemon has replaced by clones of an identical
+    /// file, since the registry was created. Files later rewritten or
+    /// evicted are not subtracted.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkspaceError::Database`] if the read fails and
+    /// [`WorkspaceError::Corrupt`] if the stored total is negative.
+    pub async fn deduplicated_bytes(&self) -> Result<u64, WorkspaceError> {
+        let value: Option<i64> = sqlx::query_scalar("SELECT value FROM counters WHERE name = ?")
+            .bind(DEDUPLICATED_BYTES)
+            .fetch_optional(&self.reader)
+            .await?;
+        let value = value.unwrap_or(0);
+        u64::try_from(value)
+            .map_err(|_| WorkspaceError::Corrupt(format!("deduplicated bytes are {value}")))
     }
 
     /// Drops every canonical copy at `path` or under it, for a directory

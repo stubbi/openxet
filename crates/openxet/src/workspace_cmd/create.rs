@@ -1,16 +1,17 @@
 //! `openxet workspace create`.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use openxet_workspace::{
     Presets, ProjectId, Registry, SeedReport, SeedSkip, Workspace, WorkspaceError, WorkspaceId,
-    add_worktree, branch_exists, delete_branch, main_worktree, nearest_sibling, remove_worktree,
-    resolve_commit, seed, seedable_bytes,
+    active_workspaces, add_worktree, branch_exists, delete_branch, free_to_floor, main_worktree,
+    nearest_sibling, remove_worktree, resolve_commit, seed, seedable_bytes,
 };
 use serde::Serialize;
 
-use super::{Context, absolute, human_bytes, names, workspace_error};
+use super::{Context, absolute, daemon, human_bytes, names, workspace_error};
 use crate::error::{CliError, ExitCode};
 use crate::output::HumanDisplay;
 
@@ -55,6 +56,12 @@ pub struct Created {
     /// Why seeding failed, for `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     seed_error: Option<String>,
+    /// Whether this command started the workspace daemon, which was not
+    /// running.
+    daemon_started: bool,
+    /// Why the daemon could not be started, if it couldn't.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daemon_error: Option<String>,
     dry_run: bool,
 }
 
@@ -99,6 +106,19 @@ impl HumanDisplay for Created {
             text.push('\n');
             text.push_str(&seeded);
         }
+        if self.daemon_started {
+            text.push_str(
+                "\nStarted the workspace daemon: it deduplicates build outputs and evicts idle \
+                 ones to keep free space over the floor.",
+            );
+        }
+        if let Some(err) = &self.daemon_error {
+            let _ = write!(
+                text,
+                "\nThe workspace daemon is not running ({err}), so nothing keeps the free-space \
+                 floor; `openxet workspace status` shows whether it runs."
+            );
+        }
         if self.dry_run {
             text.push_str("\nNothing was changed.");
         }
@@ -140,6 +160,8 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
             Some(SeedSkip::Failed(reason)) => Some(reason),
             _ => None,
         },
+        daemon_started: false,
+        daemon_error: None,
         dry_run,
     };
 
@@ -156,8 +178,13 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
         return Ok(result(&path, report, from, true));
     }
 
+    ensure_space(&registry, context, &path).await?;
     add_worktree(&dir, &path, &name, &base).map_err(error)?;
     let path = path.canonicalize().unwrap_or(path);
+    // Seeded before it is registered, so the daemon starts watching it only
+    // afterwards and never takes the seed's clones for new files to
+    // deduplicate.
+    let (report, from) = seed_from_sibling(&registry, &project, &path, &base).await;
     let now = SystemTime::now();
     let workspace = Workspace {
         id: WorkspaceId::generate(),
@@ -175,12 +202,51 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
         let _ = delete_branch(&dir, &name);
         return Err(error(err));
     }
-    let (report, from) = seed_from_sibling(&registry, &project, &path, &base).await;
-    Ok(result(&path, report, from, false))
+    let mut created = result(&path, report, from, false);
+    if context.start_daemon {
+        match daemon::start(&context.state_dir) {
+            Ok(started) => created.daemon_started = started,
+            Err(err) => created.daemon_error = Some(err),
+        }
+    }
+    Ok(created)
 }
 
-/// Seeds the new workspace. It exists and is registered by now, so a
-/// failure here is reported in the result rather than failing the command.
+/// Fails with `disk_budget` when free space on the new workspace's volume
+/// is under the floor even after one eviction pass, so agents back off
+/// instead of filling the disk.
+async fn ensure_space(registry: &Registry, context: &Context, path: &Path) -> Result<(), CliError> {
+    let error = |err: WorkspaceError| workspace_error(&err);
+    let budget = context.budget()?;
+    // The worktree doesn't exist yet; its nearest existing parent is on the
+    // volume it will be on.
+    let on = path.ancestors().find(|dir| dir.exists()).unwrap_or(path);
+    let here = (context.volume)(on).map_err(error)?;
+    if here.free_bytes >= budget.floor_for(here) {
+        return Ok(());
+    }
+    free_to_floor(
+        registry,
+        &budget,
+        SystemTime::now(),
+        active_workspaces,
+        context.volume,
+    )
+    .await
+    .map_err(error)?;
+    let here = (context.volume)(on).map_err(error)?;
+    let floor_bytes = budget.floor_for(here);
+    if here.free_bytes < floor_bytes {
+        return Err(error(WorkspaceError::DiskBudget {
+            free_bytes: here.free_bytes,
+            floor_bytes,
+        }));
+    }
+    Ok(())
+}
+
+/// Seeds the new workspace. Its worktree exists by now, so a failure here
+/// is reported in the result rather than failing the command.
 async fn seed_from_sibling(
     registry: &Registry,
     project: &ProjectId,
@@ -297,6 +363,38 @@ mod tests {
         let registry = Registry::open(&fx.context.state_dir).await.unwrap();
         assert!(registry.list(None).await.unwrap().is_empty());
         assert!(!branch_exists(&fx.main, "dry").unwrap());
+    }
+
+    /// 1 GiB free of 100 GiB: under the default floor of 20 GiB.
+    #[allow(clippy::unnecessary_wraps)] // The signature `Context::volume` takes.
+    fn full(_: &Path) -> Result<openxet_workspace::Volume, WorkspaceError> {
+        Ok(openxet_workspace::Volume {
+            free_bytes: 1 << 30,
+            total_bytes: 100 << 30,
+        })
+    }
+
+    #[tokio::test]
+    async fn create_fails_with_disk_budget_under_the_floor() {
+        let mut fx = Fixture::new();
+        let busy = create(&args("busy"), &fx.context).await.unwrap();
+        fs::create_dir_all(Path::new(&busy.path).join("target")).unwrap();
+        fs::write(Path::new(&busy.path).join("target/out"), [1u8; 4096]).unwrap();
+        fx.context.volume = full;
+
+        let err = create(&args("more"), &fx.context).await.unwrap_err();
+
+        assert_eq!((err.code, err.exit), ("disk_budget", ExitCode::FAILURE));
+        assert!(
+            err.message.contains("1073741824 bytes free")
+                && err.message.contains("floor of 21474836480 bytes"),
+            "{}",
+            err.message
+        );
+        assert!(err.hint.starts_with("Retry in a minute"), "{}", err.hint);
+        assert!(!branch_exists(&fx.main, "more").unwrap());
+        // Just created, so not idle: its build outputs stay.
+        assert!(Path::new(&busy.path).join("target/out").exists());
     }
 
     #[tokio::test]

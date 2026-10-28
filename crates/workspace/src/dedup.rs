@@ -14,7 +14,7 @@ pub const MIN_DEDUP_SIZE: u64 = 64 << 10;
 /// Dot-prefixed and OpenXet-named so no build tool writes or globs it; the
 /// rest of the name is a fresh UUID, never derived from the file's name, so
 /// it can't exceed the filesystem's name limit.
-const TEMP_PREFIX: &str = ".openxet-dedup-";
+pub(crate) const TEMP_PREFIX: &str = ".openxet-dedup-";
 
 /// What [`dedup_file`] did with one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

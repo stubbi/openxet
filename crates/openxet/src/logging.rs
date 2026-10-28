@@ -18,6 +18,7 @@ const OWN_TARGETS: &[&str] = &[
     "openxet_cas",
     "openxet_index",
     "openxet_storage",
+    "openxet_workspace",
     "tower_http",
 ];
 
