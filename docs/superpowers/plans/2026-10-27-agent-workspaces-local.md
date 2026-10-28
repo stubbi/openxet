@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+<!-- description: Plan for agent workspaces steps 1 and 2: measure parallel agent builds, then build openxet workspace with copy-on-write build outputs, clone dedup, a free-space floor and idle eviction, so the disk stays almost flat. -->
+
 **Goal:** N coding agents work in parallel worktrees of one Git repository
 while the disk stays almost flat during their builds and nothing needs
 manual cleanup.
