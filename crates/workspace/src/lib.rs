@@ -10,12 +10,14 @@
 #![forbid(unsafe_code)]
 
 mod classify;
+mod dedup;
 mod error;
 mod git;
 mod paths;
 mod registry;
 
 pub use classify::{Class, PROJECT_CONFIG, Presets, classify, reconstructible_dirs};
+pub use dedup::{DedupOutcome, DedupReport, MIN_DEDUP_SIZE, dedup_file, dedup_tree};
 pub use error::WorkspaceError;
 pub use paths::{ProjectId, STATE_DIR_ENV, state_dir};
 pub use registry::{Registry, Workspace, WorkspaceId};
