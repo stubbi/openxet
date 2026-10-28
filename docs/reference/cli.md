@@ -4,7 +4,8 @@ Every command takes `--json`, which prints one JSON object with a versioned
 `schema` on stdout instead of text, and reports failures as one
 `openxet.error.v1` object on stderr ([exit codes](exit-codes.md)). Only
 `openxet purge` ever asks a question, on a terminal and without `--yes`;
-with `--json`, or without a terminal, no command reads stdin.
+with `--json`, or without a terminal, no command reads stdin, except the
+`workspace hook` commands, which read the JSON their agent sends.
 
 | Command | Does | `--json` schema |
 | ------- | ---- | --------------- |
@@ -23,6 +24,10 @@ with `--json`, or without a terminal, no command reads stdin.
 | `openxet workspace list` | Lists the registered workspaces | `openxet.workspace.list.v1` |
 | `openxet workspace status` | Reports free space, the floor, clone support, the daemon and bytes deduplicated | `openxet.workspace.status.v1` |
 | `openxet workspace remove` | Removes a workspace unless that would lose work | `openxet.workspace.removed.v1` |
+| `openxet workspace adopt` | Registers worktrees made without OpenXet | `openxet.workspace.adopted.v1` |
+| `openxet workspace hook claude-create` | Claude Code's `WorktreeCreate` hook: creates a workspace, prints its path | `openxet.workspace.hook_created.v1` |
+| `openxet workspace hook claude-remove` | Claude Code's `WorktreeRemove` hook: removes a workspace unless that would lose work | `openxet.workspace.removed.v1` |
+| `openxet workspace install claude` | Merges the two hooks into Claude Code's settings | `openxet.workspace.installed.v1` |
 
 ## `openxet serve`
 
@@ -353,6 +358,11 @@ openxet workspace create [--repo DIR] [--name SLUG] [--base REV] [--path DIR] [-
 openxet workspace list [--repo DIR] [--json]
 openxet workspace status [--json]
 openxet workspace remove <PATH> [--discard] [--dry-run] [--json]
+openxet workspace adopt <PATH> [--dry-run] [--json]
+openxet workspace adopt --scan [--repo DIR] [--dry-run] [--json]
+openxet workspace hook claude-create [--dry-run] [--json] < hook-input.json
+openxet workspace hook claude-remove [--dry-run] [--json] < hook-input.json
+openxet workspace install claude [--user | --project [--repo DIR]] [--dry-run] [--json]
 ```
 
 A workspace is a Git worktree on its own branch, for one agent among
@@ -461,9 +471,77 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   or `HEAD` when detached, whose commits no remote-tracking branch, tag or
   other local branch reaches). `--discard` removes it anyway. A workspace
   whose directory is already gone is unregistered and its branch kept.
-- **Dry run.** `create --dry-run` and `remove --dry-run` report what they
-  would do, with `"dry_run":true`, and change nothing; `remove --dry-run`
-  refuses as `remove` would.
+- **Adopt.** `adopt PATH` registers the worktree `PATH` is in, made
+  without OpenXet (`git worktree add` in a shell, Cursor's or Codex's
+  setup step, a Claude Code subagent), so the idle TTL and the floor cover
+  it. `adopt --scan` does the same for every worktree of the repository
+  `--repo` is in (by default the current directory's) that `git worktree
+  list` shows. Both are idempotent: `adopted` lists the worktrees newly
+  registered, `already` those registered before. An adopted workspace
+  counts as active from its adoption, and `remove` keeps its branch,
+  which may be the human's. The main worktree is never adopted: it is your
+  own checkout, so the daemon never evicts its build outputs and `remove`
+  never deletes it; `adopt` exits 2 with `main_worktree` when `PATH` is in
+  it, and `--scan` lists it in `skipped` with the reason `main_worktree`.
+  A worktree whose directory is gone is skipped as `missing`.
+
+  ```json
+  {"schema":"openxet.workspace.adopted.v1","adopted":["/src/app-worktrees/by-hand"],"already":[],"skipped":[{"path":"/src/app","reason":"main_worktree"}],"dry_run":false}
+  ```
+
+- **Claude Code hooks.** With the hooks installed, every worktree Claude
+  Code makes (`claude --worktree`, the `EnterWorktree` tool, subagents with
+  `isolation: "worktree"`) is a workspace. Claude Code runs `hook
+  claude-create` with `{"cwd": …, "name": …}` on stdin; it creates the
+  workspace as `create --repo <cwd> --name <name>` would and prints only
+  its canonical path, one line on stdout, which Claude Code reads as the
+  worktree; what happened goes to stderr. A name that isn't a slug is made
+  one (`Feature/Auth` becomes `feature-auth`). If a workspace is already
+  registered at that name's path, as when a session resumes in it, its
+  path is printed again. Any failure exits non-zero with stdout empty, so
+  Claude Code reports it and creates nothing. With `--json`, stdout is one
+  `openxet.workspace.hook_created.v1` object with `path`, `reused`,
+  `created` (`create`'s result, `null` when reused) and `dry_run`; that
+  form is for agents, not for Claude Code. `hook claude-remove` reads
+  `{"worktree_path": …}` and removes the workspace as `remove` does,
+  without `--discard`: on `unsaved_work` it exits 1 and leaves the
+  directory, so Claude Code keeps it. A worktree that is not registered is
+  adopted first (its branch kept); a path already gone exits 0. Claude Code
+  doesn't run the remove hook when a subagent finishes, so those
+  workspaces stay until `remove` or `adopt --scan` and the TTL deal with
+  their build outputs. `hook claude-create` starts the daemon as `create`
+  does, unless `OPENXET_WORKSPACE_DAEMON` is `off`.
+- **Install.** `install claude` merges both hooks into
+  `~/.claude/settings.json` (`--user`, the default, for every repository)
+  or the repository's `.claude/settings.json` (`--project`, in the
+  worktree `--repo` is in, by default the current directory's):
+
+  ```json
+  {"hooks": {"WorktreeCreate": [{"hooks": [{"type": "command", "command": "openxet workspace hook claude-create"}]}],
+             "WorktreeRemove": [{"hooks": [{"type": "command", "command": "openxet workspace hook claude-remove"}]}]}}
+  ```
+
+  Every other key and hook is kept, keys in their order and untouched
+  values as written. The file is replaced atomically (a temporary file
+  beside it, then a rename), keeps its permissions (a new user file is
+  `0600`), and a symlink to it is written through. Installing again
+  changes nothing (`"changed":false`), and OpenXet's hooks pointing at
+  another binary are updated in place. Another tool's `WorktreeCreate` or
+  `WorktreeRemove` hook fails with `hook_conflict`, changing nothing: both
+  would act on the same worktrees. With `--user`, the hooks run this
+  binary by its absolute path (`"program":"absolute"`, `binary`) when that
+  path stays put, preferring the `PATH` entry that is this binary, such as
+  a package manager's link; a Cargo build output (`target/debug`,
+  `target/release`), a temporary directory or a Homebrew or Nix versioned
+  directory may move, so the hooks run `openxet` from `PATH` instead
+  (`"program":"path"`). With `--project`, they always run `openxet` from
+  `PATH`, since the file is shared with everyone who clones the
+  repository. `--dry-run` prints the merged settings, every value under
+  `env` shown as `<redacted>` since it often holds API keys, and writes
+  nothing; `settings` in the JSON result is the same.
+- **Dry run.** `create`, `remove`, `adopt` and the two hooks with
+  `--dry-run` report what they would do, with `"dry_run":true`, and change
+  nothing; `remove --dry-run` refuses as `remove` would.
 
 ## Endpoint, token and cache
 

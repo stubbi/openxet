@@ -25,7 +25,9 @@ pytestmark = pytest.mark.agent
 # `{hash}` the Xet hash of it, uploaded first, and `{repo}` a repository
 # created first through the Hub API. The `workspace` commands run in
 # `{checkout}`, a Git repository with one commit, where `{workspace}` is a
-# workspace created first.
+# workspace created first and `{worktree}` a worktree made with plain
+# `git worktree add`. The `workspace hook` commands get HOOK_INPUT on stdin,
+# as Claude Code sends it.
 JSON_COMMANDS = [
     ["version", "--json"],
     ["config", "check", "--json"],
@@ -47,7 +49,24 @@ JSON_COMMANDS = [
     ["workspace", "status", "--json"],
     ["workspace", "remove", "{workspace}", "--dry-run", "--json"],
     ["workspace", "remove", "{workspace}", "--json"],
+    ["workspace", "adopt", "{worktree}", "--dry-run", "--json"],
+    ["workspace", "adopt", "{worktree}", "--json"],
+    ["workspace", "adopt", "--scan", "--json"],
+    ["workspace", "hook", "claude-create", "--dry-run", "--json"],
+    ["workspace", "hook", "claude-create", "--json"],
+    ["workspace", "hook", "claude-remove", "--dry-run", "--json"],
+    ["workspace", "hook", "claude-remove", "--json"],
+    ["workspace", "install", "claude", "--project", "--dry-run", "--json"],
+    ["workspace", "install", "claude", "--project", "--json"],
+    ["workspace", "install", "claude", "--user", "--json"],
 ]
+
+HOOK_INPUT = {
+    "claude-create": '{"session_id": "agent", "cwd": "{checkout}", '
+    '"hook_event_name": "WorktreeCreate", "name": "agent-hook"}',
+    "claude-remove": '{"session_id": "agent", "cwd": "{checkout}", '
+    '"hook_event_name": "WorktreeRemove", "worktree_path": "{workspace}"}',
+}
 
 NEEDS_SERVER = {"upload", "download", "purge", "label"}
 
@@ -56,21 +75,22 @@ NEEDS_SERVER = {"upload", "download", "purge", "label"}
 LONG_RUNNING = {"serve"}
 
 
-def run(openxet_bin, *args, env, cwd=None):
+def run(openxet_bin, *args, env, cwd=None, stdin=None):
+    """Runs openxet with `stdin` as its input, or with stdin closed."""
+    feed = dict(input=stdin) if stdin is not None else dict(stdin=subprocess.DEVNULL)
     return subprocess.run(
         [openxet_bin, *args],
         capture_output=True,
-        stdin=subprocess.DEVNULL,
+        **feed,
         timeout=60,
         env=env,
         cwd=cwd,
     )
 
 
-def git_checkout(path):
-    """A Git repository with one commit, made without the developer's Git
-    configuration."""
-    env = dict(
+def git_env():
+    """Git without the developer's configuration, with a fixed identity."""
+    return dict(
         PATH=os.environ["PATH"],
         GIT_CONFIG_GLOBAL=os.devnull,
         GIT_CONFIG_NOSYSTEM="1",
@@ -79,6 +99,11 @@ def git_checkout(path):
         GIT_COMMITTER_NAME="agent",
         GIT_COMMITTER_EMAIL="agent@example.com",
     )
+
+
+def git_checkout(path):
+    """A Git repository with one commit."""
+    env = git_env()
     subprocess.run(["git", "init", "--quiet", "-b", "main", str(path)], check=True, env=env)
     (path / "README.md").write_text("agent workspace\n")
     for args in (["add", "."], ["commit", "--quiet", "-m", "first"]):
@@ -125,6 +150,12 @@ def expand(openxet_bin, args, tmp_path, env):
         out = run(openxet_bin, "workspace", "create", "--json", env=env, cwd=tmp_path / "checkout")
         assert out.returncode == 0, out.stderr.decode()
         args = [a.replace("{workspace}", json.loads(out.stdout)["path"]) for a in args]
+    if any("{worktree}" in a for a in args):
+        worktree = tmp_path / "by-hand"
+        checkout = str(tmp_path / "checkout")
+        add = ["worktree", "add", "--quiet", "-b", "by-hand", str(worktree)]
+        subprocess.run(["git", "-C", checkout, *add], check=True, env=git_env())
+        args = [a.replace("{worktree}", str(worktree)) for a in args]
     args = [a.replace("{checkout}", str(tmp_path / "checkout")) for a in args]
     return [a.replace("{tmp}", str(tmp_path)) for a in args]
 
@@ -174,7 +205,13 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
             env = stack.enter_context(dev_server(openxet_bin, tmp_path))
             (tmp_path / "upload.bin").write_bytes(os.urandom(4096))
         cwd = git_checkout(tmp_path / "checkout") if args[0] == "workspace" else None
-        args = expand(openxet_bin, args, tmp_path, env)
+        stdin = HOOK_INPUT.get(args[2]) if args[:2] == ["workspace", "hook"] else None
+        if stdin is not None:
+            # Expanded with the arguments, so both name the same workspace.
+            *args, stdin = expand(openxet_bin, [*args, stdin], tmp_path, env)
+            stdin = stdin.encode()
+        else:
+            args = expand(openxet_bin, args, tmp_path, env)
         if args[0] in LONG_RUNNING:
             stdout, returncode, stderr = run_long(openxet_bin, *args, env=env)
             if args[0] == "serve":
@@ -182,7 +219,7 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
                 token = json.loads(stdout)["token"]
                 assert_no_credential_in_log(stderr.decode(errors="replace"), {token})
         else:
-            out = run(openxet_bin, *args, env=env, cwd=cwd)
+            out = run(openxet_bin, *args, env=env, cwd=cwd, stdin=stdin)
             stdout, returncode, stderr = out.stdout, out.returncode, out.stderr
 
     assert returncode == 0, stderr.decode()

@@ -267,7 +267,7 @@ async fn seed_from_sibling(
     }
 }
 
-fn default_path(main: &Path, name: &str) -> PathBuf {
+pub(super) fn default_path(main: &Path, name: &str) -> PathBuf {
     if main.join(".claude").is_dir() {
         return main.join(".claude/worktrees").join(name);
     }

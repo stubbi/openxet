@@ -3,8 +3,11 @@
 //! 2026-10-27), registered per user so they can be listed and removed
 //! without losing work.
 
+mod adopt;
 mod create;
 mod daemon;
+mod hook;
+mod install;
 mod names;
 mod remove;
 mod report;
@@ -12,8 +15,11 @@ mod report;
 use std::path::{Path, PathBuf};
 
 use openxet_workspace::{Budget, Volume, WorkspaceError};
+use tracing::Level;
 
+use crate::config::LogFormat;
 use crate::error::{CliError, ExitCode};
+use crate::logging;
 use crate::output::Output;
 
 #[derive(Debug, clap::Subcommand)]
@@ -27,6 +33,19 @@ pub enum WorkspaceCommand {
     Status,
     /// Remove a workspace and its branch, refusing if that would lose work
     Remove(remove::RemoveArgs),
+    /// Register worktrees made without OpenXet, so idle eviction covers
+    /// them
+    Adopt(adopt::AdoptArgs),
+    /// The hooks an agent runs to create and remove its worktrees
+    Hook {
+        #[command(subcommand)]
+        command: hook::HookCommand,
+    },
+    /// Install the hooks into an agent's settings
+    Install {
+        #[command(subcommand)]
+        command: install::InstallCommand,
+    },
     /// Run the per-user daemon that `create` starts in the background
     #[command(hide = true)]
     Daemon,
@@ -45,6 +64,9 @@ pub(crate) struct Context {
     pub volume: fn(&Path) -> Result<Volume, WorkspaceError>,
     /// Whether `create` starts the daemon when none runs.
     pub start_daemon: bool,
+    /// The user's home, where `install claude --user` finds
+    /// `.claude/settings.json`.
+    pub home: Option<PathBuf>,
 }
 
 impl Context {
@@ -69,6 +91,7 @@ pub fn run(command: &WorkspaceCommand, output: Output) -> Result<(), CliError> {
         config: openxet_workspace::user_config_path(),
         volume: openxet_workspace::volume,
         start_daemon: std::env::var_os(daemon::DAEMON_ENV).is_none_or(|value| value != "off"),
+        home: std::env::home_dir(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -89,9 +112,38 @@ pub fn run(command: &WorkspaceCommand, output: Output) -> Result<(), CliError> {
             WorkspaceCommand::List(args) => emit(output, &report::list(args, &context).await?),
             WorkspaceCommand::Status => emit(output, &report::status(&context).await?),
             WorkspaceCommand::Remove(args) => emit(output, &remove::remove(args, &context).await?),
+            WorkspaceCommand::Adopt(args) => emit(output, &adopt::run(args, &context).await?),
+            WorkspaceCommand::Hook { command } => run_hook(command, output, &context).await,
+            WorkspaceCommand::Install {
+                command: install::InstallCommand::Claude(args),
+            } => emit(output, &install::claude(args, &context)?),
             WorkspaceCommand::Daemon => daemon::run(&context).await,
         }
     })
+}
+
+/// Runs a hook. Claude Code reads the last stdout line of `claude-create`
+/// as the worktree's path, so stdout gets that line only, and logs and the
+/// summary go to stderr.
+async fn run_hook(
+    command: &hook::HookCommand,
+    output: Output,
+    context: &Context,
+) -> Result<(), CliError> {
+    logging::init(LogFormat::Text, Level::WARN);
+    let input = hook::read_stdin()?;
+    match command {
+        hook::HookCommand::ClaudeCreate(args) => {
+            let created = hook::claude_create(&input, args, context).await?;
+            if output == Output::Human {
+                eprintln!("{}", created.summary());
+            }
+            emit(output, &created)
+        }
+        hook::HookCommand::ClaudeRemove(args) => {
+            emit(output, &hook::claude_remove(&input, args, context).await?)
+        }
+    }
 }
 
 fn emit<T: serde::Serialize + crate::output::HumanDisplay>(
@@ -148,6 +200,27 @@ pub(crate) fn workspace_error(err: &WorkspaceError) -> CliError {
         WorkspaceError::DaemonRunning { .. } => (
             "Nothing to do: one daemon per user serves every workspace, and `openxet workspace \
              status` shows it running.",
+            ExitCode::FAILURE,
+        ),
+        WorkspaceError::MainWorktree(_) => (
+            "Pass a linked worktree, one `git worktree list` shows after the first; the main \
+             worktree is your own checkout.",
+            ExitCode::USAGE,
+        ),
+        WorkspaceError::HookInput(_) => (
+            "Claude Code runs this hook with its JSON on stdin; to run it yourself, pipe in \
+             `{\"cwd\": \"<repo>\", \"name\": \"<name>\"}` for claude-create or \
+             `{\"worktree_path\": \"<path>\"}` for claude-remove.",
+            ExitCode::USAGE,
+        ),
+        WorkspaceError::Settings { .. } => (
+            "Fix the JSON in the file the message names, then run `openxet workspace install \
+             claude` again; nothing was written.",
+            ExitCode::FAILURE,
+        ),
+        WorkspaceError::HookConflict { .. } => (
+            "Remove the other worktree hook from the file, then run `openxet workspace install \
+             claude` again; both would act on the same worktrees.",
             ExitCode::FAILURE,
         ),
         WorkspaceError::Io { .. } => (

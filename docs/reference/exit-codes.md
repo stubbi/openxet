@@ -35,13 +35,17 @@ lines.
 | `storage` | 1 | `serve` or `purge` couldn't open the bucket in the data directory, or `purge` couldn't write its purge record there. Nothing was purged. |
 | `insecure_permissions` | 1 | A secret file (`dev-token`, `transfer.key`, a signing key) can be read by other users. The hint names the `chmod`. |
 | `invalid_key` | 1 | A key or token file doesn't hold what it should. |
-| `exists` | 2 | `token keygen` would overwrite a file, or `workspace create` names a path or branch that exists. Nothing was written. |
+| `exists` | 2 | `token keygen` would overwrite a file, or `workspace create` or `hook claude-create` names a path or branch that exists (and, for the hook, no workspace is registered at that path). Nothing was written. |
 | `invalid_name` | 2 | `workspace create --name` isn't a slug of lowercase letters, digits and single hyphens of at most 64 bytes. |
 | `unknown_revision` | 2 | `workspace create --base` names no commit of the repository. |
-| `not_a_repository` | 1 | `workspace create` or `list --repo` was run outside a Git repository. The hint names `--repo`. |
-| `not_a_workspace` | 1 | `workspace remove` was given a path no workspace is registered at. The hint names `workspace list`. |
-| `unsaved_work` | 1 | `workspace remove` would lose work that exists nowhere else. `files` lists each item with its `problem`: `uncommitted`, `untracked`, `ignored` or `unpushed` (its `path` is the branch). Nothing was removed; the hint names `--discard`. |
+| `not_a_repository` | 1 | `workspace create`, `list --repo`, `adopt`, `install claude --project` or `hook claude-create` (its `cwd`) was run outside a Git repository. The hint names `--repo`. |
+| `not_a_workspace` | 1 | `workspace remove` was given a path no workspace is registered at, or `hook claude-remove` a directory that is no worktree. The hint names `workspace list`. |
+| `unsaved_work` | 1 | `workspace remove` or `hook claude-remove` would lose work that exists nowhere else. `files` lists each item with its `problem`: `uncommitted`, `untracked`, `ignored` or `unpushed` (its `path` is the branch). Nothing was removed; the hint names `--discard`. |
 | `disk_budget` | 1 | `workspace create` found free space under the floor even after evicting idle workspaces' build outputs. The message gives both in bytes; nothing was created. The hint says to retry in a minute or remove idle workspaces. |
+| `main_worktree` | 2 | `workspace adopt`, `remove` or `hook claude-remove` named the repository's main worktree, which is never adopted or removed. Nothing was changed. |
+| `invalid_hook_input` | 2 | A `workspace hook` command's stdin isn't the JSON its hook event sends: `cwd` and `name` for `claude-create`, `worktree_path` for `claude-remove`. Nothing was run; stdout is empty. |
+| `invalid_settings` | 1 | `workspace install claude` found a settings file that isn't a JSON object, or whose `hooks` isn't an object of arrays. Nothing was written. |
+| `hook_conflict` | 1 | `workspace install claude` found another tool's `WorktreeCreate` or `WorktreeRemove` hook in the settings file; the message names it. Nothing was written. |
 | `registry` | 1 | The workspace registry couldn't be opened, migrated or read. |
 | `git` | 1 | A Git command a `workspace` command ran failed; the message is Git's. |
 | `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |

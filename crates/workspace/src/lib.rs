@@ -11,18 +11,21 @@
 #![forbid(unsafe_code)]
 
 mod activity;
+mod adopt;
 mod classify;
 mod daemon;
 mod dedup;
 mod error;
 mod evict;
 mod git;
+mod hooks;
 mod paths;
 mod registry;
 mod seed;
 mod space;
 
 pub use activity::active_workspaces;
+pub use adopt::{Adoption, ScanReport, ScanSkip, adopt, adopt_scan};
 pub use classify::{Class, PROJECT_CONFIG, Presets, classify, reconstructible_dirs};
 pub use daemon::{DAEMON_LOCK, daemon_running, run_daemon};
 pub use dedup::{DedupOutcome, DedupReport, MIN_DEDUP_SIZE, dedup_file, dedup_tree};
@@ -30,7 +33,11 @@ pub use error::WorkspaceError;
 pub use evict::{evict_expired, eviction_order, free_to_floor};
 pub use git::{
     UnsavedWork, add_worktree, branch_exists, delete_branch, main_worktree, remove_worktree,
-    resolve_commit, unsaved_work,
+    resolve_commit, unsaved_work, worktree_root,
+};
+pub use hooks::{
+    CLAUDE_CREATE_ARGS, CLAUDE_REMOVE_ARGS, HookCommands, MergedSettings, WorktreeCreateInput,
+    WorktreeRemoveInput, merge_claude_hooks, read_hook_input, write_atomically,
 };
 pub use paths::{ProjectId, STATE_DIR_ENV, state_dir};
 pub use registry::{Registry, Workspace, WorkspaceId};
