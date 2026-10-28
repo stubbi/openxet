@@ -14,7 +14,14 @@ use proptest::prelude::*;
 fn host() -> impl Strategy<Value = String> {
     prop_oneof![
         (
-            prop::collection::vec("[a-z0-9_]([a-z0-9_-]{0,8}[a-z0-9_])?", 1..3),
+            // An `xn--` label must be valid punycode, which random text
+            // rarely is; the vectors cover A-labels, valid and not.
+            prop::collection::vec(
+                "[a-z0-9_]([a-z0-9_-]{0,8}[a-z0-9_])?"
+                    .prop_filter("not an A-label", |label: &String| !label
+                        .starts_with("xn--")),
+                1..3
+            ),
             "[a-z]{2,6}"
         )
             .prop_map(|(labels, tld)| format!("{}.{tld}", labels.join("."))),
