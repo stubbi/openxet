@@ -7,7 +7,7 @@
 - Builds on: the approved design (`2026-10-23-openxet-design.md`), Codex's
   draft vision (PR #103: `2026-10-25-openxet-agent-storage-vision.md`,
   ADR 0013 proposed, research S15), and the agent storage survey of
-  2026-10-26 (summarised in [Prior art](#prior-art))
+  2026-10-26 (summarised in [Prior art](#8-prior-art))
 
 ## 1. Intent
 
