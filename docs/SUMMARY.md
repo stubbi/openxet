@@ -8,6 +8,7 @@
 - [Quickstart: storage only](quickstart-storage-only.md)
 - [Git hosting](guides/git-hosting.md)
 - [Git LFS for any Git host](guides/lfs-for-any-repo.md)
+- [Agent workspaces](guides/agent-workspaces.md)
 - [Server configuration](reference/config.md)
 - [Command line](reference/cli.md)
 - [Hub routes](reference/hub-routes.md)

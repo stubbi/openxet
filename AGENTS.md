@@ -243,8 +243,13 @@ Git LFS endpoint for `git-xet`, generic labels and typed views, the
 storage-only, docs, Hub, Git and LFS legs in CI, beside the latency gates
 for reconstruction and the Hub's token, resolve and tree, the fetch gate
 and the thin-base budget (`docs/reference/benchmarks.md`). Agent workspaces
-next (ADR 0013): measure, then the local store and `openxet workspace`
-provider, per `docs/superpowers/plans/2026-10-27-agent-workspaces-local.md`.
+(ADR 0013), per `docs/superpowers/plans/2026-10-27-agent-workspaces-local.md`:
+steps 1 and 2 shipped. Step 1 measured disk and build cost
+(`docs/research/S16-workspace-disk.md`); step 2 is `openxet workspace`
+(`crates/workspace`): create, list, status, remove, adopt, the per-user
+daemon with its free-space floor, idle eviction and settled-file dedup, and
+the Claude Code hooks (`docs/guides/agent-workspaces.md`). Next: the
+flat-disk and build-speed gate, then step 3 (the mount) after its plan.
 M3 follows: production backends (Postgres; S3, GCS and Azure), OIDC and the
 webhook authorizer, OpenXet-issued tokens and rate limits, per design §12,
 interleaved before the workspace steps that need it. ADR 0001 decides to build from
@@ -297,7 +302,7 @@ cargo deny --manifest-path fuzz/Cargo.toml check           # the fuzz workspace'
 uv run --frozen --directory compat pytest tests/test_fixture_redaction.py tests/test_harness.py -m "not pinned" # redaction guard + harness isolation (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m agent        # agent leg (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m storage_only # stock hf_xet against openxet serve (CI gate)
-OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # both quickstarts run as written (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m docs         # both quickstarts and the agent workspaces guide run as written (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m hub          # stock huggingface_hub and hf against openxet's Hub API (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m git          # stock git over smart HTTP, one node and two (CI gate)
 eval "$(compat/gitea/seed.sh)"                             # start the LFS leg's Gitea (Docker or colima) and export its variables
