@@ -371,7 +371,9 @@ per user, in `registry.sqlite3` under `$OPENXET_WORKSPACE_STATE`, else
 `~/Library/Application Support/openxet/workspaces` on macOS and
 `$XDG_STATE_HOME/openxet/workspaces` (by default
 `~/.local/state/openxet/workspaces`) elsewhere. It works on the local
-machine only and needs no server.
+machine only and needs no server. The [agent workspaces
+guide](../guides/agent-workspaces.md) walks through setting it up for
+Claude Code, Cursor and Codex.
 
 ```bash
 openxet workspace create --name fix-login
@@ -466,6 +468,8 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   ```
 
   An invalid file fails `create`, `status` and the daemon with `config`.
+  The daemon reads the file when it starts and keeps those limits while
+  it runs.
 - **Remove.** `remove` deletes the worktree with everything in it, its
   branch (`deleted_branch`) and its registration. `freed_bytes` counts
   clones shared with other workspaces in full, so at most that much is
@@ -548,7 +552,10 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   nothing; `settings` in the JSON result is the same.
 - **Dry run.** `create`, `remove`, `adopt` and the two hooks with
   `--dry-run` report what they would do, with `"dry_run":true`, and change
-  nothing; `remove --dry-run` refuses as `remove` would.
+  nothing; `remove --dry-run` refuses as `remove` would. `create
+  --dry-run` checks neither the floor nor your
+  `~/.config/openxet/workspace.toml`, so it never fails with
+  `disk_budget`.
 
 ## Endpoint, token and cache
 
