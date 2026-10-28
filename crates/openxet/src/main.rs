@@ -18,6 +18,7 @@ mod serve;
 mod size;
 mod token_cmd;
 mod transfer_cmd;
+mod workspace_cmd;
 
 fn main() -> std::process::ExitCode {
     if hook_cmd::invoked_as_hook(std::env::args_os().next().as_deref()) {

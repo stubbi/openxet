@@ -22,7 +22,9 @@ pytestmark = pytest.mark.agent
 # dev-mode `openxet serve` through OPENXET_ENDPOINT and OPENXET_TOKEN, with
 # its data directory at `{tmp}/server/data`, `{tmp}/upload.bin` to upload,
 # `{hash}` the Xet hash of it, uploaded first, and `{repo}` a repository
-# created first through the Hub API.
+# created first through the Hub API. The `workspace` commands run in
+# `{checkout}`, a Git repository with one commit, where `{workspace}` is a
+# workspace created first.
 JSON_COMMANDS = [
     ["version", "--json"],
     ["config", "check", "--json"],
@@ -38,6 +40,12 @@ JSON_COMMANDS = [
     ["label", "remove", "{repo}", "model", "--dry-run", "--json"],
     ["label", "list", "{repo}", "--json"],
     ["openapi", "--json"],
+    ["workspace", "create", "--name", "agent", "--json"],
+    ["workspace", "create", "--dry-run", "--json"],
+    ["workspace", "list", "--repo", "{checkout}", "--json"],
+    ["workspace", "status", "--json"],
+    ["workspace", "remove", "{workspace}", "--dry-run", "--json"],
+    ["workspace", "remove", "{workspace}", "--json"],
 ]
 
 NEEDS_SERVER = {"upload", "download", "purge", "label"}
@@ -47,14 +55,34 @@ NEEDS_SERVER = {"upload", "download", "purge", "label"}
 LONG_RUNNING = {"serve"}
 
 
-def run(openxet_bin, *args, env):
+def run(openxet_bin, *args, env, cwd=None):
     return subprocess.run(
         [openxet_bin, *args],
         capture_output=True,
         stdin=subprocess.DEVNULL,
         timeout=60,
         env=env,
+        cwd=cwd,
     )
+
+
+def git_checkout(path):
+    """A Git repository with one commit, made without the developer's Git
+    configuration."""
+    env = dict(
+        PATH=os.environ["PATH"],
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_AUTHOR_NAME="agent",
+        GIT_AUTHOR_EMAIL="agent@example.com",
+        GIT_COMMITTER_NAME="agent",
+        GIT_COMMITTER_EMAIL="agent@example.com",
+    )
+    subprocess.run(["git", "init", "--quiet", "-b", "main", str(path)], check=True, env=env)
+    (path / "README.md").write_text("agent workspace\n")
+    for args in (["add", "."], ["commit", "--quiet", "-m", "first"]):
+        subprocess.run(["git", "-C", str(path), *args], check=True, env=env)
+    return path
 
 
 def expand(openxet_bin, args, tmp_path, env):
@@ -81,6 +109,11 @@ def expand(openxet_bin, args, tmp_path, env):
         )
         assert created.status_code == 200, created.text
         args = [a.replace("{repo}", created.json()["name"]) for a in args]
+    if any("{workspace}" in a for a in args):
+        out = run(openxet_bin, "workspace", "create", "--json", env=env, cwd=tmp_path / "checkout")
+        assert out.returncode == 0, out.stderr.decode()
+        args = [a.replace("{workspace}", json.loads(out.stdout)["path"]) for a in args]
+    args = [a.replace("{checkout}", str(tmp_path / "checkout")) for a in args]
     return [a.replace("{tmp}", str(tmp_path)) for a in args]
 
 
@@ -126,6 +159,7 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
         if args[0] in NEEDS_SERVER:
             env = stack.enter_context(dev_server(openxet_bin, tmp_path))
             (tmp_path / "upload.bin").write_bytes(os.urandom(4096))
+        cwd = git_checkout(tmp_path / "checkout") if args[0] == "workspace" else None
         args = expand(openxet_bin, args, tmp_path, env)
         if args[0] in LONG_RUNNING:
             stdout, returncode, stderr = run_long(openxet_bin, *args, env=env)
@@ -134,7 +168,7 @@ def test_command_json_is_parseable_with_schema(openxet_bin, args, tmp_path):
                 token = json.loads(stdout)["token"]
                 assert_no_credential_in_log(stderr.decode(errors="replace"), {token})
         else:
-            out = run(openxet_bin, *args, env=env)
+            out = run(openxet_bin, *args, env=env, cwd=cwd)
             stdout, returncode, stderr = out.stdout, out.returncode, out.stderr
 
     assert returncode == 0, stderr.decode()

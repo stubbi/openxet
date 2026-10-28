@@ -13,6 +13,7 @@ use crate::purge_cmd::{self, PurgeArgs};
 use crate::serve::{self, ServeArgs};
 use crate::token_cmd::{self, TokenCommand};
 use crate::transfer_cmd::{self, DownloadArgs, UploadArgs};
+use crate::workspace_cmd::{self, WorkspaceCommand};
 
 #[derive(Parser)]
 #[command(
@@ -57,6 +58,12 @@ enum Command {
     Label {
         #[command(subcommand)]
         command: LabelCommand,
+    },
+    /// Create, list and remove agent workspaces: worktrees whose build outputs
+    /// start as copy-on-write clones
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
     },
     /// The proc-receive hook of the pushes openxet serves; git runs it
     #[command(hide = true)]
@@ -122,6 +129,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Command::Purge(args) => purge_cmd::run(args, output),
         Command::Label { command } => label_cmd::run(command, output),
         Command::Openapi => openapi_cmd::run(output),
+        Command::Workspace { command } => workspace_cmd::run(command, output),
         Command::ProcReceive => return crate::hook_cmd::run(),
     };
     match result {
@@ -282,6 +290,10 @@ mod tests {
             r#"["label", "add""#,
             r#"["label", "remove""#,
             r#"["label", "list""#,
+            r#"["workspace", "create""#,
+            r#"["workspace", "list""#,
+            r#"["workspace", "status""#,
+            r#"["workspace", "remove""#,
         ] {
             assert!(
                 listed.iter().any(|l| l == invocation),
