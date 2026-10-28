@@ -71,6 +71,7 @@ impl Fixture {
             config: None,
             volume: roomy,
             start_daemon: false,
+            home: None,
         };
         Self {
             _dir: dir,
