@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod classify;
+mod dedup;
 mod error;
 mod git;
 mod paths;
@@ -18,6 +19,7 @@ mod seed;
 mod space;
 
 pub use classify::{Class, PROJECT_CONFIG, Presets, classify, reconstructible_dirs};
+pub use dedup::{DedupOutcome, DedupReport, MIN_DEDUP_SIZE, dedup_file, dedup_tree};
 pub use error::WorkspaceError;
 pub use git::{
     UnsavedWork, add_worktree, branch_exists, delete_branch, main_worktree, remove_worktree,

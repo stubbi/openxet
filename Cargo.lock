@@ -3250,6 +3250,8 @@ dependencies = [
 name = "openxet-workspace"
 version = "0.0.0"
 dependencies = [
+ "blake3",
+ "libc",
  "reflink-copy",
  "rustix",
  "serde",
