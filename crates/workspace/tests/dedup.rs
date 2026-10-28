@@ -3,6 +3,7 @@
 use std::fs::{self, File, FileTimes, Permissions};
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
