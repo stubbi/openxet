@@ -10,6 +10,7 @@ benchmark, and a speed regression fails CI.
 | Hub token, resolve and tree latency, design §5.8 | CI gate (Linux runner), compared like the reconstruction gate (ruling M2-R17); locally, needs a quiet machine | `cargo nextest run --release -p openxet-hub -E 'binary(hub_latency_gate)' --no-capture` |
 | Serving a clone: OpenXet's CPU against git's | CI gate (Linux runner), both measured in the same run | `cargo nextest run --release -p openxet-git -E 'binary(fetch_gate)' --no-capture` |
 | The thin-base walk and `git.thin_bases`' defaults | CI gate (Linux runner) | `cargo nextest run --release -p openxet-git -E 'binary(thin_bases_budget)' --no-capture` |
+| Agent workspaces: disk at the peak of six concurrent builds, build speed, spec 2026-10-27 §2 | CI gate (Linux runner, XFS loop volume); locally, needs a volume with clones that nothing else writes to | `OPENXET_BIN=$PWD/target/debug/openxet OPENXET_COMPAT_WORKSPACE_VOLUME=<dir> uv run --frozen --directory compat pytest -m workspaces -s` |
 | Reconstruction and URL signing | criterion, for humans | `cargo bench -p openxet-cas --bench reconstruction` |
 | Xorb ingest | criterion, for humans | `cargo bench -p openxet-cas --bench xorb_ingest` |
 | Shard and index commit throughput | a plain run, for humans | `cargo bench -p openxet-cas --bench commit_throughput` |
@@ -443,6 +444,68 @@ The defaults, from these numbers:
 
 The test asserts both: the full walk fits `max_objects`, and the push
 through it finishes within `max_ms`.
+
+## Agent workspaces gate
+
+The success test of the [agent workspaces
+spec](../superpowers/specs/2026-10-27-agent-workspaces-design.md) (§2), on
+`compat/fixtures/workspace-project`: three crates on `serde` with `derive`,
+`serde_json` and `itoa` (14 units, build scripts and a proc macro), built
+offline from vendored sources outside every checkout.
+`compat/tests/test_workspaces.py`:
+
+- **Flat disk.** `openxet workspace create` makes `ws1`, which is built
+  alone; the volume's peak used bytes over the time just before that build
+  is one build's footprint. Five more workspaces are created (each seeded
+  by clone from the nearest sibling), the daemon is started, and all six
+  build at once. The peak used bytes over the baseline taken before `ws1`
+  existed must stay within 1.5 builds (1 plus 5 times 10%), and after
+  `openxet workspace remove` of all six, used bytes must come back within 1%
+  of that baseline.
+- **Build speed.** A workspace and a plain `git clone --local` of the same
+  repository, each built once, then 5 no-op builds and 5 builds after
+  touching `crates/model/src/lib.rs` in each, alternating which goes first.
+  The median in the workspace must be at most 1.10 times the plain clone's.
+
+Used bytes are the volume's (`statvfs`), sampled every 200 ms, not `du`,
+which counts every clone in full. The measured volume must hold nothing
+else: CI's `workspaces-gate` job mounts a fresh 20 GiB XFS loop volume made
+with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
+(`hdiutil create -size 20g -fs APFS -type SPARSE`) mounted and named by
+`OPENXET_COMPAT_WORKSPACE_VOLUME`.
+
+<!-- table-caption: The agent workspaces gate, 2026-10-28 -->
+
+| Run | Solo build | Peak of six over baseline | Share of one build (bar 1.50) | Left after removal (bar 1% of baseline) | No-op ratio (bar 1.10) | Incremental ratio (bar 1.10) |
+|---|---|---|---|---|---|---|
+| Local 1 | 45.2 MiB | 88.1 MiB | 1.950 (fails) | 1.1 MiB of 50.9 MiB (fails) | 0.960 (workspace 0.078 s, plain 0.081 s) | 1.018 (workspace 0.403 s, plain 0.396 s) |
+| Local 2 | 47.6 MiB | 45.3 MiB | 0.950 | 0.6 MiB of 50.9 MiB (fails) | not run | not run |
+| Local 3 | 47.7 MiB | 45.6 MiB | 0.956 | 0.5 MiB of 50.9 MiB (fails by 27 KiB) | not run | not run |
+
+Local is the machine above, on a sparse APFS image, with other sessions'
+builds running (8 `rustc` and `cargo` processes at the start). CI numbers
+come from the `workspaces-gate` job's log.
+
+What the local runs show:
+
+- **The disk bar holds when the seed is complete and fails when it
+  isn't.** In runs 2 and 3 the five seeded workspaces built as no-ops, and
+  the peak of all six stayed under one solo build's (whose peak includes
+  files Cargo deletes before it ends). In run 1 every seeded workspace
+  recompiled `serde`, `model`, `codec` and `report`, whose outputs embed the
+  workspace path, so each added about 8.6 MiB (19% of a build). The
+  workspaces were created within seconds of `ws1`'s build ending, and seeding
+  skips files modified in the last 2 s; in a reproduction outside the test,
+  a workspace created right after the build rebuilt only `report`, and one
+  created later rebuilt nothing. Why `serde` rebuilt in run 1 was not
+  isolated.
+- **The 1% return fails on OpenXet's own state.** The registry (SQLite,
+  with its WAL), the daemon's log and Git's metadata are made after the
+  baseline and outlive the workspaces: about 0.2 MiB without the daemon, 0.5
+  to 1.1 MiB with it. No build output remains. On this image the baseline
+  is 50.9 MiB, so 1% is 0.5 MiB.
+- **Build speed is within the bar.** Medians differ by under 4% either way,
+  inside the run-to-run spread of a shared machine.
 
 ## Criterion: reconstruction
 

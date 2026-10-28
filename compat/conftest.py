@@ -178,6 +178,7 @@ HARNESS_ENV = frozenset(
         "OPENXET_SERVER__LOG_LEVEL",
         "OPENXET_TOKEN",
         "OPENXET_WORKSPACE_DAEMON",
+        "OPENXET_WORKSPACE_STATE",
     }
 )
 SCRUBBED_PREFIXES = ("HF_XET_", "HF_HUB_", "OPENXET_")
@@ -253,7 +254,7 @@ def openxet_bin() -> str:
 def _openxet_tests_need_binary(request):
     if any(
         request.node.get_closest_marker(m)
-        for m in ("agent", "storage_only", "docs", "hub", "git", "lfs")
+        for m in ("agent", "storage_only", "docs", "hub", "git", "lfs", "workspaces")
     ):
         request.getfixturevalue("openxet_bin")
 
