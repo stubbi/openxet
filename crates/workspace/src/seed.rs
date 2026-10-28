@@ -8,12 +8,12 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
-use std::fs::{self, File, FileTimes};
+use std::fs::{self, File, FileTimes, TryLockError};
 use std::io;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rustix::io::Errno;
 
@@ -132,6 +132,95 @@ pub fn seed_with(
         let _ = align_source_mtimes(target, from);
     }
     report
+}
+
+/// The longest [`wait_until_settled`] waits for in `create`. A finished
+/// build settles within the 2 s settle window, so a longer wait means the sibling is
+/// still building: 30 s covers the end of a build, such as linking a large
+/// binary, without holding an agent for a whole build. Claude Code gives a
+/// command hook such as `WorktreeCreate` 600 s by default
+/// (<https://code.claude.com/docs/en/hooks>, "Common fields").
+pub const SETTLE_CAP: Duration = Duration::from_secs(30);
+
+const SETTLE_POLL: Duration = Duration::from_millis(250);
+
+/// The files Cargo locks exclusively, in each profile's directory under
+/// `target`, for the length of a build: `.cargo-lock` in earlier releases;
+/// Cargo 1.97.1, as observed on the gate's fixture, holds
+/// `.cargo-build-lock` and `.cargo-artifact-lock` instead and leaves
+/// `.cargo-lock` free.
+const CARGO_LOCKS: [&str; 3] = [".cargo-lock", ".cargo-build-lock", ".cargo-artifact-lock"];
+
+/// What [`wait_until_settled`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettleWait {
+    /// How long it waited.
+    pub waited: Duration,
+    /// False when the cap passed with files still being written or a Cargo
+    /// build still running: seeding then clones only the settled files.
+    pub settled: bool,
+}
+
+/// Waits, up to `cap`, until nothing under the reconstructible directories
+/// of the worktree `from` was modified within the settle window and no
+/// Cargo build holds a lock there, so a seed taken right after a
+/// sibling's build gets all of its outputs rather than skipping the newest.
+#[must_use]
+pub fn wait_until_settled(from: &Path, presets: &Presets, cap: Duration) -> SettleWait {
+    let started = Instant::now();
+    loop {
+        let settled = is_settled(from, presets);
+        let waited = started.elapsed();
+        if settled || waited >= cap {
+            return SettleWait { waited, settled };
+        }
+        std::thread::sleep(SETTLE_POLL.min(cap.saturating_sub(waited)));
+    }
+}
+
+fn is_settled(from: &Path, presets: &Presets) -> bool {
+    let settled_before = SystemTime::now() - SETTLE;
+    seedable_dirs(from, presets).iter().all(|dir| {
+        let mut settled = true;
+        crate::space::walk(dir, &mut |meta| {
+            if meta.is_file() && meta.modified().is_ok_and(|at| at > settled_before) {
+                settled = false;
+            }
+        });
+        settled && !cargo_build_running(dir)
+    })
+}
+
+/// Whether a Cargo build holds a lock under `dir`: `<dir>/<profile>` or
+/// `<dir>/<target triple>/<profile>`.
+fn cargo_build_running(dir: &Path) -> bool {
+    let subdirs = |dir: &Path| -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                    .map(|entry| entry.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    subdirs(dir)
+        .into_iter()
+        .flat_map(|profile| {
+            let mut candidates = subdirs(&profile);
+            candidates.push(profile);
+            candidates
+        })
+        .any(|dir| {
+            // A shared lock fails only while Cargo holds its exclusive one
+            // (both are flock(2) locks on Unix).
+            CARGO_LOCKS.iter().any(|name| {
+                File::open(dir.join(name)).is_ok_and(|lock| {
+                    matches!(lock.try_lock_shared(), Err(TryLockError::WouldBlock))
+                })
+            })
+        })
 }
 
 /// The bytes [`seed`] would clone from `from`, for a dry run.
