@@ -257,6 +257,11 @@ async fn small_files_are_skipped() {
 #[tokio::test]
 async fn stale_canonical_is_replaced() {
     let (_dir, dir) = scratch();
+    // Staleness is found by hashing the clone, so without clones the file
+    // stops at `Unsupported` first.
+    if !clones_or_skip(&dir, "stale_canonical_is_replaced") {
+        return;
+    }
     let (_state, reg) = registry().await;
     let bytes = content(256 << 10, 5);
     let size = 256 << 10;
