@@ -27,7 +27,7 @@ lines.
 | ------ | ---- | ---- |
 | `usage` | 2 | The arguments don't parse, including an argument that isn't UTF-8. |
 | `io` | 1 | The result couldn't be written to stdout, e.g. a closed pipe, or a file couldn't be read or written (including a downloaded file). |
-| `config` | 1 | The configuration has problems. `openxet config check` lists each one ([config](config.md)). |
+| `config` | 1 | The configuration has problems. `openxet config check` lists each one ([config](config.md)). From a `workspace` command: the repository's `.openxet/workspace.toml` is invalid. |
 | `address_in_use` | 1 | `serve` couldn't listen: another process has the port. The hint names `--port`. |
 | `bind` | 1 | `serve` couldn't listen for another reason, such as a privileged port. |
 | `data_dir` | 1 | `serve` couldn't create the data directory. |
@@ -35,7 +35,14 @@ lines.
 | `storage` | 1 | `serve` or `purge` couldn't open the bucket in the data directory, or `purge` couldn't write its purge record there. Nothing was purged. |
 | `insecure_permissions` | 1 | A secret file (`dev-token`, `transfer.key`, a signing key) can be read by other users. The hint names the `chmod`. |
 | `invalid_key` | 1 | A key or token file doesn't hold what it should. |
-| `exists` | 2 | `token keygen` would overwrite a file. Nothing was written. |
+| `exists` | 2 | `token keygen` would overwrite a file, or `workspace create` names a path or branch that exists. Nothing was written. |
+| `invalid_name` | 2 | `workspace create --name` isn't a slug of lowercase letters, digits and single hyphens of at most 64 bytes. |
+| `unknown_revision` | 2 | `workspace create --base` names no commit of the repository. |
+| `not_a_repository` | 1 | `workspace create` or `list --repo` was run outside a Git repository. The hint names `--repo`. |
+| `not_a_workspace` | 1 | `workspace remove` was given a path no workspace is registered at. The hint names `workspace list`. |
+| `unsaved_work` | 1 | `workspace remove` would lose work that exists nowhere else. `files` lists each item with its `problem`: `uncommitted`, `untracked`, `ignored` or `unpushed` (its `path` is the branch). Nothing was removed; the hint names `--discard`. |
+| `registry` | 1 | The workspace registry couldn't be opened, migrated or read. |
+| `git` | 1 | A Git command a `workspace` command ran failed; the message is Git's. |
 | `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |
 | `invalid_ttl` | 1 | `token mint --ttl` is outside `1m` to `30d`. |
 | `invalid_claims` | 1 | `token mint` or `token generate` was given an empty or invalid `--scope` or `--subject`. |

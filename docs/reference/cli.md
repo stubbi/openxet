@@ -19,6 +19,10 @@ with `--json`, or without a terminal, no command reads stdin.
 | `openxet purge` | Unregisters a file from every scope | `openxet.purge.v1` |
 | `openxet label add`, `remove`, `list` | Changes or lists a repository's labels | `openxet.labels.v1` |
 | `openxet openapi` | Prints the server's OpenAPI document | `openxet.openapi.v1` |
+| `openxet workspace create` | Creates a worktree seeded with a sibling's build outputs | `openxet.workspace.created.v1` |
+| `openxet workspace list` | Lists the registered workspaces | `openxet.workspace.list.v1` |
+| `openxet workspace status` | Reports free space, the floor and clone support | `openxet.workspace.status.v1` |
+| `openxet workspace remove` | Removes a workspace unless that would lose work | `openxet.workspace.removed.v1` |
 
 ## `openxet serve`
 
@@ -341,6 +345,88 @@ exactly the bytes `GET /openapi.json` answers, without a server
 ```bash
 openxet openapi > openapi.json
 ```
+
+## `openxet workspace`
+
+```
+openxet workspace create [--repo DIR] [--name SLUG] [--base REV] [--path DIR] [--dry-run] [--json]
+openxet workspace list [--repo DIR] [--json]
+openxet workspace status [--json]
+openxet workspace remove <PATH> [--discard] [--dry-run] [--json]
+```
+
+A workspace is a Git worktree on its own branch, for one agent among
+several working in the same repository at once. OpenXet registers each one
+per user, in `registry.sqlite3` under `$OPENXET_WORKSPACE_STATE`, else
+`~/Library/Application Support/openxet/workspaces` on macOS and
+`$XDG_STATE_HOME/openxet/workspaces` (by default
+`~/.local/state/openxet/workspaces`) elsewhere. It works on the local
+machine only and needs no server.
+
+```bash
+openxet workspace create --name fix-login
+```
+
+```
+Created workspace fix-login at /src/app/.claude/worktrees/fix-login, on new branch fix-login from 5a75a74c4895.
+Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing their disk blocks.
+```
+
+```json
+{"schema":"openxet.workspace.created.v1","path":"/src/app/.claude/worktrees/fix-login","name":"fix-login","branch":"fix-login","base":"5a75a74c4895e47467abf0be132cd566787186da","seeded_bytes":39847205,"seeded_from":"/src/app/.claude/worktrees/parser","seed_skipped":null,"dry_run":false}
+```
+
+- **Create.** `create` adds a worktree of the repository `--repo` is in
+  (by default the current directory's) on a new branch named after the
+  workspace, starting at `--base` (by default `HEAD`). The name is a slug
+  of lowercase letters, digits and single hyphens, at most 64 bytes, by
+  default a random `adjective-noun-xxxx`. The worktree goes to `--path`,
+  else `<repo>/.claude/worktrees/<name>` if `<repo>/.claude` exists, else
+  `<repo>/../<repo name>-worktrees/<name>`, where `<repo>` is the main
+  worktree. An existing path or branch exits 2 with `exists`.
+- **Seeding.** The reconstructible directories (`target`, `node_modules`
+  and those `.openxet/workspace.toml` lists) start as copy-on-write clones
+  of a sibling's: of the registered workspaces and the main worktree that
+  have any, the one whose `HEAD` is the fewest commits from the base, and
+  of those the most recently active. Files keep their mtimes and
+  permissions, and tracked files with the same content as the sibling's
+  get the sibling's mtimes, so Cargo finds the cloned outputs fresh.
+  `seeded_bytes` is the size of the files cloned; clones share their
+  blocks until either copy changes, so it is not new disk use. A file
+  modified in the last 2 seconds may still be being written and is left
+  for the build to make. `.venv` is never seeded: a virtual environment
+  holds its own absolute path. Without clone support (ext4, network
+  volumes) nothing is seeded and `seed_skipped` is `reflink_unsupported`;
+  OpenXet never copies build outputs in full. `seed_skipped` is
+  `no_sibling` when no worktree has build outputs yet, and `failed`, with
+  the reason in `seed_error`, when a clone fails otherwise; the workspace
+  is created either way.
+- **List.** `list` prints every registered workspace, or with `--repo`
+  one repository's: `path`, `name`, `branch`, `last_active` (Unix
+  seconds), `reconstructible_bytes` (what its reconstructible directories
+  take on disk, clones counted in full) and `idle` (no activity for 10
+  minutes).
+- **Status.** `status` reports the volume of the current repository's Git
+  directory (outside a repository, of the state directory):
+  `volume_path`, `volume_free_bytes`, `floor_bytes` (the free space to
+  keep, the larger of 20 GiB and a tenth of the volume),
+  `reflink_supported`, `daemon_running` and `workspaces`, the number
+  registered.
+- **Remove.** `remove` deletes the worktree with everything in it, its
+  branch (`deleted_branch`) and its registration. `freed_bytes` counts
+  clones shared with other workspaces in full, so at most that much is
+  freed. It refuses with `unsaved_work` (exit 1), changing nothing, when
+  that would lose work that exists nowhere else, listing each item in the
+  error's `files` with its `problem`: `uncommitted` (a changed tracked
+  file), `untracked` (a file Git neither tracks nor ignores), `ignored`
+  (an ignored file outside the reconstructible directories, such as
+  results or a local `.env`), or `unpushed` (the `path` is the branch,
+  or `HEAD` when detached, whose commits no remote-tracking branch, tag or
+  other local branch reaches). `--discard` removes it anyway. A workspace
+  whose directory is already gone is unregistered and its branch kept.
+- **Dry run.** `create --dry-run` and `remove --dry-run` report what they
+  would do, with `"dry_run":true`, and change nothing; `remove --dry-run`
+  refuses as `remove` would.
 
 ## Endpoint, token and cache
 

@@ -66,6 +66,15 @@ impl CliError {
         Self { exit, ..self }
     }
 
+    /// The same error with another message.
+    #[must_use]
+    pub fn with_message(self, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            ..self
+        }
+    }
+
     /// The same error with per-file problems.
     #[must_use]
     pub fn with_files(self, files: Vec<FileError>) -> Self {

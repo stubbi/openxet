@@ -3008,6 +3008,7 @@ dependencies = [
  "openxet-index",
  "openxet-protocol",
  "openxet-storage",
+ "openxet-workspace",
  "predicates",
  "reqwest",
  "rustls",
