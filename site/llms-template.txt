@@ -6,7 +6,8 @@ Available now: the server on local disk with SQLite; the Hub API, so stock
 `hf` and `huggingface_hub` create, upload, download and list repositories; Git
 over HTTPS on the same history, with Git LFS files through `git-xet`; stock
 `hf_xet` upload/download against the storage layer; and the `openxet` command
-line with versioned JSON and stable exit codes. Access is set by static tokens
+line with versioned JSON and stable exit codes, including `openxet workspace`
+for agents' worktrees on one machine. Access is set by static tokens
 and rules in the server's configuration. Start with the hf and git quickstart
 below. There is no release yet; the quickstarts build from source.
 
@@ -24,7 +25,8 @@ OpenXet is an independent project, not affiliated with or endorsed by Hugging Fa
 - Run it unattended (needs Rust 1.97+ and `git` 2.37+): `cargo install --locked --git https://github.com/stubbi/openxet openxet`, then `openxet serve --data-dir openxet-data --port 0 --json > serve.json &`. In dev mode `serve.json` holds the `endpoint` and a `token` for the user `dev`, who may create, read and write every repository.
 - Repositories with `hf` (needs `huggingface_hub>=2.2.0`): set `HF_ENDPOINT` to the endpoint and `HF_TOKEN` to the token, then `hf upload dev/NAME FOLDER .` (creates the repository) and `hf download dev/NAME --local-dir PATH`. Git: `git clone ENDPOINT/dev/NAME`, with the token as the HTTP Basic password (any user name); a push lands on the same history. The [hf and git quickstart](https://openxet.com/docs/quickstart-hub.md) runs these steps in CI.
 - Files by hash with `openxet`: set `OPENXET_ENDPOINT` and `OPENXET_TOKEN` from `serve.json`, then `openxet upload FILE --json` and `openxet download HASH --output PATH --json`. Every `openxet` command prints one JSON object with a versioned `schema`; failures print an `openxet.error.v1` object with a `code` and a `hint`, and exit with a [documented status](https://openxet.com/docs/reference/exit-codes.md). Hub routes answer errors with the same `code` and `hint` in JSON ([Hub routes](https://openxet.com/docs/reference/hub-routes.md)).
-- Ask a human before: using credentials for a server you did not start, deleting a data directory, or joining the hosted waitlist on someone's behalf.
+- Parallel coding agents in one repository (no server needed): `openxet workspace install claude --user` makes every worktree Claude Code creates an OpenXet workspace, a Git worktree on its own branch whose `target/` and `node_modules` start as copy-on-write clones of a sibling's (APFS, Btrfs, XFS with reflink; elsewhere nothing is cloned or copied). Other agents run `openxet workspace create --json` and `openxet workspace remove PATH --json`; `remove` refuses with `unsaved_work` rather than lose uncommitted, untracked or unpushed work. The [agent workspaces guide](https://openxet.com/docs/guides/agent-workspaces.md) runs in CI.
+- Ask a human before: using credentials for a server you did not start, deleting a data directory, removing a workspace with `--discard`, or joining the hosted waitlist on someone's behalf.
 
 Each docs link below is the page as plain Markdown; the same path ending in `.html` is the page for humans.
 

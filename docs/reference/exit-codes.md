@@ -26,7 +26,7 @@ lines.
 | `code` | Exit | When |
 | ------ | ---- | ---- |
 | `usage` | 2 | The arguments don't parse, including an argument that isn't UTF-8. |
-| `io` | 1 | The result couldn't be written to stdout, e.g. a closed pipe, or a file couldn't be read or written (including a downloaded file). |
+| `io` | 1 | The result couldn't be written to stdout, e.g. a closed pipe, or a file couldn't be read or written (including a downloaded file). From a `workspace` command also: the current directory or a hook's stdin couldn't be read, or there is no home directory to hold the state directory (set `OPENXET_WORKSPACE_STATE`) or `~/.claude/settings.json` for `install claude --user`. |
 | `config` | 1 | The configuration has problems. `openxet config check` lists each one ([config](config.md)). From a `workspace` command: the repository's `.openxet/workspace.toml` or your `~/.config/openxet/workspace.toml` is invalid. |
 | `address_in_use` | 1 | `serve` couldn't listen: another process has the port. The hint names `--port`. |
 | `bind` | 1 | `serve` couldn't listen for another reason, such as a privileged port. |
@@ -46,13 +46,14 @@ lines.
 | `invalid_hook_input` | 2 | A `workspace hook` command's stdin isn't the JSON its hook event sends: `cwd` and `name` for `claude-create`, `worktree_path` for `claude-remove`. Nothing was run; stdout is empty. |
 | `invalid_settings` | 1 | `workspace install claude` found a settings file that isn't a JSON object, or whose `hooks` isn't an object of arrays. Nothing was written. |
 | `hook_conflict` | 1 | `workspace install claude` found another tool's `WorktreeCreate` or `WorktreeRemove` hook in the settings file; the message names it. Nothing was written. |
+| `daemon_running` | 1 | The hidden `workspace daemon` found another daemon serving the same state directory; the message names its lock file. Nothing to do: one daemon per user serves every workspace, and `create` starts it only when none runs. |
 | `registry` | 1 | The workspace registry couldn't be opened, migrated or read. |
 | `git` | 1 | A Git command a `workspace` command ran failed; the message is Git's. |
 | `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |
 | `invalid_ttl` | 1 | `token mint --ttl` is outside `1m` to `30d`. |
 | `invalid_claims` | 1 | `token mint` or `token generate` was given an empty or invalid `--scope` or `--subject`. |
 | `key`, `random` | 1 | The operating system's random number generator failed. |
-| `signal`, `runtime` | 1 | `serve` couldn't install its signal handlers, or a command couldn't start its runtime. |
+| `signal`, `runtime` | 1 | `serve` or the workspace daemon couldn't install its signal handlers, or a command couldn't start its runtime. |
 | `missing_endpoint` | 2 | `upload`, `download` or `label` has no endpoint. The hint names `OPENXET_ENDPOINT`. |
 | `missing_token` | 2 | `upload`, `download` or `label` has no token. The hint names `OPENXET_TOKEN`. |
 | `invalid_endpoint` | 2 | The endpoint is not an `http` or `https` URL, or holds credentials, a query or a fragment. |
