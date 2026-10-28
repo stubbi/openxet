@@ -41,6 +41,6 @@ jobs:
           echo "OPENXET_COMPAT_WORKSPACE_VOLUME=$volume" >> "$GITHUB_ENV"
       - run: cargo build --locked -p openxet
       - run: nproc && uname -r && cat /proc/cpuinfo | grep "model name" | head -1
-      - run: uv run --frozen --directory compat python speed_diag.py "$GITHUB_WORKSPACE" "$OPENXET_COMPAT_WORKSPACE_VOLUME" 15
+      - run: uv run --frozen --directory compat python speed_diag.py "$GITHUB_WORKSPACE" "$OPENXET_COMPAT_WORKSPACE_VOLUME" 4
         env:
           OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
