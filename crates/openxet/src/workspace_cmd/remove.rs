@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use openxet_workspace::{
-    Registry, UnsavedWork, WorkspaceError, allocated_bytes, delete_branch, remove_worktree,
-    unsaved_work,
+    Registry, UnsavedWork, Workspace, WorkspaceError, allocated_bytes, delete_branch,
+    main_worktree, remove_worktree, unsaved_work,
 };
 use serde::Serialize;
 
@@ -73,18 +73,38 @@ pub(super) async fn remove(args: &RemoveArgs, context: &Context) -> Result<Remov
         .await
         .map_err(error)?
         .ok_or_else(|| error(WorkspaceError::NotAWorkspace(path.display().to_string())))?;
+    remove_workspace(&registry, &workspace, args.discard, args.dry_run).await
+}
+
+/// Removes `workspace` as `remove` does; `registry` holds it unless this is
+/// a dry run.
+pub(super) async fn remove_workspace(
+    registry: &Registry,
+    workspace: &Workspace,
+    discard: bool,
+    dry_run: bool,
+) -> Result<Removed, CliError> {
+    let error = |err: WorkspaceError| workspace_error(&err);
+    let path = &workspace.path;
     let repo = PathBuf::from(workspace.project.as_str());
     let exists = path.exists();
+    // Neither `create` nor `adopt` registers it, but the registry is a file
+    // anyone can write: the human's checkout is never deleted, `--discard`
+    // or not.
+    if exists && main_worktree(path).is_ok_and(|main| main.canonicalize().is_ok_and(|m| &m == path))
+    {
+        return Err(error(WorkspaceError::MainWorktree(path.clone())));
+    }
     // A workspace OpenXet adopted may sit on a branch the human made; and
     // with its directory gone, there is no telling what the branch holds.
     let branch = workspace
         .branch
         .as_deref()
         .filter(|_| !workspace.adopted && exists);
-    if exists && !args.discard {
-        let items = unsaved_work(&path, branch).map_err(error)?;
+    if exists && !discard {
+        let items = unsaved_work(path, branch).map_err(error)?;
         if !items.is_empty() {
-            return Err(unsaved(&path, &items));
+            return Err(unsaved(path, &items));
         }
     }
     let result = |freed_bytes, deleted_branch, dry_run| Removed {
@@ -94,18 +114,30 @@ pub(super) async fn remove(args: &RemoveArgs, context: &Context) -> Result<Remov
         deleted_branch,
         dry_run,
     };
-    let freed = allocated_bytes(&path);
-    if args.dry_run {
+    let freed = allocated_bytes(path);
+    if dry_run {
         return Ok(result(freed, branch.map(str::to_owned), true));
     }
-    registry.forget_canonical(&path).await.map_err(error)?;
-    remove_worktree(&repo, &path).map_err(error)?;
+    registry.forget_canonical(path).await.map_err(error)?;
+    remove_worktree(&repo, path).map_err(error)?;
     let deleted = match branch {
         Some(branch) if delete_branch(&repo, branch).map_err(error)? => Some(branch.to_owned()),
         _ => None,
     };
     registry.remove(&workspace.id).await.map_err(error)?;
     Ok(result(freed, deleted, false))
+}
+
+/// The result for a path with nothing left to remove: no directory and no
+/// registration.
+pub(super) fn already_gone(path: &Path, dry_run: bool) -> Removed {
+    Removed {
+        schema: "openxet.workspace.removed.v1",
+        path: path.display().to_string(),
+        freed_bytes: 0,
+        deleted_branch: None,
+        dry_run,
+    }
 }
 
 fn unsaved(path: &Path, items: &[UnsavedWork]) -> CliError {
@@ -277,5 +309,32 @@ mod tests {
         assert_eq!(removed.deleted_branch, None);
         assert!(openxet_workspace::branch_exists(&fx.main, "ws").unwrap());
         assert_eq!(registered(&fx).await, 0);
+    }
+
+    #[tokio::test]
+    async fn the_main_worktree_is_never_removed_even_if_registered() {
+        let fx = Fixture::new();
+        let registry = Registry::open(&fx.context.state_dir).await.unwrap();
+        let now = std::time::SystemTime::now();
+        registry
+            .insert(&Workspace {
+                id: openxet_workspace::WorkspaceId::generate(),
+                project: openxet_workspace::ProjectId::discover(&fx.main).unwrap(),
+                path: fx.main.clone(),
+                branch: Some("main".to_owned()),
+                created_at: now,
+                last_active: now,
+                adopted: false,
+            })
+            .await
+            .unwrap();
+        let mut args = args(&fx.main);
+        args.discard = true;
+
+        let err = remove(&args, &fx.context).await.unwrap_err();
+
+        assert_eq!((err.code, err.exit), ("main_worktree", ExitCode::USAGE));
+        assert!(fx.main.join("lib.rs").is_file());
+        assert_eq!(registered(&fx).await, 1);
     }
 }

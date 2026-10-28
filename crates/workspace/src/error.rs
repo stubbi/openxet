@@ -92,6 +92,38 @@ pub enum WorkspaceError {
         /// The daemon's lock file.
         lock: PathBuf,
     },
+    /// The main worktree was named where only a linked worktree may be:
+    /// it is the human's checkout, never adopted, evicted or removed.
+    #[error(
+        "{} is the repository's main worktree, which OpenXet never adopts or removes",
+        .0.display()
+    )]
+    MainWorktree(PathBuf),
+    /// A hook's stdin is not the JSON Claude Code sends.
+    #[error("the hook's input is not Claude Code's hook JSON: {0}")]
+    HookInput(String),
+    /// A Claude Code settings file is not a settings object.
+    #[error("{} is not valid Claude Code settings: {message}", .path.display())]
+    Settings {
+        /// The settings file.
+        path: PathBuf,
+        /// What is wrong.
+        message: String,
+    },
+    /// A settings file already has another tool's worktree hook, which
+    /// would act on the same worktrees as OpenXet's.
+    #[error(
+        "{} already has a {event} hook that is not OpenXet's: {handler}; nothing was changed",
+        .path.display()
+    )]
+    HookConflict {
+        /// The settings file.
+        path: PathBuf,
+        /// `WorktreeCreate` or `WorktreeRemove`.
+        event: &'static str,
+        /// The other hook's command, or its type when it has none.
+        handler: String,
+    },
     /// A file operation failed.
     #[error("{}: {source}", .path.display())]
     Io {
@@ -117,6 +149,10 @@ impl WorkspaceError {
             Self::UnknownRevision(_) => "unknown_revision",
             Self::DiskBudget { .. } => "disk_budget",
             Self::DaemonRunning { .. } => "daemon_running",
+            Self::MainWorktree(_) => "main_worktree",
+            Self::HookInput(_) => "invalid_hook_input",
+            Self::Settings { .. } => "invalid_settings",
+            Self::HookConflict { .. } => "hook_conflict",
             Self::Io { .. } => "io",
         }
     }

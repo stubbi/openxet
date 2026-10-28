@@ -58,9 +58,44 @@ pub fn check(name: &str) -> Result<&str, CliError> {
     }
 }
 
+/// `name` made a valid name, for names others chose: Claude Code passes
+/// whatever the user typed after `--worktree`. Lowercased, each run of
+/// other characters a hyphen, cut to 64 bytes; a random name if nothing is
+/// left.
+pub fn slug(name: &str) -> Result<String, CliError> {
+    if check(name).is_ok() {
+        return Ok(name.to_owned());
+    }
+    let mut slug = String::with_capacity(name.len());
+    for c in name.chars().map(|c| c.to_ascii_lowercase()) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.truncate(MAX_LEN);
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        random()
+    } else {
+        Ok(slug.to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_names_become_slugs() {
+        assert_eq!(slug("bold-oak-a3f2").unwrap(), "bold-oak-a3f2");
+        assert_eq!(slug("Feature/Auth").unwrap(), "feature-auth");
+        assert_eq!(slug("--fix  the_bug!--").unwrap(), "fix-the-bug");
+        assert_eq!(slug(&"ab-".repeat(40)).unwrap().len(), 64);
+        let fallback = slug("ü/!").unwrap();
+        assert_eq!(check(&fallback).unwrap(), fallback);
+    }
 
     #[test]
     fn random_names_are_valid_names() {
