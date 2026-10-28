@@ -49,13 +49,17 @@ Decided by the owner:
 *Made measurable by Claude:* "almost flat" means that at the peak of six
 concurrent builds of this repository, each workspace beyond the first adds
 at most 10% of one build's footprint, and total use never exceeds the disk
-budget the human set. Section 6.4's measurement shows chunk dedup alone
-leaves about half of each extra build, so meeting the bar *during* builds
-needs more than dedup after the fact:
+budget the human set. Section 6.4's measurements show that a seeded
+workspace meets the bar at creation, but once agents edit and rebuild,
+chunk dedup alone still leaves 14% of each extra full build and half of
+`incremental/`, so keeping the bar *during* builds needs more than dedup
+after the fact:
 - **Path-stable builds.** Much of the difference between sibling builds is
   the workspace path embedded in outputs. Workspaces build under a stable
-  path (the mount point, or `--remap-path-prefix` and equivalents), so
-  sibling builds produce identical bytes.
+  path (the mount point, or one compiler flag set shared by every
+  workspace), so sibling builds produce identical bytes. Per-workspace
+  `--remap-path-prefix` is ruled out: it changes `RUSTFLAGS`, and Cargo
+  then rebuilds everything ([S16](../../research/S16-workspace-disk.md)).
 - **Write-time dedup.** Writes into hot directories are chunked and
   deduplicated as they land, not by a later sweep.
 - **Backpressure.** When a build would push use past the budget, the
@@ -206,9 +210,19 @@ The open question is speed on macOS. The 2026-10-26 spike found:
   relay to its human.
 - Apple's FSKit offers path-based file systems only from macOS 26, behind a
   signed app extension the user enables. Not an option on macOS 15.
-- No build timing through the mount yet: blocked on the permission.
+- No build timing through the mount yet: blocked on the permission. Step
+  1's measurement ([S16](../../research/S16-workspace-disk.md),
+  2026-10-28) could not run the mount spike either, because the permission
+  was not granted on the reference Mac.
 
-So the design has a measured fork:
+What S16 did settle: on native APFS, a workspace whose `target/` is cloned
+from a built sibling, with tracked files given the sibling's mtimes,
+compiles nothing and adds no bytes. So the disk bar at workspace creation
+does not need the mount. The mount's case rests on what remains: stable
+build paths once workspaces diverge, shared source, and the 10% speed bar.
+
+So the design has a measured fork, decided in step 3's plan once the
+permission is granted:
 - **If a full-workspace mount stays within 10%** on a `cargo build` of this
   repository (cold, no-op and incremental), the whole workspace is mounted.
 - **Otherwise, the hybrid:** source and read-mostly data come through the
@@ -236,13 +250,51 @@ progress, no compression):
 |---|---|---|---|
 | Both `target/` directories | 28.4 GiB | 20.1 GiB (−29%) | 17.1 GiB (−40%) |
 
-Chunk dedup beats whole-file dedup (the approach of Cargo's draft blob
-store, cargo#17512) by about ten points. A second sibling build still costs
-about half its size, because Rust embeds per-build hashes and paths. So
-**dedup alone does not flatten the disk; eviction under a budget does**, and
-dedup multiplies what the budget holds. The measurement is repeated on
-complete builds and broken down by `deps/`, `incremental/` and `build/`
-before the gate's targets are set.
+Repeated on complete builds
+([S16](../../research/S16-workspace-disk.md), 2026-10-28, `cargo build
+--workspace` debug, Apple M3, macOS 15.6.1, rustc 1.97.1), the second of
+two sibling `target/` directories is new to this extent:
+
+| | Raw (second) | New after whole-file dedup | New after chunk dedup |
+|---|---|---|---|
+| `deps/` | 1,901 MB | 30.7% | 2.9% |
+| `incremental/` | 567 MB | 99.9% | 50.1% |
+| `build/` | 91 MB | 0.1% | 0.1% |
+| All of `target/` | 2,843 MB | 44.9% | 14.3% |
+
+Both directories together shrink by 33% with whole-file dedup (the approach
+of Cargo's draft blob store, cargo#17512) and by 62% with chunk dedup. So
+chunk dedup leaves 14% of an extra full build, and most of that is
+`incremental/`.
+
+Six workspaces of this repository, as a share of one build per extra
+workspace (bytes their builds wrote):
+
+| Workspaces | Units compiled | Share |
+|---|---|---|
+| Plain, each from empty | 373 | 100% |
+| `target/` cloned from the first | 12 (every workspace crate) | 49% |
+| Cloned, tracked files given the first's mtimes | 0 | 0% |
+| Cloned and aligned, per-workspace `--remap-path-prefix` | 373 | 114% |
+
+*Decided by Claude from these numbers:*
+- **Seeding meets the bar at creation, with mtime alignment.** Step 2's
+  seed clones `target/` with mtimes kept and gives every tracked file
+  whose blob matches the sibling's the sibling's mtime. Without alignment
+  the clone misses the bar by a factor of five.
+- **No per-workspace compiler flags.** Path stability comes from a stable
+  build path or one flag set shared by a project's workspaces.
+- **Divergence after edits is what the budget must absorb.** A rebuild of
+  the workspace crates wrote 1.31 GiB per workspace (49%). Step 3 adds the
+  levers for it: settled-file or write-time chunk dedup of `deps/` and
+  uplifted binaries, budget eviction that takes idle workspaces'
+  `incremental/` first (the least shareable output), and a measurement of
+  `CARGO_INCREMENTAL=0` in agent workspaces before choosing it.
+
+So **dedup alone does not flatten the disk; seeding and eviction under a
+budget do**, and dedup multiplies what the budget holds. Linux reflinks,
+npm and Python projects, test targets and edits after seeding are measured
+with the same script before the gate's absolute budgets are set.
 
 ### 6.5 Snapshots, forks and handoffs
 
