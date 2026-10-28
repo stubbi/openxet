@@ -53,7 +53,8 @@ of them worse:
 
 Each of them may be a **human, an AI agent, or both working together**. Each
 deserves the best possible experience; neither is a degraded mode of the
-other (design §7.1):
+other (design §7.1). Day to day the agent is the primary user, and the
+human sets agents loose and sets their limits (ADR 0014):
 - **Humans** get readable output, safe defaults and docs that teach.
 - **Agents** get:
   - `--json` with versioned schemas
@@ -241,10 +242,12 @@ Git LFS endpoint for `git-xet`, generic labels and typed views, the
 `git-routes.md` and `lfs.md`). The compatibility suite runs the agent,
 storage-only, docs, Hub, Git and LFS legs in CI, beside the latency gates
 for reconstruction and the Hub's token, resolve and tree, the fetch gate
-and the thin-base budget (`docs/reference/benchmarks.md`). M3 next: production
-backends (Postgres; S3, GCS and Azure), OIDC and the webhook authorizer,
-OpenXet-issued tokens and rate limits, per design §12, once its plan is
-written in `docs/superpowers/plans/`. ADR 0001 decides to build from
+and the thin-base budget (`docs/reference/benchmarks.md`). Agent workspaces
+next (ADR 0013): measure, then the local store and `openxet workspace`
+provider, per `docs/superpowers/plans/2026-10-27-agent-workspaces-local.md`.
+M3 follows: production backends (Postgres; S3, GCS and Azure), OIDC and the
+webhook authorizer, OpenXet-issued tokens and rate limits, per design §12,
+interleaved before the workspace steps that need it. ADR 0001 decides to build from
 scratch on `xet-core`'s crates (after evaluating existing Xet servers;
 see `docs/competitive-matrix.md`).
 
