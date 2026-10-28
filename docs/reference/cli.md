@@ -373,7 +373,7 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
 ```
 
 ```json
-{"schema":"openxet.workspace.created.v1","path":"/src/app/.claude/worktrees/fix-login","name":"fix-login","branch":"fix-login","base":"5a75a74c4895e47467abf0be132cd566787186da","seeded_bytes":39847205,"seeded_from":"/src/app/.claude/worktrees/parser","seed_skipped":null,"daemon_started":false,"dry_run":false}
+{"schema":"openxet.workspace.created.v1","path":"/src/app/.claude/worktrees/fix-login","name":"fix-login","branch":"fix-login","base":"5a75a74c4895e47467abf0be132cd566787186da","seeded_bytes":39847205,"seeded_from":"/src/app/.claude/worktrees/parser","seed_skipped":null,"seed_waited_ms":0,"seed_unsettled":false,"daemon_started":false,"dry_run":false}
 ```
 
 - **Create.** `create` adds a worktree of the repository `--repo` is in
@@ -399,8 +399,15 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   get the sibling's mtimes, so Cargo finds the cloned outputs fresh.
   `seeded_bytes` is the size of the files cloned; clones share their
   blocks until either copy changes, so it is not new disk use. A file
-  modified in the last 2 seconds may still be being written and is left
-  for the build to make. `.venv` is never seeded: a virtual environment
+  modified in the last 2 seconds may still be being written and is never
+  cloned, so `create` first waits until nothing in the sibling's
+  reconstructible directories is that recent and no Cargo build holds its
+  lock there (`.cargo-lock`, `.cargo-build-lock` or `.cargo-artifact-lock`
+  in a profile directory). `seed_waited_ms` is how long it waited. The wait
+  stops after 30 seconds: a finished build settles in 2, so a longer wait
+  means the sibling is still building. Then `seed_unsettled` is `true`,
+  only the files settled by then are cloned, and the first build makes the
+  rest. A dry run doesn't wait. `.venv` is never seeded: a virtual environment
   holds its own absolute path. Without clone support (ext4, network
   volumes) nothing is seeded and `seed_skipped` is `reflink_unsupported`;
   OpenXet never copies build outputs in full. `seed_skipped` is

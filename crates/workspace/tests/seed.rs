@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use openxet_workspace::{
     Presets, ProjectId, Registry, SeedReport, SeedSkip, Workspace, WorkspaceId, nearest_sibling,
-    reflink_supported, seed, seed_with,
+    reflink_supported, seed, seed_with, wait_until_settled,
 };
 use support::{Repo, git};
 
@@ -220,4 +220,81 @@ async fn the_main_worktree_is_a_sibling_too() {
         .await
         .unwrap();
     assert_eq!(found, Some(repo.main.clone()));
+}
+
+/// A sibling whose `target/` was last written an hour ago, with Cargo's
+/// lock file for the `debug` profile.
+fn settled_sibling(repo: &Repo) -> std::path::PathBuf {
+    let from = repo.worktree("from", "main");
+    let hour_ago = SystemTime::now() - Duration::from_hours(1);
+    fs::create_dir_all(from.join("target/debug/deps")).unwrap();
+    for file in [
+        "target/debug/deps/libx.rlib",
+        "target/debug/.cargo-lock",
+        "target/debug/.cargo-build-lock",
+    ] {
+        fs::write(from.join(file), "x").unwrap();
+        set_mtime(&from.join(file), hour_ago);
+    }
+    from
+}
+
+#[test]
+fn a_settled_sibling_is_seeded_without_waiting() {
+    let repo = Repo::new();
+    let from = settled_sibling(&repo);
+    let wait = wait_until_settled(&from, &Presets::default(), Duration::from_secs(10));
+    assert!(wait.settled);
+    assert!(wait.waited < Duration::from_secs(1), "{:?}", wait.waited);
+}
+
+#[test]
+fn a_file_just_written_is_waited_out() {
+    let repo = Repo::new();
+    let from = settled_sibling(&repo);
+    fs::write(from.join("target/debug/deps/liby.rlib"), "just linked").unwrap();
+    let wait = wait_until_settled(&from, &Presets::default(), Duration::from_secs(10));
+    assert!(wait.settled);
+    assert!(
+        wait.waited >= Duration::from_millis(1500),
+        "{:?}",
+        wait.waited
+    );
+}
+
+#[test]
+fn a_held_cargo_lock_is_unsettled_until_released() {
+    let repo = Repo::new();
+    let from = settled_sibling(&repo);
+    let lock = File::open(from.join("target/debug/.cargo-build-lock")).unwrap();
+    lock.lock().unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        drop(lock);
+    });
+    let wait = wait_until_settled(&from, &Presets::default(), Duration::from_secs(10));
+    release.join().unwrap();
+    assert!(wait.settled);
+    assert!(
+        wait.waited >= Duration::from_millis(900),
+        "{:?}",
+        wait.waited
+    );
+}
+
+#[test]
+fn the_wait_stops_at_the_cap() {
+    let repo = Repo::new();
+    let from = settled_sibling(&repo);
+    let lock = File::open(from.join("target/debug/.cargo-lock")).unwrap();
+    lock.lock().unwrap();
+    let cap = Duration::from_millis(500);
+    let wait = wait_until_settled(&from, &Presets::default(), cap);
+    assert!(!wait.settled);
+    assert!(
+        wait.waited >= cap && wait.waited < Duration::from_secs(3),
+        "{:?}",
+        wait.waited
+    );
+    drop(lock);
 }
