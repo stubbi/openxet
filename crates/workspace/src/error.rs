@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::UnsavedWork;
+
 /// What can go wrong with a workspace. Each variant maps to a stable
 /// [`code`](WorkspaceError::code) that `openxet workspace --json` reports in
 /// `openxet.error.v1`, so agents can branch on it.
@@ -58,15 +60,18 @@ pub enum WorkspaceError {
         "{} holds work that exists nowhere else: {}; commit and push it, or pass --discard to \
          delete it",
         .path.display(),
-        .items.join(", ")
+        .items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     UnsavedWork {
         /// The workspace.
         path: PathBuf,
-        /// One description per uncommitted file, untracked file or
-        /// unpushed branch.
-        items: Vec<String>,
+        /// What would be lost, as [`unsaved_work`](crate::unsaved_work)
+        /// found it.
+        items: Vec<UnsavedWork>,
     },
+    /// A revision names no commit.
+    #[error("{0:?} names no commit in this repository")]
+    UnknownRevision(String),
     /// Free space is under the floor, even after evicting idle workspaces.
     #[error(
         "{free_bytes} bytes free, under the floor of {floor_bytes} bytes; retry in a minute, or \
@@ -100,6 +105,7 @@ impl WorkspaceError {
             Self::Git { .. } => "git",
             Self::Config { .. } => "config",
             Self::UnsavedWork { .. } => "unsaved_work",
+            Self::UnknownRevision(_) => "unknown_revision",
             Self::DiskBudget { .. } => "disk_budget",
             Self::Io { .. } => "io",
         }
