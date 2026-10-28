@@ -3246,6 +3246,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "openxet-workspace"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
