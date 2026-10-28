@@ -1,0 +1,9 @@
+[package]
+name = "report"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+codec = { path = "../codec" }
+model = { path = "../model" }

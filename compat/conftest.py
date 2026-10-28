@@ -254,7 +254,7 @@ def openxet_bin() -> str:
 def _openxet_tests_need_binary(request):
     if any(
         request.node.get_closest_marker(m)
-        for m in ("agent", "storage_only", "docs", "hub", "git", "lfs")
+        for m in ("agent", "storage_only", "docs", "hub", "git", "lfs", "workspaces")
     ):
         request.getfixturevalue("openxet_bin")
 
