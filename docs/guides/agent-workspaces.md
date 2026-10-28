@@ -87,6 +87,12 @@ sibling has unchanged get the sibling's mtimes, so Cargo finds the cloned
 outputs fresh instead of rebuilding them. `.venv` is never cloned, since
 a virtual environment holds its own absolute path.
 
+A file still being written is never cloned. If the sibling's build
+outputs changed in the last two seconds, or a Cargo build there holds its
+lock, `create` waits for them to settle, for at most 30 seconds, and
+reports the wait as `seed_waited_ms`. After that it clones what has
+settled, and `seed_unsettled` says the sibling was still building.
+
 `create` starts the daemon in the background when none runs. Set
 `OPENXET_WORKSPACE_DAEMON=off` where something else manages disk space.
 
