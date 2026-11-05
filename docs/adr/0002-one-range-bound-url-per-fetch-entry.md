@@ -189,11 +189,18 @@ That includes whether they can bind a range.
   - **Shape:** a CAS unit test asserts the one-range-per-entry invariant
     and that every direct URL carries the range binding. The redacted
     exchanges in `compat/fixtures/s1/` are the reference shapes.
-- **Open, owned by M3** (production backends, design §12):
+- **Open, owned by M3** (production backends, design §12), carried out
+  by [M3 Task 7](../superpowers/plans/2026-11-05-m3-production-backends.md#task-7-range-bound-presigned-downloads-the-probe-and-the-signing-benchmark-adr-0002)
+  under [ADR 0015](0015-production-backends-and-range-bound-presigning.md):
   - Run the probe against real AWS S3, R2, Garage, GCS and Azure, and
-    record which pass.
+    record which pass. Each outcome, with the date and region, goes into
+    the object-store reference page Task 7 adds, which says "not yet
+    probed" for a store until it is recorded.
+  - Benchmark the signing cost: URLs per second per core, and the build
+    time of a 100k-term answer with direct URLs (Task 7 step 4).
   - Until a store passes, its pools use the transfer role. That follows
-    from rule 3; no backend list is needed.
+    from rule 3; no backend list is needed. Azure has no signer that can
+    bind a range (ADR 0015), so its pools use the transfer role.
 
 ## Alternatives considered
 
