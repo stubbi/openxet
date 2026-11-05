@@ -38,29 +38,33 @@ impl KeyKind {
         }
     }
 
-    /// How to rotate a key of this kind without refusing a credential
-    /// handed out under it.
-    const fn rotation(self) -> &'static str {
+    /// How to rotate a key of this kind under `config` without refusing a
+    /// credential handed out under it.
+    fn rotation(self, config: &Config) -> String {
+        let tokens = format!(
+            "auth.max_token_lifetime ({})",
+            duration::format(config.max_token_lifetime)
+        );
+        let transfer = transfer_lifetime(config);
         match self {
-            Self::CasToken => {
+            Self::CasToken => format!(
                 "Rotate it: trust the new key's public half in auth.jwt_public_keys on every \
                  node, then replace cas-token.key with the new key and list this key's public \
-                 half instead, and remove that after auth.max_token_lifetime."
-            }
-            Self::CasTokenVerify => {
+                 half instead, and remove that after {tokens}."
+            ),
+            Self::CasTokenVerify => format!(
                 "Rotate it with whoever signs with it: trust the new public key next to this \
-                 one on every node, switch the signer, and remove this one after \
-                 auth.max_token_lifetime."
-            }
-            Self::Transfer => {
+                 one on every node, switch the signer, and remove this one after {tokens}."
+            ),
+            Self::Transfer => format!(
                 "Rotate it: list a new key in cas.transfer_verify_key_files on every node, then \
                  make the new key cas.transfer_key_file and list this one there instead, and \
-                 remove this one after cas.url_lifetime."
-            }
-            Self::TransferVerify => {
-                "Remove it from cas.transfer_verify_key_files once cas.url_lifetime has passed \
-                 since the transfer key was switched."
-            }
+                 remove this one after {transfer}."
+            ),
+            Self::TransferVerify => format!(
+                "Remove it from cas.transfer_verify_key_files once {transfer} has passed since \
+                 the transfer key was switched."
+            ),
         }
     }
 }
@@ -181,7 +185,7 @@ pub fn report(config: &Config, now: SystemTime) -> KeyReport {
                     value: value.map(|file| file.display().to_string()),
                     source: "the file system".to_owned(),
                     rule: rule.clone(),
-                    hint: key.kind.rotation().to_owned(),
+                    hint: key.kind.rotation(config),
                     quoted: true,
                 });
             }
@@ -196,6 +200,16 @@ pub fn report(config: &Config, now: SystemTime) -> KeyReport {
         })
         .collect();
     KeyReport { keys, warnings }
+}
+
+/// How long a signature under a transfer key stays valid, as hints name
+/// it: transfer URLs live `cas.url_lifetime` and LFS capability `href`s
+/// `hub.capability_ttl`, both signed with the transfer key.
+pub fn transfer_lifetime(config: &Config) -> String {
+    format!(
+        "{}, the longer of cas.url_lifetime and hub.capability_ttl",
+        duration::format(config.transfer_signature_lifetime())
+    )
 }
 
 /// The time since `file` was last modified; zero for a time ahead of `now`.

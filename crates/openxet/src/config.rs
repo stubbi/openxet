@@ -178,6 +178,13 @@ pub struct Config {
 }
 
 impl Config {
+    /// How long a signature under the transfer key stays valid: the longer
+    /// of a transfer URL's lifetime and an LFS capability's, so how long a
+    /// previous transfer key must stay a verify key (ruling M3-R15).
+    pub fn transfer_signature_lifetime(&self) -> Duration {
+        self.url_lifetime.max(self.capability_ttl)
+    }
+
     /// The CAS configuration for a server reached at `public_url`.
     pub fn cas(&self, public_url: Url) -> CasConfig {
         CasConfig {

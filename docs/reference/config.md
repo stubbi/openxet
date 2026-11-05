@@ -365,8 +365,11 @@ starts once every node runs the one before.
 - **Transfer key** (`cas.transfer_key_file`). Create a new key
   (`(umask 077; openssl rand -hex 32 > new-transfer.key)`) and list it in
   `cas.transfer_verify_key_files`. Then make it `cas.transfer_key_file`
-  and list the old key in `cas.transfer_verify_key_files` instead. Remove
-  the old key once `cas.url_lifetime` has passed, at most an hour.
+  and list the old key in `cas.transfer_verify_key_files` instead. The
+  transfer key signs transfer URLs, which live `cas.url_lifetime`, and the
+  capability `href`s of [Git LFS](lfs.md) uploads, which live
+  `hub.capability_ttl`, up to 24 hours. Remove the old key once the longer
+  of the two has passed; `config check` names that time in its hints.
 
 `openxet config check` lists every key with its kind, id, algorithm and
 age:

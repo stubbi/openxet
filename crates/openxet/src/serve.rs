@@ -595,9 +595,7 @@ fn transfer_key(config: &Config) -> Result<Zeroizing<[u8; 32]>, CliError> {
 fn transfer_verify_keys(config: &Config) -> Result<Zeroizing<Vec<[u8; 32]>>, CliError> {
     let mut keys = Zeroizing::new(Vec::with_capacity(config.transfer_verify_key_files.len()));
     for path in &config.transfer_verify_key_files {
-        let key = secret::read_transfer_key(path)?
-            .ok_or_else(|| preflight::missing_transfer_verify_key(path))?;
-        keys.push(*key);
+        keys.push(*preflight::transfer_verify_key(config, path)?);
     }
     Ok(keys)
 }
