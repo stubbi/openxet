@@ -1,6 +1,6 @@
-//! Behaviour of `openxet-auth`: static tokens, `EdDSA` CAS tokens and
-//! range-bound signed transfer URLs (design §5.4, §5.5, §5.9; ADR 0007;
-//! rulings M1-R2, M1-R3).
+//! Behaviour of `openxet-auth`: static tokens, `EdDSA` CAS tokens,
+//! range-bound signed transfer URLs and the rotation of their keys (design
+//! §5.4, §5.5, §5.9; ADRs 0007 and 0011; rulings M1-R2, M1-R3, M3-R15).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -12,9 +12,9 @@ use ed25519_dalek::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _, EncodePr
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use openxet_auth::{
-    AuthError, Authenticator, CasGrant, Credential, ForbiddenReason, MAX_TOKEN_BYTES, Mode,
-    Principal, PublicKey, StaticToken, TokenSigner, TransferQuery, UrlSigner, UserPrincipal,
-    UserProfile, generate_keypair,
+    AuthError, Authenticator, CapabilityRefusal, CapabilitySigner, CasGrant, Credential,
+    ForbiddenReason, KeyAlg, MAX_TOKEN_BYTES, Mode, Principal, PublicKey, StaticToken, TokenSigner,
+    TransferQuery, UrlSigner, UserPrincipal, UserProfile, generate_keypair,
 };
 use openxet_protocol::{MerkleHash, chunk_hash, hash_to_hex};
 use sha2::Sha256;
@@ -1714,6 +1714,203 @@ fn generated_private_key_is_pkcs8_v1() {
     assert_eq!(
         TokenSigner::from_pem(&v2).expect("parse v2").kid(),
         pair.kid()
+    );
+}
+
+/// ADR 0011 decision 3: each key is bound to one `alg`, taken from its key
+/// type, and a token is accepted only if its header names that `alg`. An
+/// Ed25519 key is `EdDSA`; a token signed by it that claims any other
+/// algorithm, such as RFC 9964's ML-DSA, is refused.
+#[test]
+fn token_alg_must_match_key_alg() {
+    let (key, public_pem, kid) = raw_keypair();
+    let public = PublicKey::from_pem(&public_pem).expect("parse");
+    assert_eq!(public.alg(), KeyAlg::EdDSA);
+    assert_eq!(public.alg().as_str(), "EdDSA");
+    assert_eq!(signer().public_key().alg(), KeyAlg::EdDSA);
+    let auth = Authenticator::new(
+        vec![],
+        vec![public],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let payload = b64(&valid_claims().to_string());
+    let header =
+        |alg: &str| b64(&serde_json::json!({ "alg": alg, "typ": "JWT", "kid": kid }).to_string());
+
+    let token = sign_raw(&key, &header("EdDSA"), &payload);
+    assert!(auth.authenticate(&token, NOW).is_ok(), "the key's own alg");
+    for alg in [
+        "ML-DSA-44",
+        "ML-DSA-65",
+        "ML-DSA-87",
+        "ES256",
+        "PS256",
+        "EdDSA ",
+    ] {
+        let token = sign_raw(&key, &header(alg), &payload);
+        assert_eq!(
+            auth.authenticate(&token, NOW),
+            Err(AuthError::Invalid),
+            "{alg}"
+        );
+    }
+}
+
+/// A token is verified only by the key its `kid` names: a `kid` outside
+/// the key set is refused, whoever signed the token.
+#[test]
+fn unknown_kid_refused() {
+    let trusted = signer();
+    let stranger = signer();
+    let auth = Authenticator::new(
+        vec![],
+        vec![trusted.public_key()],
+        Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
+    )
+    .expect("valid config");
+    let token = trusted
+        .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
+        .expect("valid claims");
+    assert!(auth.authenticate(&token, NOW).is_ok());
+
+    let unknown = stranger
+        .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
+        .expect("valid claims");
+    assert_eq!(auth.authenticate(&unknown, NOW), Err(AuthError::Invalid));
+    for kid in [stranger.kid(), "", "0000000000000000", &trusted.kid()[..15]] {
+        assert_eq!(
+            auth.authenticate(&retarget_kid(&token, kid), NOW),
+            Err(AuthError::Invalid),
+            "{kid:?}"
+        );
+    }
+}
+
+/// Ruling M3-R15's CAS-token rotation: trust the new key next to the old,
+/// switch the signer, then drop the old key. While both are trusted,
+/// tokens from either verify; once the old key is dropped, its tokens are
+/// refused.
+#[test]
+fn old_and_new_cas_keys_both_verify() {
+    let old = signer();
+    let new = signer();
+    let trusting = |keys: Vec<PublicKey>| {
+        Authenticator::new(vec![], keys, Authenticator::DEFAULT_MAX_TOKEN_LIFETIME)
+            .expect("valid config")
+    };
+    let token = |s: &TokenSigner| {
+        s.sign("alice", "org/model", Mode::Read, NOW + 60, NOW)
+            .expect("valid claims")
+    };
+
+    let both = trusting(vec![new.public_key(), old.public_key()]);
+    for s in [&old, &new] {
+        let principal = cas(both.authenticate(&token(s), NOW).expect("trusted key"));
+        assert_eq!(principal.subject, "alice");
+    }
+
+    let after = trusting(vec![new.public_key()]);
+    assert!(after.authenticate(&token(&new), NOW).is_ok());
+    assert_eq!(
+        after.authenticate(&token(&old), NOW),
+        Err(AuthError::Invalid)
+    );
+}
+
+const OLD_TRANSFER_KEY: [u8; 32] = [0x01; 32];
+const NEW_TRANSFER_KEY: [u8; 32] = [0x02; 32];
+
+/// Ruling M3-R15's transfer-key rotation: a node signing with the new key
+/// and keeping the old one as a verify key still serves the URLs it handed
+/// out under the old key, with the same range binding.
+#[test]
+fn transfer_url_signed_with_previous_key_verifies() {
+    let base = Url::parse("https://cas.example").expect("url");
+    let old = UrlSigner::new(OLD_TRANSFER_KEY, UrlSigner::DEFAULT_LIFETIME).expect("valid");
+    let rotated = UrlSigner::new(NEW_TRANSFER_KEY, UrlSigner::DEFAULT_LIFETIME)
+        .expect("valid")
+        .with_verify_keys(vec![OLD_TRANSFER_KEY]);
+
+    let url = old
+        .sign_xorb_range(&base, &xorb(1), 100, 199, NOW)
+        .expect("valid range");
+    let query = query_of(&url);
+    assert_eq!(
+        rotated.check(&xorb(1), &query, Some("bytes=100-199"), NOW),
+        Ok((100, 199))
+    );
+    assert_eq!(
+        rotated.check(&xorb(1), &query, Some("bytes=100-200"), NOW),
+        Err(AuthError::Forbidden {
+            reason: ForbiddenReason::RangeMismatch
+        }),
+        "the previous key's URLs stay range-bound"
+    );
+    assert_eq!(
+        rotated.check(&xorb(2), &query, Some("bytes=100-199"), NOW),
+        Err(AuthError::Forbidden {
+            reason: ForbiddenReason::BadSignature
+        })
+    );
+
+    let stranger = UrlSigner::new([0x03; 32], UrlSigner::DEFAULT_LIFETIME)
+        .expect("valid")
+        .sign_xorb_range(&base, &xorb(1), 100, 199, NOW)
+        .expect("valid range");
+    assert_eq!(
+        rotated.check(&xorb(1), &query_of(&stranger), Some("bytes=100-199"), NOW),
+        Err(AuthError::Forbidden {
+            reason: ForbiddenReason::BadSignature
+        })
+    );
+}
+
+/// A verify key is accepted and never used to sign: transfer URLs and
+/// capabilities from a node holding the old key as a verify key are the
+/// ones a node holding only the new key signs, and a node holding only the
+/// old key refuses them.
+#[test]
+fn verify_only_key_never_signs() {
+    let base = Url::parse("https://cas.example").expect("url");
+    let urls = |key: [u8; 32]| UrlSigner::new(key, UrlSigner::DEFAULT_LIFETIME).expect("valid");
+    let rotated = urls(NEW_TRANSFER_KEY).with_verify_keys(vec![OLD_TRANSFER_KEY]);
+    let url = rotated
+        .sign_xorb_range(&base, &xorb(1), 0, 9, NOW)
+        .expect("valid range");
+    assert_eq!(
+        url,
+        urls(NEW_TRANSFER_KEY)
+            .sign_xorb_range(&base, &xorb(1), 0, 9, NOW)
+            .expect("valid range")
+    );
+    let mut batch = String::new();
+    rotated
+        .transfer_urls(&base, NOW)
+        .xorb(&xorb(1))
+        .push_signed(0, 9, &mut batch)
+        .expect("valid range");
+    assert_eq!(batch, url.as_str());
+    assert_eq!(
+        urls(OLD_TRANSFER_KEY).check(&xorb(1), &query_of(&url), Some("bytes=0-9"), NOW),
+        Err(AuthError::Forbidden {
+            reason: ForbiddenReason::BadSignature
+        })
+    );
+
+    let capabilities = |key: [u8; 32]| CapabilitySigner::new(key).expect("valid");
+    let rotated = capabilities(NEW_TRANSFER_KEY).with_verify_keys(vec![OLD_TRANSFER_KEY]);
+    let exp = NOW + 3600;
+    let query = rotated.sign("repo:x", Mode::Write, exp);
+    assert_eq!(
+        query,
+        capabilities(NEW_TRANSFER_KEY).sign("repo:x", Mode::Write, exp)
+    );
+    assert_eq!(
+        capabilities(OLD_TRANSFER_KEY).verify("repo:x", Mode::Write, &query, NOW),
+        Err(AuthError::CapabilityRefused {
+            reason: CapabilityRefusal::BadSignature
+        })
     );
 }
 

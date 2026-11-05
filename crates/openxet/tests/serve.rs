@@ -1473,6 +1473,149 @@ fn config_check_checks_files_and_the_data_dir() {
     assert_eq!(report["problems"][0]["key"], "server.data_dir", "{report}");
 }
 
+/// Ruling M3-R15: `config check` lists every key with its id, `alg` and
+/// age, and warns about a key older than `auth.key_max_age`, without ever
+/// showing a secret key.
+#[cfg(unix)]
+#[test]
+fn config_check_warns_on_old_key() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let write_key = |path: &Path, hex: &str, age_days: u64| {
+        std::fs::write(path, format!("{hex}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mtime = std::time::SystemTime::now() - Duration::from_hours(24 * age_days);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+    };
+    let (current, previous) = ("c".repeat(64), "b".repeat(64));
+    write_key(&data.join("transfer.key"), &current, 200);
+    let old = dir.path().join("old-transfer.key");
+    write_key(&old, &previous, 3);
+    let out = run(openxet()
+        .args(["token", "keygen", "--json", "--key"])
+        .arg(dir.path().join("token.key")));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let keygen = json_stdout(&out);
+
+    let check = |max_age: &str| {
+        let config = write_config(
+            dir.path(),
+            &format!(
+                "[cas]\ntransfer_verify_key_files = [{old:?}]\n[auth]\nkey_max_age = \
+                 \"{max_age}\"\njwt_public_keys = [{:?}]\n",
+                keygen["public_key"].as_str().unwrap()
+            ),
+        );
+        let out = run(openxet()
+            .args(["config", "check", "--json", "--config"])
+            .arg(&config)
+            .env("OPENXET_SERVER__DATA_DIR", &data));
+        let text = String::from_utf8(out.stdout.clone()).unwrap();
+        assert!(!text.contains(&current) && !text.contains(&previous));
+        json_stdout(&out)
+    };
+
+    let report = check("180d");
+    assert_eq!(report["valid"], true, "{report}");
+    let keys = report["keys"].as_array().unwrap();
+    let key = |kind: &str| {
+        keys.iter()
+            .find(|k| k["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} key in {report}"))
+    };
+    let transfer = key("transfer");
+    assert_eq!(transfer["alg"], "HS256");
+    assert_eq!(transfer["age_days"], 200);
+    assert_eq!(transfer["id"].as_str().unwrap().len(), 16);
+    assert!(
+        transfer["warning"]
+            .as_str()
+            .unwrap()
+            .contains("auth.key_max_age (180d)"),
+        "{transfer}"
+    );
+    let verify = key("transfer_verify");
+    assert_eq!(verify["alg"], "HS256");
+    assert_eq!(verify["age_days"], 3);
+    assert_ne!(verify["id"], transfer["id"]);
+    assert!(verify.get("warning").is_none(), "{verify}");
+    let jwt = key("cas_token_verify");
+    assert_eq!(jwt["id"], keygen["kid"]);
+    assert_eq!(jwt["alg"], "EdDSA");
+    assert_eq!(jwt["age_days"], 0);
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{report}");
+    assert_eq!(warnings[0]["key"], "cas.transfer_key_file");
+    assert!(
+        warnings[0]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("cas.transfer_verify_key_files"),
+        "{report}"
+    );
+
+    let report = check("365d");
+    assert_eq!(report["valid"], true, "{report}");
+    assert_eq!(report["warnings"], serde_json::json!([]), "{report}");
+    assert!(
+        report["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|k| k.get("warning").is_none()),
+        "{report}"
+    );
+}
+
+/// A listed transfer verify key must exist: `config check` names the
+/// entry, and `serve` refuses to start rather than refuse the URLs the key
+/// signed.
+#[test]
+fn missing_transfer_verify_key_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let config = write_config(
+        dir.path(),
+        &format!(
+            "[cas]\ntransfer_verify_key_files = [{:?}]\n",
+            dir.path().join("gone.key")
+        ),
+    );
+    let out = run(openxet()
+        .args(["config", "check", "--json", "--config"])
+        .arg(&config)
+        .env("OPENXET_SERVER__DATA_DIR", &data));
+    let report = json_stdout(&out);
+    assert_eq!(report["valid"], false, "{report}");
+    assert_eq!(
+        report["problems"][0]["key"], "cas.transfer_verify_key_files[0]",
+        "{report}"
+    );
+
+    let out = run(openxet()
+        .args(["serve", "--json", "--port", "0", "--config"])
+        .arg(&config)
+        .env("OPENXET_SERVER__DATA_DIR", &data));
+    assert_eq!(out.status.code(), Some(1));
+    let error = serve_error(&out);
+    assert_eq!(error["code"], "no_key", "{error}");
+    assert!(
+        error["hint"]
+            .as_str()
+            .unwrap()
+            .contains("cas.transfer_verify_key_files"),
+        "{error}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_dangling_data_dir_symlink_is_named() {

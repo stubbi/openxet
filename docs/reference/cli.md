@@ -68,7 +68,11 @@ data directory can be written; `transfer.key` and `dev-token` are well
 formed and private), and reports either every problem or every effective
 setting with its source. Values under `[auth]` are always `<redacted>`.
 `warnings` lists what `serve` accepts but warns about, such as a data
-directory other users may enter. To prove the data directory (or, if
+directory other users may enter or a key older than `auth.key_max_age`.
+`keys` lists every key the server would sign or verify with, by `kind`,
+`id`, `alg`, `file` and `age_days`, with a `warning` on a key past
+`auth.key_max_age`; a secret key is named by its id, never shown
+([Rotating keys](config.md#rotating-keys)). To prove the data directory (or, if
 it doesn't exist yet, its nearest existing parent) can be written, it
 creates one empty file named `.openxet-check-<16 hex>` there with
 `O_CREAT|O_EXCL` and removes it at once; nothing else is written. Exit code 0 if the configuration is valid,
@@ -80,7 +84,8 @@ creates one empty file named `.openxet-check-<16 hex>` there with
               "rule":"must be a whole number followed by s, m, h or d, such as 30s, 60m, 24h or 30d, from 30m to 60m inclusive",
               "hint":"Use 60m unless you need otherwise. …"}],
  "warnings":[],
- "settings":[{"key":"server.bind","value":"127.0.0.1:8080","source":"default"}, …]}
+ "settings":[{"key":"server.bind","value":"127.0.0.1:8080","source":"default"}, …],
+ "keys":[{"kind":"transfer","id":"5c1f0e9a7b2d4e63","alg":"HS256","file":"./openxet-data/transfer.key","age_days":12}]}
 ```
 
 `dev_mode` is `true` or `false` for a valid configuration and `null` for an

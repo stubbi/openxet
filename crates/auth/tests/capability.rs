@@ -169,3 +169,26 @@ fn capability_and_transfer_signatures_never_verify_as_each_other() {
             .is_err()
     );
 }
+
+/// Ruling M3-R15: a capability signed under the previous transfer key
+/// verifies on a node that signs with the new key and keeps the old one as
+/// a verify key, still bound to its scope, operation and expiry.
+#[test]
+fn capability_signed_with_previous_key_verifies() {
+    let rotated = CapabilitySigner::new([10; 32])
+        .unwrap()
+        .with_verify_keys(vec![KEY]);
+    let query = signer().sign(SCOPE, Mode::Write, EXP);
+    assert_eq!(rotated.verify(SCOPE, Mode::Write, &query, NOW), Ok(()));
+    assert_eq!(
+        rotated.verify(SCOPE, Mode::Write, &query, EXP),
+        refused(CapabilityRefusal::Expired)
+    );
+    let bad = refused(CapabilityRefusal::BadSignature);
+    assert_eq!(rotated.verify(SCOPE, Mode::Read, &query, NOW), bad);
+    assert_eq!(rotated.verify("repo:other", Mode::Write, &query, NOW), bad);
+    let stranger = CapabilitySigner::new([11; 32])
+        .unwrap()
+        .sign(SCOPE, Mode::Write, EXP);
+    assert_eq!(rotated.verify(SCOPE, Mode::Write, &stranger, NOW), bad);
+}

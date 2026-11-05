@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{Config, Problem, memory_budget_warning};
 use crate::error::CliError;
-use crate::secret;
+use crate::{secret, serve};
 
 /// What the files a configuration names would do to `serve`.
 #[derive(Debug, Default)]
@@ -84,6 +84,20 @@ pub fn missing_transfer_key(path: &Path) -> CliError {
     )
 }
 
+/// The error for a `cas.transfer_verify_key_files` entry that is missing.
+pub fn missing_transfer_verify_key(path: &Path) -> CliError {
+    CliError::new(
+        "no_key",
+        format!(
+            "the transfer verify key file {} does not exist",
+            path.display()
+        ),
+        "Copy the previous transfer key there on every node, or remove the entry from \
+         cas.transfer_verify_key_files once cas.url_lifetime has passed since the transfer key \
+         was switched.",
+    )
+}
+
 /// The checks of `config`'s files.
 pub fn check(config: &Config) -> Findings {
     let mut findings = Findings::default();
@@ -134,6 +148,21 @@ pub fn check(config: &Config) -> Findings {
         Err(err) => findings
             .problems
             .push(problem("cas.transfer_key_file", key, err)),
+    }
+    for (index, path) in config.transfer_verify_key_files.iter().enumerate() {
+        let err = match secret::read_transfer_key(path) {
+            Ok(Some(_)) => continue,
+            Ok(None) => missing_transfer_verify_key(path),
+            Err(err) => err,
+        };
+        let key = format!("cas.transfer_verify_key_files[{index}]");
+        findings.problems.push(problem(&key, path, err));
+    }
+    let cas_token = dir.join(serve::CAS_TOKEN_KEY_FILE);
+    if let Err(err) = secret::read_cas_token_key(&cas_token) {
+        findings
+            .problems
+            .push(problem("server.data_dir", &cas_token, err));
     }
 
     if config.auth.is_none() {
