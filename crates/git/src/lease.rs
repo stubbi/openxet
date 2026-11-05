@@ -67,7 +67,7 @@ pub(crate) async fn while_renewing<T>(
         if !held {
             return (work.await, false);
         }
-        let tick = std::pin::pin!(tokio::time::sleep(period));
+        let tick = std::pin::pin!(tick(engine, period));
         match select(work.as_mut(), tick).await {
             Either::Left((out, _)) => return (out, held),
             Either::Right(((), _)) => {
@@ -88,4 +88,17 @@ pub(crate) async fn while_renewing<T>(
             }
         }
     }
+}
+
+/// The wait before the next renewal: `period`, or with the test-only
+/// `fault-injection` feature a [`crate::FaultPoint::LeaseTick`] hook's work,
+/// so a test pins when renewals happen whatever the machine's load.
+async fn tick(engine: &Engine, period: Duration) {
+    #[cfg(feature = "fault-injection")]
+    if let Some(hook) = engine.fault_hook(crate::FaultPoint::LeaseTick) {
+        return hook(String::new()).await;
+    }
+    #[cfg(not(feature = "fault-injection"))]
+    let _ = engine;
+    tokio::time::sleep(period).await;
 }

@@ -1467,20 +1467,82 @@ async fn sweep_finishes_an_interrupted_claim() {
 /// The leaseholder renews its lease every third of its TTL while a repack
 /// runs (ADR 0004 item 5), so a repack that takes longer than the TTL still
 /// publishes.
+///
+/// Wall-clock waits made this flaky on loaded runners (#111), so the test
+/// drives both clocks the lease depends on: the renewal ticks through
+/// [`FaultPoint::LeaseTick`], and the database clock by moving the lease's
+/// expiry a third of its TTL into the past, as a third of the TTL passing
+/// would. Four such thirds outlast the TTL, so without the renewals the
+/// lease would have expired; with them it is renewed under the same epoch
+/// each time and the repack publishes. The TTL is a minute, so real time
+/// only matters if the machine stalls for 40 seconds between two steps.
 #[tokio::test(flavor = "multi_thread")]
 async fn long_repack_renews_its_lease() {
     let (env, _) = pushed(12).await;
-    let ttl = Duration::from_millis(600);
+    let ttl = Duration::from_mins(1);
     let lease = ok(env.world.index.acquire_lease(env.repo, "node-a", ttl).await)
         .unwrap_or_else(|| panic!("the lease is free"));
+
+    let (ticks, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let rx = Arc::new(tokio::sync::Mutex::new(rx));
+    env.node.set_fault_hook(
+        FaultPoint::LeaseTick,
+        Some(Arc::new(move |_| {
+            let rx = Arc::clone(&rx);
+            Box::pin(async move {
+                if rx.lock().await.recv().await.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            })
+        })),
+    );
+    let sql = env.world.sql().await;
+    let repo = env.repo.0.to_vec();
+    let epoch = i64::try_from(lease.epoch).unwrap_or_else(|e| panic!("{e}"));
+    let third_ms = i64::try_from(ttl.as_millis() / 3).unwrap_or_else(|e| panic!("{e}"));
     env.node.set_fault_hook(
         FaultPoint::RepackBeforeGit,
-        Some(Arc::new(|_| {
-            Box::pin(tokio::time::sleep(Duration::from_secs(2)))
+        Some(Arc::new(move |_| {
+            let (sql, repo, ticks) = (sql.clone(), repo.clone(), ticks.clone());
+            Box::pin(async move {
+                let expiry = || async {
+                    ok(sqlx::query_as::<_, (i64, i64)>(
+                        "SELECT epoch, expires_at FROM repo_leases WHERE repo = ?",
+                    )
+                    .bind(&repo)
+                    .fetch_one(&sql)
+                    .await)
+                };
+                for round in 0..4 {
+                    ok(sqlx::query(
+                        "UPDATE repo_leases SET expires_at = expires_at - ? WHERE repo = ?",
+                    )
+                    .bind(third_ms)
+                    .bind(&repo)
+                    .execute(&sql)
+                    .await);
+                    let (_, aged) = expiry().await;
+                    ok(ticks.send(()));
+                    // Bounds only a broken renewal, which never lands.
+                    let renewed = tokio::time::timeout(Duration::from_secs(30), async {
+                        loop {
+                            let (e, at) = expiry().await;
+                            if at > aged {
+                                return e;
+                            }
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|_| panic!("tick {round} renewed nothing"));
+                    assert_eq!(renewed, epoch, "a renewal keeps the epoch");
+                }
+            })
         })),
     );
     let report = repack_full(&env.node, env.repo, &lease, DEFAULT_GRACE).await;
     env.node.set_fault_hook(FaultPoint::RepackBeforeGit, None);
+    env.node.set_fault_hook(FaultPoint::LeaseTick, None);
     let report = ok(report);
     assert!(!report.published.is_empty(), "{report:?}");
     assert_eq!(
