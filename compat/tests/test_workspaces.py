@@ -215,7 +215,7 @@ class Project:
     def start_daemon(self):
         log = (self.logs / "daemon.log").open("ab")
         self.processes.start(
-            [self.openxet_bin, "workspace", "daemon"], env=self.env, cwd="/", stdout=log, stderr=log
+            [self.openxet_bin, "workspace", "daemon", "run"], env=self.env, cwd="/", stdout=log, stderr=log
         )
         deadline = time.monotonic() + 30
         while not self.openxet("workspace", "status")["daemon_running"]:
