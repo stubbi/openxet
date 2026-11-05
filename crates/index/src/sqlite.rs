@@ -16,6 +16,8 @@ use sqlx::sqlite::{
 };
 use sqlx::{AssertSqlSafe, Row, Sqlite, Transaction};
 
+#[cfg(feature = "fault-injection")]
+use crate::FAULT_AFTER_FIRST_FILE_SCOPE;
 use crate::types::{
     TERM_LEN, decode_chunk_layout, decode_chunk_table, decode_layout_of_chunk_table,
     decode_term_bytes, decode_terms, encode_chunk_layout, encode_chunk_table, encode_term_bytes,
@@ -25,12 +27,6 @@ use crate::{
     ChunkLayout, ChunkTable, FileRecord, Index, IndexError, NewFile, Registrant, Term, TermBytes,
     Visibility,
 };
-
-/// With the `fault-injection` feature, `register_shard` for this scope fails
-/// after writing its first file, so tests can check the transaction rolls
-/// back.
-#[cfg(feature = "fault-injection")]
-pub const FAULT_AFTER_FIRST_FILE_SCOPE: &str = "openxet-test/fault-after-first-file";
 
 /// How long a write waits for another process's write lock before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -118,6 +114,14 @@ impl SqliteIndex {
             .map_err(IndexError::Migrate)?;
         let reader = SqlitePoolOptions::new().connect_with(options).await?;
         Ok(Self { writer, reader })
+    }
+
+    /// The database file this index opened, so a test can open a second
+    /// handle on it, as a second node would.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn path(&self) -> std::path::PathBuf {
+        self.writer.connect_options().get_filename().to_path_buf()
     }
 
     /// Starts a write transaction holding the write lock from the start, so

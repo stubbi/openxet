@@ -15,8 +15,16 @@ fault-injection = []
 # Test-only: `rebuild_scope_tables`, which rebuilds the scope tables from a
 # bucket, and `SqliteIndex::scope_tables`, which reads them, so tests can
 # prove the bucket is the source of truth (ruling M1-R37). The core of
-# `reindex` (issue #26). Never enable it in a shipped build.
-test-support = ["dep:openxet-storage", "dep:bytes"]
+# `reindex` (issue #26). Also the backend conformance suite (`conformance`,
+# `index_conformance!`), whose atomicity case needs `fault-injection`.
+# Never enable it in a shipped build.
+test-support = [
+    "dep:openxet-storage",
+    "dep:bytes",
+    "fault-injection",
+    "tokio/rt-multi-thread",
+    "tokio/sync",
+]
 
 [dependencies]
 async-trait = "0.1"
@@ -31,7 +39,7 @@ tracing = "0.1.44"
 uuid = { version = "1.29.0", features = ["v7"] }
 
 [dev-dependencies]
-openxet-index = { path = ".", features = ["fault-injection"] }
+openxet-index = { path = ".", features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
