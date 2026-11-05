@@ -164,6 +164,7 @@ macro_rules! index_conformance {
             distinct_concurrent_writers_never_fail,
             concurrent_put_xorb_two_pools,
             concurrent_register_same_shard_two_pools,
+            concurrent_overlapping_shards_keep_the_lowest_two_pools,
         ]);
     };
     (@repos $fixture:ident) => {

@@ -2,11 +2,18 @@
 //!
 //! Several nodes write one database at once, so every write is safe
 //! against a concurrent identical one: content-addressed rows are inserted
-//! with `ON CONFLICT DO NOTHING`, so a lost race is success, and batches
-//! are inserted in key order, so two writers of overlapping rows wait for
-//! each other instead of deadlocking. What Postgres still aborts, a
-//! serialization failure or a deadlock, is retried up to [`RETRIES`] times
-//! and then answered with [`IndexError::Busy`].
+//! with `ON CONFLICT DO NOTHING`, so a lost race is success.
+//!
+//! Write transactions run at `READ COMMITTED`, set on each one rather than
+//! taken from the server's `default_transaction_isolation`: an insert that
+//! meets a concurrent writer's row waits for it to commit and then sees it,
+//! which is what makes a lost race a success. At that level Postgres
+//! aborts a transaction for a conflict only on a deadlock (`40P01`), never
+//! with a serialization failure. Batches insert and lock rows in key order,
+//! which keeps deadlocks between writers of overlapping rows rare without
+//! ruling them out (two batches lock in two statements); one that happens
+//! is retried up to [`RETRIES`] times and then answered with
+//! [`IndexError::Busy`].
 
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "fault-injection")]
@@ -29,8 +36,7 @@ use crate::{
     Visibility,
 };
 
-/// How often a write aborted by a serialization failure or a deadlock is
-/// tried again before [`IndexError::Busy`] (ruling M3-R2).
+/// How often a write aborted by a deadlock is tried again before [`IndexError::Busy`] (ruling M3-R2).
 pub const RETRIES: u32 = 3;
 
 /// The pause before retry `n` (from 1) is `n` times this, so the
@@ -51,8 +57,8 @@ pub enum Migrate {
 #[derive(Debug, Clone)]
 pub struct PostgresIndex {
     pool: PgPool,
-    /// Commits still to fail with a serialization failure, so a test can
-    /// drive the retries.
+    /// Commits still to fail as deadlocked, so a test can drive the
+    /// retries.
     #[cfg(feature = "fault-injection")]
     failing_commits: Arc<AtomicU32>,
 }
@@ -99,8 +105,9 @@ impl PostgresIndex {
             .map(str::to_owned)
     }
 
-    /// Makes the next `n` write transactions of this handle fail at commit
-    /// with a serialization failure (`40001`) raised by Postgres itself.
+    /// Makes the next `n` write transactions of this handle fail before
+    /// commit with a deadlock error (`40P01`) that Postgres itself raises,
+    /// so a test can drive the retry loop without timing a real deadlock.
     #[cfg(feature = "fault-injection")]
     pub fn fail_next_commits(&self, n: u32) {
         self.failing_commits.store(n, Ordering::SeqCst);
@@ -114,7 +121,7 @@ impl PostgresIndex {
         Ok(())
     }
 
-    /// Fails `tx` with a serialization failure if
+    /// Fails `tx` with a deadlock error if
     /// [`PostgresIndex::fail_next_commits`] asked for one.
     #[cfg(feature = "fault-injection")]
     async fn inject_conflict(
@@ -127,8 +134,8 @@ impl PostgresIndex {
             .is_ok()
         {
             sqlx::query(
-                "DO $$ BEGIN RAISE EXCEPTION 'injected serialization failure' \
-                 USING ERRCODE = '40001'; END $$",
+                "DO $$ BEGIN RAISE EXCEPTION 'injected deadlock' \
+                 USING ERRCODE = '40P01'; END $$",
             )
             .execute(&mut *tx)
             .await?;
@@ -137,14 +144,11 @@ impl PostgresIndex {
     }
 }
 
-/// Whether Postgres aborted the transaction for a conflict with a
-/// concurrent one, which trying again resolves: a serialization failure
-/// (`40001`) or a deadlock (`40P01`).
+/// Whether Postgres aborted the transaction as deadlocked with a
+/// concurrent one (`40P01`), which trying again resolves.
 fn is_conflict(e: &IndexError) -> bool {
     match e {
-        IndexError::Database(sqlx::Error::Database(db)) => {
-            matches!(db.code().as_deref(), Some("40001" | "40P01"))
-        }
+        IndexError::Database(sqlx::Error::Database(db)) => db.code().as_deref() == Some("40P01"),
         _ => false,
     }
 }
@@ -284,6 +288,13 @@ struct FileRow {
     term_bytes: Vec<u8>,
 }
 
+/// Starts a write transaction at `READ COMMITTED` (see the module docs).
+async fn begin_write(pool: &PgPool) -> Result<Transaction<'static, Postgres>, IndexError> {
+    Ok(pool
+        .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await?)
+}
+
 impl PostgresIndex {
     async fn put_xorb_once(
         &self,
@@ -294,7 +305,7 @@ impl PostgresIndex {
         eligible: &[MerkleHash],
         tenant: &str,
     ) -> Result<bool, IndexError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = begin_write(&self.pool).await?;
         sqlx::query(
             "INSERT INTO xorbs (hash, size, chunk_count, chunk_table) VALUES ($1, $2, $3, $4) \
              ON CONFLICT DO NOTHING",
@@ -340,7 +351,7 @@ impl PostgresIndex {
                 .iter()
                 .flat_map(|f| f.record.terms.iter().map(|t| t.xorb)),
         );
-        let mut tx = self.pool.begin().await?;
+        let mut tx = begin_write(&self.pool).await?;
         if let Some(xorb) = first_invisible(&mut tx, &referenced, tenant, vis).await? {
             return Err(IndexError::UnknownXorb { xorb });
         }
@@ -452,7 +463,16 @@ impl PostgresIndex {
         // is kept whichever committed first, as a rebuild from the bucket
         // keeps it (ruling M1-R37); all describe the same bytes. A row
         // inserted just now has this registration's own key, so it isn't
-        // changed.
+        // changed. The rows are locked in key order first: `UPDATE ... FROM`
+        // locks them in whatever order its plan visits them.
+        sqlx::query(
+            "SELECT 1 FROM file_scopes WHERE scope = $1 AND file = ANY($2) \
+             ORDER BY file FOR UPDATE",
+        )
+        .bind(scope)
+        .bind(&hashes)
+        .fetch_all(&mut *tx)
+        .await?;
         sqlx::query(
             "UPDATE file_scopes f SET size = u.size, terms = u.terms, sha256 = u.sha256, \
              shard = $2, term_bytes = u.term_bytes, registered_seq = $3, registered_tenant = $4 \

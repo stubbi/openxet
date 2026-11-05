@@ -150,11 +150,13 @@ fn file(xorb: MerkleHash) -> NewFile {
     }
 }
 
-/// Ruling M3-R2: a write Postgres aborts with a serialization failure is
-/// tried again up to `RETRIES` times, and one that fails every time is
-/// `IndexError::Busy`, with nothing recorded.
+/// Ruling M3-R2: a write Postgres aborts as deadlocked is tried again up
+/// to `RETRIES` times, and one that fails every time is
+/// `IndexError::Busy`, with nothing recorded. This drives the retry loop
+/// with an injected error, which Postgres raises with the deadlock's code
+/// before commit; it doesn't time a real deadlock.
 #[test]
-fn serialization_failures_retry_then_busy() {
+fn deadlocks_retry_then_busy() {
     block_on(async {
         let Some(f) = postgres() else { return };
         let index = f.fresh().await;

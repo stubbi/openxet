@@ -291,8 +291,8 @@ pub enum IndexError {
     )]
     Database(#[source] sqlx::Error),
     /// A write kept conflicting with concurrent writes on other
-    /// connections: Postgres aborted it with a serialization failure or a
-    /// deadlock, and [`RETRIES`] more attempts did too (ruling M3-R2).
+    /// connections: Postgres aborted it as deadlocked, and [`RETRIES`] more
+    /// attempts were too (ruling M3-R2).
     /// Nothing was recorded; a retry a second later normally succeeds.
     #[error("the index is busy with concurrent writes to the same rows; retry in a second")]
     Busy(#[source] sqlx::Error),
