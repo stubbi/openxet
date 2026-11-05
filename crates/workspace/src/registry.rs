@@ -432,3 +432,27 @@ async fn open_lock(database: &Path) -> Result<File, WorkspaceError> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// `journal_size_limit` is a per-connection setting, so every connection
+    /// of both pools must carry it, or a checkpoint run on one without it
+    /// leaves the WAL at its largest (#132).
+    #[tokio::test]
+    async fn every_connection_limits_the_wal() {
+        let state = tempfile::tempdir().unwrap();
+        let registry = Registry::open(state.path()).await.unwrap();
+        let limit: i64 = WAL_SIZE_LIMIT.parse().unwrap();
+        for pool in [&registry.writer, &registry.reader] {
+            let set: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_eq!(set, limit);
+        }
+    }
+}

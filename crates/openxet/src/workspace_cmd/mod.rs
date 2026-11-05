@@ -218,6 +218,12 @@ pub(crate) fn workspace_error(err: &WorkspaceError) -> CliError {
              daemon'` when it names none), then check `openxet workspace status`.",
             ExitCode::FAILURE,
         ),
+        WorkspaceError::DaemonStopping { .. } => (
+            "Nothing more to do to stop it: run `openxet workspace status` until \
+             `daemon_running` is false. If it never is, stop it with `kill` and the pid the \
+             message names.",
+            ExitCode::FAILURE,
+        ),
         WorkspaceError::MainWorktree(_) => (
             "Pass a linked worktree, one `git worktree list` shows after the first; the main \
              worktree is your own checkout.",

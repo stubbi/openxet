@@ -493,10 +493,16 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   stopping nothing, when it is invalid; with `OPENXET_WORKSPACE_DAEMON`
   set to `off` it only stops (`start_skipped: "disabled"`). Neither fails
   when no daemon runs: `stopped_pid` is then `null`, `stop` changes
-  nothing and `restart` only starts one. `--dry-run` reports the daemon that would be stopped. A daemon
-  that can't be signalled or doesn't exit in time fails with
-  `daemon_stop`, and a new one that doesn't start within 10 seconds with
-  `daemon_start`.
+  nothing and `restart` only starts one. `--dry-run` reports the daemon that would be stopped. The
+  daemon records its pid in `daemon.lock` in the state directory and
+  empties it as it exits, so only the pid of a running daemon is
+  signalled. A daemon asked to stop finishes the file it is deduplicating
+  first. A daemon that records no pid, can't be signalled or doesn't exit
+  within 10 seconds fails with `daemon_stop`; one that was signalled
+  exits on its own later, and a `restart` that failed this way started no
+  new daemon. A new daemon that doesn't start within 10 seconds fails
+  with `daemon_start`. The daemon logs its limits to `daemon.log` in the
+  state directory as it starts.
 
   ```json
   {"schema":"openxet.workspace.daemon.v1","action":"restart","stopped_pid":4242,"started":true,"started_pid":4318,"start_skipped":null,"dry_run":false}

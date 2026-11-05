@@ -98,35 +98,96 @@ async fn stopping_no_daemon_is_a_no_op() {
     assert_eq!(stop_daemon(state.path()).await.unwrap(), None);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_clears_its_pid_as_it_exits() {
+    let state = tempfile::tempdir().unwrap();
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to record its pid", || {
+        daemon_pid(state.path()).is_some()
+    })
+    .await;
+
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    // So a later `stop` can never read it and signal whatever process
+    // reuses the pid.
+    assert_eq!(
+        fs::read_to_string(state.path().join("daemon.lock")).unwrap(),
+        ""
+    );
+}
+
+/// A daemon that has taken its lock but not yet written its pid is
+/// starting: `stop` waits for the pid rather than failing.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_waits_for_a_starting_daemon_to_record_its_pid() {
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("daemon.lock");
+    let lock = File::create(&path).unwrap();
+    lock.lock().unwrap();
+    // Stands in for the daemon: SIGTERM ends it.
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let stopping = tokio::spawn({
+        let state = state.path().to_path_buf();
+        async move { stop_daemon(&state).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!stopping.is_finished(), "stop gave up on a starting daemon");
+
+    let child_pid = child.id();
+    fs::write(&path, format!("{child_pid}\n")).unwrap();
+    let status = tokio::task::spawn_blocking(move || child.wait().unwrap())
+        .await
+        .unwrap();
+    drop(lock);
+
+    assert!(!status.success(), "the stand-in was not signalled");
+    assert_eq!(stopping.await.unwrap().unwrap(), Some(child_pid));
+}
+
 /// The daemon checkpoints the registry as it exits, so removed workspaces
-/// leave no grown WAL behind (#132).
+/// leave no grown WAL behind (#132). One workspace stays registered, so
+/// only the exit checkpoint, not the one when none is left, can truncate.
 #[tokio::test(flavor = "multi_thread")]
 async fn daemon_truncates_the_registry_wal_on_exit() {
     let repo = Repo::new();
     let state = tempfile::tempdir().unwrap();
     let reg = Registry::open(state.path()).await.unwrap();
-    let path = repo.worktree("one", "main");
     let now = SystemTime::now();
-    let ws = Workspace {
-        id: WorkspaceId::generate(),
-        project: ProjectId::discover(&path).unwrap(),
-        path,
-        branch: None,
-        created_at: now,
-        last_active: now,
-        adopted: false,
+    let workspace = |name: &str| {
+        let path = repo.worktree(name, "main");
+        Workspace {
+            id: WorkspaceId::generate(),
+            project: ProjectId::discover(&path).unwrap(),
+            path,
+            branch: None,
+            created_at: now,
+            last_active: now,
+            adopted: false,
+        }
     };
-    reg.insert(&ws).await.unwrap();
-    reg.remove(&ws.id).await.unwrap();
+    let removed = workspace("one");
+    reg.insert(&removed).await.unwrap();
+    reg.remove(&removed.id).await.unwrap();
+    reg.insert(&workspace("two")).await.unwrap();
     let wal = state.path().join("registry.sqlite3-wal");
     assert!(fs::metadata(&wal).unwrap().len() > 0);
     let (stop, daemon) = start(state.path());
     wait_for("the daemon to start", || daemon_running(state.path())).await;
+    // Past the first floor check, which finds a workspace and so leaves
+    // the WAL alone.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(fs::metadata(&wal).unwrap().len() > 0);
 
     stop.send(()).unwrap();
     daemon.await.unwrap().unwrap();
 
     assert_eq!(fs::metadata(&wal).map_or(0, |meta| meta.len()), 0);
+    assert_eq!(reg.list(None).await.unwrap().len(), 1);
 }
 
 /// `openxet workspace status` probes clone support with a file named

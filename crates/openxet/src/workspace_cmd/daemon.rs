@@ -10,7 +10,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use openxet_workspace::{STATE_DIR_ENV, daemon_pid, daemon_running, run_daemon, stop_daemon};
+use openxet_workspace::{
+    STATE_DIR_ENV, WorkspaceError, daemon_pid, daemon_running, run_daemon, stop_daemon,
+};
 use serde::Serialize;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::Level;
@@ -131,7 +133,7 @@ pub(super) async fn control(
     }
     result.stopped_pid = stop_daemon(&context.state_dir)
         .await
-        .map_err(|err| workspace_error(&err))?;
+        .map_err(|err| stop_error(restart, &err))?;
     if !restart {
         return Ok(result);
     }
@@ -142,7 +144,11 @@ pub(super) async fn control(
     start(&context.state_dir).map_err(|err| start_error(&err))?;
     let deadline = Instant::now() + START_WAIT;
     loop {
-        if let Some(pid) = daemon_pid(&context.state_dir) {
+        // Never the stopped daemon's pid, should a killed daemon have left
+        // it in the lock file for a moment.
+        if let Some(pid) =
+            daemon_pid(&context.state_dir).filter(|&pid| Some(pid) != result.stopped_pid)
+        {
             result.started = true;
             result.started_pid = Some(pid);
             return Ok(result);
@@ -154,6 +160,31 @@ pub(super) async fn control(
             )));
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The error of a stop that failed. `restart` started no new daemon, and a
+/// daemon still finishing a file stops later on its own, so its hint is to
+/// restart once it has; until then the old daemon keeps the old limits.
+fn stop_error(restart: bool, err: &WorkspaceError) -> CliError {
+    let error = workspace_error(err);
+    match err {
+        WorkspaceError::DaemonStopping { .. } if restart => CliError::new(
+            error.code,
+            format!("{}; no new daemon was started", error.message),
+            "Run `openxet workspace status` until `daemon_running` is false, then run `openxet \
+             workspace daemon restart` again to start one with your workspace.toml's limits; \
+             until a daemon runs, nothing keeps the free-space floor.",
+        ),
+        _ if restart => CliError::new(
+            error.code,
+            format!("{}; no new daemon was started", error.message),
+            format!(
+                "{} Then run `openxet workspace daemon restart` again.",
+                error.hint
+            ),
+        ),
+        _ => error,
     }
 }
 

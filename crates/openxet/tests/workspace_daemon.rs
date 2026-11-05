@@ -172,6 +172,22 @@ fn restart_replaces_the_daemon_with_one_on_the_new_limits() {
     assert!(daemon.exited(), "the old daemon did not exit cleanly");
     let new = setup.running_pid().expect("no daemon after the restart");
     assert_ne!(new, daemon.pid());
+    assert_eq!(restarted["started_pid"], new);
+    // The new daemon runs on the new floor: it logs its limits as it starts.
+    let log = setup.state.join("daemon.log");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("workspace daemon started") {
+            assert!(text.contains("floor_bytes=1073741824"), "{text}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the new daemon never started: {text}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]
