@@ -410,16 +410,19 @@ async fn two_issuers_never_share_a_subject() {
     }
 }
 
+/// One change that makes an issuer config invalid.
+type BreakConfig = fn(&mut OidcConfig);
+
 #[test]
 fn issuer_config_is_checked() {
     let ok = OidcConfig::new("corp", "https://id.example.com/realms/x", &["openxet"]);
     assert_eq!(ok.check(), Ok(()));
-    let cases: [(&str, fn(&mut OidcConfig)); 7] = [
+    let cases: [(&str, BreakConfig); 7] = [
         ("delegated", |c| c.name = "delegated".to_owned()),
         ("colon", |c| c.name = "a:b".to_owned()),
         ("http", |c| c.issuer = "http://id.example.com".to_owned()),
         ("query", |c| {
-            c.issuer = "https://id.example.com/?x=1".to_owned()
+            c.issuer = "https://id.example.com/?x=1".to_owned();
         }),
         ("no audience", |c| c.audiences.clear()),
         ("empty claim", |c| c.claims = vec![String::new()]),

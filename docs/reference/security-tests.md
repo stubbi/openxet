@@ -60,8 +60,8 @@ scanned at teardown for every credential its clients sent
 | 1 | `alg_none_and_hs256_refused` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
 | 1 | `alg_must_match_jwks_key` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
 | 1 | `wrong_issuer_or_audience_refused` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
-| 1 | `token_alg_must_match_key_alg` | pending (M3, `crates/auth/tests/auth.rs`) | M3 (per-key `alg`, ADR 0011, Task 10) |
-| 1 | `unknown_kid_refused` | pending (M3, `crates/auth/tests/auth.rs`) | M3 (CAS-token key set, Task 10) |
+| 1 | `token_alg_must_match_key_alg` | `crates/auth/tests/auth.rs` | M3 (per-key `alg`, ADR 0011, Task 10) |
+| 1 | `unknown_kid_refused` | `crates/auth/tests/auth.rs` | M3 (CAS-token key set, Task 10) |
 | 1 | `expired_access_token_refused` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
 | 2 | `unreadable_repo_matches_unknown_repo_on_every_route` | `crates/hub/tests/security.rs` | M2 (Hub routes) |

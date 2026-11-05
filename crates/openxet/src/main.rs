@@ -7,6 +7,7 @@ mod duration;
 mod error;
 mod hook_cmd;
 mod host_memory;
+mod keys;
 mod label_cmd;
 mod logging;
 mod openapi_cmd;

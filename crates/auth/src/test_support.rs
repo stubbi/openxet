@@ -222,15 +222,14 @@ impl TestIssuer {
     }
 
     /// Replaces the `alg` key with a new one under a new `kid`, as an
-    /// identity provider rotating its signing key does; returns the `kid`.
-    pub fn rotate(&self, alg: TestAlg) -> String {
+    /// identity provider rotating its signing key does.
+    pub fn rotate(&self, alg: TestAlg) {
         let mut state = self.state();
         state.rotations += 1;
         let kid = format!("{}-{}", alg.name(), state.rotations);
-        let key = Key::generate(alg, kid.clone());
+        let key = Key::generate(alg, kid);
         state.keys.retain(|k| k.alg != alg);
         state.keys.push(key);
-        kid
     }
 
     /// Takes the issuer down (every request answers `503`) or brings it

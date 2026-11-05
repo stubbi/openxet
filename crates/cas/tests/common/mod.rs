@@ -448,12 +448,7 @@ impl TestServer {
                 static_token(&read_token, SCOPE_A, Mode::Read),
                 static_token(&other_scope_token, SCOPE_B, Mode::Write),
                 static_token(&other_scope_read_token, SCOPE_B, Mode::Read),
-                StaticToken {
-                    sha256: StaticToken::digest(&user_token),
-                    subject: "test-user".to_owned(),
-                    cas: None,
-                    user: Some(UserProfile::default()),
-                },
+                user_static_token(&user_token),
             ],
             vec![signer.public_key()],
             Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
@@ -667,6 +662,16 @@ fn static_token(token: &str, scope: &str, mode: Mode) -> StaticToken {
             tenant: None,
         }),
         user: None,
+    }
+}
+
+/// The static token for `test-user`, a user credential with no CAS scope.
+fn user_static_token(secret: &str) -> StaticToken {
+    StaticToken {
+        sha256: StaticToken::digest(secret),
+        subject: "test-user".to_owned(),
+        cas: None,
+        user: Some(UserProfile::default()),
     }
 }
 

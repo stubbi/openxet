@@ -420,17 +420,21 @@ async fn open(
         )
     })?;
     let key = transfer_key(config)?;
+    let verify_keys = transfer_verify_keys(config)?;
     let urls = UrlSigner::new(*key, config.url_lifetime)
-        .map_err(|err| CliError::new("config", err.to_string(), "Fix cas.url_lifetime."))?;
+        .map_err(|err| CliError::new("config", err.to_string(), "Fix cas.url_lifetime."))?
+        .with_verify_keys(verify_keys.to_vec());
     // Capability `href`s are signed with the transfer key every node shares
     // (ruling M1-R29), so any node answers one another issued.
-    let capabilities = CapabilitySigner::new(*key).map_err(|err| {
-        CliError::new(
-            "config",
-            err.to_string(),
-            "Replace the transfer key file with 32 random bytes.",
-        )
-    })?;
+    let capabilities = CapabilitySigner::new(*key)
+        .map_err(|err| {
+            CliError::new(
+                "config",
+                err.to_string(),
+                "Replace the transfer key file with 32 random bytes.",
+            )
+        })?
+        .with_verify_keys(verify_keys.to_vec());
     let signer = cas_token_signer(config)?;
     let (auth, dev_token) = if let Some(auth) = &config.auth {
         let issuers = discover_oidc(&config.oidc).await?;
@@ -627,6 +631,17 @@ async fn discover_oidc(issuers: &[OidcConfig]) -> Result<Vec<Arc<OidcIssuer>>, C
         discovered.push(issuer);
     }
     Ok(discovered)
+}
+
+/// The keys of `cas.transfer_verify_key_files`, each of which must exist:
+/// previous transfer keys, accepted and never used to sign (ruling
+/// M3-R15).
+fn transfer_verify_keys(config: &Config) -> Result<Zeroizing<Vec<[u8; 32]>>, CliError> {
+    let mut keys = Zeroizing::new(Vec::with_capacity(config.transfer_verify_key_files.len()));
+    for path in &config.transfer_verify_key_files {
+        keys.push(*preflight::transfer_verify_key(config, path)?);
+    }
+    Ok(keys)
 }
 
 /// The server's CAS token key, `{data_dir}/cas-token.key`, generated on

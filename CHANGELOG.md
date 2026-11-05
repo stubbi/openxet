@@ -16,6 +16,12 @@ in CI.
 
 ### Added in M3
 
+- Keys rotate without refusing a credential handed out under them:
+  `cas.transfer_verify_key_files` lists previous transfer keys that are
+  accepted and never sign; each CAS token key is bound to its `alg`; and
+  `openxet config check` lists every key with its id, algorithm and age,
+  warning past `auth.key_max_age` (default `180d`)
+  ([rotating keys](docs/reference/config.md#rotating-keys)).
 - Sign in with your identity provider: `[[auth.oidc]]` accepts tokens
   from any OpenID Connect issuer (Keycloak, Auth0, Okta, Entra ID,
   GitHub Actions and others) on the Hub API, Git and LFS routes, as the

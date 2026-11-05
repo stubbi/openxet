@@ -145,6 +145,9 @@ pub struct Config {
     /// Whether `cas.transfer_key_file` was set rather than defaulted: a
     /// named key must exist, a default one is created.
     pub transfer_key_explicit: bool,
+    /// `cas.transfer_verify_key_files`: previous transfer keys, accepted and
+    /// never used to sign (ruling M3-R15). Each must exist.
+    pub transfer_verify_key_files: Vec<PathBuf>,
     /// The configured credentials, or `None` in dev mode (no `[auth]`).
     pub auth: Option<Arc<Authenticator>>,
     /// `[[auth.rules]]`: what user credentials may do per repository
@@ -154,7 +157,13 @@ pub struct Config {
     /// `[[auth.oidc]]`: the identity providers whose tokens authenticate
     /// users (ruling M3-R7). `serve` discovers each on startup.
     pub oidc: Vec<OidcConfig>,
+    /// `auth.jwt_public_keys`, with the files they were read from, for the
+    /// key report. Empty in dev mode.
+    pub jwt_public_keys: Vec<JwtKey>,
     pub max_token_lifetime: Duration,
+    /// `auth.key_max_age`: `config check` warns about older keys (ruling
+    /// M3-R15).
+    pub key_max_age: Duration,
     /// `hub.public_url`; `None` means the server's public URL.
     pub hub_public_url: Option<Url>,
     /// `hub.cas_url`; `None` means the server's public URL, where the CAS
@@ -172,6 +181,13 @@ pub struct Config {
 }
 
 impl Config {
+    /// How long a signature under the transfer key stays valid: the longer
+    /// of a transfer URL's lifetime and an LFS capability's, so how long a
+    /// previous transfer key must stay a verify key (ruling M3-R15).
+    pub fn transfer_signature_lifetime(&self) -> Duration {
+        self.url_lifetime.max(self.capability_ttl)
+    }
+
     /// The CAS configuration for a server reached at `public_url`.
     pub fn cas(&self, public_url: Url) -> CasConfig {
         CasConfig {
@@ -204,6 +220,14 @@ impl Config {
             gateway_idle_timeout: self.gateway_idle_timeout,
         }
     }
+}
+
+/// A key of `auth.jwt_public_keys`.
+#[derive(Debug, Clone)]
+pub struct JwtKey {
+    pub key: PublicKey,
+    /// The file it was read from; `None` for a PEM given inline.
+    pub file: Option<PathBuf>,
 }
 
 /// The outcome of loading: every effective setting and every problem, and
@@ -255,6 +279,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("url_lifetime", Kind::Str),
             ("heartbeat_interval", Kind::Str),
             ("transfer_key_file", Kind::Str),
+            ("transfer_verify_key_files", Kind::StrList),
         ],
     ),
     (
@@ -265,6 +290,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
             ("oidc", Kind::Oidc),
             ("jwt_public_keys", Kind::StrList),
             ("max_token_lifetime", Kind::Str),
+            ("key_max_age", Kind::Str),
         ],
     ),
     (
@@ -889,6 +915,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
             path
         }),
     };
+    let transfer_verify_key_files = transfer_verify_key_files(c);
 
     let max_token_lifetime = c.duration(
         "auth.max_token_lifetime",
@@ -900,18 +927,29 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "CAS tokens expiring further ahead are refused. Match it to your issuer's longest \
          token; 24h is the default.",
     );
-    let (auth, rules, oidc) = if c.raw.auth {
+    let key_max_age = c.duration(
+        "auth.key_max_age",
+        DEFAULT_KEY_MAX_AGE,
+        (Duration::from_hours(24), Duration::from_hours(24 * 3650)),
+        "`config check` warns about keys older than this; rotate them as \
+         docs/reference/config.md#keys-and-tokens-on-disk describes. 180d is the default.",
+    );
+    let (auth, rules, oidc, jwt_keys) = if c.raw.auth {
         let tokens = static_tokens(c);
         let rules = rules(c);
         let oidc = oidc_issuers(c);
         let keys = jwt_public_keys(c);
-        let auth = match (tokens, keys, &oidc, max_token_lifetime) {
-            (Some(tokens), Some(keys), Some(oidc), Some(max)) => {
-                authenticator(c, tokens, keys, !oidc.is_empty(), max)
-            }
+        let auth = match (tokens, &keys, &oidc, max_token_lifetime) {
+            (Some(tokens), Some(keys), Some(oidc), Some(max)) => authenticator(
+                c,
+                tokens,
+                keys.iter().map(|k| k.key.clone()).collect(),
+                !oidc.is_empty(),
+                max,
+            ),
             _ => None,
         };
-        (auth, rules, oidc)
+        (auth, rules, oidc, keys)
     } else {
         c.set(
             "auth",
@@ -919,7 +957,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
              create every repository",
             &Source::Default,
         );
-        (None, Some(Vec::new()), Some(Vec::new()))
+        (None, Some(Vec::new()), Some(Vec::new()), Some(Vec::new()))
     };
     let hub = hub(c, max_token_lifetime)?;
     let git = git(c, data_dir.as_deref());
@@ -941,10 +979,13 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         heartbeat_interval: heartbeat_interval?,
         transfer_key_file: transfer_key_file?,
         transfer_key_explicit,
+        transfer_verify_key_files: transfer_verify_key_files?,
         auth: if c.raw.auth { Some(auth?) } else { None },
         rules: rules?,
         oidc: oidc?,
+        jwt_public_keys: jwt_keys?,
         max_token_lifetime: max_token_lifetime?,
+        key_max_age: key_max_age?,
         hub_public_url: hub.public_url,
         hub_cas_url: hub.cas_url,
         lfs_threshold: hub.lfs_threshold,
@@ -2096,20 +2137,18 @@ fn oidc_issuer(
     }
     if let Some(text) = optional_string(c, at, table, "jwks_max_stale", source, OIDC_HINT)? {
         let range = OidcConfig::MIN_JWKS_MAX_STALE..=OidcConfig::MAX_JWKS_MAX_STALE;
-        match duration::parse(&text).filter(|d| range.contains(d)) {
-            Some(stale) => cfg.jwks_max_stale = stale,
-            None => {
-                c.raw.problem(
-                    format!("{at}.jwks_max_stale"),
-                    Some(text),
-                    source,
-                    format!("must be {}, from 10m to 7d inclusive", duration::FORM),
-                    "How long the last fetched keys verify while the issuer can't be reached; \
-                     24h is the default.",
-                );
-                return None;
-            }
-        }
+        let Some(stale) = duration::parse(&text).filter(|d| range.contains(d)) else {
+            c.raw.problem(
+                format!("{at}.jwks_max_stale"),
+                Some(text),
+                source,
+                format!("must be {}, from 10m to 7d inclusive", duration::FORM),
+                "How long the last fetched keys verify while the issuer can't be reached; \
+                 24h is the default.",
+            );
+            return None;
+        };
+        cfg.jwks_max_stale = stale;
     }
     if let Err(reason) = cfg.check() {
         c.raw.problem(at, None, source, reason, OIDC_HINT);
@@ -2129,7 +2168,61 @@ fn parse_sha256(text: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-fn jwt_public_keys(c: &mut Checker<'_>) -> Option<Vec<PublicKey>> {
+/// The default `auth.key_max_age` (ruling M3-R15).
+const DEFAULT_KEY_MAX_AGE: Duration = Duration::from_hours(24 * 180);
+
+/// `cas.transfer_verify_key_files`, each a non-empty path. Whether the
+/// files exist and hold keys is checked by `preflight`.
+fn transfer_verify_key_files(c: &mut Checker<'_>) -> Option<Vec<PathBuf>> {
+    const KEY: &str = "cas.transfer_verify_key_files";
+    const HINT: &str = "List the files of previous transfer keys, such as \
+         [\"/etc/openxet/transfer-old.key\"], while URLs they signed are still valid. See \
+         docs/reference/config.md#transfer-urls.";
+    let Some((value, source)) = c.raw.values.get(KEY).cloned() else {
+        c.set(KEY, "none", &Source::Default);
+        return Some(Vec::new());
+    };
+    let Some(entries) = value.as_array() else {
+        c.raw.problem_toml(
+            KEY,
+            Some(&value),
+            &source,
+            "must be an array of strings",
+            HINT,
+        );
+        return None;
+    };
+    let mut files = Vec::new();
+    let mut ok = true;
+    for (index, entry) in entries.iter().enumerate() {
+        match entry.as_str() {
+            Some(text) if !text.is_empty() => files.push(PathBuf::from(text)),
+            _ => {
+                c.raw.problem_toml(
+                    format!("{KEY}[{index}]"),
+                    Some(entry),
+                    &source,
+                    "must be a file path",
+                    HINT,
+                );
+                ok = false;
+            }
+        }
+    }
+    let shown: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+    c.set(
+        KEY,
+        if shown.is_empty() {
+            "none".to_owned()
+        } else {
+            shown.join(", ")
+        },
+        &source,
+    );
+    ok.then_some(files)
+}
+
+fn jwt_public_keys(c: &mut Checker<'_>) -> Option<Vec<JwtKey>> {
     const KEY: &str = "auth.jwt_public_keys";
     const HINT: &str = "Give the path of an Ed25519 public key in SPKI PEM \
          (-----BEGIN PUBLIC KEY-----), or the PEM itself. `openxet token keygen` writes one.";
@@ -2153,10 +2246,14 @@ fn jwt_public_keys(c: &mut Checker<'_>) -> Option<Vec<PublicKey>> {
             ok = false;
             continue;
         };
-        let (pem, label) = if text.trim_start().starts_with("-----BEGIN") {
-            (Ok(text.to_owned()), "inline PEM".to_owned())
+        let (pem, label, file) = if text.trim_start().starts_with("-----BEGIN") {
+            (Ok(text.to_owned()), "inline PEM".to_owned(), None)
         } else {
-            (std::fs::read_to_string(text), text.to_owned())
+            (
+                std::fs::read_to_string(text),
+                text.to_owned(),
+                Some(PathBuf::from(text)),
+            )
         };
         let key = match pem {
             Ok(pem) => PublicKey::from_pem(&pem).map_err(|err| err.to_string()),
@@ -2165,7 +2262,7 @@ fn jwt_public_keys(c: &mut Checker<'_>) -> Option<Vec<PublicKey>> {
         match key {
             Ok(key) => {
                 shown.push(format!("{label} (kid {})", key.kid()));
-                keys.push(key);
+                keys.push(JwtKey { key, file });
             }
             Err(rule) => {
                 c.raw.problem(&at, Some(label), &source, rule, HINT);
@@ -2390,6 +2487,35 @@ mod tests {
         for bad in ["0", "1000001", "\"64\""] {
             let loaded = load_toml(&format!("[server]\nmax_connections = {bad}\n"), &[]);
             assert_eq!(problem_keys(&loaded), ["server.max_connections"], "{bad}");
+        }
+    }
+
+    #[test]
+    fn key_rotation_settings_are_checked() {
+        let config = load_toml("", &[]).config.unwrap();
+        assert!(config.transfer_verify_key_files.is_empty());
+        assert_eq!(config.key_max_age, Duration::from_hours(24 * 180));
+        let config = load_toml(
+            "[cas]\ntransfer_verify_key_files = [\"/a.key\", \"/b.key\"]\n",
+            &[],
+        )
+        .config
+        .unwrap();
+        assert_eq!(
+            config.transfer_verify_key_files,
+            [PathBuf::from("/a.key"), PathBuf::from("/b.key")]
+        );
+        for (bad, key) in [
+            ("\"/a.key\"", "cas.transfer_verify_key_files"),
+            ("[\"\"]", "cas.transfer_verify_key_files[0]"),
+            ("[\"/a.key\", 1]", "cas.transfer_verify_key_files[1]"),
+        ] {
+            let loaded = load_toml(&format!("[cas]\ntransfer_verify_key_files = {bad}\n"), &[]);
+            assert_eq!(problem_keys(&loaded), [key], "{bad}");
+        }
+        for bad in ["23h", "3651d", "0s"] {
+            let loaded = load_toml(&format!("[auth]\nkey_max_age = \"{bad}\"\n"), &[]);
+            assert_eq!(problem_keys(&loaded), ["auth.key_max_age", "auth"], "{bad}");
         }
     }
 

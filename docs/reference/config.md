@@ -150,6 +150,7 @@ host name instead. A trailing `/` is allowed and ignored.
 | `url_lifetime` | `60m` | `30m` to `60m` | How long a signed transfer URL is valid. See [Transfer URLs](#transfer-urls). |
 | `heartbeat_interval` | `5s` | `1s` to `2m` | How often a `/v2/shards` upload stream repeats its progress while the upload is verified and committed. `hf_xet` fails a stream that is silent for 300 s. |
 | `transfer_key_file` | `<data_dir>/transfer.key` | a file path | The key that signs transfer URLs. Set explicitly, the file must exist. See [Keys and tokens on disk](#keys-and-tokens-on-disk). |
+| `transfer_verify_key_files` | none | an array of file paths | Previous transfer keys: URLs and capability `href`s they signed are still accepted, and they never sign. Each file must exist. See [Rotating keys](#rotating-keys). |
 
 ### `[auth]`
 
@@ -163,6 +164,7 @@ configure at least one credential.
 | `oidc` | none | an array of tables | Identity providers whose tokens authenticate users. See [OIDC](#oidc). |
 | `jwt_public_keys` | none | an array of strings | Ed25519 public keys trusted to sign CAS tokens: a file path, or the PEM itself. See [CAS tokens](#cas-tokens). |
 | `max_token_lifetime` | `24h` | `1m` to `30d` | A CAS token whose `exp` lies further ahead than this is refused. |
+| `key_max_age` | `180d` | `1d` to `3650d` | `config check` warns about a key file older than this. See [Rotating keys](#rotating-keys). |
 
 Every request needs a credential: there are no anonymous reads unless a
 [rule](#rules) for `anonymous` grants them on a repository. The other
@@ -346,6 +348,48 @@ another node's CAS. A missing key is generated, silently in dev mode and
 with a warning naming the file when `[auth]` is configured. Replacing it
 invalidates the tokens already handed out; clients fetch new ones.
 
+### Rotating keys
+
+Each key rotates without refusing a credential handed out under it
+(ruling M3-R15). Restart the nodes one at a time after each step; a step
+starts once every node runs the one before.
+
+- **CAS token key** (`cas-token.key`). Make a key pair with `openxet token
+  keygen --key new.key`. Add `new.key.pub` to `auth.jwt_public_keys`.
+  Then replace `cas-token.key` with `new.key` and list the old key's
+  public half in `auth.jwt_public_keys` instead of the new one, since the
+  server trusts its own key unlisted. Remove the old public key once
+  `auth.max_token_lifetime` has passed.
+- **A platform's signing key** (an `auth.jwt_public_keys` entry). Add the
+  new public key next to the old one, switch the platform's signer, and
+  remove the old key once `auth.max_token_lifetime` has passed.
+- **Transfer key** (`cas.transfer_key_file`). Create a new key
+  (`(umask 077; openssl rand -hex 32 > new-transfer.key)`) and list it in
+  `cas.transfer_verify_key_files`. Then make it `cas.transfer_key_file`
+  and list the old key in `cas.transfer_verify_key_files` instead. The
+  transfer key signs transfer URLs, which live `cas.url_lifetime`, and the
+  capability `href`s of [Git LFS](lfs.md) uploads, which live
+  `hub.capability_ttl`, up to 24 hours. Remove the old key once the longer
+  of the two has passed; `config check` names that time in its hints.
+
+`openxet config check` lists every key with its kind, id, algorithm and
+age:
+
+| `kind` | Key | `id` | `alg` |
+| ------ | --- | ---- | ----- |
+| `cas_token` | `cas-token.key`, once `serve` created it | its `kid` | `EdDSA` |
+| `cas_token_verify` | an `auth.jwt_public_keys` entry | its `kid` | `EdDSA` |
+| `transfer` | `cas.transfer_key_file` | its id | `HS256` |
+| `transfer_verify` | a `cas.transfer_verify_key_files` entry | its id | `HS256` |
+
+A transfer key's id is the first 16 hex characters of the SHA-256 of
+`openxet-transfer-key-id-v1`, a newline and the key. It names the key
+without revealing it. A key's age is the time since its file was last
+modified, so copy key files with `cp -p` or `rsync -t` to keep it; an
+inline PEM has no age. A key older than `auth.key_max_age` gets a
+`warning`, and `config check` lists it under `warnings` with how to rotate
+it. `serve` starts either way.
+
 ## Token format
 
 Tokens OpenXet generates (the dev token and `openxet token generate`) are
@@ -523,7 +567,12 @@ OpenXet accepts exactly this:
   (RFC 8410 §7), since Python's `cryptography` (checked with 50.0.2, under
   PyJWT) refuses v2 with the public key attached; `token mint` reads both.
   List several public keys to rotate: sign
-  with the new key once every node trusts it, then remove the old one.
+  with the new key once every node trusts it, then remove the old one
+  ([Rotating keys](#rotating-keys)).
+- **Algorithm:** each key is bound to one `alg`, taken from its key type:
+  `EdDSA` for Ed25519 (ADR 0011). A token is verified only by the key its
+  `kid` names, and only if its header `alg` is that key's; a token can't
+  choose its own algorithm. An unknown `kid` is refused.
 - **`kid`:** the first 16 lowercase hex characters of the SHA-256 of the raw
   32-byte public key. The commands `openxet token keygen` and
   `config check` print it.
@@ -557,6 +606,11 @@ hour. A URL whose `exp` lies further ahead than this server's
 `url_lifetime` on a live server invalidates outstanding URLs signed under
 the longer lifetime. Clients recover by requesting a fresh reconstruction,
 which `hf_xet` does on the `403` by itself.
+
+URLs are signed with `cas.transfer_key_file` and accepted under it or
+any key in `cas.transfer_verify_key_files`, which never signs. Listing the
+previous key there keeps the URLs it signed working through a rotation,
+for at most their own lifetime ([Rotating keys](#rotating-keys)).
 
 ## Tenants
 

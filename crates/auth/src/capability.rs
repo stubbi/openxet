@@ -11,6 +11,9 @@
 //! as the other. `op` and `exp` hold no newline, so the string splits from
 //! its end into exactly one scope, operation and expiry, whatever the scope
 //! holds.
+//!
+//! Like a [`crate::UrlSigner`], a signer may hold verify keys, previous
+//! transfer keys it accepts and never signs with (ruling M3-R15).
 
 use std::fmt;
 
@@ -50,6 +53,8 @@ impl fmt::Debug for CapabilityQuery {
 /// (ruling M1-R29).
 pub struct CapabilitySigner {
     mac: Hmac<Sha256>,
+    /// Keys accepted by [`CapabilitySigner::verify`] and never used to sign.
+    verify: Vec<Hmac<Sha256>>,
 }
 
 impl CapabilitySigner {
@@ -68,7 +73,19 @@ impl CapabilitySigner {
         let mac = mac.map_err(|_| AuthError::InvalidKey {
             reason: "the capability-signing key was rejected by HMAC-SHA256",
         })?;
-        Ok(Self { mac })
+        Ok(Self {
+            mac,
+            verify: Vec::new(),
+        })
+    }
+
+    /// This signer, also accepting capabilities signed with any of `keys`,
+    /// which it never signs with: the previous transfer keys during a
+    /// rotation (ruling M3-R15). The local copies of `keys` are wiped.
+    #[must_use]
+    pub fn with_verify_keys(mut self, keys: Vec<[u8; 32]>) -> Self {
+        self.verify = crate::verify_macs(keys);
+        self
     }
 
     /// The capability for `op` on `scope`, valid until `exp` (Unix seconds,
@@ -77,16 +94,17 @@ impl CapabilitySigner {
     pub fn sign(&self, scope: &str, op: Mode, exp: u64) -> CapabilityQuery {
         CapabilityQuery {
             exp,
-            sig: URL_SAFE_NO_PAD.encode(self.tag(scope, op, exp)),
+            sig: URL_SAFE_NO_PAD.encode(tag(&self.mac, scope, op, exp)),
         }
     }
 
     /// Checks that `query` is the capability for `op` on `scope` and that
     /// `now` (Unix seconds) is before its `exp`.
     ///
-    /// The signature is checked first, and compared in constant time over
-    /// the whole tag, so a request learns nothing about how close a forgery
-    /// came, nor whether a forged one had expired.
+    /// The signature is checked first, under the signing key and then each
+    /// verify key, and compared in constant time over the whole tag, so a
+    /// request learns nothing about how close a forgery came, nor whether a
+    /// forged one had expired.
     ///
     /// # Errors
     ///
@@ -105,8 +123,14 @@ impl CapabilitySigner {
         let presented = URL_SAFE_NO_PAD
             .decode(&query.sig)
             .map_err(|_| refused(CapabilityRefusal::BadSignature))?;
-        let expected = self.tag(scope, op, query.exp);
-        if !bool::from(expected.as_slice().ct_eq(&presented)) {
+        let signed_by = |keyed: &Hmac<Sha256>| {
+            bool::from(
+                tag(keyed, scope, op, query.exp)
+                    .as_slice()
+                    .ct_eq(&presented),
+            )
+        };
+        if !(signed_by(&self.mac) || self.verify.iter().any(signed_by)) {
             return Err(refused(CapabilityRefusal::BadSignature));
         }
         if now >= query.exp {
@@ -114,24 +138,26 @@ impl CapabilitySigner {
         }
         Ok(())
     }
+}
 
-    fn tag(&self, scope: &str, op: Mode, exp: u64) -> [u8; 32] {
-        let mut mac = self.mac.clone();
-        mac.update(DOMAIN);
-        mac.update(scope.as_bytes());
-        mac.update(match op {
-            Mode::Read => b"\nread\n".as_slice(),
-            Mode::Write => b"\nwrite\n".as_slice(),
-        });
-        mac.update(itoa::Buffer::new().format(exp).as_bytes());
-        mac.finalize().into_bytes().into()
-    }
+/// The signature under `keyed` of `op` on `scope` until `exp`.
+fn tag(keyed: &Hmac<Sha256>, scope: &str, op: Mode, exp: u64) -> [u8; 32] {
+    let mut mac = keyed.clone();
+    mac.update(DOMAIN);
+    mac.update(scope.as_bytes());
+    mac.update(match op {
+        Mode::Read => b"\nread\n".as_slice(),
+        Mode::Write => b"\nwrite\n".as_slice(),
+    });
+    mac.update(itoa::Buffer::new().format(exp).as_bytes());
+    mac.finalize().into_bytes().into()
 }
 
 impl fmt::Debug for CapabilitySigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CapabilitySigner")
             .field("mac", &"<redacted>")
+            .field("verify_keys", &self.verify.len())
             .finish()
     }
 }
