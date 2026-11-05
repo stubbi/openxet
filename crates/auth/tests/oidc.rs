@@ -63,6 +63,7 @@ async fn oidc_token_becomes_user_principal() {
     let mut claims = idp.claims("u-42", t);
     claims["preferred_username"] = "alice".into();
     claims["email"] = "alice@example.com".into();
+    claims["email_verified"] = true.into();
     claims["orgs"] = json!(["acme", "labs"]);
     claims["groups"] = "ml-team".into();
     claims["ignored"] = json!(["not", "mapped"]);
@@ -106,6 +107,20 @@ async fn oidc_token_becomes_user_principal() {
     assert_eq!(user.name, "corp:u-7");
     assert_eq!(user.email, None);
     assert_eq!(user.claims["orgs"], ["ok"]);
+
+    // Hub commits are authored with the email (ruling M2-R7), so it is
+    // taken only when the issuer says it verified it: `email_verified`
+    // exactly `true`.
+    for verified in [Value::Null, json!(false), json!("true"), json!(1)] {
+        let mut unverified = with(claims.clone(), "email_verified", verified.clone());
+        unverified["sub"] = "u-9".into();
+        let user = oidc
+            .verify(&idp.sign(TestAlg::Es256, &unverified), t)
+            .await
+            .unwrap();
+        assert_eq!(user.email, None, "{verified}");
+        assert_eq!(user.name, "alice", "{verified}");
+    }
 
     // A subject that isn't a string, or that carries control characters,
     // makes no principal.
@@ -433,4 +448,82 @@ fn issuer_config_is_checked() {
         change(&mut cfg);
         assert!(cfg.check().is_err(), "{what}");
     }
+}
+
+/// Discovery and JWKS fetches never follow a redirect, which could lead to
+/// `http://` on any host past the `https`-or-loopback check: discovery
+/// fails, and a refresh fails closed, keeping the last keys, whether the
+/// client follows redirects or not.
+#[tokio::test(flavor = "multi_thread")]
+async fn issuer_redirect_refused() {
+    let idp = TestIssuer::start().await;
+    let elsewhere = TestIssuer::start().await;
+    let no_redirects = || {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    };
+    for target in ["http://keys.example.invalid", elsewhere.issuer()] {
+        idp.redirect_to(Some(target));
+        let err = OidcIssuer::discover(config(&idp, |_| {}), no_redirects())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("redirect"), "{target}: {err}");
+        // A following client reaches the target, or fails to, and either
+        // way discovery fails.
+        let followed = OidcIssuer::discover(config(&idp, |_| {}), reqwest::Client::new()).await;
+        assert!(followed.is_err(), "{target}");
+    }
+
+    idp.redirect_to(None);
+    let t = now();
+    for http in [no_redirects(), reqwest::Client::new()] {
+        let oidc = OidcIssuer::discover(config(&idp, |_| {}), http)
+            .await
+            .unwrap();
+        // The JWKS now redirects to keys `idp` never published, under a
+        // `kid` the cache lacks; following it would accept their tokens.
+        idp.redirect_to(Some(elsewhere.issuer()));
+        elsewhere.rotate(TestAlg::EdDsa);
+        let foreign = elsewhere.sign(TestAlg::EdDsa, &idp.claims("mallory", t));
+        assert_eq!(oidc.verify(&foreign, t).await, Err(AuthError::Unavailable));
+        // The last keys still verify.
+        let own = idp.sign(TestAlg::Es256, &idp.claims("alice", t));
+        assert_eq!(oidc.verify(&own, t).await.unwrap().subject, "corp:alice");
+        idp.redirect_to(None);
+    }
+}
+
+/// A JWKS without a key a token could be verified with is refused at
+/// discovery, and on a refresh it is a failed refresh: the last keys stay.
+#[tokio::test(flavor = "multi_thread")]
+async fn jwks_without_keys_keeps_the_last_keys() {
+    let idp = TestIssuer::start().await;
+    idp.serve_empty_jwks(true);
+    let err = OidcIssuer::discover(config(&idp, |_| {}), reqwest::Client::new())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("holds no signing key"), "{err}");
+
+    idp.serve_empty_jwks(false);
+    let oidc = discover(&idp, |_| {}).await;
+    let fetched = idp.jwks_fetches();
+    let t = now();
+    idp.serve_empty_jwks(true);
+    // An unknown `kid` refreshes, gets no keys, and fails closed.
+    idp.rotate(TestAlg::Rs256);
+    let rotated = |at: u64| idp.sign(TestAlg::Rs256, &idp.claims("alice", at));
+    assert_eq!(
+        oidc.verify(&rotated(t), t).await,
+        Err(AuthError::Unavailable)
+    );
+    assert_eq!(idp.jwks_fetches(), fetched + 1);
+    // The keys from before the refresh still verify.
+    let cached = idp.sign(TestAlg::Es256, &idp.claims("alice", t));
+    assert!(oidc.verify(&cached, t).await.is_ok());
+    // Once the provider serves keys again, the next refresh picks them up.
+    idp.serve_empty_jwks(false);
+    let later = t + UNKNOWN_KID_REFRESH_INTERVAL.as_secs();
+    assert!(oidc.verify(&rotated(later), later).await.is_ok());
 }

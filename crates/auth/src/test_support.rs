@@ -1,7 +1,8 @@
 //! An in-process OIDC issuer for tests ([`TestIssuer`]): it serves a
 //! discovery document and a JWKS over loopback HTTP, signs RS256, ES256 and
-//! `EdDSA` tokens with keys generated per run, and can rotate a key, go down
-//! and count the JWKS fetches it answered. Only with the `test-support`
+//! `EdDSA` tokens with keys generated per run, and can rotate a key, go down,
+//! redirect, serve a JWKS without keys and count the JWKS fetches it
+//! answered. Only with the `test-support`
 //! feature.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::missing_panics_doc)]
@@ -131,6 +132,8 @@ struct State {
     issuer: String,
     keys: Vec<Key>,
     up: bool,
+    redirect_to: Option<String>,
+    empty_jwks: bool,
     jwks_fetches: usize,
     rotations: usize,
 }
@@ -162,6 +165,8 @@ impl TestIssuer {
             issuer: issuer.clone(),
             keys,
             up: true,
+            redirect_to: None,
+            empty_jwks: false,
             jwks_fetches: 0,
             rotations: 0,
         }));
@@ -193,6 +198,7 @@ impl TestIssuer {
         change(&mut cfg);
         let http = reqwest::Client::builder()
             .pool_max_idle_per_host(0)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
         Arc::new(OidcIssuer::discover(cfg, http).await.unwrap())
@@ -236,6 +242,18 @@ impl TestIssuer {
     /// back up.
     pub fn set_up(&self, up: bool) {
         self.state().up = up;
+    }
+
+    /// Makes both endpoints answer `302 Found` to the same path under
+    /// `base`, or stops redirecting for `None`.
+    pub fn redirect_to(&self, base: Option<&str>) {
+        self.state().redirect_to = base.map(str::to_owned);
+    }
+
+    /// Makes the JWKS hold no keys, as a misconfigured provider's can, or
+    /// serve the keys again.
+    pub fn serve_empty_jwks(&self, empty: bool) {
+        self.state().empty_jwks = empty;
     }
 
     /// How many JWKS requests the issuer answered while up.
@@ -313,10 +331,26 @@ fn signing_input(header: &Value, claims: &Value) -> String {
     )
 }
 
+/// `302 Found` to `path` under the redirect base, if one is set.
+fn redirect(state: &State, path: &str) -> Option<Response> {
+    let base = state.redirect_to.as_deref()?;
+    let location = format!("{}{path}", base.trim_end_matches('/'));
+    Some(
+        (
+            StatusCode::FOUND,
+            [(axum::http::header::LOCATION, location)],
+        )
+            .into_response(),
+    )
+}
+
 async fn discovery(Shared(state): Shared<Arc<Mutex<State>>>) -> Response {
     let state = state.lock().unwrap_or_else(PoisonError::into_inner);
     if !state.up {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if let Some(response) = redirect(&state, "/.well-known/openid-configuration") {
+        return response;
     }
     axum::Json(json!({
         "issuer": state.issuer,
@@ -331,7 +365,14 @@ async fn jwks(Shared(state): Shared<Arc<Mutex<State>>>) -> Response {
     if !state.up {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    if let Some(response) = redirect(&state, "/jwks") {
+        return response;
+    }
     state.jwks_fetches += 1;
-    let keys: Vec<Value> = state.keys.iter().map(|k| k.jwk.clone()).collect();
+    let keys: Vec<Value> = if state.empty_jwks {
+        Vec::new()
+    } else {
+        state.keys.iter().map(|k| k.jwk.clone()).collect()
+    };
     axum::Json(json!({ "keys": keys })).into_response()
 }

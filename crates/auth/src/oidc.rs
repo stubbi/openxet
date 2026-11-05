@@ -24,7 +24,14 @@
 //! - the subject claim is a string that makes a valid subject.
 //!
 //! The principal's subject is `{name}:{sub}`, so two issuers never share a
-//! subject. An OIDC token is a user credential, never a CAS credential.
+//! subject. Its email is the email claim only when `email_verified` is
+//! `true`, since Hub commits are authored with it (ruling M2-R7). An OIDC
+//! token is a user credential, never a CAS credential.
+//!
+//! Discovery and JWKS fetches never follow a redirect: the answer must come
+//! from the URL [`check_endpoint`] accepted. `openxet serve` builds its
+//! client with redirects off, and [`fetch`] refuses an answer from any other
+//! URL, so a client that follows redirects still fails closed.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -88,7 +95,8 @@ pub struct OidcConfig {
     /// The claim holding the display name; `preferred_username` by
     /// default, falling back to the subject.
     pub name_claim: String,
-    /// The claim holding the email address; `email` by default.
+    /// The claim holding the email address; `email` by default. It is
+    /// taken only from a token whose `email_verified` claim is `true`.
     pub email_claim: String,
     /// String or string-list claims copied into the principal, which rules
     /// match; `orgs` feeds `whoami-v2`.
@@ -276,12 +284,6 @@ impl OidcIssuer {
             .map_err(|_| fail(format!("its `jwks_uri` {:?} is not a URL", doc.jwks_uri)))?;
         check_endpoint(&jwks_uri).map_err(|reason| fail(format!("its `jwks_uri`: {reason}")))?;
         let keys = fetch_keys(&http, &jwks_uri).await.map_err(fail)?;
-        if keys.is_empty() {
-            return Err(fail(format!(
-                "the JWKS at {jwks_uri} holds no signing key with a `kid` for RS256, PS256, \
-                 ES256, ES384 or EdDSA"
-            )));
-        }
         Ok(Self {
             jwks: ArcSwap::from_pointee(Jwks {
                 keys,
@@ -393,7 +395,8 @@ impl OidcIssuer {
     }
 
     /// Fetches the JWKS and caches it, recording the attempt in `refresh`.
-    /// A failure is logged with the issuer's name and keeps the last keys.
+    /// A failure, including a JWKS with no key a token could be verified
+    /// with, is logged with the issuer's name and keeps the last keys.
     async fn fetch_into(&self, refresh: &mut Refresh, now: u64) -> Result<Arc<Jwks>, AuthError> {
         refresh.last_attempt = now;
         match fetch_keys(&self.http, &self.jwks_uri).await {
@@ -485,9 +488,12 @@ impl OidcIssuer {
                 mapped.insert(claim.clone(), values);
             }
         }
+        // An address the issuer hasn't verified would let a user author
+        // Hub commits as anyone (ruling M2-R7).
+        let email_verified = claims.get("email_verified") == Some(&Value::Bool(true));
         Ok(UserPrincipal {
             name: text(&self.cfg.name_claim).unwrap_or_else(|| subject.clone()),
-            email: text(&self.cfg.email_claim),
+            email: text(&self.cfg.email_claim).filter(|_| email_verified),
             subject,
             claims: mapped,
         })
@@ -517,7 +523,9 @@ pub(crate) fn unverified_issuer(jwt: &str) -> Option<String> {
         .map(|issuer| issuer.iss)
 }
 
-/// The keys of the JWKS at `url` a token may be verified with, by `kid`.
+/// The keys of the JWKS at `url` a token may be verified with, by `kid`;
+/// an error if it holds none, so neither discovery nor a refresh ever
+/// caches an empty set.
 async fn fetch_keys(
     http: &reqwest::Client,
     url: &Url,
@@ -539,6 +547,12 @@ async fn fetch_keys(
         if let Some((kid, key)) = issuer_key(&jwk) {
             keys.entry(kid).or_insert(key);
         }
+    }
+    if keys.is_empty() {
+        return Err(format!(
+            "the JWKS at {url} holds no signing key with a `kid` for RS256, PS256, ES256, \
+             ES384 or EdDSA"
+        ));
     }
     Ok(keys)
 }
@@ -579,8 +593,9 @@ fn issuer_key(jwk: &Jwk) -> Option<(String, IssuerKey)> {
     Some((kid, IssuerKey { alg, key }))
 }
 
-/// The body at `url`, of a `2xx` answer and at most
-/// [`MAX_DOCUMENT_BYTES`].
+/// The body at `url`, of a `2xx` answer from `url` itself and at most
+/// [`MAX_DOCUMENT_BYTES`]. A redirect is refused: following it would take
+/// keys from a URL [`check_endpoint`] never saw.
 async fn fetch(http: &reqwest::Client, url: &Url) -> Result<Vec<u8>, String> {
     let mut response = http
         .get(url.clone())
@@ -588,6 +603,11 @@ async fn fetch(http: &reqwest::Client, url: &Url) -> Result<Vec<u8>, String> {
         .send()
         .await
         .map_err(|err| format!("could not fetch {url}: {err}"))?;
+    if response.status().is_redirection() || response.url() != url {
+        return Err(format!(
+            "{url} answered with a redirect, which OpenXet never follows for an issuer"
+        ));
+    }
     if !response.status().is_success() {
         return Err(format!("{url} answered {}", response.status()));
     }

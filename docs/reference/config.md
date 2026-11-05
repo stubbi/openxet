@@ -522,16 +522,20 @@ actions = ["read", "write", "create"]
 | `audiences` | required | The accepted audiences; a token's `aud` must name at least one. Use the client id your provider issues OpenXet's tokens for. |
 | `subject_claim` | `sub` | The claim holding the user's id, the part after `{name}:`. |
 | `name_claim` | `preferred_username` | The claim `whoami-v2` answers as `name`; without it, the subject. |
-| `email_claim` | `email` | The claim holding the address Hub commits are authored with. |
+| `email_claim` | `email` | The claim holding the address Hub commits are authored with. It is taken only from a token whose `email_verified` claim is `true`; otherwise the user has no email and commits use the noreply address. |
 | `claims` | none | Claims copied into the user, each a string or a list of strings, which [rules](#rules) match by `claims`. `orgs` feeds `whoami-v2`'s organizations. A value with control characters is left out. |
 | `jwks_max_stale` | `24h` | How long the last fetched signing keys keep verifying while the issuer can't be reached, from `10m` to `7d`. |
 
 How tokens are checked:
 
 - On start, `serve` reads `{issuer}/.well-known/openid-configuration` and
-  the JWKS it names. If either can't be fetched, or the document names
-  another issuer, `serve` stops with the error code `oidc`, naming the
-  issuer and what to fix.
+  the JWKS it names. If either can't be fetched, the document names
+  another issuer, or the JWKS holds no key a token could be verified
+  with, `serve` stops with the error code `oidc`, naming the issuer and
+  what to fix.
+- Neither fetch follows a redirect: an issuer or JWKS URL that answers
+  `3xx` counts as unreachable, so keys only ever come from the
+  `https://` (or loopback `http://`) URL that was checked.
 - A token's `alg` must be the one of the JWKS key its `kid` names: RS256,
   PS256, ES256, ES384 or EdDSA. `none` and HMAC algorithms are always
   refused. A key without `alg` is RS256 for RSA, and ES256, ES384 or
@@ -542,8 +546,8 @@ How tokens are checked:
 - The JWKS is fetched again every 10 minutes, and when a token names a
   `kid` the cache doesn't hold, at most once every 30 seconds, so a
   provider that rotates its key is followed within one request.
-- While the issuer can't be reached, the last keys keep verifying for
-  `jwks_max_stale`. After that, and for a token under a key the cache
+- While the issuer can't be reached, or its JWKS holds no usable key,
+  the last keys keep verifying for `jwks_max_stale`. After that, and for a token under a key the cache
   doesn't hold, requests get `503 authn_unavailable` with `Retry-After:
   1`, never an accept. The server log names the issuer whose refresh
   failed. OIDC tokens are never logged.

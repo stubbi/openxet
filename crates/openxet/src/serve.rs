@@ -599,8 +599,11 @@ async fn discover_oidc(issuers: &[OidcConfig]) -> Result<Vec<Arc<OidcIssuer>>, C
     if issuers.is_empty() {
         return Ok(Vec::new());
     }
+    // Never follow a redirect: discovery and JWKS answers must come from
+    // the URLs checked as `https://` or loopback `http://`.
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|err| {
             CliError::new(
