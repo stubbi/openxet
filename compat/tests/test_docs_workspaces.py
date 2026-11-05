@@ -11,6 +11,13 @@ Nothing touches the real machine's state: HOME (so `~/.claude` and
 `~/.config/openxet`), the workspace registry and Git's configuration are
 all under pytest's tmp_path, and the daemon is off, since no command in
 the guide needs it and the test must leave no process behind.
+
+The reader's free space is not the runner's: a CI runner can have less
+free than the default floor (the larger of 20 GiB and a tenth of the
+volume), and `create` would refuse with `disk_budget` (#142). So the
+scratch HOME starts with a `workspace.toml` setting `floor = 0`, the
+setting the guide documents, until the guide writes its own limits; the
+guide's text and every command in it run unchanged.
 """
 
 import json
@@ -130,6 +137,10 @@ def test_agent_workspaces_guide_runs_as_written(openxet_bin, tmp_path):
     work.mkdir()
     home = tmp_path / "env" / "home"
     home.mkdir(parents=True)
+    # No floor until the guide sets one, whatever the runner's free space.
+    config = home / ".config" / "openxet" / "workspace.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("floor = 0\n")
     state = tmp_path / "state"
     env = isolated_env(
         tmp_path / "env",
@@ -160,7 +171,7 @@ def test_agent_workspaces_guide_runs_as_written(openxet_bin, tmp_path):
     # The hooks went into the scratch HOME, and the limits were read back.
     settings = json.loads((home / ".claude" / "settings.json").read_text())
     assert set(settings["hooks"]) == {"WorktreeCreate", "WorktreeRemove"}
-    assert (home / ".config" / "openxet" / "workspace.toml").is_file()
+    assert 'floor = "50 GiB"' in config.read_text()
     assert "floor 50.0 GiB" in proc.stdout
 
     # The guide cleans up after itself: nothing stays registered.
