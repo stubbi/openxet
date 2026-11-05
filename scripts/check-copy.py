@@ -9,7 +9,9 @@ can check:
 - none of PHRASES in the prose of Markdown and HTML files, outside code.
 
 crates/ joins SCAN with the renaming of user-facing strings (Rust string
-literals and doc comments reach docs.rs and the terminal).
+literals and doc comments reach docs.rs and the terminal). Vendored
+third-party crates (the workspace gate's fixture) are other projects' copy,
+byte for byte as `cargo vendor` wrote them, and stay out.
 
 A justified exception goes in scripts/check-copy.allow as
 `path | snippet | reason`, where the snippet is text on the flagged line. An
@@ -33,7 +35,7 @@ TEXT_SUFFIXES = {
     ".py", ".mjs", ".js", ".ts", ".tsx", ".css", ".sh",
 }
 # Directories outside the check for now; see the module doc.
-SKIP_PREFIXES = ("crates/", "testdata/")
+SKIP_PREFIXES = ("crates/", "testdata/", "compat/fixtures/workspace-project/vendor/")
 PROSE_SUFFIXES = {".md", ".html"}
 
 DASHES = re.compile("[\u2013\u2014]")

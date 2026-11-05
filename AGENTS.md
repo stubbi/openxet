@@ -251,7 +251,8 @@ daemon with its free-space floor, idle eviction and settled-file dedup, and
 the Claude Code hooks (`docs/guides/agent-workspaces.md`). Next: the
 flat-disk and build-speed gate, then step 3 (the mount) after its plan.
 M3 follows: production backends (Postgres; S3, GCS and Azure), OIDC and the
-webhook authorizer, OpenXet-issued tokens and rate limits, per design §12,
+webhook authorizer, OpenXet-issued tokens and rate limits, per design §12
+and `docs/superpowers/plans/2026-11-05-m3-production-backends.md`,
 interleaved before the workspace steps that need it. ADR 0001 decides to build from
 scratch on `xet-core`'s crates (after evaluating existing Xet servers;
 see `docs/competitive-matrix.md`).
@@ -307,6 +308,7 @@ OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest 
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m git          # stock git over smart HTTP, one node and two (CI gate)
 eval "$(compat/gitea/seed.sh)"                             # start the LFS leg's Gitea (Docker or colima) and export its variables
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest -m lfs          # git-lfs 3.7.1 and git-xet 0.2.1 on PATH, repos on Gitea, LFS on openxet (CI gate)
+OPENXET_BIN=$PWD/target/debug/openxet OPENXET_COMPAT_WORKSPACE_VOLUME=<dir> uv run --frozen --directory compat pytest -m workspaces -s # flat-disk and build-speed gate for agent workspaces; <dir> on a volume with clones nothing else writes to (CI gate: workspaces-gate, on XFS)
 scripts/install-git-floor.sh ~/.cache/openxet/git-2.37.7   # build the oldest supported git once (CI: git-floor)
 OPENXET_TEST_GIT_237=~/.cache/openxet/git-2.37.7/bin/git cargo nextest run -p openxet-git # the Git role's tests against git 2.37.7 too (CI gate)
 OPENXET_BIN=$PWD/target/debug/openxet uv run --frozen --directory compat pytest                 # all of it (Gitea included), plus the HF baseline against huggingface.co

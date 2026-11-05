@@ -575,6 +575,44 @@ signed in or not, so an operator can make repositories public; no rule
 names it by default. Dev mode installs `subjects = ["dev"], repos = ["*"], actions
 = ["read", "write", "create"]`.
 
+**OIDC, the webhook and issued tokens** *(rulings M3-R7 to M3-R10,
+[ADR 0016](../../adr/0016-issued-and-delegated-tokens.md))*:
+- **OIDC.** Each `[[auth.oidc]]` issuer is discovered from its
+  `.well-known/openid-configuration`, must match `iss` exactly and one
+  configured audience, and maps a subject `{name}:{sub}`, so two issuers
+  never share one. A token's `alg` must be its JWKS key's (RS256, PS256,
+  ES256, ES384 or EdDSA; never `none` or HMAC). JWKS is cached, refreshed
+  every 10 min and at most every 30 s on an unknown `kid`, and served
+  stale up to `jwks_max_stale` (24 h) when the issuer is down; past that,
+  requests get `503 authn_unavailable`, never an unverified accept.
+- **Webhook.** `[auth.webhook]` receives a signed, timestamped
+  `openxet.authz.v1` request (subject, claims, action, repository,
+  `delegated_by`) and answers `{"allow": bool}`. Decisions are cached by
+  the SHA-256 of the whole request (30 s for allow, 5 s for deny by
+  default); a timeout or bad answer is `503 authz_unavailable`. With
+  `auth.authorizer = "rules+webhook"`, a rule grant allows without a
+  call and the webhook decides the rest.
+- **Access tokens.** Issued against an OIDC credential (`POST
+  /api/openxet/v1/tokens`), or by an admin for a platform's users, never
+  by another access, delegated or static token, so every one traces to an
+  identity-provider proof. 90 days by default, at most
+  `auth.access_token_max_ttl` (365 days by default). The index and the
+  bucket record hold the secret's SHA-256 only.
+- **Delegated tokens** (§7.1). Minted with an OIDC or access credential
+  for up to 100 listed repositories, `read` or `write`, 8 h by default
+  and at most `auth.delegated_max_ttl` (24 h), with optional byte and
+  operation caps. They never create, never mint, and never outlive or
+  outreach their parent: each use checks the list, the mode, the expiry,
+  revocation, exhaustion and that the parent subject is still allowed.
+  Revoking the parent access token revokes them. CAS tokens minted
+  through one have the reserved subject `delegated:{id}` (ADR 0007, as
+  amended). Caps count granted bytes (upload bodies and the ranges a
+  reconstruction grants), not egress, and may overshoot by two seconds
+  of the token's own traffic.
+- Token and revocation records reach the bucket (`tokens/{id}`,
+  `token-revocations/{id}`) before the index, so losing the database
+  loses no one's access.
+
 CAS tokens are short-lived EdDSA JWTs (ADR 0007), scoped to
 (scope, read|write, exp), with no revision, because Xet reads follow scope
 membership (R25) and a revision would enforce nothing. The Hub token route
@@ -676,7 +714,11 @@ A dedup answer offers every xorb of the newest visible shard that
 references the matched xorb, up to 16 MiB, so one hit lets a client with an
 empty cache dedup a whole earlier upload (rulings M1-R30, M1-R32, S11); under
 `per-tenant` that shard must be registered for the caller's tenant and
-only the tenant's xorbs are offered.
+only the tenant's xorbs are offered. Under `global` the answer takes the
+newest visible shard registered by the caller's own tenant, and only if
+there is none the newest of any tenant *(ruling M3-R17, issue #50)*, so
+another tenant's registrations shape only the answers of tenants that
+never uploaded those chunks themselves.
 
 **Existence checks in `per-tenant` mode** answer per tenant too, or they
 would reveal what dedup answers hide. Every check that says whether a xorb
@@ -742,6 +784,24 @@ already stored writes only its small ownership record. Tests:
   60 min, with a 30 min minimum as derived in ADR 0002 and a 60 min maximum
   (ruling M1-R42). v1 reconstruction
   is served too, for older clients.
+
+  **Presigners** *(ruling M3-R5, [ADR 0015](../../adr/0015-production-backends-and-range-bound-presigning.md))*:
+  `object_store`'s signer can't sign a `Range` header, so OpenXet signs
+  presigned GETs itself: SigV4 with `X-Amz-SignedHeaders=host;range` for
+  `s3://` pools (AWS S3, R2, MinIO, Garage) and GCS V4 with
+  `X-Goog-SignedHeaders=host;range` for `gs://`. Azure SAS has no field
+  that binds a range, so `az://` pools serve through the transfer role.
+  A presigned URL lives `min(cas.url_lifetime, credential expiry - 60 s)`;
+  if that is under the 30 min floor even after a credential refresh, the
+  answer's URLs are transfer URLs. No direct URL comes from a pool whose
+  probe hasn't passed in this process.
+
+  **Conditional-create probe** *(ruling M3-R4)*: registration records
+  rely on create-if-absent (M1-R37). At start-up each node creates
+  `probe/{node uuid}/create` twice in each object-store pool and requires
+  the second call to report that the object exists; a store that
+  overwrites instead is refused with `storage_unsafe`, naming the check,
+  and the server doesn't start on it.
 - **Plain HTTP read gateway:** `GET /{repo}/resolve/{rev}/{path}`, when the
   redirect is followed, streams the reconstructed file with HTTP `Range`
   support. This makes OpenXet readable by anything that speaks HTTP (curl,
@@ -796,6 +856,26 @@ API and metrics, because platforms need them for quotas and billing.
   reconstruction and listing reads, and native partitioning by hash prefix.
   The index trait does not assume a single instance, so a sharded backend
   (Citus, or a distributed KV) can come later without touching callers.
+  - **Postgres** *(rulings M3-R2, M3-R3, ADR 0015)*: the hash-keyed
+    tables (`xorbs`, `xorb_layouts`, `xorb_owners`, `file_scopes`,
+    `dedup`) are hash-partitioned 16 ways; content-addressed inserts
+    treat a lost race as success, ref commits lock the repository row,
+    and a serialization failure is retried 3 times, then answered `503
+    index_busy`.
+  - **Replicas**: with `index.read_url`, reconstructions, file heads,
+    listings and dedup lookups read from the replica, and a replica's
+    "absent" is read again from the primary, so a replica never hides an
+    acknowledged write. Writes, Git ref snapshots, tokens, revocations
+    and limits always use the primary.
+  - **Schema compatibility** *(ruling M3-R6, [ADR 0017](../../adr/0017-schema-compatibility-for-rolling-upgrades.md))*:
+    migrations are additive unless marked contract, and a contract
+    raises a schema epoch, so nodes of two adjacent releases share one
+    database through a rolling upgrade.
+  - **Index round trips outside CPU permits** *(ruling M3-R14, issue
+    #48)*: chunk tables and layouts are loaded, with their bytes reserved
+    from the memory budget first, before a `validate` permit is taken; an
+    `index_io` semaphore sized to `index.max_connections` bounds the
+    loads.
 - **Write rate target:** 2,000 xorb registrations/s and 200 shard
   registrations/s per deployment.
 
@@ -824,12 +904,29 @@ API and metrics, because platforms need them for quotas and billing.
   `validate`, `commit` and `dedup` permits (M1-R8, M1-R24, M1-R32), and
   connections by `server.max_connections`. Measured peaks are in
   [benchmarks](../../reference/benchmarks.md#memory-bounds).
+- **Limits and quotas** *(rulings M3-R11 to M3-R13,
+  [ADR 0018](../../adr/0018-limits-quotas-and-memory-shares.md))*:
+  - Rate limits are per node, with no shared state: per tenant (2,000
+    requests/s, burst 4,000), per credential (1,000/s, burst 2,000; at
+    most 512 in flight) and per client IP for failed authentication
+    (60/min). Over one, `429 rate_limited` with `Retry-After`. A
+    deployment's figure is the per-node one times its nodes.
+  - Quotas are global: a tenant's stored bytes are the xorbs it owns,
+    counted as if it were alone. An upload past the quota gets `403
+    quota_exceeded` before its body is read; reads never stop. No quota
+    by default; per-tenant overrides through the admin API.
+  - One credential may hold at most a quarter of the memory budget, one
+    tenant at most half; a ranged reconstruction reserves only its
+    range's terms.
+  - These defaults are generous for self-hosters; openxet.com sets lower
+    per-tenant values through the admin API, not new defaults.
 
 ### 5.9 Security requirements
 
 Each requirement is a release blocker and has a named test. The tests are
 planned for the milestone that builds the surface (M1 for CAS, M2 for Hub
-and Git, later for caches and the mirror); a surface doesn't ship without
+and Git, M3 for production backends and issued tokens, later for caches
+and the mirror); a surface doesn't ship without
 its test. [Security tests](../../reference/security-tests.md) maps each
 test to its file and milestone, and CI keeps that map and this table in
 step.
@@ -837,11 +934,11 @@ step.
 | # | Requirement | Tests |
 |---|---|---|
 | 1 | **No unauthenticated reads when auth is on.** Every data URL (reconstruction, xorb ranges, the HTTP gateway, LFS `href`s) needs a credential, or is a signed URL bound to one range and a short lifetime (ADR 0002). | `no_unauthenticated_reads` walks every route and every URL OpenXet emits without a credential; `signed_url_bound_to_range` |
-| 2 | **Credentials are scoped to one repository or bucket.** CAS tokens and capability `href`s are scoped to one repository or bucket; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's scope check; user credentials are authorized per repository or bucket on every Hub and CAS route. A foreign repository or bucket answers `403`, or `404` where the caller can't read it, never revealing a private one's existence. Repository and bucket creation is authorized per namespace (§5.4). A bucket `batch` that adds or copies a file by Xet hash names a file the caller can read, or gets the `404` of an unknown hash (§5.4). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repository's or bucket's credential, bucket routes included; `repo_create_authorized_per_namespace`; `bucket_create_authorized_per_namespace`; `bucket_add_file_hash_must_be_readable`; `bucket_copy_file_requires_source_read`; `wrong_type_without_read_access_matches_unknown_repo`; `create_collision_authorized_first` |
-| 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). | `cache_keyed_by_caller`, `cache_fails_closed` |
+| 2 | **Credentials are scoped to one repository or bucket.** CAS tokens and capability `href`s are scoped to one repository or bucket; signed URLs are bound to one xorb range and an expiry (ADR 0002) and are issued only after the caller's scope check; user credentials are authorized per repository or bucket on every Hub and CAS route. A foreign repository or bucket answers `403`, or `404` where the caller can't read it, never revealing a private one's existence. Repository and bucket creation is authorized per namespace (§5.4). A bucket `batch` that adds or copies a file by Xet hash names a file the caller can read, or gets the `404` of an unknown hash (§5.4). Direct presigned URLs bind one range as transfer URLs do, and come only from a pool whose probe passed in this process (ADR 0015). Issued tokens are authorized again on every use, and a delegated token reaches only its listed repositories in its mode, and never widens its scope, extends its expiry, raises its caps or mints a token (ADR 0014 item 3, ADR 0016). | `credential_scoped_to_repo`, a matrix of every route × read, write and create with another repository's or bucket's credential, bucket routes included; `repo_create_authorized_per_namespace`; `bucket_create_authorized_per_namespace`; `bucket_add_file_hash_must_be_readable`; `bucket_copy_file_requires_source_read`; `wrong_type_without_read_access_matches_unknown_repo`; `create_collision_authorized_first`; `every_direct_url_binds_its_range`, `direct_urls_only_after_probe_passed`; `oidc_token_scoped_like_static_user_token`; `access_token_scoped_to_repo`, `authorizer_reasked_on_use`; `delegated_token_limited_to_listed_repos_and_mode`, `delegated_token_cannot_widen_itself`, `delegated_token_cannot_mint_tokens`, `revoking_parent_revokes_delegated`, `parent_losing_access_revokes_use` |
+| 3 | **Caches and proxies are keyed by the caller's credential** for anything that depends on authorization. They never share tokens or authorized responses, and they fail closed. The only exception is stale serving of content whose last upstream check was public and ungated (§10.6). This covers the JWKS cache, the webhook decision cache, the access-token cache, the delegated-usage cache and the rate limiters (ADR 0016, ADR 0018): a cache that can't be refreshed denies, and unknown secrets are never cached. | `cache_keyed_by_caller`, `cache_fails_closed`; `jwks_outage_serves_cached_then_fails_closed`; `cache_keyed_by_subject_and_claims`, `timeout_fails_closed`; `unknown_secret_not_cached`, `revoked_token_refused_on_every_node`; `tenants_do_not_share_buckets`, `credential_share_caps_one_reader` |
 | 4 | **Dedup answers reveal no raw chunk hashes.** They are HMAC-keyed shards with a footer, and per-tenant dedup (`per-tenant`, §5.4) is available. In `per-tenant` mode every existence check (`HEAD` of xorbs, dedup lookups, shard xorb lookups) answers as absent for any xorb the caller's tenant doesn't own, and `HEAD` of files for any file not registered to the caller's scope. | `dedup_response_hmac_keyed`, `dedup_answer_never_contains_raw_hashes_or_file_info`, `per_tenant_dedup_isolates_tenants`, `per_tenant_multi_xorb_answer_hides_foreign_xorbs`, `per_tenant_existence_checks_hide_other_tenants`, `per_tenant_scopes_of_one_tenant_share_dedup` |
 | 5 | **Uploads are verified.** Xorbs are re-hashed on ingest. Shards are checked against the stored xorb chunk hashes by `verify_shard`, with its work cap (S6), and a shard that references a missing xorb is rejected. Verification errors reveal no value derived from stored data, so they can't stand in for holding the chunks (M1-R23). | the S6 rule tests; `shard_with_missing_xorb_rejected`, `shard_verify_work_capped`, `verification_errors_reveal_no_server_derived_values`, `foreign_writer_cannot_forge_shard_under_global` |
-| 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction` |
+| 6 | **Credentials are never echoed or logged.** LFS download actions carry no CAS token (ADR 0003), no action `header` or response carries the client's own credential, and fixtures and docs pass the redaction guard. Issued token secrets are stored only as a SHA-256, and OIDC tokens, token secrets, the webhook secret and presigned query strings are never logged. | `lfs_download_action_has_no_token`, `responses_never_echo_credential`, `credentials_never_logged` (scans all logs of a suite run), `test_fixture_redaction`; `oidc_token_never_logged`, `access_token_never_logged_or_echoed`, `secret_stored_only_as_hash`, `webhook_secret_never_logged` |
 | 7 | **No silent no-op success.** Every acknowledged write has its effect, and survives a SIGKILL right after the acknowledgement. An acknowledged bucket key write also survives the loss of the database: `reindex` restores it (§10.4). | `acknowledged_xorb_write_is_visible`, `acknowledged_shard_write_is_visible`, `acked_write_survives_sigkill`, `acknowledged_bucket_key_write_is_visible` |
 | 8 | **Git reads check reachability on every path** (R22), and **every ref writer is fenced** (ADR 0004). | ADR 0004's `v2_want_unreachable_refused`, `hub_read_by_sha_obeys_r22`, `writer_cannot_make_unreachable_reachable`, `hub_ref_write_fenced`, `ref_log_in_cas_transaction` |
 
@@ -1215,7 +1312,9 @@ every guarantee below stays ([ADR 0014](../../adr/0014-agents-are-the-primary-da
   - expiry measured in hours
   - optional limits on bytes or operations
 
-  It is revocable from the web UI.
+  It is revocable from the web UI. How they are minted, checked, capped
+  and revoked is [ADR 0016](../../adr/0016-issued-and-delegated-tokens.md)
+  (ruling M3-R10).
 - **Every action is attributed** in the audit log as human, or as agent on
   behalf of a human. The web UI shows what an agent did.
 - **Approval gates:** operators can require human approval for
@@ -1942,7 +2041,9 @@ Agent workspaces come after M2 and before M3 to M8, with M3 interleaved as
   - One router: the CAS and Hub routes composed at the builder level under
     a single fallback, since axum can't merge two routers that each carry
     one (issue #46).
-- **M3:** production backends.
+- **M3:** production backends
+  ([plan](../plans/2026-11-05-m3-production-backends.md); rulings M3-R1
+  to M3-R17 in §17; ADRs 0015 to 0018).
   - Postgres; S3, GCS and Azure; presigned downloads.
   - The range-binding probe against real AWS S3, R2, Garage, GCS and
     Azure, and the presigned-URL signing benchmarks (ADR 0002).
@@ -1973,7 +2074,9 @@ Agent workspaces come after M2 and before M3 to M8, with M3 interleaved as
     networked (issue #48).
   - Hybrid post-quantum TLS key exchange preferred in every rustls client
     OpenXet builds, with a test of the negotiated group (ADR 0011, issue
-    [#66](https://github.com/stubbi/openxet/issues/66)).
+    [#66](https://github.com/stubbi/openxet/issues/66)). **Shipped** in
+    [PR #89](https://github.com/stubbi/openxet/pull/89)
+    (`crates/openxet/tests/post_quantum_tls.rs`).
   - A key-rotation drill for CAS token keys and the transfer key, under
     load (ADR 0011, issue [#65](https://github.com/stubbi/openxet/issues/65)).
 - **M4:** operational completeness.
@@ -2066,7 +2169,8 @@ Agent workspaces come after M2 and before M3 to M8, with M3 interleaved as
 - Global-dedup response shards are decided (M1-R4, M1-R30): synthesized
   from the xorbs of the newest visible shard that references the xorb
   holding the queried chunk, with a fresh random HMAC key and a
-  `shard_key_expiry` of now + 7 days.
+  `shard_key_expiry` of now + 7 days. Under `global`, the caller's own
+  tenant's shards come first (M3-R17).
 - Docs site tooling.
 
 ## 14. Name
@@ -2200,7 +2304,7 @@ decides, with superseded parts marked.
 | M1-R5 | The GC grace defaults to 30 days and is never below 28 (21-day client shard cache + 7-day dedup key). | §5.6, S10 |
 | M1-R6 | `GET /v2/file-chunk-hashes` is built in M6 and answers `404` until then. | §12, ADR 0006 |
 | M1-R7 | Metering ships in M4 with the admin API. | §5.7, §12 |
-| M1-R8 | Xorb validation runs on blocking threads bounded by one permit per CPU; double decompression on accept is kept and benchmarked. | M1 plan |
+| M1-R8 | Xorb validation runs on blocking threads bounded by one permit per CPU; double decompression on accept is kept and benchmarked. Amended by M3-R14: index loads happen before the permit is taken. | M1 plan |
 | M1-R9 | The client version floor is `hf_xet` 1.7.0. | §11, S10 |
 | M1-R10 | The default bind is `127.0.0.1:8080`, which is also `hf_xet`'s default CAS endpoint. | S10 |
 | M1-R11 | CAS tokens carry a scope, a mode and an expiry, never a Git revision: Xet reads follow scope membership (R25), so a revision binding would enforce nothing. Hub routes still accept a revision in the URL for compatibility. | §5.4, ADR 0007 |
@@ -2217,12 +2321,12 @@ decides, with superseded parts marked.
 | M1-R22 | A refused request's body is drained up to the route's size limit before the answer, as a lingering close does, so a client sees the final `401` or `403` instead of a connection reset it would retry; the body read deadline bounds the cost. | §5.9 req 1, routes reference |
 | M1-R23 | Verification errors name the rule, the file, the xorb and the chunk range the client sent, and never a value derived from stored data (expected hashes, lengths, chunk counts); those are logged only. | §5.9 req 5, S6 |
 | M1-R24 | Shard commits (bucket write through index registration) are bounded per process by a commit semaphore of 4 permits per CPU, separate from the validation permits; ingest memory is at most validation permits × the verification limits plus commit permits × a stored shard and its files. | M1 plan |
-| M1-R25 | Blocking work (validation, verification, reconstruction rendering, dedup builds) takes its permit inside the blocking closure, so a client disconnecting can't release a permit while its work still runs. Dedup's use of the `validate` pool is superseded by M1-R32's own pool. | M1 plan |
+| M1-R25 | Blocking work (validation, verification, reconstruction rendering, dedup builds) takes its permit inside the blocking closure, so a client disconnecting can't release a permit while its work still runs. Dedup's use of the `validate` pool is superseded by M1-R32's own pool. Amended by M3-R14: the index round trips that load chunk tables and layouts run before the permit, not inside it. | M1 plan |
 | M1-R26 | Reconstruction trims the first and last kept terms to the chunks covering the requested range, as `xet-core`'s reference server does, so fewer bytes are transferred. | S10 |
 | M1-R27 | Ranged bucket reads are validated before the `206` and then streamed in 1 MiB blocks, so a transfer holds one block of its range at a time. | §5.5 |
 | M1-R28 | Generated secrets are `oxt_` followed by 43 base64url characters encoding 32 bytes from the operating system's CSPRNG; the fixed prefix makes leaked secrets findable by secret scanners. | §5.4 |
 | M1-R29 | In a configured server, a transfer key missing at its default path is generated with a warning, and one missing at an explicitly configured path is an error; remote buckets (M3) will require a configured key, since every node behind one endpoint needs the same one. | §5.5 |
-| M1-R30 | A dedup answer offers every xorb of the newest shard that references the matched xorb and is visible to the caller, in the shard's term order from the matched xorb, wrapping round, up to the answer budget of M1-R32 and without lookup tables; with no such shard, the matched xorb alone. | §5.4, S11 |
+| M1-R30 | A dedup answer offers every xorb of the newest shard that references the matched xorb and is visible to the caller, in the shard's term order from the matched xorb, wrapping round, up to the answer budget of M1-R32 and without lookup tables; with no such shard, the matched xorb alone. Amended by M3-R17: under `global`, the caller's own tenant's newest shard is preferred. | §5.4, S11 |
 | M1-R31 | Independent tasks run in parallel, each in its own worktree, with review gates unchanged; from M2 on, plans give a dependency graph with file ownership. | §8 |
 | M1-R32 | Dedup answers are at most 16 MiB (about 350 typical xorbs, about 22 GB of file) and hold a `dedup` permit, a pool of a quarter of the CPUs separate from `validate`, from loading their chunk tables until their body has been sent or dropped; dedup memory per process is at most those permits × about 150 MB (measured: about 120 MB for one answer, about 300 MB with 2 permits busy). | §5.4, S11 |
 | M1-R33 | A dedup query waits at most 1 s for a `dedup` permit, then answers `429 dedup_busy` with `Retry-After: 1`, which clients read as "no match"; sending an answer has a deadline of 30 s plus its length at 1 MiB/s, after which the body fails and its permit and memory are released. | §5.4, S10, S11 |
@@ -2232,7 +2336,7 @@ decides, with superseded parts marked.
 | M1-R37 | Who may read what lives in the bucket before the index. A shard registration first creates, only if absent, `registrations/{sha256(scope)}/{sha256(tenant)}/{shard hex}` holding `{"v":1,"scope","tenant","shard","seq"}`; every retry reuses that record and its number. A xorb upload puts `xorb-owners/{sha256(tenant)}/{xorb hex}` holding `{"v":1,"tenant","xorb"}` before the index records the owner. The index keeps, per file and scope, the row of the lowest `(seq, shard, tenant)`, so its tables equal what the records, stored shards and stored xorbs rebuild. | §5.3, `openxet-storage`, issue #26 |
 | M1-R38 | Every principal carries a tenant: a CAS token's optional `tenant` claim, a static token's configured `tenant`, or the default of M1-R43. Xorb visibility, dedup answers, xorb existence checks and shard verification lookups key by tenant; file reads and registrations by scope. `per-scope` visibility is renamed `per-tenant`. | §5.4, ADR 0007 |
 | M1-R39 | Registering a shard makes the registering tenant an owner of every xorb its files reference, in every visibility mode, in the same transaction and in the bucket record, so switching `global` to `per-tenant` never breaks a read or a dedup answer. Ownership covers the whole xorb. | §5.4 |
-| M1-R40 | One process-wide memory budget bounds buffered request bodies and built reconstruction answers: `server.memory_budget`, by default a quarter of the memory the process may use (on Linux the smallest cgroup limit over it, if lower), from 256 MiB to 1 TiB, and 1 GiB where memory can't be read; a budget over half the memory is warned about. Reservations and the `commit` permit are held by the work they guard, so they outlive a client that leaves while uncancellable work runs. Uploads reserve their `Content-Length` (the route's limit if none, never more than declared) before a byte is read, until stored and registered; they queue in arrival order, unread, up to 120 s. A reconstruction reserves its decoded record from the stored term count before loading it, then its answer's bound, then its size until sent, under a send deadline of 30 s plus 1 s per MiB; an answer that fits takes free bytes at once, past queued uploads, and one that doesn't waits up to 5 s. After its wait a request gets `503 memory_busy` with `Retry-After: 1`. One answer may reserve at most an eighth of the budget, else a final `413 answer_too_large`; an upload over the whole budget gets a final `413 exceeds_memory_budget`. A batch holds at most 100,000 terms, checked from stored term counts before decoding; the count runs before any permit, not under the validation permit (accepted deviation: the reservation sized from it must precede the permit, the one order every request takes them in). Xorb commits take a `commit` permit. `accept` is capped by `server.max_connections` (default 4096); further connections wait in the listen backlog. Per-credential budget shares and connection limits are M3's, with rate limiting. | §5.8, S10 |
+| M1-R40 | One process-wide memory budget bounds buffered request bodies and built reconstruction answers: `server.memory_budget`, by default a quarter of the memory the process may use (on Linux the smallest cgroup limit over it, if lower), from 256 MiB to 1 TiB, and 1 GiB where memory can't be read; a budget over half the memory is warned about. Reservations and the `commit` permit are held by the work they guard, so they outlive a client that leaves while uncancellable work runs. Uploads reserve their `Content-Length` (the route's limit if none, never more than declared) before a byte is read, until stored and registered; they queue in arrival order, unread, up to 120 s. A reconstruction reserves its decoded record from the stored term count before loading it, then its answer's bound, then its size until sent, under a send deadline of 30 s plus 1 s per MiB; an answer that fits takes free bytes at once, past queued uploads, and one that doesn't waits up to 5 s. After its wait a request gets `503 memory_busy` with `Retry-After: 1`. One answer may reserve at most an eighth of the budget, else a final `413 answer_too_large`; an upload over the whole budget gets a final `413 exceeds_memory_budget`. A batch holds at most 100,000 terms, checked from stored term counts before decoding; the count runs before any permit, not under the validation permit (accepted deviation: the reservation sized from it must precede the permit, the one order every request takes them in). Xorb commits take a `commit` permit. `accept` is capped by `server.max_connections` (default 4096); further connections wait in the listen backlog. Per-credential budget shares and connection limits are M3's, with rate limiting (M3-R11, M3-R13). | §5.8, S10 |
 | M1-R41 | This register lists every ruling that tracked code or docs cite. | §17 |
 | M1-R42 | Signed transfer URLs live 30 to 60 minutes (60 by default), so a leaked URL, or one issued before a purge, stops working within the hour; supersedes M1-R19's 24 h URL cap. | §5.4, §5.5, ADR 0002 |
 | M1-R43 | A credential that names no tenant is in tenant `scope:` followed by its scope, and no explicit tenant may start with `scope:`, so a scope named like a tenant never joins it. Migration 0005 and the bucket records use the same default. | §5.4, ADR 0007 |
@@ -2253,3 +2357,20 @@ decides, with superseded parts marked.
 | M2-R15 | The `openxet openapi` command prints the OpenAPI 3.1 document generated from the route builders' `utoipa` annotations; it is checked in at `docs/reference/openapi.json`, served at `GET /openapi.json`, and CI fails when the two differ. | §7.1 |
 | M2-R16 | Git budgets take ADR 0004's defaults (`git.reachability.max_commits` 200,000, `max_ms` 2,000, `max_concurrent_per_repo` 2, `max_concurrent_per_principal` 4; `git.thin_bases.max_objects` 2,000,000, `max_ms` 2,000), and the M2 benchmarks record the measured values that replace the thin-base placeholders. Amended by M2 Task 20: measured, `git.thin_bases.max_objects` is 1,000,000 and `max_ms` stays 2,000 (benchmarks reference, ADR 0004 item 3). The node cache is `git.cache_dir` (default `{data_dir}/git-cache`) with snapshots under it, `git.cache_max_bytes` (default `20GiB`), and `git.max_plain_blob_bytes` is unset by default. | ADR 0004 |
 | M2-R17 | On a pull request the reconstruction latency gate is relative to the PR's base, the base branch's tip recorded in the event (`pull_request.base.sha`), measured in the same job on the same runner: both trees run the PR's measurement code (its gate test and fixture copied over the base's), each in a release build in its own target directory with `OPENXET_LATENCY_GATE=measure`, each printing one `openxet.latency-gate.v1` JSON line per shape (`build`, `shape`, `p50_ms`, `p99_ms`, `max_ms`, `runs`; `build` is the checkout's commit, fixed at compile time). `scripts/check-latency-gate.py` exits 2 when the head's `build` isn't the checked-out commit, both runs share a `build`, or a value isn't a finite non-negative number, and fails a shape when the PR's p99 is at or past 50 ms and more than 1.25 × the base's p99, or its p50 > max(1.25 × the base's p50, the base's p50 + 2 ms), writing both runs and the ratios to the job summary. On `main` the gate asserts p99 < 50 ms on the pushed commit alone (the default `assert` mode), reported, not required; the release rig (issue #55) enforces the absolute bar unconditionally. | §8, benchmarks reference, issue #83 |
+| M3-R1 | Postgres implements `Index`, `Repos` and `GitStore` in `crates/index/src/postgres.rs` and `crates/index/src/postgres/{git,repos,tokens,limits}.rs`, with its migrations in `crates/index/migrations-postgres/` (SQLite's stay in `crates/index/migrations/`). `ObjectBucket` lives in `crates/storage/src/object.rs`, the presigners and the range-binding probe in `crates/storage/src/presign/`. OIDC, the webhook authorizer, access and delegated tokens live in `crates/auth/src/{oidc,webhook,access,delegation}.rs`; limits in `crates/http/src/limits.rs`. The native load generator is the workspace crate `crates/loadgen` (`publish = false`, binary `openxet-loadgen`); scenarios, compose files, thresholds and the orchestrator live in `loadtest/`. | §5.2, M3 plan |
+| M3-R2 | The Postgres index mirrors SQLite's schema (hashes as `BYTEA`, times as `BIGINT` Unix seconds). `xorbs`, `xorb_layouts`, `xorb_owners`, `file_scopes` and `dedup` are `PARTITION BY HASH` on their hash column with 16 partitions; changing the count is a migration. The registration sequence is a Postgres `SEQUENCE`. Content-addressed inserts use `ON CONFLICT DO NOTHING` and read back, so a lost race is success; ref commits lock the repository row (`SELECT ... FOR UPDATE`) in the transaction that checks the fence (ADR 0004 item 3); a serialization failure (`40001`, `40P01`) is retried up to 3 times, then answered `503 index_busy` with `Retry-After: 1`. `[index] url` takes a `sqlite:` path or a `postgres://` URL (default the data directory's `index.sqlite`), `max_connections` (default 4 × CPUs, bounds 2 to 1024) and an optional `read_url`. | §5.8, ADR 0015 |
+| M3-R3 | With `index.read_url`, reconstructions, file heads, listings and dedup lookups read from the replica; a replica's "absent" is read again from the primary before anyone is told "absent", so a replica never hides an acknowledged write (§5.9 requirement 7). Writes, Git ref snapshots and every authorization-bearing read (tokens, revocations, limits) use the primary. | §5.8, ADR 0015 |
+| M3-R4 | `[storage] url` selects the backend: `file:///path` (M1's local bucket, default `{data_dir}/bucket`), `s3://bucket/prefix`, `gs://bucket/prefix` or `az://container/prefix`, with `object_store`'s builder options under `[storage.options]` and credentials from the environment, instance identity or a `*_file` option, never in plain text in the config file. The key layout is M1's, under the prefix. `create` is `PutMode::Create`; at start-up a conditional-create probe creates `probe/{node uuid}/create` twice and requires the second call to report that it exists, and a store failing it is refused with `storage_unsafe` and a hint. A remote store requires an explicit `cas.transfer_key_file` and an explicit CAS-token key (M1-R29). | §5.5, ADR 0015 |
+| M3-R5 | OpenXet signs presigned GETs itself so that `Range` is a signed header: SigV4 query signing with `X-Amz-SignedHeaders=host;range` for `s3://` (AWS S3, R2, MinIO, Garage) and GCS V4 with `X-Goog-SignedHeaders=host;range` for `gs://`; `az://` pools have no presigner and serve through the transfer role. Each pool's range-binding probe (ADR 0002 rule 3) runs at start-up and in `openxet config check --probe`; only a pool whose three checks pass serves direct URLs, and the result is logged, exported as the `openxet_storage_direct_downloads` gauge and shown by `config check`. A presigned URL lives `min(cas.url_lifetime, credential expiry - 60 s)`; under the 30 min floor the presigner refreshes its credentials first, and if it still can't reach the floor that answer's URLs are transfer URLs. | §5.5, ADR 0002, ADR 0015 |
+| M3-R6 | Migrations are expand migrations (new tables, nullable or defaulted columns, new indexes) unless the file's first line is `-- openxet: contract`. A contract migration only drops or narrows what no binary of the previous release reads, and raises `schema_compat.min_binary_epoch`. Each binary carries `openxet_index::SCHEMA_EPOCH` and opens a database holding migrations it doesn't know as long as `min_binary_epoch <= SCHEMA_EPOCH`, and refuses with `schema_too_new`, naming the version to upgrade to, otherwise. `index.migrate = "auto"` (default) applies pending migrations at start-up, on Postgres under an advisory lock; `"off"` leaves it to `openxet migrate [--dry-run] [--json]`. | §5.8, ADR 0017, issue #47 |
+| M3-R7 | `[[auth.oidc]]` entries: `name` (subject prefix), `issuer` (exact match, discovered through `{issuer}/.well-known/openid-configuration`), `audiences` (required, one must match `aud`), `subject_claim` (default `sub`), `name_claim` (default `preferred_username`, falling back to the subject), `email_claim` (default `email`), `claims` (string or string-list claims copied into the principal; `orgs` feeds `whoami-v2`). A subject is `{name}:{sub}`. The accepted `alg` is that of the JWKS key the `kid` names, from RS256, PS256, ES256, ES384 and EdDSA; `none` and HMAC are always refused. `exp` is exact, `nbf` and `iat` allow `MAX_CLOCK_SKEW`. JWKS refreshes every 10 min, and on an unknown `kid` at most once per 30 s per issuer; after a failed refresh the last keys serve up to `jwks_max_stale` (default `24h`), then requests get `503 authn_unavailable`. `Authenticator::authenticate` becomes `async`. | §5.4, ADR 0016 |
+| M3-R8 | `[auth.webhook]` takes `url`, `secret_file`, `timeout` (default `2s`), `allow_ttl` (default `30s`) and `deny_ttl` (default `5s`). OpenXet POSTs `{"schema": "openxet.authz.v1", "subject", "claims", "action", "namespace", "name", "delegated_by"}` with `X-Openxet-Signature: sha256={hex HMAC of the body}` and `X-Openxet-Timestamp`; the answer is `{"allow": bool}` with an optional `ttl_seconds`, capped by the configured TTLs. Decisions are cached under the SHA-256 of the whole request body. Timeouts, non-`2xx` answers and unparseable bodies are `503 authz_unavailable`, never an allow. `auth.authorizer` is `rules`, `webhook` or `rules+webhook` (default `rules`); with both, a rule grant allows without a call and the webhook decides the rest. | §5.4, ADR 0016 |
+| M3-R9 | An access token's secret is `oxt_` plus 43 base64url characters (M1-R28); its record holds the secret's SHA-256, a UUIDv7 id, the bound subject, a claims snapshot, the issuer name, `created_at`, `expires_at` (default 90 days, at most `auth.access_token_max_ttl`, default `365d`, bounds `1d` to `3650d`), `revoked_at` and, in the index only, `last_used_at` (written at most once a minute). It is issued by `POST /api/openxet/v1/tokens` with an OIDC credential (never another access token), or by `POST /api/openxet/v1/admin/tokens` by a subject in `auth.admins`. The record is written to `tokens/{id}` in the bucket, then the index; revocation writes `token-revocations/{id}` first. Each use asks the authorizer again. Lookup: static tokens, then a per-node cache of found tokens (5 s), then the primary index; unknown secrets are never cached. The lifetimes are decided defaults the owner may revise. | §5.4, ADR 0016 |
+| M3-R10 | A delegated token is minted by `POST /api/openxet/v1/tokens/delegate` with an OIDC or access credential, never a delegated one; revoking the access token it was minted with revokes it too. Body: `repos` (at most 100 `{namespace}/{name}`, no globs), `mode` (`read` or `write`), `ttl` (default `8h`, at most `auth.delegated_max_ttl`, default `24h`, bounds `1h` to `720h`), optional `max_bytes` and `max_ops`, and `name`. At mint the parent must be allowed `mode` on every listed repository; on use a request is allowed only if its target is listed, its action is within `mode` (`create` never), the parent subject is still allowed, and the token is not expired, revoked or exhausted. A CAS token minted through it has `sub = "delegated:{id}"` (a reserved prefix, ADR 0007) and lasts at most what the delegated token has left. Ops are authenticated requests made with the token or its CAS tokens; bytes are upload bodies accepted plus the bytes of the ranges a reconstruction grants, not egress (a replayed URL isn't counted). Usage is batched per node and flushed every second, and exhaustion and revocation are read from a per-node cache at most 2 s old, so a cap overshoots by at most two seconds of the token's own traffic. Records reach the bucket like access tokens; usage counters are index-only, so after `reindex` a capped token comes back exhausted. The lifetimes are decided defaults the owner may revise. | §7.1, ADR 0014, ADR 0016 |
+| M3-R11 | Rate limits are per-node GCRA limiters (`governor`), keyed per tenant and per credential, under `[limits]`: `tenant_requests_per_second` (default 2000, burst 4000), `credential_requests_per_second` (default 1000, burst 2000), `max_in_flight_per_credential` (default 512) and `auth_failures_per_minute` per client IP (default 60). Over a limit: `429 rate_limited` with `Retry-After` in whole seconds and a hint; the probes are exempt. Limits are per node on purpose, needing no shared state (non-negotiable 5); the deployment-wide figure is the per-node one times the nodes. The defaults are decided defaults the owner may revise; M3 confirms with the stock client that they never throttle a default `hf_xet` transfer, and changes them with the measured rate if they do. | §5.8, ADR 0018 |
+| M3-R12 | A tenant's stored bytes are the sizes of the xorbs it owns (M1-R39), counted alone, as stand-alone billing will be (§15): a counter kept in the transaction that records an owner and rebuilt from `xorb-owners/` records by `reindex`. A xorb upload that would take its tenant past its quota answers `403 quota_exceeded` with the quota, the usage and a hint, before the body is read; reads never stop. `[limits] default_tenant_quota` is unlimited by default; per-tenant overrides of the quota and the rate limits are set with `PUT /api/openxet/v1/admin/tenants/{tenant}/limits`, written to `tenant-limits/{sha256(tenant)}` in the bucket, then the index, and read by nodes through a 10 s cache. | §5.8, §15, ADR 0018 |
+| M3-R13 | One credential may hold at most `server.credential_memory_share` of the memory budget (default `0.25`, bounds `0.01` to `1`), one tenant at most `server.tenant_memory_share` (default `0.5`). A reservation over its share waits by the rules of one over the budget, then gets `503 memory_busy`. A reconstruction reserves once, from the upper bound its stored term count gives, and a ranged request reserves only its range's terms, so `413 answer_too_large` is only given to an answer too large for any range. | §5.8, ADR 0018, M1-R40, issue #57 |
+| M3-R14 | Shard verification's chunk tables and a reconstruction's chunk layouts are loaded before the `validate` permit is taken, with their bytes reserved from the memory budget first (from the stored xorb count × 320 KiB and the term count), so the memory bound moves from permits × tables to the budget; an `index_io` semaphore sized to `index.max_connections` bounds the loads. Amends M1-R8 and M1-R25: the permit still covers the CPU work, but no longer an index round trip. | §5.8, issue #48 |
+| M3-R15 | Each verification key is bound to one `alg`, taken from its key type (Ed25519: `EdDSA`), and a token whose header `alg` differs from its key's is refused. CAS-token keys rotate with today's settings: add the new public key to `auth.jwt_public_keys` everywhere, switch `cas-token.key` and list the old public key, remove it after `auth.max_token_lifetime`. `cas.transfer_verify_key_files` lists transfer keys accepted but never used to sign, so the transfer key rotates the same way within one URL lifetime. `openxet config check` lists every key with its `kid` or fingerprint, `alg` and age, and warns past `auth.key_max_age` (default `180d`). | §5.4, ADR 0007, ADR 0011, issue #65 |
+| M3-R16 | Load-test scenarios are TOML files in `loadtest/scenarios/`, thresholds are in `loadtest/thresholds.toml`, and results are JSON (`openxet.loadtest.v1`) with the machine, the git revision, the config and the raw latency histograms. The nightly run (CI, one runner, 3 nodes in compose, about 20 min) fails on any error outside the documented `503`, `413` and `429`, any acknowledged write missing after the node kill, memory over budget, or a p99 more than 2× its threshold. The release run (the release rig, full scenarios, the 24 h soak) fails at the threshold itself. | §12 M3, §16, issues #55, #43 |
+| M3-R17 | Under `global` visibility a dedup answer takes the newest visible shard registered by the caller's own tenant that references the matched xorb, and only if there is none the newest shard of any tenant, so another tenant's registrations shape only the answers of tenants that never uploaded those chunks themselves. Amends M1-R30. Tenant preference is a decided default the owner may revise; the alternative, ranking shards by how many tenants reference them, fits the same index call. | §5.4, §15, issue #50 |
