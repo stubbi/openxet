@@ -141,7 +141,12 @@ Behaviour that shapes the M1 server:
   then a third block, growing the block size up to 8 GB
   (`reconstruction_terms/manager.rs:83-85`,
   `xet_runtime/src/config/groups/reconstruction.rs:13,21`). Ranges past
-  EOF are normal.
+  EOF are normal. From hf_xet 1.8.0, a download that knows the file size
+  caps the plan at EOF and extends a block over a tail shorter than one
+  block, so it never asks past EOF and asks nothing for an empty file
+  (xet-core #995, commit `40cea44`, `file_reconstructor.rs`); a download
+  without a size (huggingface_hub 2.4.0 passes `expected_size`, which may
+  be `None`) still plans as above, so the server keeps answering both.
 - **Range handling the server must do:**
   - `start >= file_size` → `416` (the client reads it as "past the end",
     `remote_client.rs:271`). An empty file may answer `416` or `200` with

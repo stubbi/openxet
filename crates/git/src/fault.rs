@@ -22,6 +22,10 @@ pub enum FaultPoint {
     /// In the pack sweep, after it claimed the deletion of a pack's files
     /// and before they go; the hook gets the pack's name.
     SweepAfterClaim,
+    /// While a leaseholder works, in place of the wait of a third of the
+    /// lease's TTL before each renewal; the hook gets an empty string. A
+    /// test drives the renewals with it instead of the wall clock.
+    LeaseTick,
 }
 
 /// A hook: called with the point's argument, it returns the work to await
@@ -47,15 +51,18 @@ impl Engine {
 
     /// Runs the hook at `point`, if any, with `arg`.
     pub(crate) async fn fault(&self, point: FaultPoint, arg: &str) {
-        let hook = self
-            .hooks
+        if let Some(hook) = self.fault_hook(point) {
+            hook(arg.to_owned()).await;
+        }
+    }
+
+    /// The hook at `point`, if any.
+    pub(crate) fn fault_hook(&self, point: FaultPoint) -> Option<FaultHook> {
+        self.hooks
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&point)
-            .cloned();
-        if let Some(hook) = hook {
-            hook(arg.to_owned()).await;
-        }
+            .cloned()
     }
 }

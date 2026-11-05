@@ -96,12 +96,19 @@ class Clients:
         assert code == 0, f"hf_xet upload failed:\n{stderr}"
         return json.loads(stdout)
 
-    def hf_xet_download(self, server, dest: Path, info: dict, token=None, exp=None) -> None:
-        code, _, stderr = self.hf_xet_download_result(server, dest, info, token, exp)
+    def hf_xet_download(
+        self, server, dest: Path, info: dict, token=None, exp=None, known_size=True
+    ) -> None:
+        code, _, stderr = self.hf_xet_download_result(server, dest, info, token, exp, known_size)
         assert code == 0, f"hf_xet download failed:\n{stderr}"
 
-    def hf_xet_download_result(self, server, dest: Path, info: dict, token=None, exp=None):
-        files = [{"dest": str(dest), "hash": info["hash"], "size": info["size"]}]
+    def hf_xet_download_result(
+        self, server, dest: Path, info: dict, token=None, exp=None, known_size=True
+    ):
+        # huggingface_hub 2.4.0 passes `expected_size`, which may be None
+        # (`xet_get`), so a download either knows the file size or not.
+        size = info["size"] if known_size else None
+        files = [{"dest": str(dest), "hash": info["hash"], "size": size}]
         return self.hf_xet(server, {"op": "download", "files": files}, token, exp)
 
     def openxet(self, server, *args) -> dict:
@@ -199,18 +206,27 @@ def test_upload_download_round_trip(openxet_server, clients, tmp_path):
         # reaches the server; pinned so a client change shows up here.
         expected = "0" * 64 if info["size"] == 0 else sha256(path)
         assert info["sha256"] == expected, path.name
-        dest = tmp_path / f"{path.name}.out"
-        mark = openxet_server.mark()
-        clients.hf_xet_download(openxet_server, dest, info)
-        assert dest.read_bytes() == path.read_bytes(), path.name
-        # hf_xet falls back to v1 silently if v2 fails, so a broken v2 route
-        # would otherwise go unnoticed here. An empty file's only block
-        # starts at EOF and answers 416, which the client reads as the end.
-        openxet_server.settle()
-        statuses = openxet_server.statuses("GET", RECONSTRUCTION_ROUTE, mark)
-        assert statuses and set(statuses) <= {200, 416}, (path.name, statuses)
-        assert (200 in statuses) == (info["size"] > 0), (path.name, statuses)
-        assert openxet_server.requests("GET", V1_RECONSTRUCTION_ROUTE, mark) == 0, path.name
+        for known_size in (True, False):
+            case = (path.name, f"known_size={known_size}")
+            dest = tmp_path / f"{path.name}.{known_size}.out"
+            mark = openxet_server.mark()
+            clients.hf_xet_download(openxet_server, dest, info, known_size=known_size)
+            assert dest.read_bytes() == path.read_bytes(), case
+            # hf_xet falls back to v1 silently if v2 fails, so a broken v2
+            # route would otherwise go unnoticed here.
+            openxet_server.settle()
+            statuses = openxet_server.statuses("GET", RECONSTRUCTION_ROUTE, mark)
+            assert set(statuses) <= {200, 416}, (case, statuses)
+            assert (200 in statuses) == (info["size"] > 0), (case, statuses)
+            assert openxet_server.requests("GET", V1_RECONSTRUCTION_ROUTE, mark) == 0, case
+            if info["size"] == 0 and not known_size:
+                # Without a size, the empty file's only block starts at EOF
+                # and must answer 416, which the client reads as the end.
+                assert statuses and set(statuses) == {416}, (case, statuses)
+            # With the size known, hf_xet 1.8.0 caps its requests at EOF
+            # (xet-core #995, 40cea44) and asks nothing for an empty file;
+            # 1.7.0 and 1.7.1 still ask and get 416 (observed). Either way
+            # the 416 path stays covered by the unknown-size download.
     assert len({info["hash"] for info in infos}) == len(paths)
 
 
@@ -237,22 +253,31 @@ def test_reupload_global_dedup(openxet_server, clients, tmp_path):
 
 def test_range_and_empty_file(openxet_server, clients, tmp_path):
     # hf_xet plans downloads in blocks, the first 256,000,000 bytes long
-    # (S10 §1), so 300 MiB needs a second block, which ends past EOF and is
-    # clamped. A further block that starts past EOF answers 416, which the
-    # client reads as the end of the file.
+    # (S10 §1). Without a known size, 300 MiB needs a second block, which
+    # ends past EOF and is clamped; a further block that starts past EOF
+    # answers 416, which the client reads as the end of the file. With the
+    # size known, hf_xet 1.8.0 caps the plan at EOF and stretches the first
+    # block over a tail shorter than one block (xet-core #995, 40cea44,
+    # `prefetch_block` in reconstruction_terms/manager.rs), so 300 MiB is
+    # one request; 1.7.0 and 1.7.1 plan as without a size (observed).
     big = write_noise(tmp_path / "big.bin", 300 * MiB, 5)
     empty = write_noise(tmp_path / "empty.bin", 0, 6)
     big_info, empty_info = clients.hf_xet_upload(openxet_server, [big, empty])
 
-    mark = openxet_server.mark()
-    dest = tmp_path / "big.out"
-    clients.hf_xet_download(openxet_server, dest, big_info)
-    assert dest.stat().st_size == big.stat().st_size
-    assert sha256(dest) == sha256(big)
-    openxet_server.settle()
-    statuses = openxet_server.statuses("GET", RECONSTRUCTION_ROUTE, mark)
-    assert statuses.count(200) >= 2, f"one reconstruction block covered 300 MiB: {statuses}"
-    assert set(statuses) <= {200, 416}, statuses
+    for known_size in (False, True):
+        mark = openxet_server.mark()
+        dest = tmp_path / f"big.{known_size}.out"
+        clients.hf_xet_download(openxet_server, dest, big_info, known_size=known_size)
+        assert dest.stat().st_size == big.stat().st_size, f"known_size={known_size}"
+        assert sha256(dest) == sha256(big), f"known_size={known_size}"
+        openxet_server.settle()
+        statuses = openxet_server.statuses("GET", RECONSTRUCTION_ROUTE, mark)
+        assert set(statuses) <= {200, 416}, (f"known_size={known_size}", statuses)
+        assert openxet_server.requests("GET", V1_RECONSTRUCTION_ROUTE, mark) == 0
+        if known_size:
+            assert 200 in statuses, statuses
+        else:
+            assert statuses.count(200) >= 2, f"one reconstruction block covered 300 MiB: {statuses}"
 
     dest = tmp_path / "empty.out"
     clients.hf_xet_download(openxet_server, dest, empty_info)

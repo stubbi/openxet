@@ -47,6 +47,18 @@ therefore has to honour `exp` exactly.
    now, before platforms integrate, because the strict claim set above
    would make a later addition break every platform's tokens. Static
    tokens take an optional configured `tenant` with the same default.
+
+   *Amended (M3-R10, [ADR 0016](0016-issued-and-delegated-tokens.md)):*
+   the subject prefix `delegated:` is reserved. A CAS token minted
+   through a delegated token has `sub = "delegated:{id}"`, naming the
+   delegated token, and its `exp` is at most the delegated token's own
+   expiry. On every use the CAS checks that the named delegated token
+   is not expired, revoked or exhausted (from a per-node cache at most
+   2 s old) and charges its usage, so revoking a delegated token stops
+   its outstanding CAS tokens too. A configured static token whose
+   subject starts with `delegated:` is a configuration problem. A CAS
+   token with a `delegated:` subject that names no live delegated token
+   is refused, whoever signed it.
 3. **Key set.** The server accepts several public keys at once and signs
    with one private key. Rotation adds the new public key everywhere,
    switches the signer, then removes the old key after the longest token
@@ -68,6 +80,8 @@ therefore has to honour `exp` exactly.
   (non-negotiable 5).
 - Revoking a CAS token before `exp` is not possible. Lifetimes stay short,
   and revocation happens at the access token or authorizer (design §5.4).
+  The one exception is a CAS token with a `delegated:` subject, which
+  stops working within 2 s of its delegated token's revocation (M3-R10).
 - Tokens carry no revision: Xet reads follow scope membership (R25), so a
   revision claim would enforce nothing. The Hub token route still accepts
   a revision in its URL (M2) and ignores it when minting.

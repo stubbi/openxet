@@ -6,13 +6,16 @@ in, so a reviewer can check that a requirement is enforced and see what
 runs when one of its tests fails.
 
 A test is planned for the milestone that builds the surface it guards:
-M1 for the CAS, M2 for the Hub and Git, M5 for buckets, caches and the
-mirror.
+M1 for the CAS, M2 for the Hub and Git, M3 for production backends,
+OIDC, the webhook authorizer, issued and delegated tokens, and limits
+([plan](../superpowers/plans/2026-11-05-m3-production-backends.md)), M5
+for buckets, caches and the mirror.
 Every M0, M1 and M2 row names the test that enforces it. Pending rows
 name tests that are not written yet, for surfaces that don't exist yet
-either (buckets, caches and the mirror, M5). A row marked
-`pending (M5, <file>)` names the file its milestone's plan puts the test
-in; the task that writes the test drops the `pending`.
+either (M3's backends, identity and limits; buckets, caches and the
+mirror, M5). A row marked `pending (M3, <file>)` names the file its
+milestone's plan puts the test in, and its milestone cell names the
+plan's task; the task that writes the test drops the `pending`.
 
 `scripts/check-security-tests-map.py` checks this page in CI against the
 tests that actually run:
@@ -54,6 +57,12 @@ scanned at teardown for every credential its clients sent
 | 1 | `no_unauthenticated_reads` | `crates/hub/tests/gateway.rs` | M2 (Hub and gateway URLs) |
 | 1 | `anonymous_reads_only_with_rule` | `crates/hub/tests/security.rs` | M2 |
 | 1 | `test_anonymous_private_download_is_401_shape` | `compat/tests/test_hub.py` | M2 (stock `huggingface_hub`) |
+| 1 | `alg_none_and_hs256_refused` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
+| 1 | `alg_must_match_jwks_key` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
+| 1 | `wrong_issuer_or_audience_refused` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
+| 1 | `token_alg_must_match_key_alg` | pending (M3, `crates/auth/tests/auth.rs`) | M3 (per-key `alg`, ADR 0011, Task 10) |
+| 1 | `unknown_kid_refused` | pending (M3, `crates/auth/tests/auth.rs`) | M3 (CAS-token key set, Task 10) |
+| 1 | `expired_access_token_refused` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
 | 2 | `credential_scoped_to_repo` | `crates/cas/tests/reconstruction.rs` | M1 (CAS routes) |
 | 2 | `unreadable_repo_matches_unknown_repo_on_every_route` | `crates/hub/tests/security.rs` | M2 (Hub routes) |
 | 2 | `gateway_needs_credential_scoped_to_repo` | `crates/hub/tests/gateway.rs` | M2 (file gateway) |
@@ -68,14 +77,48 @@ scanned at teardown for every credential its clients sent
 | 2 | `bucket_create_authorized_per_namespace` | pending | M5 |
 | 2 | `bucket_add_file_hash_must_be_readable` | pending | M5 |
 | 2 | `bucket_copy_file_requires_source_read` | pending | M5 |
+| 2 | `every_direct_url_binds_its_range` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (presigned URLs, Task 7) |
+| 2 | `direct_urls_only_after_probe_passed` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (presigned URLs, Task 7) |
+| 2 | `presigned_lifetime_capped_by_credential_expiry` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (presigned URLs, Task 7) |
+| 2 | `probe_falls_back_on_unbound_signer` | pending (M3, `crates/storage/tests/presign.rs`) | M3 (range-binding probe, Task 7) |
+| 2 | `oidc_token_scoped_like_static_user_token` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (CAS routes: never a CAS credential, Task 11) |
+| 2 | `oidc_token_scoped_like_static_user_token` | pending (M3, `crates/hub/tests/security.rs`) | M3 (Hub routes, Task 11) |
+| 2 | `two_issuers_never_share_a_subject` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
+| 2 | `access_token_issued_from_oidc_only` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
+| 2 | `access_token_scoped_to_repo` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
+| 2 | `authorizer_reasked_on_use` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
+| 2 | `delegated_token_limited_to_listed_repos_and_mode` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (delegated tokens, Task 14) |
+| 2 | `delegated_token_cannot_widen_itself` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (ADR 0014 item 3, Task 14) |
+| 2 | `delegated_token_cannot_mint_tokens` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (ADR 0014 item 3, Task 14) |
+| 2 | `delegated_ttl_bounded_and_cas_tokens_end_with_it` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (ADR 0014 item 3, Task 14) |
+| 2 | `delegated_mint_requires_parent_access_now` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (delegated tokens, Task 14) |
+| 2 | `parent_losing_access_revokes_use` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (delegated tokens, Task 14) |
+| 2 | `revoking_parent_revokes_delegated` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (delegated tokens, Task 14) |
+| 2 | `revocation_stops_outstanding_cas_tokens` | pending (M3, `crates/cas/tests/delegated_usage.rs`) | M3 (delegated CAS tokens, Task 14) |
+| 2 | `byte_cap_counts_upload_and_granted_bytes` | pending (M3, `crates/cas/tests/delegated_usage.rs`) | M3 (ADR 0014 item 3, Task 14) |
+| 2 | `op_cap_counts_cas_token_requests` | pending (M3, `crates/cas/tests/delegated_usage.rs`) | M3 (ADR 0014 item 3, Task 14) |
+| 2 | `static_token_cannot_use_delegated_subject_prefix` | pending (M3, `crates/openxet/src/config.rs`) | M3 (reserved `delegated:` subject, Task 14) |
+| 2 | `admin_limits_require_admin` | pending (M3, `crates/hub/tests/admin_limits.rs`) | M3 (tenant-limits admin API, Task 16) |
 | 3 | `cache_keyed_by_caller` | pending | M5 |
 | 3 | `cache_fails_closed` | pending | M5 |
+| 3 | `jwks_outage_serves_cached_then_fails_closed` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (JWKS cache, Task 11) |
+| 3 | `cache_keyed_by_subject_and_claims` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook decision cache, Task 12) |
+| 3 | `timeout_fails_closed` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook, Task 12) |
+| 3 | `non_2xx_or_bad_body_fails_closed` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook, Task 12) |
+| 3 | `unknown_secret_not_cached` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access-token cache, Task 13) |
+| 3 | `revoked_token_refused_on_every_node` | pending (M3, `crates/openxet/tests/token_api.rs`) | M3 (access-token cache, two nodes, Task 13) |
+| 3 | `exhausted_within_two_seconds_on_every_node` | pending (M3, `crates/cas/tests/delegated_usage.rs`) | M3 (delegated-usage cache, Task 14) |
+| 3 | `replica_never_used_for_tokens_or_refs` | pending (M3, `crates/openxet/tests/serve_backends.rs`) | M3 (read replica, Task 8) |
+| 3 | `tenants_do_not_share_buckets` | pending (M3, `crates/http/tests/limits.rs`) | M3 (rate limiters, Task 15) |
+| 3 | `credential_share_caps_one_reader` | pending (M3, `crates/cas/tests/memory_shares.rs`) | M3 (memory shares, Task 15) |
+| 3 | `tenant_share_caps_many_credentials` | pending (M3, `crates/cas/tests/memory_shares.rs`) | M3 (memory shares, Task 15) |
 | 4 | `dedup_response_hmac_keyed` | `crates/cas/tests/dedup.rs` | M1 |
 | 4 | `dedup_answer_never_contains_raw_hashes_or_file_info` | `crates/cas/tests/dedup.rs` | M1 |
 | 4 | `per_tenant_dedup_isolates_tenants` | `crates/cas/tests/dedup.rs` | M1 |
 | 4 | `per_tenant_multi_xorb_answer_hides_foreign_xorbs` | `crates/cas/tests/dedup.rs` | M1 |
 | 4 | `per_tenant_existence_checks_hide_other_tenants` | `crates/cas/tests/reconstruction.rs` | M1 |
 | 4 | `per_tenant_scopes_of_one_tenant_share_dedup` | `crates/cas/tests/dedup.rs` | M1 |
+| 4 | `global_prefers_callers_own_shard` | pending (M3, `crates/cas/tests/dedup.rs`) | M3 (issue #50, Task 17) |
 | 5 | the S6 rule tests of `verify_shard` | `crates/protocol/tests/reference_files.rs` | M0 |
 | 5 | `shard_with_missing_xorb_rejected` | `crates/cas/tests/shards.rs` | M1 |
 | 5 | `shard_verify_work_capped` | `crates/cas/tests/shards.rs` | M1 |
@@ -88,10 +131,21 @@ scanned at teardown for every credential its clients sent
 | 6 | `credentials_never_logged` | `crates/openxet/tests/serve.rs` | M1 |
 | 6 | `credentials_never_logged` | `crates/openxet/tests/hub_serve.rs` | M2 (Hub, Git and LFS routes) |
 | 6 | `test_fixture_redaction` | `compat/tests/test_fixture_redaction.py` | M0 |
+| 6 | `oidc_token_never_logged` | pending (M3, `crates/hub/tests/security.rs`) | M3 (OIDC, Task 11) |
+| 6 | `access_token_never_logged_or_echoed` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
+| 6 | `secret_stored_only_as_hash` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
+| 6 | `webhook_secret_never_logged` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook, Task 12) |
+| 6 | `storage_secrets_only_from_files` | pending (M3, `crates/openxet/tests/serve_backends.rs`) | M3 (object-store credentials, Task 8) |
 | 7 | `acknowledged_xorb_write_is_visible` | `crates/cas/tests/xorbs.rs` | M1 |
 | 7 | `acknowledged_shard_write_is_visible` | `crates/cas/tests/shards.rs` | M1 |
 | 7 | `acked_write_survives_sigkill` | `crates/openxet/tests/serve.rs` | M1 |
 | 7 | `acknowledged_bucket_key_write_is_visible` | pending | M5 |
+| 7 | `start_refuses_store_without_conditional_create` | pending (M3, `crates/storage/tests/object_bucket.rs`) | M3 (conditional-create probe, Task 6) |
+| 7 | `create_race_one_winner_on_object_store` | pending (M3, `crates/storage/tests/object_bucket.rs`) | M3 (object-store buckets, Task 6) |
+| 7 | `replica_miss_reads_primary` | pending (M3, `crates/openxet/tests/serve_backends.rs`) | M3 (read replica, Task 8) |
+| 7 | `token_record_reaches_bucket_before_index` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (token records, Task 13) |
+| 7 | `reindexed_capped_token_comes_back_exhausted` | pending (M3, `crates/hub/tests/delegated_tokens.rs`) | M3 (token records, Task 14) |
+| 7 | `tenant_limits_record_reaches_bucket_first` | pending (M3, `crates/hub/tests/admin_limits.rs`) | M3 (tenant-limit records, Task 16) |
 | 8 | `v2_want_unreachable_refused` | `crates/git/tests/reachability.rs` | M2 |
 | 8 | `hub_read_by_sha_obeys_r22` | `crates/git/tests/hub_objects.rs` | M2 |
 | 8 | `writer_cannot_make_unreachable_reachable` | `crates/git/tests/thin_bases.rs` | M2 (pushes) |
@@ -102,6 +156,7 @@ scanned at teardown for every credential its clients sent
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/receive_pack.rs` | M2 (pushes) |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/hub_objects.rs` | M2 (Hub ref writes and commits) |
 | 8 | `ref_log_in_cas_transaction` | `crates/git/tests/repack.rs` | M2 (bucket ref log derivation and retention) |
+| 8 | `lease_epoch_fences_a_stale_holder_across_pools` | pending (M3, `crates/index/tests/postgres_conformance.rs`) | M3 (Postgres, Task 4) |
 
 Notes on what some tests cover:
 
