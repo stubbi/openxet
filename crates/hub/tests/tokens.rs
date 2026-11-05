@@ -125,7 +125,7 @@ async fn token_scope_is_repo_id_and_tenant_namespace() {
         );
         // The CAS verifies it with the server's own key.
         let now = claims["iat"].as_u64().unwrap();
-        match hub.state.auth.authenticate(jwt, now).unwrap() {
+        match hub.state.auth.authenticate(jwt, now).await.unwrap() {
             Credential::Cas(grant) => {
                 assert_eq!(grant.scope, format!("repo:{id}"));
                 assert_eq!(grant.mode, mode);

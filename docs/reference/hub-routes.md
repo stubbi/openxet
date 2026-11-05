@@ -73,7 +73,7 @@ These answers can come from any route:
 | `404` | `wrong_label` | The caller may read the repository, but it lacks the label of the route's type. `X-Error-Code: RepoNotFound`; the message names the `openxet label add` command that adds the label. To a caller who may not read the repository, this is `repo_not_found`. |
 | `404` | `revision_not_found` | `{rev}` is no branch or tag, nor a commit of the repository. `X-Error-Code: RevisionNotFound`. |
 | `501` | `not_implemented` | A Hub endpoint OpenXet doesn't implement; the message names it. |
-| `503` | `not_ready`, `unavailable`, `authorizer_unavailable` | The server is starting, the index or bucket failed, or the authorizer could not decide. `Retry-After: 1`; `huggingface_hub` retries. |
+| `503` | `not_ready`, `unavailable`, `authorizer_unavailable`, `authn_unavailable` | The server is starting, the index or bucket failed, the authorizer could not decide, or an [OIDC](config.md#oidc) token can't be verified because its issuer's keys can't be fetched. `Retry-After: 1`; `huggingface_hub` retries. |
 | `500` | `internal` | A server bug, logged under the `X-Request-Id`. |
 
 Routes with a body also answer `400 bad_request` (not what the route

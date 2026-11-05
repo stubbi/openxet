@@ -14,12 +14,18 @@ import json
 import secrets
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import count
 from pathlib import Path
 
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 
 from conftest import isolated_env, openxet_serve
 
@@ -298,6 +304,68 @@ class Hub:
         return httpx.request(
             method, f"{self.endpoint}{path}", headers=headers, timeout=60, **kwargs
         )
+
+
+class OidcIssuer:
+    """An OpenID Connect issuer on a loopback port: it serves its discovery
+    document and JWKS, as an identity provider does, and signs RS256 ID
+    tokens with a key generated per run (docs/reference/config.md, "OIDC")."""
+
+    KID = "compat-rs256"
+    AUDIENCE = "openxet"
+
+    def __init__(self):
+        self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        jwk = RSAAlgorithm.to_jwk(self._key.public_key(), as_dict=True)
+        jwk.update(kid=self.KID, alg="RS256", use="sig")
+        documents: dict[str, bytes] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = documents.get(self.path)
+                self.send_response(200 if body else 404)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(body or b"{}")
+
+            def log_message(self, *args):
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.issuer = f"http://127.0.0.1:{self._server.server_address[1]}"
+        documents["/.well-known/openid-configuration"] = json.dumps(
+            {"issuer": self.issuer, "jwks_uri": f"{self.issuer}/jwks"}
+        ).encode()
+        documents["/jwks"] = json.dumps({"keys": [jwk]}).encode()
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def config(self, name: str) -> str:
+        """An `[[auth.oidc]]` entry for this issuer under `name`, mapping
+        the `orgs` claim."""
+        return (
+            f'\n[[auth.oidc]]\nname = "{name}"\nissuer = "{self.issuer}"\n'
+            f'audiences = ["{self.AUDIENCE}"]\nclaims = ["orgs"]\n'
+        )
+
+    def token(self, sub: str, **claims) -> str:
+        """An ID token for `sub`, valid for an hour, with `claims`."""
+        now = int(time.time())
+        payload = {"iss": self.issuer, "aud": self.AUDIENCE, "sub": sub, "iat": now}
+        payload.update(exp=now + 3600, **claims)
+        return jwt.encode(payload, self._key, algorithm="RS256", headers={"kid": self.KID})
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@contextlib.contextmanager
+def oidc_issuer():
+    issuer = OidcIssuer()
+    try:
+        yield issuer
+    finally:
+        issuer.close()
 
 
 @contextlib.contextmanager

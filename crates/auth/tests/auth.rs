@@ -63,15 +63,18 @@ fn query_of(url: &Url) -> TransferQuery {
         .expect("query deserializes as TransferQuery")
 }
 
-#[test]
-fn static_token_matches_by_hash() {
+#[tokio::test]
+async fn static_token_matches_by_hash() {
     let auth = Authenticator::new(
         vec![static_token(STATIC_SECRET, Mode::Write)],
         vec![],
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).expect("static token"));
+    let principal = cas(auth
+        .authenticate(STATIC_SECRET, NOW)
+        .await
+        .expect("static token"));
     assert_eq!(
         principal,
         Principal {
@@ -87,8 +90,8 @@ fn static_token_matches_by_hash() {
 
 /// A static token's tenant is the configured one, or `scope:` and its scope
 /// (rulings M1-R38, M1-R43).
-#[test]
-fn static_token_tenant_is_configured_or_the_scope() {
+#[tokio::test]
+async fn static_token_tenant_is_configured_or_the_scope() {
     let mut org = static_token("org secret", Mode::Read);
     org.cas.as_mut().unwrap().tenant = Some("org".to_owned());
     let auth = Authenticator::new(
@@ -97,9 +100,9 @@ fn static_token_tenant_is_configured_or_the_scope() {
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).expect("static"));
+    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).await.expect("static"));
     assert_eq!(principal.tenant, "scope:org/model");
-    let principal = cas(auth.authenticate("org secret", NOW).expect("static"));
+    let principal = cas(auth.authenticate("org secret", NOW).await.expect("static"));
     assert_eq!(principal.scope, "org/model");
     assert_eq!(principal.tenant, "org");
 }
@@ -146,8 +149,8 @@ fn authenticator(tokens: Vec<StaticToken>) -> Result<Authenticator, AuthError> {
 
 /// A static token without a scope is a user credential only (ruling M2-R3):
 /// its name defaults to the subject, and it carries its claims.
-#[test]
-fn token_without_scope_is_user_only() {
+#[tokio::test]
+async fn token_without_scope_is_user_only() {
     let orgs = std::collections::BTreeMap::from([(
         "orgs".to_owned(),
         vec!["acme".to_owned(), "research".to_owned()],
@@ -172,7 +175,10 @@ fn token_without_scope_is_user_only() {
         ),
     ])
     .expect("valid config");
-    let credential = auth.authenticate(STATIC_SECRET, NOW).expect("user token");
+    let credential = auth
+        .authenticate(STATIC_SECRET, NOW)
+        .await
+        .expect("user token");
     assert_eq!(
         credential,
         Credential::User(UserPrincipal {
@@ -183,7 +189,10 @@ fn token_without_scope_is_user_only() {
         })
     );
     assert_eq!(credential.cas(), None);
-    let bob = auth.authenticate("named secret", NOW).expect("user token");
+    let bob = auth
+        .authenticate("named secret", NOW)
+        .await
+        .expect("user token");
     let bob = bob.user().expect("a user credential");
     assert_eq!(
         (bob.name.as_str(), bob.email.as_deref()),
@@ -193,8 +202,8 @@ fn token_without_scope_is_user_only() {
 
 /// A static token with a scope and a user identity is both credentials,
 /// for the same subject.
-#[test]
-fn token_with_scope_and_claims_is_both() {
+#[tokio::test]
+async fn token_with_scope_and_claims_is_both() {
     let claims = std::collections::BTreeMap::from([("groups".to_owned(), vec!["ml".to_owned()])]);
     let mut token = static_token(STATIC_SECRET, Mode::Write);
     token.user = Some(UserProfile {
@@ -202,7 +211,10 @@ fn token_with_scope_and_claims_is_both() {
         ..UserProfile::default()
     });
     let auth = authenticator(vec![token]).expect("valid config");
-    let credential = auth.authenticate(STATIC_SECRET, NOW).expect("static token");
+    let credential = auth
+        .authenticate(STATIC_SECRET, NOW)
+        .await
+        .expect("static token");
     let Credential::Both(principal, user) = credential else {
         panic!("expected both credentials, got {credential:?}");
     };
@@ -219,7 +231,7 @@ fn token_with_scope_and_claims_is_both() {
     // Without a user identity it stays the M1 CAS credential.
     let auth = authenticator(vec![static_token(STATIC_SECRET, Mode::Read)]).expect("valid");
     assert!(matches!(
-        auth.authenticate(STATIC_SECRET, NOW),
+        auth.authenticate(STATIC_SECRET, NOW).await,
         Ok(Credential::Cas(_))
     ));
 }
@@ -278,8 +290,8 @@ fn user_tokens_with_invalid_identity_are_rejected_at_construction() {
     assert!(authenticator(vec![cas_only]).is_ok());
 }
 
-#[test]
-fn unknown_token_is_invalid() {
+#[tokio::test]
+async fn unknown_token_is_invalid() {
     let auth = Authenticator::new(
         vec![static_token(STATIC_SECRET, Mode::Read)],
         vec![],
@@ -287,27 +299,31 @@ fn unknown_token_is_invalid() {
     )
     .expect("valid config");
     assert_eq!(
-        auth.authenticate("oxt_static_secret_never_printed_012345678X", NOW),
+        auth.authenticate("oxt_static_secret_never_printed_012345678X", NOW)
+            .await,
         Err(AuthError::Invalid)
     );
-    assert_eq!(auth.authenticate("", NOW), Err(AuthError::Missing));
+    assert_eq!(auth.authenticate("", NOW).await, Err(AuthError::Missing));
 }
 
-#[test]
-fn read_mode_cannot_write() {
+#[tokio::test]
+async fn read_mode_cannot_write() {
     let auth = Authenticator::new(
         vec![static_token(STATIC_SECRET, Mode::Read)],
         vec![],
         Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
     )
     .expect("valid config");
-    let principal = cas(auth.authenticate(STATIC_SECRET, NOW).expect("static token"));
+    let principal = cas(auth
+        .authenticate(STATIC_SECRET, NOW)
+        .await
+        .expect("static token"));
     assert!(principal.can_read());
     assert!(!principal.can_write());
 }
 
-#[test]
-fn jwt_round_trip_and_kid_rotation() {
+#[tokio::test]
+async fn jwt_round_trip_and_kid_rotation() {
     let old = signer();
     let new = signer();
     let stranger = signer();
@@ -325,6 +341,7 @@ fn jwt_round_trip_and_kid_rotation() {
             .expect("valid claims");
         let principal = cas(auth
             .authenticate(&token, NOW)
+            .await
             .expect("token from a known key"));
         assert_eq!(principal.subject, "alice");
         assert_eq!(principal.scope, "org/model");
@@ -334,11 +351,14 @@ fn jwt_round_trip_and_kid_rotation() {
     let token = stranger
         .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
         .expect("valid claims");
-    assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
+    assert_eq!(
+        auth.authenticate(&token, NOW).await,
+        Err(AuthError::Invalid)
+    );
 }
 
-#[test]
-fn jwt_signed_with_a_known_kid_but_another_key_is_invalid() {
+#[tokio::test]
+async fn jwt_signed_with_a_known_kid_but_another_key_is_invalid() {
     let known = signer();
     let impostor = signer();
     let auth = Authenticator::new(
@@ -351,7 +371,10 @@ fn jwt_signed_with_a_known_kid_but_another_key_is_invalid() {
         .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
         .expect("valid claims");
     let forged = retarget_kid(&token, known.kid());
-    assert_eq!(auth.authenticate(&forged, NOW), Err(AuthError::Invalid));
+    assert_eq!(
+        auth.authenticate(&forged, NOW).await,
+        Err(AuthError::Invalid)
+    );
 }
 
 #[test]
@@ -392,8 +415,8 @@ fn signer_token_decodes_with_an_independent_decoder() {
         .expect("signature over header.payload verifies");
 }
 
-#[test]
-fn signer_refuses_tokens_the_verifier_would_reject() {
+#[tokio::test]
+async fn signer_refuses_tokens_the_verifier_would_reject() {
     let s = signer();
     let day = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
     let long_scope = "s".repeat(1025);
@@ -434,7 +457,7 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
         let token = s
             .sign("alice", "org/model", Mode::Read, exp, NOW)
             .expect("valid claims");
-        assert!(auth.authenticate(&token, NOW).is_ok(), "{exp}");
+        assert!(auth.authenticate(&token, NOW).await.is_ok(), "{exp}");
     }
     // The signer's size cap is the verifier's: the longest subject it
     // signs makes a token the verifier accepts, within 3 bytes (one
@@ -447,7 +470,7 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
     let token = sign_len(longest).expect("the longest subject signs");
     assert!(token.len() <= MAX_TOKEN_BYTES, "{}", token.len());
     assert!(token.len() > MAX_TOKEN_BYTES - 4, "{}", token.len());
-    assert!(auth.authenticate(&token, NOW).is_ok());
+    assert!(auth.authenticate(&token, NOW).await.is_ok());
     assert!(matches!(
         sign_len(longest + 1),
         Err(AuthError::InvalidClaims { .. })
@@ -467,8 +490,8 @@ fn signer_refuses_tokens_the_verifier_would_reject() {
     ));
 }
 
-#[test]
-fn jwt_expired_exactly_at_exp() {
+#[tokio::test]
+async fn jwt_expired_exactly_at_exp() {
     let s = signer();
     let auth = Authenticator::new(
         vec![],
@@ -479,13 +502,19 @@ fn jwt_expired_exactly_at_exp() {
     let token = s
         .sign("alice", "org/model", Mode::Read, NOW, NOW - 60)
         .expect("valid claims");
-    assert!(auth.authenticate(&token, NOW - 1).is_ok());
-    assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Expired));
-    assert_eq!(auth.authenticate(&token, NOW + 1), Err(AuthError::Expired));
+    assert!(auth.authenticate(&token, NOW - 1).await.is_ok());
+    assert_eq!(
+        auth.authenticate(&token, NOW).await,
+        Err(AuthError::Expired)
+    );
+    assert_eq!(
+        auth.authenticate(&token, NOW + 1).await,
+        Err(AuthError::Expired)
+    );
 }
 
-#[test]
-fn jwt_wrong_alg_rejected() {
+#[tokio::test]
+async fn jwt_wrong_alg_rejected() {
     let (key, public_pem, _) = raw_keypair();
     let kid = PublicKey::from_pem(&public_pem)
         .expect("parse")
@@ -516,7 +545,10 @@ fn jwt_wrong_alg_rejected() {
             "{input}.{}",
             URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
         );
-        assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
+        assert_eq!(
+            auth.authenticate(&token, NOW).await,
+            Err(AuthError::Invalid)
+        );
     }
 
     for alg in ["none", "None", "RS256", "ES256", "Ed25519", "eddsa"] {
@@ -528,7 +560,7 @@ fn jwt_wrong_alg_rejected() {
             format!("{header}.{payload}"),
         ] {
             assert_eq!(
-                auth.authenticate(&token, NOW),
+                auth.authenticate(&token, NOW).await,
                 Err(AuthError::Invalid),
                 "{alg}"
             );
@@ -536,8 +568,8 @@ fn jwt_wrong_alg_rejected() {
     }
 }
 
-#[test]
-fn jwt_rejects_header_with_extra_fields() {
+#[tokio::test]
+async fn jwt_rejects_header_with_extra_fields() {
     let (key, public_pem, _) = raw_keypair();
     let kid = PublicKey::from_pem(&public_pem)
         .expect("parse")
@@ -554,6 +586,7 @@ fn jwt_rejects_header_with_extra_fields() {
     let good = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid });
     assert!(
         auth.authenticate(&sign_raw(&key, &b64(&good.to_string()), &payload), NOW)
+            .await
             .is_ok()
     );
 
@@ -579,15 +612,15 @@ fn jwt_rejects_header_with_extra_fields() {
     for header in headers {
         let token = sign_raw(&key, &b64(&header), &payload);
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{header}"
         );
     }
 }
 
-#[test]
-fn jwt_rejects_bad_claims() {
+#[tokio::test]
+async fn jwt_rejects_bad_claims() {
     let (key, public_pem, _) = raw_keypair();
     let kid = PublicKey::from_pem(&public_pem)
         .expect("parse")
@@ -625,13 +658,16 @@ fn jwt_rejects_bad_claims() {
     for claims in cases {
         let token = sign_raw(&key, &header, &b64(&claims.to_string()));
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{claims}"
         );
     }
     let token = sign_raw(&key, &header, "not-json");
-    assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
+    assert_eq!(
+        auth.authenticate(&token, NOW).await,
+        Err(AuthError::Invalid)
+    );
 }
 
 fn auth_for_raw_tokens() -> (Authenticator, SigningKey, String) {
@@ -652,8 +688,8 @@ fn with_claim(field: &str, value: serde_json::Value) -> serde_json::Value {
     claims
 }
 
-#[test]
-fn jwt_rejects_future_nbf() {
+#[tokio::test]
+async fn jwt_rejects_future_nbf() {
     let (auth, key, header) = auth_for_raw_tokens();
     for nbf in [NOW + 1, NOW + 3600, u64::MAX] {
         let token = sign_raw(
@@ -662,7 +698,7 @@ fn jwt_rejects_future_nbf() {
             &b64(&with_claim("nbf", nbf.into()).to_string()),
         );
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{nbf}"
         );
@@ -678,15 +714,15 @@ fn jwt_rejects_future_nbf() {
             &b64(&with_claim("nbf", nbf.clone()).to_string()),
         );
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{nbf}"
         );
     }
 }
 
-#[test]
-fn jwt_accepts_past_nbf() {
+#[tokio::test]
+async fn jwt_accepts_past_nbf() {
     let (auth, key, header) = auth_for_raw_tokens();
     for nbf in [0, NOW - 60, NOW] {
         let token = sign_raw(
@@ -694,12 +730,12 @@ fn jwt_accepts_past_nbf() {
             &header,
             &b64(&with_claim("nbf", nbf.into()).to_string()),
         );
-        assert!(auth.authenticate(&token, NOW).is_ok(), "{nbf}");
+        assert!(auth.authenticate(&token, NOW).await.is_ok(), "{nbf}");
     }
 }
 
-#[test]
-fn jwt_rejects_unknown_claims() {
+#[tokio::test]
+async fn jwt_rejects_unknown_claims() {
     let (auth, key, header) = auth_for_raw_tokens();
     for field in ["aud", "iss", "jti", "revision", "scopes", "Sub", "pad"] {
         let token = sign_raw(
@@ -708,24 +744,30 @@ fn jwt_rejects_unknown_claims() {
             &b64(&with_claim(field, "x".into()).to_string()),
         );
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{field}"
         );
     }
     let aud_list = with_claim("aud", serde_json::json!(["openxet"]));
     let token = sign_raw(&key, &header, &b64(&aud_list.to_string()));
-    assert_eq!(auth.authenticate(&token, NOW), Err(AuthError::Invalid));
+    assert_eq!(
+        auth.authenticate(&token, NOW).await,
+        Err(AuthError::Invalid)
+    );
 }
 
 /// The optional `tenant` claim names the unit of isolation; without it the
 /// tenant is `scope:` and the scope, a name no explicit tenant can take (ADR
 /// 0007 as amended, rulings M1-R38, M1-R43).
-#[test]
-fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
+#[tokio::test]
+async fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
     let (auth, key, header) = auth_for_raw_tokens();
     let token = sign_raw(&key, &header, &b64(&valid_claims().to_string()));
-    let principal = cas(auth.authenticate(&token, NOW).expect("no tenant claim"));
+    let principal = cas(auth
+        .authenticate(&token, NOW)
+        .await
+        .expect("no tenant claim"));
     assert_eq!(principal.tenant, "scope:org/model");
 
     let max = "t".repeat(1024);
@@ -735,7 +777,7 @@ fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
             &header,
             &b64(&with_claim("tenant", tenant.into()).to_string()),
         );
-        let principal = cas(auth.authenticate(&token, NOW).expect("valid tenant"));
+        let principal = cas(auth.authenticate(&token, NOW).await.expect("valid tenant"));
         assert_eq!(principal.tenant, tenant);
         assert_eq!(principal.scope, "org/model");
     }
@@ -758,20 +800,20 @@ fn jwt_tenant_claim_sets_the_tenant_and_defaults_to_the_scope() {
         )
         .expect("valid claims");
     assert_eq!(
-        cas(auth.authenticate(&token, NOW).expect("valid")).tenant,
+        cas(auth.authenticate(&token, NOW).await.expect("valid")).tenant,
         "org"
     );
     let token = s
         .sign_with_tenant("alice", "org/model", None, Mode::Write, NOW + 60, NOW)
         .expect("valid claims");
     assert_eq!(
-        cas(auth.authenticate(&token, NOW).expect("valid")).tenant,
+        cas(auth.authenticate(&token, NOW).await.expect("valid")).tenant,
         "scope:org/model"
     );
 }
 
-#[test]
-fn jwt_rejects_empty_or_malformed_tenant() {
+#[tokio::test]
+async fn jwt_rejects_empty_or_malformed_tenant() {
     let (auth, key, header) = auth_for_raw_tokens();
     let long = "t".repeat(1025);
     for tenant in [
@@ -790,7 +832,7 @@ fn jwt_rejects_empty_or_malformed_tenant() {
             &b64(&with_claim("tenant", tenant.clone()).to_string()),
         );
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{tenant}"
         );
@@ -814,8 +856,8 @@ fn jwt_rejects_empty_or_malformed_tenant() {
     }
 }
 
-#[test]
-fn jwt_rejects_empty_or_malformed_subject_and_scope() {
+#[tokio::test]
+async fn jwt_rejects_empty_or_malformed_subject_and_scope() {
     let (auth, key, header) = auth_for_raw_tokens();
     let long_scope = "s".repeat(1025);
     let rejected = [
@@ -835,7 +877,7 @@ fn jwt_rejects_empty_or_malformed_subject_and_scope() {
             &b64(&with_claim(field, value.into()).to_string()),
         );
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{field}={value:?}"
         );
@@ -851,12 +893,15 @@ fn jwt_rejects_empty_or_malformed_subject_and_scope() {
             &header,
             &b64(&with_claim(field, value.into()).to_string()),
         );
-        assert!(auth.authenticate(&token, NOW).is_ok(), "{field}={value:?}");
+        assert!(
+            auth.authenticate(&token, NOW).await.is_ok(),
+            "{field}={value:?}"
+        );
     }
 }
 
-#[test]
-fn jwt_lifetime_is_capped() {
+#[tokio::test]
+async fn jwt_lifetime_is_capped() {
     let (key, public_pem, kid) = raw_keypair();
     let header = b64(&serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": kid }).to_string());
     let day = Authenticator::DEFAULT_MAX_TOKEN_LIFETIME.as_secs();
@@ -880,31 +925,37 @@ fn jwt_lifetime_is_capped() {
     assert!(
         default
             .authenticate(&token_with(NOW + day, NOW), NOW)
+            .await
             .is_ok()
     );
     for exp in [NOW + day + 1, NOW + 365 * day, u64::MAX] {
         assert_eq!(
-            default.authenticate(&token_with(exp, NOW), NOW),
+            default.authenticate(&token_with(exp, NOW), NOW).await,
             Err(AuthError::Invalid),
             "{exp}"
         );
     }
 
     let hour = auth(Duration::from_hours(1));
-    assert!(hour.authenticate(&token_with(NOW + 3600, NOW), NOW).is_ok());
+    assert!(
+        hour.authenticate(&token_with(NOW + 3600, NOW), NOW)
+            .await
+            .is_ok()
+    );
     assert_eq!(
-        hour.authenticate(&token_with(NOW + 3601, NOW), NOW),
+        hour.authenticate(&token_with(NOW + 3601, NOW), NOW).await,
         Err(AuthError::Invalid)
     );
     // The cap is measured from the verifier's clock, not the token's `iat`.
     assert!(
         hour.authenticate(&token_with(NOW + 3600, NOW + 300), NOW)
+            .await
             .is_ok()
     );
 }
 
-#[test]
-fn jwt_iat_tolerates_five_minutes_of_skew() {
+#[tokio::test]
+async fn jwt_iat_tolerates_five_minutes_of_skew() {
     let (auth, key, header) = auth_for_raw_tokens();
     for (iat, ok) in [
         (0, true),
@@ -918,7 +969,7 @@ fn jwt_iat_tolerates_five_minutes_of_skew() {
             &header,
             &b64(&with_claim("iat", iat.into()).to_string()),
         );
-        assert_eq!(auth.authenticate(&token, NOW).is_ok(), ok, "{iat}");
+        assert_eq!(auth.authenticate(&token, NOW).await.is_ok(), ok, "{iat}");
     }
 }
 
@@ -994,8 +1045,8 @@ fn token_lifetime_cap_is_bounded() {
     }
 }
 
-#[test]
-fn subject_and_scope_reject_invisible_separator_and_blank_values() {
+#[tokio::test]
+async fn subject_and_scope_reject_invisible_separator_and_blank_values() {
     let (auth, key, header) = auth_for_raw_tokens();
     let s = signer();
     let mut bad: Vec<String> = [
@@ -1017,7 +1068,7 @@ fn subject_and_scope_reject_invisible_separator_and_blank_values() {
                 &b64(&with_claim(field, value.as_str().into()).to_string()),
             );
             assert_eq!(
-                auth.authenticate(&token, NOW),
+                auth.authenticate(&token, NOW).await,
                 Err(AuthError::Invalid),
                 "{field}={value:?}"
             );
@@ -1055,12 +1106,12 @@ fn subject_and_scope_reject_invisible_separator_and_blank_values() {
             &header,
             &b64(&with_claim("scope", value.into()).to_string()),
         );
-        assert!(auth.authenticate(&token, NOW).is_ok(), "{value:?}");
+        assert!(auth.authenticate(&token, NOW).await.is_ok(), "{value:?}");
     }
 }
 
-#[test]
-fn jwt_rejects_oversized_token() {
+#[tokio::test]
+async fn jwt_rejects_oversized_token() {
     let (key, public_pem, _) = raw_keypair();
     let kid = PublicKey::from_pem(&public_pem)
         .expect("parse")
@@ -1084,17 +1135,17 @@ fn jwt_rejects_oversized_token() {
     };
     let at_cap = sized(MAX_TOKEN_BYTES);
     assert!(at_cap.len() <= MAX_TOKEN_BYTES && at_cap.len() > MAX_TOKEN_BYTES - 4);
-    assert!(auth.authenticate(&at_cap, NOW).is_ok());
+    assert!(auth.authenticate(&at_cap, NOW).await.is_ok());
 
     let over = sized(MAX_TOKEN_BYTES + 8);
     assert!(over.len() > MAX_TOKEN_BYTES);
-    assert_eq!(auth.authenticate(&over, NOW), Err(AuthError::Invalid));
+    assert_eq!(auth.authenticate(&over, NOW).await, Err(AuthError::Invalid));
     let junk = "a".repeat(1 << 20);
-    assert_eq!(auth.authenticate(&junk, NOW), Err(AuthError::Invalid));
+    assert_eq!(auth.authenticate(&junk, NOW).await, Err(AuthError::Invalid));
 }
 
-#[test]
-fn jwt_rejects_non_canonical_base64() {
+#[tokio::test]
+async fn jwt_rejects_non_canonical_base64() {
     let s = signer();
     let auth = Authenticator::new(
         vec![],
@@ -1105,7 +1156,7 @@ fn jwt_rejects_non_canonical_base64() {
     let token = s
         .sign("alice", "org/model", Mode::Read, NOW + 60, NOW)
         .expect("valid claims");
-    assert!(auth.authenticate(&token, NOW).is_ok());
+    assert!(auth.authenticate(&token, NOW).await.is_ok());
     let (input, sig) = token.rsplit_once('.').expect("three segments");
     let (header, payload) = input.split_once('.').expect("three segments");
 
@@ -1133,7 +1184,7 @@ fn jwt_rejects_non_canonical_base64() {
     }
     for variant in variants {
         assert_eq!(
-            auth.authenticate(&variant, NOW),
+            auth.authenticate(&variant, NOW).await,
             Err(AuthError::Invalid),
             "{variant}"
         );
@@ -1572,8 +1623,8 @@ fn batch_signing_refuses_a_reversed_range_and_writes_nothing() {
     assert_eq!(out, "before");
 }
 
-#[test]
-fn auth_errors_never_contain_the_credential() {
+#[tokio::test]
+async fn auth_errors_never_contain_the_credential() {
     let s = signer();
     let auth = Authenticator::new(
         vec![static_token(STATIC_SECRET, Mode::Read)],
@@ -1599,15 +1650,15 @@ fn auth_errors_never_contain_the_credential() {
     let mut cases: Vec<(String, AuthError)> = vec![
         (
             expired.clone(),
-            auth.authenticate(&expired, NOW).unwrap_err(),
+            auth.authenticate(&expired, NOW).await.unwrap_err(),
         ),
         (
             foreign.clone(),
-            auth.authenticate(&foreign, NOW).unwrap_err(),
+            auth.authenticate(&foreign, NOW).await.unwrap_err(),
         ),
         (
             wrong_static.clone(),
-            auth.authenticate(&wrong_static, NOW).unwrap_err(),
+            auth.authenticate(&wrong_static, NOW).await.unwrap_err(),
         ),
     ];
     for header in [None, Some("bytes=0-8")] {
@@ -1721,8 +1772,8 @@ fn generated_private_key_is_pkcs8_v1() {
 /// type, and a token is accepted only if its header names that `alg`. An
 /// Ed25519 key is `EdDSA`; a token signed by it that claims any other
 /// algorithm, such as RFC 9964's ML-DSA, is refused.
-#[test]
-fn token_alg_must_match_key_alg() {
+#[tokio::test]
+async fn token_alg_must_match_key_alg() {
     let (key, public_pem, kid) = raw_keypair();
     let public = PublicKey::from_pem(&public_pem).expect("parse");
     assert_eq!(public.alg(), KeyAlg::EdDSA);
@@ -1739,7 +1790,10 @@ fn token_alg_must_match_key_alg() {
         |alg: &str| b64(&serde_json::json!({ "alg": alg, "typ": "JWT", "kid": kid }).to_string());
 
     let token = sign_raw(&key, &header("EdDSA"), &payload);
-    assert!(auth.authenticate(&token, NOW).is_ok(), "the key's own alg");
+    assert!(
+        auth.authenticate(&token, NOW).await.is_ok(),
+        "the key's own alg"
+    );
     for alg in [
         "ML-DSA-44",
         "ML-DSA-65",
@@ -1750,7 +1804,7 @@ fn token_alg_must_match_key_alg() {
     ] {
         let token = sign_raw(&key, &header(alg), &payload);
         assert_eq!(
-            auth.authenticate(&token, NOW),
+            auth.authenticate(&token, NOW).await,
             Err(AuthError::Invalid),
             "{alg}"
         );
@@ -1759,8 +1813,8 @@ fn token_alg_must_match_key_alg() {
 
 /// A token is verified only by the key its `kid` names: a `kid` outside
 /// the key set is refused, whoever signed the token.
-#[test]
-fn unknown_kid_refused() {
+#[tokio::test]
+async fn unknown_kid_refused() {
     let trusted = signer();
     let stranger = signer();
     let auth = Authenticator::new(
@@ -1772,15 +1826,18 @@ fn unknown_kid_refused() {
     let token = trusted
         .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
         .expect("valid claims");
-    assert!(auth.authenticate(&token, NOW).is_ok());
+    assert!(auth.authenticate(&token, NOW).await.is_ok());
 
     let unknown = stranger
         .sign("alice", "org/model", Mode::Write, NOW + 60, NOW)
         .expect("valid claims");
-    assert_eq!(auth.authenticate(&unknown, NOW), Err(AuthError::Invalid));
+    assert_eq!(
+        auth.authenticate(&unknown, NOW).await,
+        Err(AuthError::Invalid)
+    );
     for kid in [stranger.kid(), "", "0000000000000000", &trusted.kid()[..15]] {
         assert_eq!(
-            auth.authenticate(&retarget_kid(&token, kid), NOW),
+            auth.authenticate(&retarget_kid(&token, kid), NOW).await,
             Err(AuthError::Invalid),
             "{kid:?}"
         );
@@ -1791,8 +1848,8 @@ fn unknown_kid_refused() {
 /// switch the signer, then drop the old key. While both are trusted,
 /// tokens from either verify; once the old key is dropped, its tokens are
 /// refused.
-#[test]
-fn old_and_new_cas_keys_both_verify() {
+#[tokio::test]
+async fn old_and_new_cas_keys_both_verify() {
     let old = signer();
     let new = signer();
     let trusting = |keys: Vec<PublicKey>| {
@@ -1806,14 +1863,17 @@ fn old_and_new_cas_keys_both_verify() {
 
     let both = trusting(vec![new.public_key(), old.public_key()]);
     for s in [&old, &new] {
-        let principal = cas(both.authenticate(&token(s), NOW).expect("trusted key"));
+        let principal = cas(both
+            .authenticate(&token(s), NOW)
+            .await
+            .expect("trusted key"));
         assert_eq!(principal.subject, "alice");
     }
 
     let after = trusting(vec![new.public_key()]);
-    assert!(after.authenticate(&token(&new), NOW).is_ok());
+    assert!(after.authenticate(&token(&new), NOW).await.is_ok());
     assert_eq!(
-        after.authenticate(&token(&old), NOW),
+        after.authenticate(&token(&old), NOW).await,
         Err(AuthError::Invalid)
     );
 }

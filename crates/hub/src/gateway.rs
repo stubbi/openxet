@@ -241,7 +241,7 @@ impl FromRequestParts<HubState> for GatewayWho {
         } else {
             return Err(HubError::InvalidCredential);
         };
-        user_for_token(state, &token).map(Self)
+        user_for_token(state, &token).await.map(Self)
     }
 }
 

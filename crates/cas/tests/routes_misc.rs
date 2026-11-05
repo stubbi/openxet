@@ -19,6 +19,7 @@ use common::{
     TRANSFER_PATH, TestServer, UNAUTHENTICATED, UNSERVED, XORB_GRANT_PATH, bearer, config,
 };
 use openxet_auth::Mode;
+use openxet_auth::test_support::{TestAlg, TestIssuer};
 use openxet_cas::{BodyDeadline, CasConfig, TELEMETRY_BODY_LIMIT, starting_router};
 use openxet_index::Visibility;
 use reqwest::Method;
@@ -299,9 +300,10 @@ async fn missing_or_bad_credential_is_401_and_wrong_mode_is_403() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn responses_never_echo_credential() {
-    let server = TestServer::start_default().await;
+    let idp = TestIssuer::start().await;
+    let server = TestServer::start_with_oidc(config(Visibility::Global), &idp).await;
     let now = openxet_cas::Clock::now(&server.clock);
     let jwt = server
         .signer
@@ -313,7 +315,9 @@ async fn responses_never_echo_credential() {
         server.read_token.clone(),
         server.other_scope_token.clone(),
         server.other_scope_read_token.clone(),
+        server.user_token.clone(),
         jwt,
+        idp.sign(TestAlg::Rs256, &idp.claims("alice", now)),
         unknown,
     ];
     let mut targets: Vec<(Method, &str)> =

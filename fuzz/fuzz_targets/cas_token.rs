@@ -12,7 +12,10 @@
 
 #![no_main]
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::OnceLock;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -51,6 +54,16 @@ fn keys() -> &'static (TokenSigner, Authenticator) {
         .expect("valid settings");
         (signer, authenticator)
     })
+}
+
+/// Runs an authentication to completion. With no OIDC issuer configured
+/// it never waits on I/O, so one poll finishes it and the fuzzer needs no
+/// runtime.
+fn now_ready<T>(future: impl Future<Output = T>) -> T {
+    match pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("CAS-token authentication waited with no OIDC issuer configured"),
+    }
 }
 
 fn assert_valid_identity(principal: &Principal) {
@@ -96,7 +109,7 @@ fn raw(bearer: &[u8]) {
     let Ok(bearer) = std::str::from_utf8(bearer) else {
         return;
     };
-    if let Ok(credential) = keys().1.authenticate(bearer, NOW) {
+    if let Ok(credential) = now_ready(keys().1.authenticate(bearer, NOW)) {
         assert_eq!(bearer, static_secret(), "{credential:?}");
         let Credential::Cas(principal) = credential else {
             panic!("the static token is a CAS credential only: {credential:?}");
@@ -137,7 +150,7 @@ fn minted(input: &mut Unstructured<'_>) -> ArbitraryResult<()> {
     let Ok(bearer) = String::from_utf8(bytes) else {
         return Ok(());
     };
-    match authenticator.authenticate(&bearer, NOW) {
+    match now_ready(authenticator.authenticate(&bearer, NOW)) {
         Ok(Credential::Cas(principal)) => {
             assert_valid_identity(&principal);
             assert_eq!(principal, expected);

@@ -11,6 +11,9 @@
 //!   `now < exp` and invalid from the `exp` second on, with no leeway: stock
 //!   clients refresh by clock 30 s before `exp` and never react to a `401`.
 //!   See [`TokenSigner`] and [`PublicKey`].
+//! - **OIDC tokens** from the operator's identity providers, verified
+//!   against each issuer's cached JWKS (ruling M3-R7, ADR 0016); see
+//!   [`OidcIssuer`]. An OIDC token is a user credential only.
 //! - **Signed transfer URLs**, each bound by HMAC-SHA256 to one xorb, one
 //!   byte range and one expiry; see [`UrlSigner`].
 //! - **Capability `href`s**, each bound by HMAC-SHA256 to one scope, one
@@ -31,11 +34,15 @@
 mod capability;
 mod error;
 mod jwt;
+mod oidc;
 mod rules;
 mod signed_url;
 mod static_tokens;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +52,7 @@ pub use error::{AuthError, AuthzError, CapabilityRefusal, ForbiddenReason, Inval
 pub use jwt::{
     GeneratedKeypair, KeyAlg, MAX_TOKEN_BYTES, PublicKey, TokenSigner, generate_keypair,
 };
+pub use oidc::{JWKS_REFRESH_INTERVAL, OidcConfig, OidcIssuer, UNKNOWN_KID_REFRESH_INTERVAL};
 pub use rules::{Action, Authorizer, Glob, Rule, RulesAuthorizer, Target};
 pub use signed_url::{TransferQuery, TransferUrls, UrlSigner, XorbUrls, transfer_key_id};
 pub use static_tokens::{CasGrant, StaticToken, UserProfile};
@@ -168,12 +176,13 @@ impl Credential {
 /// CAS token's `iat` and a signed URL's `exp` from above.
 pub const MAX_CLOCK_SKEW: Duration = Duration::from_mins(5);
 
-/// Verifies bearer credentials: static tokens and CAS tokens.
-#[derive(Debug)]
+/// Verifies bearer credentials: static tokens, CAS tokens and OIDC tokens.
+#[derive(Debug, Clone)]
 pub struct Authenticator {
     static_tokens: Vec<StaticToken>,
     jwt_keys: Vec<PublicKey>,
     max_token_lifetime: Duration,
+    oidc: Vec<Arc<OidcIssuer>>,
 }
 
 impl Authenticator {
@@ -219,6 +228,7 @@ impl Authenticator {
             static_tokens,
             jwt_keys,
             max_token_lifetime,
+            oidc: Vec::new(),
         })
     }
 
@@ -226,34 +236,49 @@ impl Authenticator {
     /// server's own key, whose tokens the Hub hands out (design §5.4).
     #[must_use]
     pub fn with_jwt_key(&self, key: PublicKey) -> Self {
-        let mut jwt_keys = self.jwt_keys.clone();
-        jwt_keys.push(key);
-        Self {
-            static_tokens: self.static_tokens.clone(),
-            jwt_keys,
-            max_token_lifetime: self.max_token_lifetime,
-        }
+        let mut auth = self.clone();
+        auth.jwt_keys.push(key);
+        auth
+    }
+
+    /// This authenticator, also accepting tokens from `issuers`. A token
+    /// goes to the issuer its `iss` names; configuration keeps issuers
+    /// distinct.
+    #[must_use]
+    pub fn with_oidc(mut self, issuers: Vec<Arc<OidcIssuer>>) -> Self {
+        self.oidc.extend(issuers);
+        self
     }
 
     /// Authenticates the token from an `Authorization: Bearer` header.
     ///
-    /// `now` is Unix seconds. Static tokens are tried first, then CAS
-    /// tokens. A CAS token is only ever a [`Credential::Cas`]; a static
-    /// token is whatever it was configured as.
+    /// `now` is Unix seconds. Static tokens are tried first, then a JWT
+    /// whose `iss` names a configured OIDC issuer goes to that issuer, and
+    /// any other is verified as a CAS token (CAS tokens carry no `iss`). A
+    /// CAS token is only ever a [`Credential::Cas`], an OIDC token only a
+    /// [`Credential::User`]; a static token is whatever it was configured
+    /// as.
     ///
     /// # Errors
     ///
     /// [`AuthError::Missing`] for an empty token, [`AuthError::Expired`] for
-    /// a CAS token at or past its `exp`, and [`AuthError::Invalid`] for
-    /// anything else that does not verify, including a CAS token before its
-    /// `nbf`, beyond the lifetime cap, or with `iat` more than
-    /// [`MAX_CLOCK_SKEW`] ahead.
-    pub fn authenticate(&self, bearer: &str, now: u64) -> Result<Credential, AuthError> {
+    /// a token at or past its `exp`, [`AuthError::Unavailable`] for an OIDC
+    /// token whose issuer's keys can't be fetched (ruling M3-R7), and
+    /// [`AuthError::Invalid`] for anything else that does not verify,
+    /// including a CAS token before its `nbf`, beyond the lifetime cap, or
+    /// with `iat` more than [`MAX_CLOCK_SKEW`] ahead.
+    pub async fn authenticate(&self, bearer: &str, now: u64) -> Result<Credential, AuthError> {
         if bearer.is_empty() {
             return Err(AuthError::Missing);
         }
         if let Some(token) = static_tokens::find(&self.static_tokens, bearer) {
             return Ok(token.credential());
+        }
+        if !self.oidc.is_empty()
+            && let Some(iss) = oidc::unverified_issuer(bearer)
+            && let Some(issuer) = self.oidc.iter().find(|i| i.issuer() == iss)
+        {
+            return issuer.verify(bearer, now).await.map(Credential::User);
         }
         jwt::verify(&self.jwt_keys, bearer, now, self.max_token_lifetime).map(Credential::Cas)
     }

@@ -11,7 +11,7 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
-use openxet_auth::{ANONYMOUS, Action, Credential, Target, UserPrincipal};
+use openxet_auth::{ANONYMOUS, Action, AuthError, Credential, Target, UserPrincipal};
 use openxet_index::Repo;
 use zeroize::Zeroizing;
 
@@ -52,7 +52,7 @@ impl Who {
     /// [`HubError::InvalidCredential`] for a malformed, unknown or expired
     /// credential or more than one header, and [`HubError::CasCredential`]
     /// for a CAS-only one.
-    pub(crate) fn from_headers(
+    pub(crate) async fn from_headers(
         headers: &HeaderMap,
         state: &HubState,
         basic: bool,
@@ -79,7 +79,7 @@ impl Who {
         } else {
             return Err(HubError::InvalidCredential);
         };
-        user_for_token(state, &token).map(Self)
+        user_for_token(state, &token).await.map(Self)
     }
 }
 
@@ -88,11 +88,17 @@ impl Who {
 /// # Errors
 ///
 /// [`HubError::InvalidCredential`] for an unknown, malformed or expired
-/// token, and [`HubError::CasCredential`] for a CAS-only one.
-pub(crate) fn user_for_token(state: &HubState, token: &str) -> Result<UserPrincipal, HubError> {
-    match state.auth.authenticate(token, state.clock.now()) {
+/// token, [`HubError::CasCredential`] for a CAS-only one, and
+/// [`HubError::AuthnUnavailable`] for an OIDC token whose issuer's keys
+/// can't be fetched.
+pub(crate) async fn user_for_token(
+    state: &HubState,
+    token: &str,
+) -> Result<UserPrincipal, HubError> {
+    match state.auth.authenticate(token, state.clock.now()).await {
         Ok(Credential::User(user) | Credential::Both(_, user)) => Ok(user),
         Ok(Credential::Cas(_)) => Err(HubError::CasCredential),
+        Err(AuthError::Unavailable) => Err(HubError::AuthnUnavailable),
         // An empty token is a malformed credential, not none.
         Err(_) => Err(HubError::InvalidCredential),
     }
@@ -111,7 +117,7 @@ impl FromRequestParts<HubState> for Who {
     type Rejection = HubError;
 
     async fn from_request_parts(parts: &mut Parts, state: &HubState) -> Result<Self, HubError> {
-        Self::from_headers(&parts.headers, state, false)
+        Self::from_headers(&parts.headers, state, false).await
     }
 }
 

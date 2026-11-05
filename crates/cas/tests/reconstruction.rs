@@ -19,6 +19,7 @@ use common::{
     FILE_PATH, PROBE_BODIES, RECONSTRUCTION_V1_PATH, RECONSTRUCTION_V2_PATH, ROUTES, Reply, Route,
     SCOPE_A, TRANSFER_PATH, TablelessIndex, TestServer, UNAUTHENTICATED, XORB_PATH, bearer, config,
 };
+use openxet_auth::test_support::{TestAlg, TestIssuer};
 use openxet_auth::{Mode, UrlSigner};
 use openxet_cas::{Clock as _, MAX_BATCH_FILES, MAX_BATCH_TERMS};
 use openxet_index::{FileRecord, NewFile, Registrant, Term, Visibility};
@@ -29,7 +30,7 @@ use openxet_protocol::{
 use openxet_storage::{LocalBucket, STREAM_BLOCK_BYTES};
 use reqwest::Method;
 use reqwest::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE, RETRY_AFTER,
 };
 use serde_json::{Value, json};
 use url::Url;
@@ -1026,6 +1027,108 @@ async fn credential_scoped_to_repo() {
     reconstruct(&server, "v2", &a, None, &server.other_scope_read_token)
         .await
         .assert_error(404, "not_found");
+}
+
+/// Asserts `route` answered `reply` to an OIDC token exactly as `user` to
+/// a static user token, and with neither the data nor a data URL.
+fn assert_answers_like(reply: &Reply, user: &Reply, route: &Route) {
+    let what = format!("{} {}", route.method, route.path);
+    assert_eq!(reply.status, user.status, "{what}");
+    assert_eq!(reply.body, user.body, "{what}");
+    assert_eq!(
+        reply.headers.get(CONTENT_TYPE),
+        user.headers.get(CONTENT_TYPE),
+        "{what}"
+    );
+    assert!(!reply.body.contains("/v1/transfer/"), "{what}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oidc_token_scoped_like_static_user_token() {
+    // Design §5.9 req 2, the CAS half for OIDC (ruling M3-R7, ADR 0016 item
+    // 1): an OIDC token is a user credential and never a CAS credential, so
+    // every CAS route answers it exactly as a static user token: `403
+    // insufficient_scope`, pointing at the Hub's token route, with no data.
+    // An OIDC token the server can't verify for want of keys is `503
+    // authn_unavailable`, never an accept.
+    let idp = TestIssuer::start().await;
+    let server = TestServer::start_with_oidc(config(Visibility::Global), &idp).await;
+    upload_capture(&server, &server.write_token).await;
+    let now = server.clock.now();
+    for alg in [TestAlg::Rs256, TestAlg::Es256, TestAlg::EdDsa] {
+        let token = idp.sign(alg, &idp.claims("alice", now));
+        for route in ROUTES {
+            let user = send_aimed(&server, route, Some(&server.user_token)).await;
+            if route.method != Method::HEAD {
+                user.assert_error(403, "insufficient_scope");
+                assert!(user.body.contains("This is a user token"), "{}", user.body);
+            }
+            let reply = send_aimed(&server, route, Some(&token)).await;
+            assert_answers_like(&reply, &user, route);
+        }
+    }
+
+    idp.set_up(false);
+    idp.rotate(TestAlg::Rs256);
+    let unverifiable = idp.sign(TestAlg::Rs256, &idp.claims("alice", now));
+    for route in ROUTES {
+        let reply = send_aimed(&server, route, Some(&unverifiable)).await;
+        let code = if route.method == Method::HEAD {
+            ""
+        } else {
+            "authn_unavailable"
+        };
+        reply.assert_error(503, code);
+        assert_eq!(
+            reply.headers[RETRY_AFTER], "1",
+            "{} {}",
+            route.method, route.path
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oidc_token_never_logged() {
+    // Design §5.9 req 6, the CAS half for OIDC: OIDC tokens, accepted,
+    // expired, forged or unverifiable, on every CAS route, never reach the
+    // server's log, whole or as any of their three parts. The log runs at
+    // `TRACE`.
+    let idp = TestIssuer::start().await;
+    let server = TestServer::start_with_oidc(config(Visibility::Global), &idp).await;
+    upload_capture(&server, &server.write_token).await;
+    let now = server.clock.now();
+    let mut expired = idp.claims("alice", now - 7200);
+    expired["exp"] = (now - 3600).into();
+    let mut tokens = vec![
+        idp.sign(TestAlg::Rs256, &idp.claims("alice", now)),
+        idp.sign(TestAlg::EdDsa, &expired),
+        idp.hs256_with_public_key(&idp.claims("mallory", now)),
+        idp.unsigned(&idp.claims("mallory", now)),
+    ];
+    for route in ROUTES {
+        for token in &tokens {
+            send_aimed(&server, route, Some(token)).await;
+        }
+    }
+    // While the issuer is down, a token under a new key is refused, and
+    // the failed refresh is logged without it.
+    idp.set_up(false);
+    idp.rotate(TestAlg::Es256);
+    let unverifiable = idp.sign(TestAlg::Es256, &idp.claims("alice", now));
+    for route in ROUTES {
+        send_aimed(&server, route, Some(&unverifiable)).await;
+    }
+    tokens.push(unverifiable);
+    let logs = server.logs();
+    assert!(
+        logs.contains("could not refresh the OIDC issuer's JWKS"),
+        "the failed refresh is logged: {logs}"
+    );
+    for token in &tokens {
+        for part in token.split('.').filter(|p| p.len() > 8) {
+            assert!(!logs.contains(part), "a token part is in the log");
+        }
+    }
 }
 
 #[tokio::test]

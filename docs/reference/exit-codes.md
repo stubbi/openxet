@@ -33,6 +33,7 @@ lines.
 | `data_dir` | 1 | `serve` couldn't create the data directory. |
 | `index` | 1 | `serve` or `purge` couldn't open or write the index in the data directory, or `purge` found none there (the hint names `--config` and `--data-dir`). |
 | `storage` | 1 | `serve` or `purge` couldn't open the bucket in the data directory, or `purge` couldn't write its purge record there. Nothing was purged. |
+| `oidc` | 1 | `serve` couldn't discover an `[[auth.oidc]]` issuer: its discovery document or JWKS couldn't be fetched or read, the document names another issuer, or the JWKS holds no key a token could be checked with. The message names the issuer; the hint names the discovery URL. |
 | `insecure_permissions` | 1 | A secret file (`dev-token`, `transfer.key`, a signing key) can be read by other users. The hint names the `chmod`. |
 | `invalid_key` | 1 | A key or token file doesn't hold what it should. |
 | `exists` | 2 | `token keygen` would overwrite a file, or `workspace create` or `hook claude-create` names a path or branch that exists (and, for the hook, no workspace is registered at that path). Nothing was written. |
