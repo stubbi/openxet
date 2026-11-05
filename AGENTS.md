@@ -251,7 +251,8 @@ daemon with its free-space floor, idle eviction and settled-file dedup, and
 the Claude Code hooks (`docs/guides/agent-workspaces.md`). Next: the
 flat-disk and build-speed gate, then step 3 (the mount) after its plan.
 M3 follows: production backends (Postgres; S3, GCS and Azure), OIDC and the
-webhook authorizer, OpenXet-issued tokens and rate limits, per design §12,
+webhook authorizer, OpenXet-issued tokens and rate limits, per design §12
+and `docs/superpowers/plans/2026-11-05-m3-production-backends.md`,
 interleaved before the workspace steps that need it. ADR 0001 decides to build from
 scratch on `xet-core`'s crates (after evaluating existing Xet servers;
 see `docs/competitive-matrix.md`).
