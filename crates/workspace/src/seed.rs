@@ -11,7 +11,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File, FileTimes, TryLockError};
 use std::io;
 use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -248,6 +248,10 @@ fn seedable_dirs(from: &Path, presets: &Presets) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The start of [`reflink_supported`]'s probe file names, which the daemon
+/// ignores: they are OpenXet's own writes, not a workspace's activity.
+pub(crate) const CLONE_PROBE_PREFIX: &str = ".openxet-clone-probe-";
+
 /// Whether files in `dir` can be cloned: clones a one-byte probe file
 /// there, then removes both.
 #[must_use]
@@ -256,7 +260,7 @@ pub fn reflink_supported(dir: &Path) -> bool {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
     let probe = dir.join(format!(
-        ".openxet-clone-probe-{}-{nanos}",
+        "{CLONE_PROBE_PREFIX}{}-{nanos}",
         std::process::id()
     ));
     let mut clone_path = probe.clone().into_os_string();
@@ -267,6 +271,32 @@ pub fn reflink_supported(dir: &Path) -> bool {
     let _ = fs::remove_file(&clone_path);
     let _ = fs::remove_file(&probe);
     supported
+}
+
+/// Whether files on the volume of `path`, a worktree, can be cloned. The
+/// probe goes to the nearest directory above `path` on the same device
+/// that the user may write and that no worktree contains (no `.git` in it
+/// or above it), else to `path` itself: a probe inside a worktree shows in
+/// its `git status` while it exists.
+#[must_use]
+pub fn volume_reflink_supported(path: &Path) -> bool {
+    reflink_supported(&probe_dir(path))
+}
+
+/// Where [`volume_reflink_supported`] probes for `path`.
+fn probe_dir(path: &Path) -> PathBuf {
+    let Ok(dev) = fs::metadata(path).map(|meta| meta.dev()) else {
+        return path.to_path_buf();
+    };
+    path.ancestors()
+        .skip(1)
+        .take_while(|dir| fs::metadata(dir).is_ok_and(|meta| meta.dev() == dev))
+        .find(|dir| {
+            !dir.ancestors()
+                .any(|above| fs::symlink_metadata(above.join(".git")).is_ok())
+                && rustix::fs::access(*dir, rustix::fs::Access::WRITE_OK).is_ok()
+        })
+        .map_or_else(|| path.to_path_buf(), Path::to_path_buf)
 }
 
 /// The worktree of `project` to seed `target` from: of those with
@@ -446,4 +476,30 @@ fn index_entries(dir: &Path) -> Result<HashMap<Vec<u8>, Vec<u8>>, WorkspaceError
             Some((entry[tab + 1..].to_vec(), entry[..tab].to_vec()))
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// A probe in a worktree would show in its `git status`, and in a
+    /// workspace count as activity, so it goes to the nearest directory
+    /// above that no worktree contains.
+    #[test]
+    fn clone_probes_go_outside_every_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let beside = root.join("app-worktrees/one");
+        fs::create_dir_all(&beside).unwrap();
+        fs::write(beside.join(".git"), "gitdir: elsewhere\n").unwrap();
+        let nested = root.join("app/.claude/worktrees/two");
+        fs::create_dir_all(root.join("app/.git")).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join(".git"), "gitdir: elsewhere\n").unwrap();
+
+        assert_eq!(probe_dir(&beside), root.join("app-worktrees"));
+        assert_eq!(probe_dir(&nested), root);
+    }
 }

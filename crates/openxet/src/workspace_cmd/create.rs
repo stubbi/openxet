@@ -69,6 +69,13 @@ pub struct Created {
     /// Why the daemon could not be started, if it couldn't.
     #[serde(skip_serializing_if = "Option::is_none")]
     daemon_error: Option<String>,
+    /// Free space on the new workspace's volume when it was checked against
+    /// the floor, after any eviction `create` did first.
+    volume_free_bytes: u64,
+    /// The floor on that volume. With `dry_run`, free space under it means
+    /// `create` would first evict idle build outputs, and fail with
+    /// `disk_budget` if that freed too little.
+    floor_bytes: u64,
     dry_run: bool,
 }
 
@@ -138,6 +145,12 @@ impl HumanDisplay for Created {
                  floor; `openxet workspace status` shows whether it runs."
             );
         }
+        if self.dry_run && self.volume_free_bytes < self.floor_bytes {
+            text.push_str(
+                "\nFree space there is under the floor: `create` would first evict idle \
+                 workspaces' build outputs, and fail with disk_budget if that freed too little.",
+            );
+        }
         if self.dry_run {
             text.push_str("\nNothing was changed.");
         }
@@ -183,10 +196,15 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
         seed_unsettled: false,
         daemon_started: false,
         daemon_error: None,
+        volume_free_bytes: 0,
+        floor_bytes: 0,
         dry_run,
     };
 
     if args.dry_run {
+        // As `create` would: an invalid config fails here too.
+        let budget = context.budget()?;
+        let here = (context.volume)(nearest_existing(&path)).map_err(error)?;
         let from = nearest_sibling(&registry, &project, &path, &base)
             .await
             .map_err(error)?;
@@ -196,10 +214,13 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
                 .map_or(0, |from| seedable_bytes(from, &Presets::default())),
             skipped: from.is_none().then_some(SeedSkip::NoSibling),
         };
-        return Ok(result(&path, report, from, true));
+        let mut planned = result(&path, report, from, true);
+        planned.volume_free_bytes = here.free_bytes;
+        planned.floor_bytes = budget.floor_for(here);
+        return Ok(planned);
     }
 
-    ensure_space(&registry, context, &path).await?;
+    let (free, floor) = ensure_space(&registry, context, &path).await?;
     add_worktree(&dir, &path, &name, &base).map_err(error)?;
     let path = path.canonicalize().unwrap_or(path);
     // Seeded before it is registered, so the daemon starts watching it only
@@ -224,6 +245,8 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
         return Err(error(err));
     }
     let mut created = result(&path, report, from, false);
+    created.volume_free_bytes = free;
+    created.floor_bytes = floor;
     if let Some(wait) = wait {
         created.seed_waited_ms = u64::try_from(wait.waited.as_millis()).unwrap_or(u64::MAX);
         created.seed_unsettled = !wait.settled;
@@ -239,16 +262,19 @@ pub(super) async fn create(args: &CreateArgs, context: &Context) -> Result<Creat
 
 /// Fails with `disk_budget` when free space on the new workspace's volume
 /// is under the floor even after one eviction pass, so agents back off
-/// instead of filling the disk.
-async fn ensure_space(registry: &Registry, context: &Context, path: &Path) -> Result<(), CliError> {
+/// instead of filling the disk. Returns the free space and the floor it
+/// checked.
+async fn ensure_space(
+    registry: &Registry,
+    context: &Context,
+    path: &Path,
+) -> Result<(u64, u64), CliError> {
     let error = |err: WorkspaceError| workspace_error(&err);
     let budget = context.budget()?;
-    // The worktree doesn't exist yet; its nearest existing parent is on the
-    // volume it will be on.
-    let on = path.ancestors().find(|dir| dir.exists()).unwrap_or(path);
+    let on = nearest_existing(path);
     let here = (context.volume)(on).map_err(error)?;
     if here.free_bytes >= budget.floor_for(here) {
-        return Ok(());
+        return Ok((here.free_bytes, budget.floor_for(here)));
     }
     free_to_floor(
         registry,
@@ -267,7 +293,13 @@ async fn ensure_space(registry: &Registry, context: &Context, path: &Path) -> Re
             floor_bytes,
         }));
     }
-    Ok(())
+    Ok((here.free_bytes, floor_bytes))
+}
+
+/// The worktree at `path` doesn't exist yet; its nearest existing parent is
+/// on the volume it will be on.
+fn nearest_existing(path: &Path) -> &Path {
+    path.ancestors().find(|dir| dir.exists()).unwrap_or(path)
 }
 
 /// Seeds the new workspace. Its worktree exists by now, so a failure here
@@ -445,6 +477,43 @@ mod tests {
         assert!(!branch_exists(&fx.main, "more").unwrap());
         // Just created, so not idle: its build outputs stay.
         assert!(Path::new(&busy.path).join("target/out").exists());
+    }
+
+    #[tokio::test]
+    async fn create_dry_run_reports_free_space_under_the_floor() {
+        let mut fx = Fixture::new();
+        let mut args = args("dry");
+        args.dry_run = true;
+        let roomy = create(&args, &fx.context).await.unwrap();
+        assert_eq!(roomy.volume_free_bytes, 1 << 40);
+        assert!(!roomy.human().contains("under the floor"));
+        fx.context.volume = full;
+
+        let planned = create(&args, &fx.context).await.unwrap();
+
+        assert_eq!(
+            (planned.volume_free_bytes, planned.floor_bytes),
+            (1 << 30, 20 << 30)
+        );
+        assert!(
+            planned.human().contains("under the floor"),
+            "{}",
+            planned.human()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_dry_run_fails_on_an_invalid_config_as_create_does() {
+        let mut fx = Fixture::new();
+        let config = fx.main.parent().unwrap().join("workspace.toml");
+        fs::write(&config, "floor = \"lots\"\n").unwrap();
+        fx.context.config = Some(config);
+        let mut args = args("dry");
+        args.dry_run = true;
+
+        let err = create(&args, &fx.context).await.unwrap_err();
+
+        assert_eq!(err.code, "config");
     }
 
     #[tokio::test]

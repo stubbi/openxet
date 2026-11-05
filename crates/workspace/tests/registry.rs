@@ -176,3 +176,25 @@ async fn registry_survives_reopen() {
         Some(ws.path.join("target/x"))
     );
 }
+
+/// Removing workspaces returns the disk: once checkpointed, the WAL that
+/// registering and removing six of them grew is empty again (#132).
+#[tokio::test]
+async fn checkpoint_truncates_the_wal() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let project = git_repo(repo.path());
+    let registry = Registry::open(state.path()).await.unwrap();
+    for n in 0..6 {
+        let ws = workspace(&project, &repo.path().join(format!("wt/{n}")));
+        registry.insert(&ws).await.unwrap();
+        registry.remove(&ws.id).await.unwrap();
+    }
+    let wal = state.path().join("registry.sqlite3-wal");
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+
+    registry.checkpoint().await.unwrap();
+
+    assert_eq!(std::fs::metadata(&wal).map_or(0, |meta| meta.len()), 0);
+    assert!(registry.list(None).await.unwrap().is_empty());
+}

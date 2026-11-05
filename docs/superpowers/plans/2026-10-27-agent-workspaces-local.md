@@ -288,6 +288,16 @@ rename(tmp, path)                         -> Cloned { bytes: size }
 - [ ] **Step 2:** Run `uv run --frozen --directory compat pytest -m docs`, brand and copy checks, `scripts/build-site.sh`. Expected: PASS.
 - [ ] **Step 3:** Open one issue "MCP tools for `openxet workspace`" linking the MCP server milestone. Commit `docs: agent workspaces guide and references`.
 
+### Task 10: Daemon control and the guide's workarounds ([#132](https://github.com/stubbi/openxet/issues/132))
+
+**Files:**
+- Modify: `crates/workspace/src/{daemon,space,evict,registry,error}.rs`, `crates/openxet/src/workspace_cmd/{daemon,report,create,mod}.rs`, `compat/tests/test_agent_cli.py`, the guide and both references
+- Create: `crates/openxet/tests/workspace_daemon.rs`
+
+- [x] **Step 1:** Failing tests: `daemon_records_its_pid_while_it_runs`, `stopping_no_daemon_is_a_no_op`, `daemon_truncates_the_registry_wal_on_exit`, `checkpoint_truncates_the_wal`, `idle_after_is_the_shorter_of_ten_minutes_and_the_ttl`, `floor_eviction_counts_idle_from_a_shorter_ttl`, the `workspace_daemon` binary tests (stop, restart, invalid config, daemon off), `status_counts_workspaces_on_each_volume`, `volumes_are_grouped_by_device_with_the_current_one_first`, `create_dry_run_reports_free_space_under_the_floor`.
+- [x] **Step 2:** Implement: the daemon writes its pid into `daemon.lock`; `openxet workspace daemon stop` and `restart` (`openxet.workspace.daemon.v1`, codes `daemon_stop` and `daemon_start`), the old foreground form as hidden `daemon run`; one idle rule, `min(10 min, idle_ttl)`, for the floor pass and `list`; `status` per volume; `create` (and `--dry-run`, which now reads the budget) reports `volume_free_bytes` and `floor_bytes` (decided: a dry run measures the floor check but evicts nothing, so it can't promise `disk_budget`); `journal_size_limit` and a `TRUNCATE` checkpoint when no workspace is left and on exit.
+- [x] **Step 3:** The guide runs `daemon restart` instead of `pkill`; commit `feat(client): workspace daemon stop and restart, one idle rule, status per volume`.
+
 ---
 
 Step 3 (the mount) and steps 4 to 6 get their own plans after Task 2's

@@ -92,6 +92,30 @@ pub enum WorkspaceError {
         /// The daemon's lock file.
         lock: PathBuf,
     },
+    /// The running daemon could not be stopped.
+    #[error(
+        "could not stop the OpenXet workspace daemon{}: {reason}",
+        .pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
+    )]
+    DaemonStop {
+        /// Its process id, if it recorded one.
+        pid: Option<u32>,
+        /// Why it is still running.
+        reason: String,
+    },
+    /// The daemon was asked to stop but is still finishing; it exits once
+    /// the file it is deduplicating is done.
+    #[error(
+        "the OpenXet workspace daemon (pid {pid}) was asked to stop but had not exited after {} s; \
+         it exits once the file it is deduplicating is done",
+        .waited.as_secs()
+    )]
+    DaemonStopping {
+        /// Its process id.
+        pid: u32,
+        /// How long it was waited for.
+        waited: std::time::Duration,
+    },
     /// The main worktree was named where only a linked worktree may be:
     /// it is the human's checkout, never adopted, evicted or removed.
     #[error(
@@ -149,6 +173,7 @@ impl WorkspaceError {
             Self::UnknownRevision(_) => "unknown_revision",
             Self::DiskBudget { .. } => "disk_budget",
             Self::DaemonRunning { .. } => "daemon_running",
+            Self::DaemonStop { .. } | Self::DaemonStopping { .. } => "daemon_stop",
             Self::MainWorktree(_) => "main_worktree",
             Self::HookInput(_) => "invalid_hook_input",
             Self::Settings { .. } => "invalid_settings",

@@ -59,6 +59,10 @@ JSON_COMMANDS = [
     ["workspace", "install", "claude", "--project", "--dry-run", "--json"],
     ["workspace", "install", "claude", "--project", "--json"],
     ["workspace", "install", "claude", "--user", "--json"],
+    ["workspace", "daemon", "stop", "--dry-run", "--json"],
+    ["workspace", "daemon", "stop", "--json"],
+    ["workspace", "daemon", "restart", "--dry-run", "--json"],
+    ["workspace", "daemon", "restart", "--json"],
 ]
 
 HOOK_INPUT = {
@@ -113,12 +117,12 @@ def git_checkout(path):
 
 def workspace_env(root):
     """The environment for `openxet workspace`: no background daemon, which
-    would outlive the test, and a 1 GiB free-space floor, so a CI runner
-    with less than the default 20 GiB free still creates workspaces."""
+    would outlive the test, and no free-space floor, so whether workspaces
+    are created never depends on the host's free space."""
     env = isolated_env(root, OPENXET_WORKSPACE_DAEMON="off")
     config = Path(env["HOME"]) / ".config" / "openxet" / "workspace.toml"
     config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text('floor = "1 GiB"\n')
+    config.write_text("floor = 0\n")
     return env
 
 

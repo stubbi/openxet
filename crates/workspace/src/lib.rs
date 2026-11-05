@@ -27,7 +27,7 @@ mod space;
 pub use activity::active_workspaces;
 pub use adopt::{Adoption, ScanReport, ScanSkip, adopt, adopt_scan};
 pub use classify::{Class, PROJECT_CONFIG, Presets, classify, reconstructible_dirs};
-pub use daemon::{DAEMON_LOCK, daemon_running, run_daemon};
+pub use daemon::{DAEMON_LOCK, daemon_pid, daemon_running, run_daemon, stop_daemon};
 pub use dedup::{DedupOutcome, DedupReport, MIN_DEDUP_SIZE, dedup_file, dedup_tree};
 pub use error::WorkspaceError;
 pub use evict::{evict_expired, eviction_order, free_to_floor};
@@ -43,7 +43,7 @@ pub use paths::{ProjectId, STATE_DIR_ENV, state_dir};
 pub use registry::{Registry, Workspace, WorkspaceId};
 pub use seed::{
     SETTLE_CAP, SeedReport, SeedSkip, SettleWait, nearest_sibling, reflink_supported, seed,
-    seed_with, seedable_bytes, wait_until_settled,
+    seed_with, seedable_bytes, volume_reflink_supported, wait_until_settled,
 };
 pub use space::{
     Budget, IDLE_AFTER, Volume, allocated_bytes, default_floor, is_idle, user_config_path, volume,
