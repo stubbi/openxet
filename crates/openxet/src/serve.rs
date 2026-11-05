@@ -22,8 +22,8 @@ use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use openxet_auth::{
-    Action, Authenticator, Authorizer, CapabilitySigner, CasGrant, Glob, Mode, Rule,
-    RulesAuthorizer, StaticToken, TokenSigner, UrlSigner, UserProfile,
+    Action, Authenticator, Authorizer, CapabilitySigner, CasGrant, Glob, Mode, OidcConfig,
+    OidcIssuer, Rule, RulesAuthorizer, StaticToken, TokenSigner, UrlSigner, UserProfile,
 };
 use openxet_cas::{AppState, starting_router};
 use openxet_client::STATIC_TOKEN_EXP;
@@ -433,7 +433,9 @@ async fn open(
     })?;
     let signer = cas_token_signer(config)?;
     let (auth, dev_token) = if let Some(auth) = &config.auth {
-        (Arc::new(auth.with_jwt_key(signer.public_key())), None)
+        let issuers = discover_oidc(&config.oidc).await?;
+        let auth = auth.with_jwt_key(signer.public_key()).with_oidc(issuers);
+        (Arc::new(auth), None)
     } else {
         let token = secret::dev_token(&dir.join("dev-token"))?;
         let auth = Authenticator::new(
@@ -585,6 +587,48 @@ fn transfer_key(config: &Config) -> Result<Zeroizing<[u8; 32]>, CliError> {
     Ok(key)
 }
 
+/// Each `[[auth.oidc]]` issuer, discovered, its JWKS fetched and kept
+/// fresh (ruling M3-R7). An issuer that can't be discovered stops the
+/// start: a node that can't verify its users' tokens shouldn't take
+/// traffic.
+async fn discover_oidc(issuers: &[OidcConfig]) -> Result<Vec<Arc<OidcIssuer>>, CliError> {
+    if issuers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|err| {
+            CliError::new(
+                "runtime",
+                format!("could not start the HTTP client for OIDC discovery: {err}"),
+                "Check the system's TLS and proxy configuration.",
+            )
+        })?;
+    let mut discovered = Vec::with_capacity(issuers.len());
+    for cfg in issuers {
+        let issuer = OidcIssuer::discover(cfg.clone(), http.clone())
+            .await
+            .map_err(|err| {
+                CliError::new(
+                    "oidc",
+                    err.to_string(),
+                    format!(
+                        "Check that this server reaches {}/.well-known/openid-configuration and \
+                         that `issuer` is exactly the `issuer` it names; see \
+                         docs/reference/config.md#oidc.",
+                        cfg.issuer.trim_end_matches('/')
+                    ),
+                )
+            })?;
+        let issuer = Arc::new(issuer);
+        issuer.keep_fresh();
+        tracing::info!(issuer = %cfg.name, url = %cfg.issuer, "OIDC issuer discovered");
+        discovered.push(issuer);
+    }
+    Ok(discovered)
+}
+
 /// The server's CAS token key, `{data_dir}/cas-token.key`, generated on
 /// first start with a warning outside dev mode: every node behind one
 /// endpoint must share it, or tokens one node's Hub hands out are refused
@@ -717,7 +761,7 @@ mod tests {
             Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
         )
         .unwrap();
-        let Credential::Both(principal, user) = auth.authenticate(token, 0).unwrap() else {
+        let Credential::Both(principal, user) = auth.authenticate(token, 0).await.unwrap() else {
             panic!("the dev token must be both credentials");
         };
         assert_eq!(

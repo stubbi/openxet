@@ -14,6 +14,17 @@ and newer uploads to and downloads from the CAS directly. The
 [storage-only quickstart](docs/quickstart-storage-only.md) run as written
 in CI.
 
+### Added in M3
+
+- Sign in with your identity provider: `[[auth.oidc]]` accepts tokens
+  from any OpenID Connect issuer (Keycloak, Auth0, Okta, Entra ID,
+  GitHub Actions and others) on the Hub API, Git and LFS routes, as the
+  subject `{name}:{sub}` with mapped claims that rules match. Signing keys
+  are discovered, cached and followed through rotation; while the issuer
+  is down the last keys verify for `jwks_max_stale` (default `24h`), and
+  after that requests get `503 authn_unavailable`, never an unverified
+  accept ([OIDC](docs/reference/config.md#oidc)).
+
 ### Added in M2
 
 - Hub token, resolve and tree answer within 10 ms at p99 on an idle node,

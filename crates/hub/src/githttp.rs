@@ -306,7 +306,7 @@ async fn info_refs(
 ) -> Response {
     let service = query.as_deref().and_then(service_of);
     let answer = async {
-        let who = who(&state, &headers)?;
+        let who = who(&state, &headers).await?;
         let target = target(&path, params, &who)?;
         let repo = match service {
             Some(Service::ReceivePack) => target.push_target(&state, &who).await?,
@@ -348,7 +348,7 @@ async fn upload_pack(
     body: Body,
 ) -> Response {
     let answer = async {
-        let who = who(&state, &headers)?;
+        let who = who(&state, &headers).await?;
         let target = target(&path, params, &who)?;
         let subject = who.subject.clone();
         let repo = target.readable(&state, who).await?;
@@ -380,7 +380,7 @@ async fn receive_pack(
     body: Body,
 ) -> Response {
     let answer = async {
-        let who = who(&state, &headers)?;
+        let who = who(&state, &headers).await?;
         let target = target(&path, params, &who)?;
         let repo = target.push_target(&state, &who).await?;
         require_request_type(&headers, Service::ReceivePack)?;
@@ -439,8 +439,10 @@ fn require_request_type(headers: &HeaderMap, service: Service) -> Result<(), Hub
 }
 
 /// The caller, by `Bearer` or by HTTP Basic with the token as the password.
-fn who(state: &HubState, headers: &HeaderMap) -> Result<UserPrincipal, HubError> {
-    Who::from_headers(headers, state, true).map(|Who(who)| who)
+async fn who(state: &HubState, headers: &HeaderMap) -> Result<UserPrincipal, HubError> {
+    Who::from_headers(headers, state, true)
+        .await
+        .map(|Who(who)| who)
 }
 
 /// The request's repository. Parameters that aren't UTF-8 name no

@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use openxet_auth::{
-    Action, AuthError, Authenticator, CasGrant, Glob, Mode, PublicKey, REPO_SCOPE_PREFIX, Rule,
-    StaticToken, UrlSigner, UserProfile,
+    Action, AuthError, Authenticator, CasGrant, Glob, Mode, OidcConfig, PublicKey,
+    REPO_SCOPE_PREFIX, Rule, StaticToken, UrlSigner, UserProfile,
 };
 use openxet_cas::{BodyDeadline, CasConfig, MemoryBudget};
 use openxet_git::{Budget, GitConfig};
@@ -151,6 +151,9 @@ pub struct Config {
     /// (ruling M2-R3). Empty in dev mode, where `serve` installs the dev
     /// rule.
     pub rules: Vec<Rule>,
+    /// `[[auth.oidc]]`: the identity providers whose tokens authenticate
+    /// users (ruling M3-R7). `serve` discovers each on startup.
+    pub oidc: Vec<OidcConfig>,
     pub max_token_lifetime: Duration,
     /// `hub.public_url`; `None` means the server's public URL.
     pub hub_public_url: Option<Url>,
@@ -224,6 +227,7 @@ enum Kind {
     StrList,
     Tokens,
     Rules,
+    Oidc,
 }
 
 /// Every key, by section. Keep in step with `docs/reference/config.md`.
@@ -258,6 +262,7 @@ const KEYS: &[(&str, &[(&str, Kind)])] = &[
         &[
             ("static_tokens", Kind::Tokens),
             ("rules", Kind::Rules),
+            ("oidc", Kind::Oidc),
             ("jwt_public_keys", Kind::StrList),
             ("max_token_lifetime", Kind::Str),
         ],
@@ -298,6 +303,17 @@ const STATIC_TOKEN_FIELDS: &[&str] = &[
 ];
 
 const RULE_FIELDS: &[&str] = &["subjects", "claims", "repos", "actions"];
+
+const OIDC_FIELDS: &[&str] = &[
+    "name",
+    "issuer",
+    "audiences",
+    "subject_claim",
+    "name_claim",
+    "email_claim",
+    "claims",
+    "jwks_max_stale",
+];
 
 fn kind_of(key: &str) -> Option<Kind> {
     let (section, name) = key.split_once('.')?;
@@ -884,15 +900,18 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         "CAS tokens expiring further ahead are refused. Match it to your issuer's longest \
          token; 24h is the default.",
     );
-    let (auth, rules) = if c.raw.auth {
+    let (auth, rules, oidc) = if c.raw.auth {
         let tokens = static_tokens(c);
         let rules = rules(c);
+        let oidc = oidc_issuers(c);
         let keys = jwt_public_keys(c);
-        let auth = match (tokens, keys, max_token_lifetime) {
-            (Some(tokens), Some(keys), Some(max)) => authenticator(c, tokens, keys, max),
+        let auth = match (tokens, keys, &oidc, max_token_lifetime) {
+            (Some(tokens), Some(keys), Some(oidc), Some(max)) => {
+                authenticator(c, tokens, keys, !oidc.is_empty(), max)
+            }
             _ => None,
         };
-        (auth, rules)
+        (auth, rules, oidc)
     } else {
         c.set(
             "auth",
@@ -900,7 +919,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
              create every repository",
             &Source::Default,
         );
-        (None, Some(Vec::new()))
+        (None, Some(Vec::new()), Some(Vec::new()))
     };
     let hub = hub(c, max_token_lifetime)?;
     let git = git(c, data_dir.as_deref());
@@ -924,6 +943,7 @@ fn check(c: &mut Checker<'_>, overrides: &Overrides) -> Option<Config> {
         transfer_key_explicit,
         auth: if c.raw.auth { Some(auth?) } else { None },
         rules: rules?,
+        oidc: oidc?,
         max_token_lifetime: max_token_lifetime?,
         hub_public_url: hub.public_url,
         hub_cas_url: hub.cas_url,
@@ -1928,6 +1948,176 @@ fn list_field<T>(
     }
 }
 
+const OIDC_HINT: &str = "An issuer is `[[auth.oidc]]` with `name = \"corp\"`, \
+     `issuer = \"https://id.example.com/realms/corp\"` and `audiences = [\"openxet\"]`; \
+     optionally `subject_claim`, `name_claim`, `email_claim`, `claims = [\"orgs\"]` and \
+     `jwks_max_stale`. See docs/reference/config.md#oidc.";
+
+/// `[[auth.oidc]]` (ruling M3-R7), every entry checked field by field, and
+/// no two entries sharing a `name` or an `issuer`: a token goes to the
+/// issuer its `iss` names, and its subject carries the issuer's name.
+fn oidc_issuers(c: &mut Checker<'_>) -> Option<Vec<OidcConfig>> {
+    const KEY: &str = "auth.oidc";
+    let Some((value, source)) = c.raw.values.get(KEY).cloned() else {
+        c.set(KEY, "none", &Source::Default);
+        return Some(Vec::new());
+    };
+    let Some(entries) = value.as_array() else {
+        c.raw.problem(
+            KEY,
+            None,
+            &source,
+            "must be an array of tables, written [[auth.oidc]]",
+            OIDC_HINT,
+        );
+        return None;
+    };
+    // Each accepted issuer with its index in the array, so a clash names
+    // the entry as written even when an earlier entry was rejected.
+    let mut accepted: Vec<(usize, OidcConfig)> = Vec::new();
+    let mut ok = true;
+    for (index, entry) in entries.iter().enumerate() {
+        let at = format!("{KEY}[{index}]");
+        let Some(cfg) = oidc_issuer(c, &at, entry, &source) else {
+            ok = false;
+            continue;
+        };
+        if let Some((other, _)) = accepted
+            .iter()
+            .find(|(_, o)| o.name == cfg.name || o.issuer == cfg.issuer)
+        {
+            c.raw.problem(
+                at,
+                None,
+                &source,
+                format!("has the name or issuer of {KEY}[{other}]"),
+                "Give each issuer its own `name` and `issuer`; one provider is one entry, \
+                 with all its audiences in `audiences`.",
+            );
+            ok = false;
+            continue;
+        }
+        accepted.push((index, cfg));
+    }
+    let issuers: Vec<OidcConfig> = accepted.into_iter().map(|(_, cfg)| cfg).collect();
+    let summary = issuers
+        .iter()
+        .map(|cfg| format!("{} ({})", cfg.name, cfg.issuer))
+        .collect::<Vec<_>>()
+        .join(", ");
+    c.set(
+        KEY,
+        format!("{} issuer(s): {summary}", issuers.len()),
+        &source,
+    );
+    ok.then_some(issuers)
+}
+
+/// The issuer entry `at`, recording a problem for each bad field.
+fn oidc_issuer(
+    c: &mut Checker<'_>,
+    at: &str,
+    entry: &toml::Value,
+    source: &Source,
+) -> Option<OidcConfig> {
+    let Some(table) = entry.as_table() else {
+        c.raw
+            .problem(at, None, source, "must be a table", OIDC_HINT);
+        return None;
+    };
+    let mut ok = true;
+    for name in table.keys() {
+        if !OIDC_FIELDS.contains(&name.as_str()) {
+            c.raw.problem(
+                format!("{at}.{name}"),
+                None,
+                source,
+                "is not an OIDC issuer field",
+                OIDC_HINT,
+            );
+            ok = false;
+        }
+    }
+    let mut required = |name: &str| match table.get(name) {
+        Some(toml::Value::String(text)) => Some(text.clone()),
+        other => {
+            c.raw.problem_toml(
+                format!("{at}.{name}"),
+                other,
+                source,
+                "is required and must be a string",
+                OIDC_HINT,
+            );
+            None
+        }
+    };
+    let (name, issuer) = (required("name"), required("issuer"));
+    let audiences = match table.get("audiences").and_then(string_list) {
+        Some(audiences) if !audiences.is_empty() => Some(audiences),
+        _ => {
+            c.raw.problem(
+                format!("{at}.audiences"),
+                None,
+                source,
+                "is required and must be a non-empty list of strings",
+                "List the audiences (`aud`) your provider issues tokens for, such as the \
+                 client id it registered OpenXet under.",
+            );
+            None
+        }
+    };
+    let claims = match table.get("claims") {
+        None => Some(Vec::new()),
+        Some(value) => {
+            let claims = string_list(value);
+            if claims.is_none() {
+                c.raw.problem_toml(
+                    format!("{at}.claims"),
+                    Some(value),
+                    source,
+                    "must be a list of claim names",
+                    OIDC_HINT,
+                );
+            }
+            claims
+        }
+    };
+    let mut cfg = OidcConfig::new(name.as_deref()?, issuer.as_deref()?, &[]);
+    cfg.audiences = audiences?;
+    cfg.claims = claims?;
+    for (field, slot) in [
+        ("subject_claim", &mut cfg.subject_claim),
+        ("name_claim", &mut cfg.name_claim),
+        ("email_claim", &mut cfg.email_claim),
+    ] {
+        if let Some(value) = optional_string(c, at, table, field, source, OIDC_HINT)? {
+            *slot = value;
+        }
+    }
+    if let Some(text) = optional_string(c, at, table, "jwks_max_stale", source, OIDC_HINT)? {
+        let range = OidcConfig::MIN_JWKS_MAX_STALE..=OidcConfig::MAX_JWKS_MAX_STALE;
+        match duration::parse(&text).filter(|d| range.contains(d)) {
+            Some(stale) => cfg.jwks_max_stale = stale,
+            None => {
+                c.raw.problem(
+                    format!("{at}.jwks_max_stale"),
+                    Some(text),
+                    source,
+                    format!("must be {}, from 10m to 7d inclusive", duration::FORM),
+                    "How long the last fetched keys verify while the issuer can't be reached; \
+                     24h is the default.",
+                );
+                return None;
+            }
+        }
+    }
+    if let Err(reason) = cfg.check() {
+        c.raw.problem(at, None, source, reason, OIDC_HINT);
+        return None;
+    }
+    ok.then_some(cfg)
+}
+
 fn parse_sha256(text: &str) -> Option<[u8; 32]> {
     if text.len() != 64 || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         return None;
@@ -1987,10 +2177,13 @@ fn jwt_public_keys(c: &mut Checker<'_>) -> Option<Vec<PublicKey>> {
     ok.then_some(keys)
 }
 
+/// The authenticator of `[auth]`. OIDC issuers join it in `serve`, once
+/// discovered; `oidc` says whether any is configured.
 fn authenticator(
     c: &mut Checker<'_>,
     tokens: Vec<StaticToken>,
     keys: Vec<PublicKey>,
+    oidc: bool,
     max_token_lifetime: Duration,
 ) -> Option<Arc<Authenticator>> {
     let source = c
@@ -1999,14 +2192,14 @@ fn authenticator(
         .get("auth.static_tokens")
         .or_else(|| c.raw.values.get("auth.jwt_public_keys"))
         .map_or(Source::Default, |(_, source)| source.clone());
-    if tokens.is_empty() && keys.is_empty() {
+    if tokens.is_empty() && keys.is_empty() && !oidc {
         c.raw.problem(
             "auth",
             None,
             &source,
             "configures no credential, so no request could authenticate",
-            "Add [[auth.static_tokens]] or auth.jwt_public_keys, or remove [auth] to run in dev \
-             mode.",
+            "Add [[auth.static_tokens]], [[auth.oidc]] or auth.jwt_public_keys, or remove [auth] \
+             to run in dev mode.",
         );
         return None;
     }
@@ -2367,6 +2560,64 @@ mod tests {
             "{problem:?}"
         );
         assert_eq!(problem.value.as_deref(), Some(REDACTED));
+    }
+
+    /// `[[auth.oidc]]` alone is a credential source; every field has its
+    /// default and its check (ruling M3-R7).
+    #[test]
+    fn oidc_issuers_are_checked_field_by_field() {
+        let loaded = load_toml(
+            "[[auth.oidc]]\nname = \"corp\"\nissuer = \"https://id.example.com/realms/corp\"\n\
+             audiences = [\"openxet\"]\n\
+             [[auth.oidc]]\nname = \"gh\"\nissuer = \"https://token.actions.githubusercontent.com\"\n\
+             audiences = [\"openxet\"]\nsubject_claim = \"repository\"\nname_claim = \"actor\"\n\
+             claims = [\"repository_owner\"]\njwks_max_stale = \"1h\"\n",
+            &[],
+        );
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let config = loaded.config.unwrap();
+        assert!(config.auth.is_some());
+        let [corp, gh] = &config.oidc[..] else {
+            panic!("{:?}", config.oidc)
+        };
+        assert_eq!(
+            *corp,
+            OidcConfig::new("corp", "https://id.example.com/realms/corp", &["openxet"])
+        );
+        assert_eq!(gh.subject_claim, "repository");
+        assert_eq!(gh.name_claim, "actor");
+        assert_eq!(gh.email_claim, "email");
+        assert_eq!(gh.claims, ["repository_owner"]);
+        assert_eq!(gh.jwks_max_stale, Duration::from_hours(1));
+
+        let loaded = load_toml(
+            "[[auth.oidc]]\nname = \"a:b\"\nissuer = \"https://id.example.com\"\n\
+             audiences = [\"x\"]\n\
+             [[auth.oidc]]\nname = \"plain\"\nissuer = \"http://id.example.com\"\n\
+             audiences = [\"x\"]\n\
+             [[auth.oidc]]\nname = \"c\"\nissuer = \"https://c.example.com\"\naudiences = []\n\
+             secret = \"x\"\n\
+             [[auth.oidc]]\nname = \"d\"\nissuer = \"https://d.example.com\"\n\
+             audiences = [\"x\"]\njwks_max_stale = \"30d\"\nclaims = \"orgs\"\n\
+             [[auth.oidc]]\nissuer = \"https://e.example.com\"\naudiences = [\"x\"]\n\
+             [[auth.oidc]]\nname = \"f\"\nissuer = \"https://f.example.com\"\naudiences = [\"x\"]\n\
+             [[auth.oidc]]\nname = \"f\"\nissuer = \"https://g.example.com\"\naudiences = [\"x\"]\n",
+            &[],
+        );
+        assert_eq!(
+            problem_keys(&loaded),
+            [
+                "auth.oidc[0]",
+                "auth.oidc[1]",
+                "auth.oidc[2].secret",
+                "auth.oidc[2].audiences",
+                "auth.oidc[3].claims",
+                "auth.oidc[4].name",
+                "auth.oidc[6]",
+            ]
+        );
+        assert!(loaded.problems[1].rule.contains("loopback"));
+        assert!(loaded.problems[6].rule.contains("auth.oidc[5]"));
     }
 
     #[test]

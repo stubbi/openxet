@@ -63,7 +63,7 @@ These answers can come from any route:
 | `401` | `missing_credential` | No `Authorization` header. `WWW-Authenticate: Bearer`. |
 | `401` | `invalid_credential` | The token is unknown, malformed, signed by an untrusted key, carries a claim OpenXet can't honour, or the header isn't one `Bearer` value. `WWW-Authenticate: Bearer error="invalid_token"`. |
 | `401` | `expired_credential` | The CAS token is at or past its `exp`. Same challenge. |
-| `403` | `insufficient_scope` | A read token on a route that writes. |
+| `403` | `insufficient_scope` | A read token on a route that writes, or a user credential (a static user token or an [OIDC](config.md#oidc) token), which holds no scope: get a CAS token from the Hub token route. |
 | `404` | `not_found` | No route serves the path, whatever the method: how stock clients learn a route doesn't exist here. Also a `{prefix}` other than the route's. |
 | `405` | `method_not_allowed` | The path exists, but not for this method. `Allow` names the methods. |
 | `400` | `invalid_path` | The path holds a percent-encoded byte. Hashes and prefixes are sent as they are, so each object has one URL. |
@@ -72,6 +72,7 @@ These answers can come from any route:
 | `408` | `body_timeout` | The body stalled for `server.body_read_timeout`, or fell below `server.body_min_rate` ([config](config.md#server)). The answer closes the connection. Clients retry. |
 | `503` | `not_ready` | The server is starting; the index and bucket are not open yet. `Retry-After: 1`; clients retry. |
 | `503` | `unavailable` | The index or bucket failed in a way a retry may fix. Clients retry. |
+| `503` | `authn_unavailable` | An [OIDC](config.md#oidc) token can't be verified now: its issuer's keys can't be fetched, and the cached ones are too old or lack its key. `Retry-After: 1`. Never an accept. |
 | `503` | `memory_busy` | The server's memory budget stayed full for the request's wait: 120 s for an upload, 5 s for a reconstruction that doesn't fit at once ([config](config.md#memory)). `Retry-After: 1`; clients retry. A refused upload's body is not read, and the answer closes the connection. |
 | `413` | `answer_too_large` | One reconstruction answer would hold more than an eighth of the server's memory budget. Final: ask for the file by range, as `hf_xet` does, or put fewer files in a batch; the operator can raise `server.memory_budget`. |
 | `413` | `exceeds_memory_budget` | An upload larger than the server's whole memory budget. Final; stock clients' uploads never are. |

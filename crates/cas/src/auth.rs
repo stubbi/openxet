@@ -25,7 +25,7 @@ impl FromRequestParts<AppState> for ReadAccess {
     type Rejection = CasError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, CasError> {
-        let principal = authenticate(parts, state)?;
+        let principal = authenticate(parts, state).await?;
         if principal.can_read() {
             Ok(Self(principal))
         } else {
@@ -38,7 +38,7 @@ impl FromRequestParts<AppState> for WriteAccess {
     type Rejection = CasError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, CasError> {
-        let principal = authenticate(parts, state)?;
+        let principal = authenticate(parts, state).await?;
         if principal.can_write() {
             Ok(Self(principal))
         } else {
@@ -52,7 +52,7 @@ impl FromRequestParts<AppState> for WriteAccess {
 /// is case-insensitive (RFC 9110 §11.1); anything other than `Bearer`, or a
 /// value that isn't visible ASCII, is an invalid credential. A user-only
 /// credential holds no scope, so it may use no CAS route (ruling M2-R3).
-fn authenticate(parts: &Parts, state: &AppState) -> Result<Principal, CasError> {
+async fn authenticate(parts: &Parts, state: &AppState) -> Result<Principal, CasError> {
     let mut values = parts.headers.get_all(AUTHORIZATION).iter();
     let (Some(value), None) = (values.next(), values.next()) else {
         return Err(if parts.headers.contains_key(AUTHORIZATION) {
@@ -69,7 +69,7 @@ fn authenticate(parts: &Parts, state: &AppState) -> Result<Principal, CasError> 
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, token)| token.trim_start_matches(' '))
         .ok_or(AuthError::Invalid)?;
-    match state.auth.authenticate(token, state.clock.now())? {
+    match state.auth.authenticate(token, state.clock.now()).await? {
         Credential::Cas(principal) | Credential::Both(principal, _) => Ok(principal),
         Credential::User(_) => Err(CasError::UserCredential),
     }

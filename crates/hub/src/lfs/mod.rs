@@ -55,8 +55,10 @@ pub(crate) fn routes() -> Routes {
 
 /// The caller of an LFS request, by `Bearer` or by HTTP Basic with the
 /// token as the password.
-fn who(state: &HubState, headers: &HeaderMap) -> Result<UserPrincipal, HubError> {
-    Who::from_headers(headers, state, true).map(|Who(who)| who)
+async fn who(state: &HubState, headers: &HeaderMap) -> Result<UserPrincipal, HubError> {
+    Who::from_headers(headers, state, true)
+        .await
+        .map(|Who(who)| who)
 }
 
 /// The repository an LFS route names, as the client wrote it.

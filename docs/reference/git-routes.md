@@ -114,7 +114,7 @@ prints as `remote:` lines. The message is also in `X-Error-Message`.
 | `415` | `unsupported_media_type` | Not git's request type. |
 | `429` | `too_many_requests` | The reachability check is at its concurrency limit for the repository or the caller. `Retry-After: 1`. |
 | `503` | `busy` | Too many requests in the repository at once. `Retry-After: 1`. |
-| `503` | `not_ready`, `unavailable`, `authorizer_unavailable` | The server is starting, the index or bucket failed, or the authorizer could not decide. `Retry-After: 1`. |
+| `503` | `not_ready`, `unavailable`, `authorizer_unavailable`, `authn_unavailable` | The server is starting, the index or bucket failed, the authorizer could not decide, or an [OIDC](config.md#oidc) token can't be verified because its issuer's keys can't be fetched. `Retry-After: 1`. |
 | `500` | `internal` | A server bug, logged under the `X-Request-Id`. |
 
 A refusal of one ref inside a successful `git-receive-pack` answer, such

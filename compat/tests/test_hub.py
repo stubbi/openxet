@@ -17,7 +17,17 @@ import pytest
 
 from conftest import RECONSTRUCTION_ROUTE, XORB_ROUTE, MiB, sha256, write_noise
 from git_harness import commit_file, openxet_git
-from hub_harness import CREATE, DOWNLOAD, PATHS_INFO, SNAPSHOT, UPLOAD_FILE, UPLOAD_FOLDER, User
+from hub_harness import (
+    CREATE,
+    DOWNLOAD,
+    PATHS_INFO,
+    SNAPSHOT,
+    UPLOAD_FILE,
+    UPLOAD_FOLDER,
+    User,
+    hub_server,
+    oidc_issuer,
+)
 
 pytestmark = pytest.mark.hub
 
@@ -70,6 +80,32 @@ def test_auth_login_whoami(hub):
     hub.server.uses_credential(mallory.token)
     refused = hub.fails(mallory, "api.model_info('alice/exists')")
     assert (refused["error"], refused["status"]) == ("HfHubHTTPError", 401), refused
+
+
+def test_hf_whoami_with_oidc_token(openxet_bin, tmp_path):
+    # Ruling M3-R7: a token from the operator's identity provider signs
+    # stock `hf` in, as the subject `{name}:{sub}` with its mapped name and
+    # orgs, and the rules decide what it may do.
+    with (
+        oidc_issuer() as idp,
+        hub_server(openxet_bin, tmp_path, idp.config("corp")) as hub,
+    ):
+        token = idp.token("u-1001", preferred_username="carol", orgs=["acme"])
+        carol = User("carol", token)
+        hub.users["carol"] = carol
+        hub.server.uses_credential(token)
+
+        whoami = hub.hf(carol, "auth", "whoami", "--format", "json")
+        assert whoami.returncode == 0, whoami.stderr
+        shown = json.loads(whoami.stdout.strip().splitlines()[-1])
+        assert shown == {"user": "carol", "orgs": "acme", "endpoint": hub.endpoint}
+
+        # Her `orgs` claim matches the rule for `acme/*`; nothing grants
+        # her `alice/*`.
+        hub.ok(carol, CREATE, repo_id="acme/from-oidc")
+        hub.ok(hub.users["alice"], CREATE, repo_id="alice/private")
+        refused = hub.fails(carol, "api.model_info('alice/private')")
+        assert refused["status"] == 404, refused
 
 
 def test_upload_folder_and_snapshot_download(hub, tmp_path):

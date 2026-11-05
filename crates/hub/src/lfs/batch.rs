@@ -260,7 +260,7 @@ async fn batch_route(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, LfsError> {
-    let who = who(&state, &headers)?;
+    let who = who(&state, &headers).await?;
     let address = Address::of(&path, params, &who)?;
     let resolved = match address.resolve(&state, &who).await {
         Ok(access) => Some(access),
@@ -489,7 +489,7 @@ async fn verify_route(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, LfsError> {
-    let who = who(&state, &headers)?;
+    let who = who(&state, &headers).await?;
     let access = Address::of(&path, params, &who)?
         .resolve(&state, &who)
         .await?;

@@ -31,8 +31,10 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use futures_core::stream::BoxStream;
+use openxet_auth::test_support::TestIssuer;
 use openxet_auth::{
-    Authenticator, CasGrant, Mode, StaticToken, TokenSigner, UrlSigner, generate_keypair,
+    Authenticator, CasGrant, Mode, OidcIssuer, StaticToken, TokenSigner, UrlSigner, UserProfile,
+    generate_keypair,
 };
 use openxet_cas::{AppState, BodyDeadline, CasConfig, Clock, SystemClock, mounted};
 use openxet_http::compose;
@@ -360,6 +362,9 @@ pub struct TestServer {
     pub other_scope_token: String,
     /// A static read token for [`SCOPE_B`].
     pub other_scope_read_token: String,
+    /// A static user token: a user identity with no CAS scope, which CAS
+    /// routes refuse (ruling M2-R3).
+    pub user_token: String,
     /// Signs CAS tokens (`EdDSA` JWTs) the server accepts.
     pub signer: TokenSigner,
     /// The clock the server checks credentials against.
@@ -388,7 +393,7 @@ impl TestServer {
     pub async fn start(cfg: CasConfig) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let bucket = Arc::new(LocalBucket::open(&dir.path().join(BUCKET_DIR)).unwrap());
-        Self::start_in(dir, cfg, bucket, Box::new(|index| index)).await
+        Self::start_in(dir, cfg, bucket, Box::new(|index| index), Vec::new()).await
     }
 
     /// Starts a server with `cfg` over `bucket` instead of a local one, for
@@ -399,6 +404,7 @@ impl TestServer {
             cfg,
             bucket,
             Box::new(|index| index),
+            Vec::new(),
         )
         .await
     }
@@ -409,7 +415,17 @@ impl TestServer {
     pub async fn start_with_index(cfg: CasConfig, wrap: WrapIndex) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let bucket = Arc::new(LocalBucket::open(&dir.path().join(BUCKET_DIR)).unwrap());
-        Self::start_in(dir, cfg, bucket, wrap).await
+        Self::start_in(dir, cfg, bucket, wrap, Vec::new()).await
+    }
+
+    /// Starts a server with `cfg` that also accepts tokens from `idp`,
+    /// discovered under the name `corp` (`TestIssuer::discover`), as `openxet
+    /// serve` does with `[[auth.oidc]]` (ruling M3-R7).
+    pub async fn start_with_oidc(cfg: CasConfig, idp: &TestIssuer) -> Self {
+        let oidc = idp.discover(|_| {}).await;
+        let dir = tempfile::tempdir().unwrap();
+        let bucket = Arc::new(LocalBucket::open(&dir.path().join(BUCKET_DIR)).unwrap());
+        Self::start_in(dir, cfg, bucket, Box::new(|index| index), vec![oidc]).await
     }
 
     async fn start_in(
@@ -417,11 +433,13 @@ impl TestServer {
         cfg: CasConfig,
         bucket: Arc<dyn Bucket>,
         wrap: WrapIndex,
+        oidc: Vec<Arc<OidcIssuer>>,
     ) -> Self {
         let write_token = new_token();
         let read_token = new_token();
         let other_scope_token = new_token();
         let other_scope_read_token = new_token();
+        let user_token = new_token();
         let keys = generate_keypair().unwrap();
         let signer = TokenSigner::from_pem(keys.private_pem()).unwrap();
         let auth = Authenticator::new(
@@ -430,11 +448,18 @@ impl TestServer {
                 static_token(&read_token, SCOPE_A, Mode::Read),
                 static_token(&other_scope_token, SCOPE_B, Mode::Write),
                 static_token(&other_scope_read_token, SCOPE_B, Mode::Read),
+                StaticToken {
+                    sha256: StaticToken::digest(&user_token),
+                    subject: "test-user".to_owned(),
+                    cas: None,
+                    user: Some(UserProfile::default()),
+                },
             ],
             vec![signer.public_key()],
             Authenticator::DEFAULT_MAX_TOKEN_LIFETIME,
         )
-        .unwrap();
+        .unwrap()
+        .with_oidc(oidc);
         let urls = UrlSigner::new([7; 32], UrlSigner::DEFAULT_LIFETIME).unwrap();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -505,6 +530,7 @@ impl TestServer {
             read_token,
             other_scope_token,
             other_scope_read_token,
+            user_token,
             signer,
             clock,
             http: reqwest::Client::new(),
@@ -529,7 +555,7 @@ impl TestServer {
         let dir = std::mem::replace(&mut self.dir, tempfile::tempdir().unwrap());
         let bucket = Arc::clone(&self.bucket);
         drop(self);
-        Self::start_in(dir, cfg, bucket, Box::new(|index| index)).await
+        Self::start_in(dir, cfg, bucket, Box::new(|index| index), Vec::new()).await
     }
 
     /// The server's index file, which another `SqliteIndex` may open too.

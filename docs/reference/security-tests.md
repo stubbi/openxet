@@ -57,9 +57,9 @@ scanned at teardown for every credential its clients sent
 | 1 | `no_unauthenticated_reads` | `crates/hub/tests/gateway.rs` | M2 (Hub and gateway URLs) |
 | 1 | `anonymous_reads_only_with_rule` | `crates/hub/tests/security.rs` | M2 |
 | 1 | `test_anonymous_private_download_is_401_shape` | `compat/tests/test_hub.py` | M2 (stock `huggingface_hub`) |
-| 1 | `alg_none_and_hs256_refused` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
-| 1 | `alg_must_match_jwks_key` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
-| 1 | `wrong_issuer_or_audience_refused` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
+| 1 | `alg_none_and_hs256_refused` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
+| 1 | `alg_must_match_jwks_key` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
+| 1 | `wrong_issuer_or_audience_refused` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
 | 1 | `token_alg_must_match_key_alg` | pending (M3, `crates/auth/tests/auth.rs`) | M3 (per-key `alg`, ADR 0011, Task 10) |
 | 1 | `unknown_kid_refused` | pending (M3, `crates/auth/tests/auth.rs`) | M3 (CAS-token key set, Task 10) |
 | 1 | `expired_access_token_refused` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
@@ -81,9 +81,9 @@ scanned at teardown for every credential its clients sent
 | 2 | `direct_urls_only_after_probe_passed` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (presigned URLs, Task 7) |
 | 2 | `presigned_lifetime_capped_by_credential_expiry` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (presigned URLs, Task 7) |
 | 2 | `probe_falls_back_on_unbound_signer` | pending (M3, `crates/storage/tests/presign.rs`) | M3 (range-binding probe, Task 7) |
-| 2 | `oidc_token_scoped_like_static_user_token` | pending (M3, `crates/cas/tests/reconstruction.rs`) | M3 (CAS routes: never a CAS credential, Task 11) |
-| 2 | `oidc_token_scoped_like_static_user_token` | pending (M3, `crates/hub/tests/security.rs`) | M3 (Hub routes, Task 11) |
-| 2 | `two_issuers_never_share_a_subject` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (OIDC, Task 11) |
+| 2 | `oidc_token_scoped_like_static_user_token` | `crates/cas/tests/reconstruction.rs` | M3 (CAS routes: never a CAS credential, Task 11) |
+| 2 | `oidc_token_scoped_like_static_user_token` | `crates/hub/tests/security.rs` | M3 (Hub routes, Task 11) |
+| 2 | `two_issuers_never_share_a_subject` | `crates/auth/tests/oidc.rs` | M3 (OIDC, Task 11) |
 | 2 | `access_token_issued_from_oidc_only` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
 | 2 | `access_token_scoped_to_repo` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
 | 2 | `authorizer_reasked_on_use` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
@@ -101,7 +101,7 @@ scanned at teardown for every credential its clients sent
 | 2 | `admin_limits_require_admin` | pending (M3, `crates/hub/tests/admin_limits.rs`) | M3 (tenant-limits admin API, Task 16) |
 | 3 | `cache_keyed_by_caller` | pending | M5 |
 | 3 | `cache_fails_closed` | pending | M5 |
-| 3 | `jwks_outage_serves_cached_then_fails_closed` | pending (M3, `crates/auth/tests/oidc.rs`) | M3 (JWKS cache, Task 11) |
+| 3 | `jwks_outage_serves_cached_then_fails_closed` | `crates/auth/tests/oidc.rs` | M3 (JWKS cache, Task 11) |
 | 3 | `cache_keyed_by_subject_and_claims` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook decision cache, Task 12) |
 | 3 | `timeout_fails_closed` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook, Task 12) |
 | 3 | `non_2xx_or_bad_body_fails_closed` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook, Task 12) |
@@ -131,7 +131,8 @@ scanned at teardown for every credential its clients sent
 | 6 | `credentials_never_logged` | `crates/openxet/tests/serve.rs` | M1 |
 | 6 | `credentials_never_logged` | `crates/openxet/tests/hub_serve.rs` | M2 (Hub, Git and LFS routes) |
 | 6 | `test_fixture_redaction` | `compat/tests/test_fixture_redaction.py` | M0 |
-| 6 | `oidc_token_never_logged` | pending (M3, `crates/hub/tests/security.rs`) | M3 (OIDC, Task 11) |
+| 6 | `oidc_token_never_logged` | `crates/cas/tests/reconstruction.rs` | M3 (OIDC on CAS routes, Task 11) |
+| 6 | `oidc_token_never_logged` | `crates/hub/tests/security.rs` | M3 (OIDC on Hub, Git and LFS routes, Task 11) |
 | 6 | `access_token_never_logged_or_echoed` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
 | 6 | `secret_stored_only_as_hash` | pending (M3, `crates/hub/tests/access_tokens.rs`) | M3 (access tokens, Task 13) |
 | 6 | `webhook_secret_never_logged` | pending (M3, `crates/auth/tests/webhook.rs`) | M3 (webhook, Task 12) |

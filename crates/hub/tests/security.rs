@@ -1,23 +1,30 @@
 //! The Hub's security tests of design §5.9 (`docs/reference/security-tests.md`):
 //! creation authorized per namespace, a repository the caller may not read
 //! answering exactly as an unknown one on every route (ruling M2-R6), no
-//! credential echoed, and anonymous reads only by explicit rule (ruling
-//! M2-R3).
+//! credential echoed, anonymous reads only by explicit rule (ruling
+//! M2-R3), and OIDC tokens authorized by the rules as static user tokens
+//! are and never logged (ruling M3-R7).
 
 #![allow(clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
+use std::io::Write;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use axum::http::header::AUTHORIZATION;
 use axum::http::{Method, Request, StatusCode};
+use openxet_auth::test_support::{TestAlg, TestIssuer};
 use openxet_auth::{Action, CasGrant, Glob, Mode, Rule, StaticToken};
 use openxet_hub::test_support::{ALL, BEARER, Reply, TestHub, rule, user_token};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const ALICE: &str = "oxt_test_alice";
 const BOB: &str = "oxt_test_bob";
 const CAROL: &str = "oxt_test_carol";
 const CAS_ONLY: &str = "oxt_test_cas_only";
+/// A static user token for `corp:dave`, the subject the OIDC issuer `corp`
+/// gives its user `dave`.
+const STATIC_DAVE: &str = "oxt_test_static_dave";
 
 /// The unknown-repository body of ruling M2-R6, byte for byte.
 const UNKNOWN_BODY: &str = r#"{"error":"Repository not found","schema":"openxet.error.v1","code":"repo_not_found","message":"Repository not found","hint":"Check the repository id and the token's access: a repository the token may not read answers exactly like one that doesn't exist."}"#;
@@ -258,15 +265,20 @@ const NOT_REPOSITORY_ROUTES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Asserts that `method template` answers Bob, who may not read
-/// `alice/m`, exactly as for a repository that doesn't exist or can't, and
-/// a caller without a credential the same `401` either way.
-async fn assert_route_hides_repository(hub: &TestHub, method: &Method, template: &str) {
+/// Asserts that `method template` answers `token`, whose holder may not
+/// read `alice/m`, exactly as for a repository that doesn't exist or
+/// can't, and a caller without a credential the same `401` either way.
+async fn assert_route_hides_repository(
+    hub: &TestHub,
+    token: &str,
+    method: &Method,
+    template: &str,
+) {
     let existing = hub
         .call(
             method.clone(),
             &concrete(template, "alice", "m"),
-            Some(BOB),
+            Some(token),
             None,
         )
         .await;
@@ -274,7 +286,7 @@ async fn assert_route_hides_repository(hub: &TestHub, method: &Method, template:
         .call(
             method.clone(),
             &concrete(template, "alice", "gone"),
-            Some(BOB),
+            Some(token),
             None,
         )
         .await;
@@ -282,7 +294,7 @@ async fn assert_route_hides_repository(hub: &TestHub, method: &Method, template:
         .call(
             method.clone(),
             &concrete(template, "alice", "a..b"),
-            Some(BOB),
+            Some(token),
             None,
         )
         .await;
@@ -350,7 +362,7 @@ async fn unreadable_repo_matches_unknown_repo_on_every_route() {
         if !by_path {
             continue;
         }
-        assert_route_hides_repository(&hub, method, template).await;
+        assert_route_hides_repository(&hub, BOB, method, template).await;
         checked += 1;
     }
     assert!(checked >= 12, "only {checked} repository routes");
@@ -380,9 +392,11 @@ async fn unreadable_repo_matches_unknown_repo_on_every_route() {
 
 #[tokio::test]
 async fn responses_never_echo_credential() {
-    let hub = hub().await;
+    let idp = TestIssuer::start().await;
+    let hub = oidc_hub(&idp).await;
     let unknown = "oxt_test_never_configured_0123456789";
-    let tokens = [ALICE, BOB, CAROL, CAS_ONLY, unknown];
+    let oidc = idp.sign(TestAlg::Rs256, &dave(&idp, hub.state.clock.now()));
+    let tokens = [ALICE, BOB, CAROL, CAS_ONLY, STATIC_DAVE, unknown, &oidc];
     let mut targets: Vec<(Method, String)> = openxet_hub::endpoints()
         .iter()
         .map(|e| (e.method.clone(), concrete(e.path, "alice", "m")))
@@ -485,4 +499,261 @@ async fn anonymous_reads_only_with_rule() {
         .call(Method::GET, "/api/models/pub/x", Some(ALICE), None)
         .await;
     assert_eq!(reply.status, StatusCode::OK);
+}
+
+/// [`hub`], also accepting OIDC tokens from `idp` as the issuer `corp`,
+/// with its `orgs` claim mapped (ruling M3-R7). `corp:dave` may do
+/// everything in `dave/*`, through `STATIC_DAVE` or an OIDC token alike,
+/// and members of the org `acme` may read `alice/*`.
+async fn oidc_hub(idp: &TestIssuer) -> TestHub {
+    let cas_only = StaticToken {
+        sha256: StaticToken::digest(CAS_ONLY),
+        subject: "ci".to_owned(),
+        cas: Some(CasGrant {
+            scope: "default".to_owned(),
+            mode: Mode::Write,
+            tenant: None,
+        }),
+        user: None,
+    };
+    let acme = Rule {
+        subjects: vec![],
+        claims: BTreeMap::from([("orgs".to_owned(), vec!["acme".to_owned()])]),
+        repos: vec![Glob::new("alice/*").unwrap()],
+        actions: vec![Action::Read],
+    };
+    let hub = TestHub::start(
+        vec![
+            user_token(ALICE, "alice", &[]),
+            user_token(BOB, "bob", &[]),
+            user_token(CAROL, "carol", &[]),
+            user_token(STATIC_DAVE, "corp:dave", &[]),
+            cas_only,
+        ],
+        vec![
+            rule(&["alice"], &["alice/*"], ALL),
+            rule(&["bob"], &["bob/*"], ALL),
+            rule(&["carol"], &["alice/*"], &[Action::Create]),
+            rule(&["corp:dave"], &["dave/*"], ALL),
+            acme,
+        ],
+    )
+    .await;
+    hub.create(ALICE, "alice", "m", None).await;
+    let oidc = idp
+        .discover(|cfg| cfg.claims = vec!["orgs".to_owned()])
+        .await;
+    let mut state = hub.state.clone();
+    state.auth = Arc::new((*state.auth).clone().with_oidc(vec![oidc]));
+    TestHub::with_state(hub.dir, state)
+}
+
+/// Claims for `corp`'s user `dave` at `now`.
+fn dave(idp: &TestIssuer, now: u64) -> Value {
+    let mut claims = idp.claims("dave", now);
+    claims["preferred_username"] = "Dave".into();
+    claims
+}
+
+#[tokio::test]
+async fn oidc_token_scoped_like_static_user_token() {
+    // Design §5.9 req 2 for OIDC (ruling M3-R7): the rules decide what an
+    // OIDC token may do exactly as for a static user token with its
+    // subject `{name}:{sub}` and claims; nothing about OIDC widens it.
+    let idp = TestIssuer::start().await;
+    let hub = oidc_hub(&idp).await;
+    let now = hub.state.clock.now();
+    let token = |claims: &Value| idp.sign(TestAlg::Es256, claims);
+
+    // Eve of `corp` has no rule: every repository route answers her as for
+    // a repository that doesn't exist.
+    let eve = token(&idp.claims("eve", now));
+    for endpoint in openxet_hub::endpoints() {
+        if endpoint.path.contains("/{ns}/{name}") {
+            assert_route_hides_repository(&hub, &eve, &endpoint.method, endpoint.path).await;
+        }
+    }
+
+    // Dave through OIDC and through his static token get the same answers.
+    let oidc_dave = token(&dave(&idp, now));
+    hub.create(&oidc_dave, "dave", "x", None).await;
+    for path in [
+        "/api/models/dave/x",
+        "/api/openxet/v1/repos/dave/x/labels",
+        "/api/models/alice/m",
+        "/api/models/bob/none",
+    ] {
+        let by_oidc = hub.call(Method::GET, path, Some(&oidc_dave), None).await;
+        let by_static = hub.call(Method::GET, path, Some(STATIC_DAVE), None).await;
+        assert_eq!(by_oidc.comparable(), by_static.comparable(), "{path}");
+    }
+    for namespace in ["alice", "bob"] {
+        let body = json!({"name": "y", "organization": namespace});
+        let by_oidc = hub
+            .call(
+                Method::POST,
+                "/api/repos/create",
+                Some(&oidc_dave),
+                Some(&body),
+            )
+            .await;
+        let by_static = hub
+            .call(
+                Method::POST,
+                "/api/repos/create",
+                Some(STATIC_DAVE),
+                Some(&body),
+            )
+            .await;
+        assert_eq!(by_oidc.status, StatusCode::FORBIDDEN, "{namespace}");
+        assert_eq!(by_oidc.comparable(), by_static.comparable(), "{namespace}");
+    }
+    // The Hub mints CAS tokens for an OIDC user as for any user.
+    let read_token = hub
+        .call(
+            Method::GET,
+            "/api/models/dave/x/xet-read-token/main",
+            Some(&oidc_dave),
+            None,
+        )
+        .await;
+    assert_eq!(read_token.status, StatusCode::OK, "{}", read_token.text());
+    assert!(read_token.json()["accessToken"].is_string());
+
+    // A mapped claim matches claim rules: `acme` members read `alice/*`,
+    // and only read.
+    let mut member = idp.claims("frank", now);
+    member["orgs"] = json!(["acme"]);
+    let member = token(&member);
+    let read = hub
+        .call(Method::GET, "/api/models/alice/m", Some(&member), None)
+        .await;
+    assert_eq!(read.status, StatusCode::OK);
+    let write = hub
+        .call(
+            Method::PUT,
+            "/api/openxet/v1/repos/alice/m/labels/new",
+            Some(&member),
+            None,
+        )
+        .await;
+    assert_eq!(write.status, StatusCode::FORBIDDEN, "{}", write.text());
+    let whoami = hub
+        .call(Method::GET, "/api/whoami-v2", Some(&member), None)
+        .await;
+    assert_eq!(whoami.json()["name"], "corp:frank");
+    assert_eq!(whoami.json()["orgs"][0]["name"], "acme");
+
+    // While the issuer is down, a token under a key the cache lacks can't
+    // be verified: `503 authn_unavailable`, never an accept and never a
+    // `401` that would make a client drop a valid token.
+    idp.set_up(false);
+    idp.rotate(TestAlg::Rs256);
+    let unverifiable = idp.sign(TestAlg::Rs256, &dave(&idp, now));
+    for path in ["/api/models/dave/x", "/api/whoami-v2"] {
+        let reply = hub.call(Method::GET, path, Some(&unverifiable), None).await;
+        assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(reply.json()["code"], "authn_unavailable", "{path}");
+        assert_eq!(reply.header("retry-after"), Some("1"), "{path}");
+    }
+    // Keys already cached keep verifying meanwhile.
+    let reply = hub
+        .call(Method::GET, "/api/models/dave/x", Some(&oidc_dave), None)
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+}
+
+/// Every log line written on this thread, at every level.
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Logs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn oidc_token_never_logged() {
+    // Design §5.9 req 6 for OIDC, the Hub half: OIDC tokens, accepted,
+    // expired, forged or unverifiable, as `Bearer` and as a Basic
+    // password, on every Hub route, never reach the log, whole or as any
+    // of their parts. The test's runtime runs on this one thread, so the
+    // capture sees everything the Hub logs, at `TRACE`.
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let _guard = tracing::dispatcher::set_default(&dispatch);
+    let idp = TestIssuer::start().await;
+    let hub = oidc_hub(&idp).await;
+    let now = hub.state.clock.now();
+    let mut expired = dave(&idp, now - 7200);
+    expired["exp"] = (now - 3600).into();
+    let mut tokens = vec![
+        idp.sign(TestAlg::Rs256, &dave(&idp, now)),
+        idp.sign(TestAlg::EdDsa, &expired),
+        idp.hs256_with_public_key(&dave(&idp, now)),
+        idp.unsigned(&dave(&idp, now)),
+    ];
+    let send_all = |token: String| {
+        let hub = &hub;
+        async move {
+            for endpoint in openxet_hub::endpoints() {
+                let path = concrete(endpoint.path, "dave", "x");
+                for auth in [
+                    format!("{BEARER} {token}"),
+                    format!("Basic {}", base64_password(&token)),
+                ] {
+                    let request = Request::builder()
+                        .method(endpoint.method.clone())
+                        .uri(&path)
+                        .header(AUTHORIZATION, auth)
+                        .body(axum::body::Body::empty())
+                        .unwrap();
+                    hub.send(request).await;
+                }
+            }
+        }
+    };
+    for token in &tokens {
+        send_all(token.clone()).await;
+    }
+    idp.set_up(false);
+    idp.rotate(TestAlg::Es256);
+    let unverifiable = idp.sign(TestAlg::Es256, &dave(&idp, now));
+    send_all(unverifiable.clone()).await;
+    tokens.push(unverifiable);
+
+    let logs = String::from_utf8_lossy(&logs.0.lock().unwrap_or_else(PoisonError::into_inner))
+        .into_owned();
+    assert!(
+        logs.contains("could not refresh the OIDC issuer's JWKS"),
+        "the failed refresh is logged: {logs}"
+    );
+    for token in &tokens {
+        for part in token.split('.').filter(|p| p.len() > 8) {
+            assert!(!logs.contains(part), "a token part is in the log");
+        }
+        assert!(!logs.contains(&base64_password(token)));
+    }
+}
+
+/// HTTP Basic credentials with `token` as the password, as git sends them.
+fn base64_password(token: &str) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(format!("git:{token}"))
 }
