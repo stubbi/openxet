@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 
 use super::{Fixture, ok};
 use crate::{
-    CommitError, CommitTx, GitStore, IndexError, Oid, Pack, PackId, PackState, RefLogRow,
+    CommitError, CommitTx, GitStore, HubIndex, IndexError, Oid, Pack, PackId, PackState, RefLogRow,
     RefUpdate, Reindexed, RepackPublish, Repo, RepoId, Repos, Unplaced, UnplacedKind,
 };
 
@@ -91,7 +91,7 @@ async fn push(index: &impl GitStore, repo: RepoId, old: Option<u8>, new: u8) -> 
 /// A ref log row's `(ref, old, new, actor, request)`.
 type LogRow<'a> = (&'a str, Option<Oid>, Option<Oid>, &'a str, &'a str);
 
-pub async fn snapshot_reads_refs_and_committed_packs_only<F: Fixture>(f: &F) {
+pub async fn snapshot_reads_refs_and_committed_packs_only<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -134,7 +134,7 @@ pub async fn snapshot_reads_refs_and_committed_packs_only<F: Fixture>(f: &F) {
     }
 }
 
-pub async fn commit_applies_all_updates_or_none<F: Fixture>(f: &F) {
+pub async fn commit_applies_all_updates_or_none<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     push(&index, repo, None, 1).await;
@@ -210,7 +210,7 @@ pub async fn commit_applies_all_updates_or_none<F: Fixture>(f: &F) {
     }
 }
 
-pub async fn commit_requires_pending_pack<F: Fixture>(f: &F) {
+pub async fn commit_requires_pending_pack<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -257,7 +257,7 @@ pub async fn commit_requires_pending_pack<F: Fixture>(f: &F) {
     }
 }
 
-pub async fn commit_fenced_by_full_repack_gen<F: Fixture>(f: &F) {
+pub async fn commit_fenced_by_full_repack_gen<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let base = push(&index, repo, None, 1).await;
@@ -313,7 +313,7 @@ pub async fn commit_fenced_by_full_repack_gen<F: Fixture>(f: &F) {
         .await);
 }
 
-pub async fn commit_writes_one_ref_log_row_per_update<F: Fixture>(f: &F) {
+pub async fn commit_writes_one_ref_log_row_per_update<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -372,7 +372,7 @@ pub async fn commit_writes_one_ref_log_row_per_update<F: Fixture>(f: &F) {
     assert_eq!(ok(index.ref_log_since(other, 0).await).len(), 1);
 }
 
-pub async fn mark_pack_is_guarded<F: Fixture>(f: &F) {
+pub async fn mark_pack_is_guarded<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let pack = pending(repo, "p");
@@ -417,7 +417,7 @@ pub async fn mark_pack_is_guarded<F: Fixture>(f: &F) {
         .await));
 }
 
-pub async fn lease_epoch_increases_and_expires<F: Fixture>(f: &F) {
+pub async fn lease_epoch_increases_and_expires<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -449,7 +449,11 @@ pub async fn lease_epoch_increases_and_expires<F: Fixture>(f: &F) {
     }
 }
 
-pub async fn publish_repack_rejects_stale_epoch_and_advanced_ref_log<F: Fixture>(f: &F) {
+pub async fn publish_repack_rejects_stale_epoch_and_advanced_ref_log<
+    F: Fixture<Index: HubIndex>,
+>(
+    f: &F,
+) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let a = push(&index, repo, None, 1).await;
@@ -560,7 +564,7 @@ pub async fn publish_repack_rejects_stale_epoch_and_advanced_ref_log<F: Fixture>
     assert_eq!(ok(index.snapshot(repo).await), after);
 }
 
-pub async fn unplaced_rows_persist_and_clear_by_coverage<F: Fixture>(f: &F) {
+pub async fn unplaced_rows_persist_and_clear_by_coverage<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -605,7 +609,7 @@ pub async fn unplaced_rows_persist_and_clear_by_coverage<F: Fixture>(f: &F) {
 /// superseded, recovered ones lost, and pending ones can no longer commit.
 /// What the repository's own rows look like afterwards is each backend's
 /// to check.
-pub async fn delete_repo_hands_packs_to_gc<F: Fixture>(f: &F) {
+pub async fn delete_repo_hands_packs_to_gc<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "doomed").await;
     let keep = new_repo(&index, "kept").await;
@@ -686,7 +690,7 @@ pub async fn delete_repo_hands_packs_to_gc<F: Fixture>(f: &F) {
 /// wins, the tip is the winner's, every loser gets `RefMismatch` and marks
 /// its pack lost, and the ref log and the committed packs hold one entry
 /// per round.
-pub async fn concurrent_hub_commits_two_pools_one_winner<F: Fixture>(f: &F) {
+pub async fn concurrent_hub_commits_two_pools_one_winner<F: Fixture<Index: HubIndex>>(f: &F) {
     const WRITERS: u8 = 16;
     const ROUNDS: u8 = 15;
     let first = f.fresh().await;
@@ -751,7 +755,7 @@ pub async fn concurrent_hub_commits_two_pools_one_winner<F: Fixture>(f: &F) {
 
 /// The pack sweep's reads and deletes (ADR 0004 item 5): every row with its
 /// commit and supersede times, and deletes guarded by state.
-pub async fn packs_list_every_state_and_delete_is_guarded<F: Fixture>(f: &F) {
+pub async fn packs_list_every_state_and_delete_is_guarded<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let first = push(&index, repo, None, 1).await;
@@ -812,7 +816,7 @@ pub async fn packs_list_every_state_and_delete_is_guarded<F: Fixture>(f: &F) {
 
 /// The ref log's head and pruning (ADR 0004 item 3): only rows older than
 /// the cut-off and already in the bucket go.
-pub async fn ref_log_head_and_prune<F: Fixture>(f: &F) {
+pub async fn ref_log_head_and_prune<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     assert_eq!(ok(index.ref_log_head(repo).await), 0);
@@ -837,7 +841,7 @@ pub async fn ref_log_head_and_prune<F: Fixture>(f: &F) {
 /// its generation; a restore commits recovered packs and clears what its
 /// ref covers; discard clears the rest (ADR 0004 item 4).
 #[allow(clippy::too_many_lines)]
-pub async fn reindex_restore_and_discard<F: Fixture>(f: &F) {
+pub async fn reindex_restore_and_discard<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -1012,7 +1016,7 @@ pub async fn reindex_restore_and_discard<F: Fixture>(f: &F) {
 /// The pack sweep's deletion claims (ADR 0004 item 5): a claim is refused
 /// while a pending, committed or recovered row names the pack, and while
 /// one exists, a row of that name can't be inserted.
-pub async fn pack_deletion_claims_exclude_new_rows<F: Fixture>(f: &F) {
+pub async fn pack_deletion_claims_exclude_new_rows<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let other = new_repo(&index, "b").await;
@@ -1056,7 +1060,7 @@ pub async fn pack_deletion_claims_exclude_new_rows<F: Fixture>(f: &F) {
 /// A pack row's `inserted_at` is the database clock at insert, whatever
 /// `created_at` the writer gives it (a repack output carries its oldest
 /// input's), and reindex stamps its rows the same way.
-pub async fn inserted_at_is_the_database_clock<F: Fixture>(f: &F) {
+pub async fn inserted_at_is_the_database_clock<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let before = std::time::SystemTime::now()
@@ -1077,7 +1081,7 @@ pub async fn inserted_at_is_the_database_clock<F: Fixture>(f: &F) {
 
 /// Lease renewal (ADR 0004 item 5) extends the holder's lease under the
 /// same epoch, and fails once the lease is lost or taken over.
-pub async fn renew_lease_keeps_epoch_until_lost<F: Fixture>(f: &F) {
+pub async fn renew_lease_keeps_epoch_until_lost<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let repo = new_repo(&index, "a").await;
     let ttl = Duration::from_millis(400);

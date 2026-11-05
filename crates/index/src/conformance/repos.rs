@@ -101,7 +101,7 @@ async fn dedup_answers(index: &dyn Index, t: &ChunkTable) -> Vec<Option<MerkleHa
     out
 }
 
-pub async fn create_then_lookup_by_name_and_id<F: Fixture>(f: &F) {
+pub async fn create_then_lookup_by_name_and_id<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let mut r = repo("Org", "Model", &["model", "eval"]);
     r.private = true;
@@ -127,7 +127,7 @@ pub async fn create_then_lookup_by_name_and_id<F: Fixture>(f: &F) {
     assert_eq!(ok(other.repo_by_id(r.id).await), Some(r));
 }
 
-pub async fn name_taken_case_insensitively<F: Fixture>(f: &F) {
+pub async fn name_taken_case_insensitively<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let first = repo("org", "model", &["model"]);
     ok(index.create_repo(&first).await);
@@ -146,7 +146,7 @@ pub async fn name_taken_case_insensitively<F: Fixture>(f: &F) {
     ok(index.create_repo(&repo("org2", "model", &[])).await);
 }
 
-pub async fn list_filters_by_label_and_paginates<F: Fixture>(f: &F) {
+pub async fn list_filters_by_label_and_paginates<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     // 150 models alternating between two namespaces, and 15 datasets
     // alternating every ten.
@@ -226,7 +226,7 @@ pub async fn list_filters_by_label_and_paginates<F: Fixture>(f: &F) {
     );
 }
 
-pub async fn set_labels_replaces<F: Fixture>(f: &F) {
+pub async fn set_labels_replaces<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let r = repo("org", "thing", &["model"]);
     ok(index.create_repo(&r).await);
@@ -261,7 +261,7 @@ pub async fn set_labels_replaces<F: Fixture>(f: &F) {
 /// Two writers that read the same labels can't both change them: the
 /// second one's expected list is stale, and it changes nothing (ruling
 /// M2-R12).
-pub async fn set_labels_compares_and_swaps<F: Fixture>(f: &F) {
+pub async fn set_labels_compares_and_swaps<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let r = repo("org", "thing", &["model"]);
     ok(index.create_repo(&r).await);
@@ -283,7 +283,7 @@ pub async fn set_labels_compares_and_swaps<F: Fixture>(f: &F) {
     ));
 }
 
-pub async fn file_by_sha256_is_per_scope<F: Fixture>(f: &F) {
+pub async fn file_by_sha256_is_per_scope<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let (xorb, t) = put(&index, "x", 4, "repo:a").await;
     let f = file("same", xorb, &t, 0, 4);
@@ -312,7 +312,7 @@ pub async fn file_by_sha256_is_per_scope<F: Fixture>(f: &F) {
 
 /// The batch form answers each SHA-256 as `file_by_sha256` does, across
 /// query batches.
-pub async fn xet_files_by_sha256_answers_like_file_by_sha256<F: Fixture>(f: &F) {
+pub async fn xet_files_by_sha256_answers_like_file_by_sha256<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let (xorb, t) = put(&index, "x", 4, "repo:a").await;
     let files: Vec<NewFile> = (0..1_200)
@@ -350,7 +350,7 @@ pub async fn xet_files_by_sha256_answers_like_file_by_sha256<F: Fixture>(f: &F) 
     assert!(ok(index.xet_files_by_sha256("repo:a", &[]).await).is_empty());
 }
 
-pub async fn file_summary_is_per_scope<F: Fixture>(f: &F) {
+pub async fn file_summary_is_per_scope<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let (xorb, t) = put(&index, "x", 4, "repo:a").await;
     let f = file("same", xorb, &t, 0, 4);
@@ -384,7 +384,7 @@ pub async fn file_summary_is_per_scope<F: Fixture>(f: &F) {
     );
 }
 
-pub async fn purge_removes_every_scope_row<F: Fixture>(f: &F) {
+pub async fn purge_removes_every_scope_row<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let (xorb, t) = put(&index, "secret", 6, "t").await;
     let (other_xorb, other_t) = put(&index, "other", 3, "t").await;
@@ -426,7 +426,7 @@ pub async fn purge_removes_every_scope_row<F: Fixture>(f: &F) {
 }
 
 /// The Hub holds the index as one trait object.
-pub async fn is_a_hub_index<F: Fixture>(f: &F) {
+pub async fn is_a_hub_index<F: Fixture<Index: HubIndex>>(f: &F) {
     let index = f.fresh().await;
     let hub: Arc<dyn HubIndex> = Arc::new(index);
     let r = repo("org", "model", &["model"]);

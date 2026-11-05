@@ -1276,3 +1276,74 @@ pub async fn concurrent_register_same_shard_two_pools<F: Fixture>(f: &F) {
         );
     }
 }
+
+/// Two nodes registering overlapping multi-file shards at once (the M3
+/// plan's Review Focus 1). Each call names most of a set of files, in its
+/// own order, over its own xorb, so within one call some files are new to
+/// the scope and some were registered by a racing call: inserts and
+/// updates of the same rows race each other. Every call succeeds, and each
+/// file keeps the reconstruction of the lowest-numbered registration that
+/// names it, whichever committed first (ruling M1-R37).
+pub async fn concurrent_overlapping_shards_keep_the_lowest_two_pools<F: Fixture>(f: &F) {
+    const FILES: usize = 8;
+    // Call `i` names file `j` unless `(i + j) % 3 == 0`, odd calls in
+    // reverse order.
+    let names = |i: usize| -> Vec<usize> {
+        let mut named: Vec<usize> = (0..FILES).filter(|j| !(i + j).is_multiple_of(3)).collect();
+        if i % 2 == 1 {
+            named.reverse();
+        }
+        named
+    };
+    let nodes = two_nodes(f).await;
+    for round in 0..ROUNDS {
+        let xorbs: Vec<MerkleHash> = (0..CALLS)
+            .map(|i| h(&format!("overlap{round}/xorb{i}")))
+            .collect();
+        for (i, xorb) in xorbs.iter().enumerate() {
+            ok(nodes[0]
+                .put_xorb(
+                    xorb,
+                    1300,
+                    &table(&format!("overlap{round}/{i}"), 2),
+                    &[],
+                    A,
+                )
+                .await);
+        }
+        let over =
+            |i: usize, j: usize| file_over(&format!("overlap{round}/file{j}"), &[(xorbs[i], 2)]);
+        all(CALLS, |i| {
+            let node = Arc::clone(&nodes[i % 2]);
+            let files: Vec<NewFile> = names(i).into_iter().map(|j| over(i, j)).collect();
+            async move {
+                let by = Registrant {
+                    scope: A,
+                    tenant: A,
+                    seq: 1000 + u64::try_from(i).unwrap_or(u64::MAX),
+                };
+                let shard = h(&format!("overlap{round}/shard{i}"));
+                if let Err(e) = node
+                    .register_shard(&shard, &files, by, Visibility::PerTenant)
+                    .await
+                {
+                    panic!("round {round} call {i}: register_shard: {}", chain(&e));
+                }
+            }
+        })
+        .await;
+        for j in 0..FILES {
+            let Some(winner) = (0..CALLS).find(|i| names(*i).contains(&j)) else {
+                panic!("no call names file {j}");
+            };
+            let expected = over(winner, j).record;
+            for node in &nodes {
+                assert_eq!(
+                    ok(node.file(&expected.hash, A).await),
+                    Some(expected.clone()),
+                    "round {round} file {j}: the lowest-numbered registration wins"
+                );
+            }
+        }
+    }
+}

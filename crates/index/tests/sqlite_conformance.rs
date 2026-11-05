@@ -13,12 +13,17 @@ struct Sqlite {
     next: AtomicUsize,
 }
 
-fn sqlite() -> Sqlite {
+/// Always `Some`: SQLite needs no service to skip without.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "index_conformance! takes fixtures that may skip"
+)]
+fn sqlite() -> Option<Sqlite> {
     match TempDir::new() {
-        Ok(dir) => Sqlite {
+        Ok(dir) => Some(Sqlite {
             dir,
             next: AtomicUsize::new(0),
-        },
+        }),
         Err(e) => panic!("tempdir: {e}"),
     }
 }
