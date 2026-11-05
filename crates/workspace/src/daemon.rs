@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use notify::event::{AccessKind, AccessMode};
-use notify::{EventKind, RecursiveMode, Watcher as _};
+use notify::{EventKind, EventKindMask, RecursiveMode, Watcher as _};
 use tokio::sync::mpsc;
 
 use crate::dedup::TEMP_PREFIX;
@@ -42,6 +42,25 @@ const SETTLE_POLL: Duration = Duration::from_millis(250);
 /// The most files deduplicated per poll, so a large build's queue doesn't
 /// keep the daemon from its other checks and from stopping.
 const MAX_PER_POLL: usize = 256;
+
+/// The events the daemon acts on: a file appearing, going, being renamed,
+/// written or having its metadata changed.
+///
+/// Opens are left out: inotify queues one for every file a build reads,
+/// and with them a build in a watched workspace took 5 to 6% longer than
+/// in a plain clone in the CI gate (`compat/tests/test_workspaces.py`). On
+/// Linux a finished write is inotify's `CLOSE_WRITE`, so each `write`
+/// call's `MODIFY` is left out too. `FSEvents` (macOS) reports a write only
+/// as a data modification, and filters these kinds in user space, where
+/// leaving them out saves nothing.
+#[cfg(target_os = "linux")]
+const WATCHED_EVENTS: EventKindMask = EventKindMask::CREATE
+    .union(EventKindMask::REMOVE)
+    .union(EventKindMask::MODIFY_META)
+    .union(EventKindMask::MODIFY_NAME)
+    .union(EventKindMask::ACCESS_CLOSE);
+#[cfg(not(target_os = "linux"))]
+const WATCHED_EVENTS: EventKindMask = EventKindMask::CORE.union(EventKindMask::ACCESS_CLOSE);
 
 /// The longest between two writes of one workspace's `last_active`.
 const TOUCH_EVERY: Duration = Duration::from_secs(30);
@@ -95,7 +114,9 @@ pub async fn run_daemon(
     let (events, mut received) = mpsc::unbounded_channel();
     // Symbolic links are not followed, so no event comes from outside a
     // workspace; inotify's recursive watch would otherwise walk into them.
-    let config = notify::Config::default().with_follow_symlinks(false);
+    let config = notify::Config::default()
+        .with_follow_symlinks(false)
+        .with_event_kinds(WATCHED_EVENTS);
     let watcher = notify::RecommendedWatcher::new(
         move |event| {
             let _ = events.send(event);

@@ -393,6 +393,46 @@ jobs:
         if: failure()
         run: docker compose -f compat/gitea/compose.yaml logs
 
+  # Spec 2026-10-27-agent-workspaces-design.md §2: six concurrent builds in
+  # agent workspaces keep the disk almost flat, and a workspace build is at
+  # most 10% slower than a plain clone's. The fixture and the workspace state
+  # sit on a fresh XFS volume with reflink, so clones work as on APFS and
+  # nothing else writes to the used bytes the test samples. The loop file is
+  # sparse: the runner's disk holds only what the tests write.
+  workspaces-gate:
+    name: workspaces gate
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.9.8"
+          cache-dependency-glob: compat/uv.lock
+      - name: Mount a 20 GiB XFS volume with reflink
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xfsprogs
+          image="$RUNNER_TEMP/workspaces.img"
+          volume="$RUNNER_TEMP/workspaces-volume"
+          truncate -s 20G "$image"
+          mkfs.xfs -q -m reflink=1 "$image"
+          mkdir -p "$volume"
+          sudo mount -o loop "$image" "$volume"
+          sudo chown "$(id -u):$(id -g)" "$volume"
+          echo "OPENXET_COMPAT_WORKSPACE_VOLUME=$volume" >> "$GITHUB_ENV"
+          df -h "$volume"
+      - run: cargo build --locked -p openxet
+      - run: uv run --frozen --directory compat pytest -m workspaces -s
+        env:
+          OPENXET_BIN: ${{ github.workspace }}/target/debug/openxet
+
   # The Git role's protocol tests against git 2.37.7, the oldest git it
   # supports (ADR 0004 item 8), besides the runner's own.
   git-floor:

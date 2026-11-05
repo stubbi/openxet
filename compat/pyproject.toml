@@ -23,6 +23,7 @@ markers = [
     "lfs: git-lfs and git-xet with repos on Gitea and on OpenXet, and jj-xet's contract (needs OPENXET_BIN; the Gitea tests need compat/gitea)",
     "pinned: only valid when the locked client versions are installed",
     "storage_only: stock hf_xet against openxet serve, no Hub (needs OPENXET_BIN)",
+    "workspaces: the flat-disk and build-speed gate for agent workspaces (needs OPENXET_BIN, cargo and a volume with clones)",
 ]
 
 [dependency-groups]

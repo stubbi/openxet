@@ -23,10 +23,13 @@ allow = [
 # CDLA-Permissive-2.0; the client core's TLS stack (reqwest, rustls) needs it.
 # notify, the workspace daemon's filesystem watcher, is dedicated to the
 # public domain under CC0-1.0, which asks nothing of its users.
+# xxhash-rust, which notify's polling watcher hashes files with, is under the
+# permissive, OSI-approved Boost licence (BSL-1.0).
 exceptions = [
     { allow = ["NCSA"], crate = "libfuzzer-sys" },
     { allow = ["CC0-1.0"], crate = "notify" },
     { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+    { allow = ["BSL-1.0"], crate = "xxhash-rust" },
 ]
 
 [bans]

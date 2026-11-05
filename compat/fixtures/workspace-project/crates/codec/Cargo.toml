@@ -1,0 +1,10 @@
+[package]
+name = "codec"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+itoa.workspace = true
+model = { path = "../model" }
+serde_json.workspace = true
