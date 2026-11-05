@@ -235,9 +235,17 @@ class Project:
         )
 
     def wait(self, build: subprocess.Popen, checkout: Path):
-        assert build.wait(timeout=BUILD_TIMEOUT) == 0, (
-            self.logs / f"build-{checkout.name}.log"
-        ).read_text()[-4000:]
+        # A blocking wait, with a watchdog for the timeout: `wait(timeout=)`
+        # polls with sleeps that grow to 50 ms, so it returns on a 50 ms grid
+        # (31 ms, 63 ms, 113 ms, 163 ms, 213 ms, ...), coarser than the 10%
+        # the build-speed gate measures on a build of a fraction of a second.
+        watchdog = threading.Timer(BUILD_TIMEOUT, os.killpg, (build.pid, signal.SIGKILL))
+        watchdog.start()
+        try:
+            code = build.wait()
+        finally:
+            watchdog.cancel()
+        assert code == 0, (self.logs / f"build-{checkout.name}.log").read_text()[-4000:]
 
     def compiled(self, checkout: Path) -> list[str]:
         """The units Cargo compiled, rather than found fresh, in every build
