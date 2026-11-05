@@ -28,7 +28,9 @@ pub(crate) fn doc(summary: &'static str, write: bool) -> Doc {
         )
         .error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "`unavailable`: the index or bucket failed in a way a retry may fix.",
+            "`unavailable`: the index or bucket failed in a way a retry may fix. \
+             `authn_unavailable`: an OIDC token's issuer keys can't be fetched. \
+             `Retry-After: 1`.",
         );
     if write {
         doc.error(

@@ -26,8 +26,9 @@ fn credential_errors(doc: Doc) -> Doc {
     )
     .error(
         StatusCode::SERVICE_UNAVAILABLE,
-        "`authorizer_unavailable`: the authorizer could not decide. `unavailable`: the \
-         index or the bucket failed. `Retry-After: 1`.",
+        "`authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: \
+         an OIDC token's issuer keys can't be fetched, so it can't be verified now. \
+         `unavailable`: the index or the bucket failed. `Retry-After: 1`.",
     )
 }
 

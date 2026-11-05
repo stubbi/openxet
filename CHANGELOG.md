@@ -22,6 +22,15 @@ in CI.
   `openxet config check` lists every key with its id, algorithm and age,
   warning past `auth.key_max_age` (default `180d`)
   ([rotating keys](docs/reference/config.md#rotating-keys)).
+- Sign in with your identity provider: `[[auth.oidc]]` accepts tokens
+  from any OpenID Connect issuer (Keycloak, Auth0, Okta, Entra ID,
+  GitHub Actions and others) on the Hub API, Git and LFS routes, as the
+  subject `{name}:{sub}` with mapped claims that rules match, and the
+  email Hub commits carry only when `email_verified` is true. Signing keys
+  are discovered, cached and followed through rotation; while the issuer
+  is down the last keys verify for `jwks_max_stale` (default `24h`), and
+  after that requests get `503 authn_unavailable`, never an unverified
+  accept ([OIDC](docs/reference/config.md#oidc)).
 
 ### Added in M2
 

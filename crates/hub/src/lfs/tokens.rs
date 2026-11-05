@@ -64,7 +64,7 @@ async fn token(
     headers: HeaderMap,
     mode: Mode,
 ) -> Result<Response, LfsError> {
-    let who = who(&state, &headers)?;
+    let who = who(&state, &headers).await?;
     let access = Address::of(&path, params, &who)?
         .resolve(&state, &who)
         .await?;

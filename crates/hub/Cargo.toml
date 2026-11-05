@@ -50,6 +50,7 @@ zeroize = "1.9.1"
 
 [dev-dependencies]
 async-trait = "0.1.92"
+openxet-auth = { path = "../auth", version = "0.0.0", features = ["test-support"] }
 openxet-hub = { path = ".", features = ["test-support"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio"] }
 tokio = { version = "1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "test-util", "time"] }

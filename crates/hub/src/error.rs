@@ -286,6 +286,14 @@ pub enum HubError {
     /// The authorizer could not decide. `503`.
     #[error("the authorizer could not decide; retry in a moment")]
     AuthorizerUnavailable(#[source] AuthzError),
+    /// An OIDC token can't be verified now: its issuer's keys can't be
+    /// fetched, and the cached ones can't verify it (ruling M3-R7). `503`,
+    /// never an accept, and never a `401` that would make a client drop a
+    /// valid token.
+    #[error(
+        "the identity provider's signing keys can't be fetched, so the token can't be verified now; retry in a moment"
+    )]
+    AuthnUnavailable,
     /// The index or the bucket failed in a way a retry may fix. `503`.
     #[error("the server's storage is unavailable; retry in a moment")]
     Unavailable(#[source] Box<dyn StdError + Send + Sync>),
@@ -454,6 +462,12 @@ impl HubError {
                 "authorizer_unavailable",
                 RETRY_HINT,
             ),
+            Self::AuthnUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authn_unavailable",
+                "Retry in a moment. If it persists, the operator should check that the server \
+                 reaches the OIDC issuer's JWKS; the server log names the issuer.",
+            ),
             Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable", RETRY_HINT),
             Self::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -550,6 +564,7 @@ impl HubError {
                 );
             }
             Self::AuthorizerUnavailable(_)
+            | Self::AuthnUnavailable
             | Self::Unavailable(_)
             | Self::Busy(_)
             | Self::Throttled(_)

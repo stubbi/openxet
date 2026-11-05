@@ -20,11 +20,30 @@ pub enum AuthError {
     )]
     Invalid,
 
-    /// The CAS token is at or past its `exp`. HTTP `401`.
+    /// The CAS or OIDC token is at or past its `exp`. HTTP `401`.
     #[error(
-        "the CAS token has expired (a token is invalid from its `exp` second on); obtain a new token"
+        "the token has expired (a token is invalid from its `exp` second on); obtain a new token"
     )]
     Expired,
+
+    /// An OIDC token can't be verified now: its issuer's keys could not be
+    /// fetched, and the cached ones are older than `jwks_max_stale` or
+    /// don't hold the token's `kid` (ruling M3-R7). Never an accept. HTTP
+    /// `503 authn_unavailable`.
+    #[error(
+        "the identity provider's signing keys could not be fetched, so the token can't be verified now; retry in a moment, and tell the operator if it persists"
+    )]
+    Unavailable,
+
+    /// An `[[auth.oidc]]` issuer is misconfigured, or its discovery
+    /// document or JWKS could not be fetched or read at startup.
+    #[error("OIDC issuer `{name}`: {reason}")]
+    Oidc {
+        /// The issuer's configured `name`.
+        name: String,
+        /// What is wrong; issuer metadata is public, so it may name URLs.
+        reason: String,
+    },
 
     /// A signed transfer URL was refused. HTTP `403`.
     #[error("the signed transfer URL was refused: {reason}; request a fresh reconstruction")]

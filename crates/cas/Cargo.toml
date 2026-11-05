@@ -41,6 +41,7 @@ url = "2.5.8"
 [dev-dependencies]
 async-trait = "0.1.92"
 criterion = { version = "0.8.2", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
+openxet-auth = { path = "../auth", version = "0.0.0", features = ["test-support"] }
 openxet-index = { path = "../index", version = "0.0.0", features = ["test-support"] }
 openxet-cas = { path = ".", features = ["test-support"] }
 openxet-protocol = { path = "../protocol", version = "0.0.0", features = ["test-support"] }

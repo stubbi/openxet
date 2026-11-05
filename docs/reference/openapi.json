@@ -12568,7 +12568,7 @@
             "$ref": "#/components/responses/get_healthz_500"
           },
           "503": {
-            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix.",
+            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`.",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/X-Request-Id"
@@ -12775,7 +12775,7 @@
             "$ref": "#/components/responses/get_api_datasets_500"
           },
           "503": {
-            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `memory_busy`: the memory budget stayed full. `Retry-After: 1`.",
+            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `memory_busy`: the memory budget stayed full. `Retry-After: 1`.",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/Cache-Control"
@@ -13161,7 +13161,7 @@
             "$ref": "#/components/responses/get_v1_chunks_prefix_hash_500"
           },
           "503": {
-            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
+            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/Cache-Control"
@@ -14629,7 +14629,7 @@
         }
       },
       "get_api_agent_harnesses_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`.",
         "headers": {
           "X-Error-Code": {
             "$ref": "#/components/headers/X-Error-Code"
@@ -14865,7 +14865,7 @@
         }
       },
       "get_api_datasets_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -15729,7 +15729,7 @@
         }
       },
       "get_datasets_ns_name_resolve_rev_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `blob_too_large`: a Git blob too large to buffer; it won't fit later either. `memory_busy`: the memory budget stayed full. `busy`: too many reads at once.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `blob_too_large`: a Git blob too large to buffer; it won't fit later either. `memory_busy`: the memory budget stayed full. `busy`: too many reads at once.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -15837,7 +15837,7 @@
         }
       },
       "get_v1_chunks_prefix_hash_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -15978,7 +15978,7 @@
         }
       },
       "get_v1_reconstructions_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `memory_busy`: the memory budget stayed full for 5 s. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 5 s. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -16217,7 +16217,7 @@
         }
       },
       "post_api_datasets_ns_name_branch_branch_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `busy`: too many writes in the repository at once. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `busy`: too many writes in the repository at once. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -16377,7 +16377,7 @@
         }
       },
       "post_api_datasets_ns_name_commit_rev_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `busy`: the commit lost its branch to concurrent writers on every attempt. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `busy`: the commit lost its branch to concurrent writers on every attempt. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -16816,7 +16816,7 @@
         }
       },
       "post_datasets_ns_name_git_receive_pack_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `busy`: too many requests in the repository at once. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `authorizer_unavailable`: the authorizer could not decide. `authn_unavailable`: an OIDC token's issuer keys can't be fetched, so it can't be verified now. `unavailable`: the index or the bucket failed. `Retry-After: 1`. `busy`: too many requests in the repository at once. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -17222,7 +17222,7 @@
         }
       },
       "post_shards_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"

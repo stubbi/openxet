@@ -1,14 +1,24 @@
 [package]
 name = "openxet-auth"
 version = "0.0.0"
-description = "openxet's authentication and authorization: static tokens, EdDSA CAS tokens, signed URLs and capabilities, and the rules authorizer"
+description = "openxet's authentication and authorization: static tokens, EdDSA CAS tokens, OIDC, signed URLs and capabilities, and the rules authorizer"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only: `test_support::TestIssuer`, an in-process OIDC issuer serving
+# discovery and JWKS and signing RS256, ES256 and EdDSA tokens, which the
+# auth, CAS and Hub tests share. Never enable it in a shipped build.
+test-support = ["dep:aws-lc-rs", "dep:axum", "tokio/net"]
+
 [dependencies]
+arc-swap = "1.9.3"
 async-trait = "0.1.92"
+# Only for `test_support`: the test issuer's keys, generated per run.
+aws-lc-rs = { version = "1.18.2", optional = true }
+axum = { version = "0.8.9", optional = true }
 base64 = "0.23.1"
 # Only for its `zeroize` feature, which ed25519-dalek doesn't enable: it
 # wipes `KeypairBytes` on drop and the PKCS#8 encoder's copy of the seed.
@@ -17,19 +27,28 @@ ed25519-dalek = { version = "3.0.0", features = ["pem"] }
 getrandom = "0.4.3"
 hmac = { version = "0.13.0", features = ["zeroize"] }
 itoa = "1.0.18"
+# OIDC token verification (ruling M3-R7) on the aws-lc-rs provider rustls
+# already brings; no PEM support, since issuer keys arrive as JWKs.
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 openxet-protocol = { path = "../protocol", version = "0.0.0" }
+# OIDC discovery and JWKS fetches; the caller's client brings TLS.
+reqwest = { version = "0.13.5", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = { version = "0.11.1", features = ["zeroize"] }
 subtle = "2.6.1"
 thiserror = "2"
+# The JWKS refresh task and the per-issuer refresh lock.
+tokio = { version = "1.54.1", features = ["rt", "sync", "time"] }
+tracing = "0.1.44"
 url = "2.5.8"
 zeroize = "1.9.1"
 
 [dev-dependencies]
 curve25519-dalek = "5.0.0"
+openxet-auth = { path = ".", features = ["test-support"] }
 serde_urlencoded = "0.7.1"
-tokio = { version = "1.54.1", features = ["macros", "rt"] }
+tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread"] }
 
 [lints]
 workspace = true

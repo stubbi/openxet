@@ -50,6 +50,14 @@ pub enum CasError {
     #[error("the CAS token has expired")]
     ExpiredCredential,
 
+    /// An OIDC token can't be verified now: its issuer's keys can't be
+    /// fetched and the cached ones can't verify it (ruling M3-R7).
+    /// `503 authn_unavailable` with `Retry-After: 1`; never an accept.
+    #[error(
+        "the identity provider's signing keys can't be fetched, so the token can't be verified now"
+    )]
+    AuthnUnavailable,
+
     /// The credential is valid but only for reading, and the route writes.
     /// `403 insufficient_scope`.
     #[error("the credential is read-only and this route writes")]
@@ -329,6 +337,7 @@ impl From<AuthError> for CasError {
             AuthError::Missing => Self::MissingCredential,
             AuthError::Invalid => Self::InvalidCredential,
             AuthError::Expired => Self::ExpiredCredential,
+            AuthError::Unavailable => Self::AuthnUnavailable,
             AuthError::Forbidden { reason } => Self::UrlRefused(reason),
             AuthError::BadRange => Self::BadRange,
             // Configuration and signing failures: never the caller's fault.
@@ -337,7 +346,8 @@ impl From<AuthError> for CasError {
             | AuthError::InvalidStaticToken { .. }
             | AuthError::LifetimeOutOfRange { .. }
             | AuthError::ReversedRange { .. }
-            | AuthError::KeyGeneration => Self::internal(e),
+            | AuthError::KeyGeneration
+            | AuthError::Oidc { .. } => Self::internal(e),
             // A variant added upstream is a server-side failure until it is
             // classified here.
             _ => Self::internal(e),
@@ -447,6 +457,12 @@ impl CasError {
                 StatusCode::UNAUTHORIZED,
                 "expired_credential",
                 "Obtain a fresh token from your token issuer and retry.",
+            ),
+            Self::AuthnUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authn_unavailable",
+                "Retry in a moment. If it persists, the operator should check that the server \
+                 reaches the OIDC issuer's JWKS; the server log names the issuer.",
             ),
             Self::InsufficientScope => (
                 StatusCode::FORBIDDEN,
@@ -658,7 +674,7 @@ impl CasError {
     pub(crate) fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Unavailable { .. } | Self::NotReady | Self::MemoryBusy
+            Self::Unavailable { .. } | Self::NotReady | Self::MemoryBusy | Self::AuthnUnavailable
         )
     }
 
@@ -700,7 +716,7 @@ impl IntoResponse for CasError {
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
-        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy = self {
+        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy | Self::AuthnUnavailable = self {
             response
                 .headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
@@ -891,6 +907,21 @@ mod tests {
         );
     }
 
+    /// An OIDC token whose issuer's keys can't be fetched is refused with a
+    /// retryable `503`, never an accept and never a `401`, which would
+    /// make a client drop a valid token (ruling M3-R7).
+    #[tokio::test]
+    async fn unverifiable_oidc_token_is_503_authn_unavailable() {
+        let reply = assert_maps(
+            AuthError::Unavailable,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authn_unavailable",
+        )
+        .await;
+        assert_eq!(reply.headers[RETRY_AFTER], "1");
+        assert!(reply.headers.get(WWW_AUTHENTICATE).is_none());
+    }
+
     #[tokio::test]
     async fn refused_transfer_url_is_403_forbidden() {
         // hf_xet refreshes a data URL only on a 403 (S10 "Status codes and
@@ -928,6 +959,10 @@ mod tests {
             },
             AuthError::ReversedRange { start: 9, end: 1 },
             AuthError::KeyGeneration,
+            AuthError::Oidc {
+                name: "o-detail".to_owned(),
+                reason: "o-detail".to_owned(),
+            },
         ];
         for failure in failures {
             let reply = assert_maps(failure, StatusCode::INTERNAL_SERVER_ERROR, "internal").await;
