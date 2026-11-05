@@ -8,7 +8,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use openxet_workspace::{
-    Budget, ProjectId, Registry, Workspace, WorkspaceId, daemon_running, run_daemon,
+    Budget, ProjectId, Registry, Workspace, WorkspaceId, daemon_pid, daemon_running, run_daemon,
+    stop_daemon,
 };
 use support::Repo;
 use tokio::sync::oneshot;
@@ -68,6 +69,172 @@ async fn second_daemon_exits_when_lock_is_held() {
     stop.send(()).unwrap();
     first.await.unwrap().unwrap();
     assert!(!daemon_running(state.path()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_records_its_pid_while_it_runs() {
+    let state = tempfile::tempdir().unwrap();
+    assert_eq!(daemon_pid(state.path()), None);
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to record its pid", || {
+        daemon_pid(state.path()).is_some()
+    })
+    .await;
+
+    assert_eq!(daemon_pid(state.path()), Some(std::process::id()));
+
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+    assert_eq!(daemon_pid(state.path()), None);
+}
+
+#[tokio::test]
+async fn stopping_no_daemon_is_a_no_op() {
+    let state = tempfile::tempdir().unwrap();
+    assert_eq!(stop_daemon(state.path()).await.unwrap(), None);
+    // A pid left by a daemon that exited is not signalled: no process holds
+    // the lock.
+    fs::write(state.path().join("daemon.lock"), "1\n").unwrap();
+    assert_eq!(stop_daemon(state.path()).await.unwrap(), None);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_clears_its_pid_as_it_exits() {
+    let state = tempfile::tempdir().unwrap();
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to record its pid", || {
+        daemon_pid(state.path()).is_some()
+    })
+    .await;
+
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    // So a later `stop` can never read it and signal whatever process
+    // reuses the pid.
+    assert_eq!(
+        fs::read_to_string(state.path().join("daemon.lock")).unwrap(),
+        ""
+    );
+}
+
+/// A daemon that has taken its lock but not yet written its pid is
+/// starting: `stop` waits for the pid rather than failing.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_waits_for_a_starting_daemon_to_record_its_pid() {
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("daemon.lock");
+    let lock = File::create(&path).unwrap();
+    lock.lock().unwrap();
+    // Stands in for the daemon: SIGTERM ends it.
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let stopping = tokio::spawn({
+        let state = state.path().to_path_buf();
+        async move { stop_daemon(&state).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!stopping.is_finished(), "stop gave up on a starting daemon");
+
+    let child_pid = child.id();
+    fs::write(&path, format!("{child_pid}\n")).unwrap();
+    let status = tokio::task::spawn_blocking(move || child.wait().unwrap())
+        .await
+        .unwrap();
+    drop(lock);
+
+    assert!(!status.success(), "the stand-in was not signalled");
+    assert_eq!(stopping.await.unwrap().unwrap(), Some(child_pid));
+}
+
+/// The daemon checkpoints the registry as it exits, so removed workspaces
+/// leave no grown WAL behind (#132). One workspace stays registered, so
+/// only the exit checkpoint, not the one when none is left, can truncate.
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_truncates_the_registry_wal_on_exit() {
+    let repo = Repo::new();
+    let state = tempfile::tempdir().unwrap();
+    let reg = Registry::open(state.path()).await.unwrap();
+    let now = SystemTime::now();
+    let workspace = |name: &str| {
+        let path = repo.worktree(name, "main");
+        Workspace {
+            id: WorkspaceId::generate(),
+            project: ProjectId::discover(&path).unwrap(),
+            path,
+            branch: None,
+            created_at: now,
+            last_active: now,
+            adopted: false,
+        }
+    };
+    let removed = workspace("one");
+    reg.insert(&removed).await.unwrap();
+    reg.remove(&removed.id).await.unwrap();
+    reg.insert(&workspace("two")).await.unwrap();
+    let wal = state.path().join("registry.sqlite3-wal");
+    assert!(fs::metadata(&wal).unwrap().len() > 0);
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to start", || daemon_running(state.path())).await;
+    // Past the first floor check, which finds a workspace and so leaves
+    // the WAL alone.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(fs::metadata(&wal).unwrap().len() > 0);
+
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    assert_eq!(fs::metadata(&wal).map_or(0, |meta| meta.len()), 0);
+    assert_eq!(reg.list(None).await.unwrap().len(), 1);
+}
+
+/// `openxet workspace status` probes clone support with a file named
+/// `.openxet-clone-probe-*`; that is OpenXet's own write, not the
+/// workspace's activity, and must not keep it from going idle.
+#[tokio::test(flavor = "multi_thread")]
+async fn clone_probes_are_not_activity() {
+    let repo = Repo::new();
+    let state = tempfile::tempdir().unwrap();
+    let reg = Registry::open(state.path()).await.unwrap();
+    let path = repo.worktree("one", "main");
+    let idle_since = SystemTime::now() - Duration::from_hours(1);
+    reg.insert(&Workspace {
+        id: WorkspaceId::generate(),
+        project: ProjectId::discover(&path).unwrap(),
+        path: path.clone(),
+        branch: None,
+        created_at: idle_since,
+        last_active: idle_since,
+        adopted: false,
+    })
+    .await
+    .unwrap();
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to start", || daemon_running(state.path())).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let last_active = || async { reg.list(None).await.unwrap()[0].last_active };
+    let before = last_active().await;
+
+    let probe = path.join(".openxet-clone-probe-1-2");
+    fs::write(&probe, [0u8]).unwrap();
+    fs::remove_file(&probe).unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(last_active().await, before);
+
+    // The watch was in place: a file of the workspace's own is activity.
+    fs::write(path.join("notes.txt"), b"work").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while last_active().await == before {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no activity recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
 }
 
 /// Writes `bytes` to `path` with an mtime long past any settle window.

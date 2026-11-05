@@ -8,8 +8,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use openxet_workspace::{
-    Budget, ProjectId, Registry, Volume, Workspace, WorkspaceError, WorkspaceId, evict_expired,
-    eviction_order, free_to_floor,
+    Budget, IDLE_AFTER, ProjectId, Registry, Volume, Workspace, WorkspaceError, WorkspaceId,
+    evict_expired, eviction_order, free_to_floor,
 };
 use support::{Repo, git};
 
@@ -130,7 +130,7 @@ fn eviction_skips_active_workspaces() {
     let idle = workspace(dir.path(), hours_ago(1));
     let active = HashSet::from([busy.id]);
 
-    let order = eviction_order(&[busy, recent, idle.clone()], now, &active);
+    let order = eviction_order(&[busy, recent, idle.clone()], now, IDLE_AFTER, &active);
 
     assert_eq!(order, vec![idle.id]);
 }
@@ -146,10 +146,48 @@ fn eviction_orders_least_recently_active_first() {
     let order = eviction_order(
         &[middle.clone(), newest.clone(), oldest.clone()],
         SystemTime::now(),
+        IDLE_AFTER,
         &HashSet::new(),
     );
 
     assert_eq!(order, vec![oldest.id, middle.id, newest.id]);
+}
+
+#[test]
+fn idle_after_is_the_shorter_of_ten_minutes_and_the_ttl() {
+    assert_eq!(Budget::default().idle_after(), IDLE_AFTER);
+    let short = Budget {
+        idle_ttl: Duration::from_mins(5),
+        ..Budget::default()
+    };
+    assert_eq!(short.idle_after(), Duration::from_mins(5));
+}
+
+/// With `idle_ttl` under 10 minutes, the floor pass counts a workspace as
+/// idle from the TTL too, so neither pass is stricter than the other.
+#[tokio::test]
+async fn floor_eviction_counts_idle_from_a_shorter_ttl() {
+    let repo = Repo::new();
+    let (_state, reg) = registry().await;
+    let ws = built_workspace(
+        &repo,
+        &reg,
+        "one",
+        SystemTime::now() - Duration::from_mins(6),
+    )
+    .await;
+    let budget = Budget {
+        idle_ttl: Duration::from_mins(5),
+        ..Budget::default()
+    };
+
+    let evicted = free_to_floor(&reg, &budget, SystemTime::now(), none_active, |_| {
+        Ok(volume(GIB))
+    })
+    .await
+    .unwrap();
+
+    assert!(evicted.contains(&ws.path.join("target")), "{evicted:?}");
 }
 
 #[tokio::test]

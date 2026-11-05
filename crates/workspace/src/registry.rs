@@ -23,6 +23,11 @@ const DEDUPLICATED_BYTES: &str = "deduplicated_bytes";
 /// How long a write waits for another process's write lock before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The bytes SQLite leaves in the WAL after a checkpoint resets it, so a
+/// burst of writes doesn't keep the disk it took
+/// (<https://sqlite.org/pragma.html#pragma_journal_size_limit>).
+const WAL_SIZE_LIMIT: &str = "1048576";
+
 /// How long an open waits for another process's open to finish.
 const OPEN_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -111,6 +116,7 @@ impl Registry {
             // database; a power loss can only drop the last commits
             // (https://sqlite.org/pragma.html#pragma_synchronous).
             .synchronous(SqliteSynchronous::Normal)
+            .pragma("journal_size_limit", WAL_SIZE_LIMIT)
             .busy_timeout(BUSY_TIMEOUT);
         let writer = SqlitePoolOptions::new()
             .max_connections(1)
@@ -219,6 +225,23 @@ impl Registry {
         if done.rows_affected() == 0 {
             return Err(WorkspaceError::NotAWorkspace(format!("workspace {id}")));
         }
+        Ok(())
+    }
+
+    /// Copies the WAL into the database and truncates it to zero bytes, so
+    /// the disk that registering and removing workspaces took is returned
+    /// (<https://sqlite.org/pragma.html#pragma_wal_checkpoint>). The daemon
+    /// calls it when no workspace is left and when it exits. Another
+    /// process's open read transaction keeps the WAL; the next checkpoint
+    /// truncates it.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkspaceError::Database`] if the checkpoint fails.
+    pub async fn checkpoint(&self) -> Result<(), WorkspaceError> {
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.writer)
+            .await?;
         Ok(())
     }
 
@@ -406,6 +429,30 @@ async fn open_lock(database: &Path) -> Result<File, WorkspaceError> {
                 });
             }
             Err(TryLockError::Error(err)) => return Err(WorkspaceError::io(path)(err)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// `journal_size_limit` is a per-connection setting, so every connection
+    /// of both pools must carry it, or a checkpoint run on one without it
+    /// leaves the WAL at its largest (#132).
+    #[tokio::test]
+    async fn every_connection_limits_the_wal() {
+        let state = tempfile::tempdir().unwrap();
+        let registry = Registry::open(state.path()).await.unwrap();
+        let limit: i64 = WAL_SIZE_LIMIT.parse().unwrap();
+        for pool in [&registry.writer, &registry.reader] {
+            let set: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_eq!(set, limit);
         }
     }
 }

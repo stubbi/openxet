@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::{
     Budget, Presets, Registry, Volume, Workspace, WorkspaceError, WorkspaceId, is_idle,
@@ -20,23 +20,25 @@ const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
 
 /// The workspaces whose reconstructible directories may be evicted, least
 /// recently active first: those no process works in (not in `active`) and
-/// idle at `now` ([`is_idle`]).
+/// with no activity for `idle_after` at `now` ([`is_idle`]).
 #[must_use]
 pub fn eviction_order<S: BuildHasher>(
     workspaces: &[Workspace],
     now: SystemTime,
+    idle_after: Duration,
     active: &HashSet<WorkspaceId, S>,
 ) -> Vec<WorkspaceId> {
     let mut idle: Vec<&Workspace> = workspaces
         .iter()
-        .filter(|ws| !active.contains(&ws.id) && is_idle(ws.last_active, now))
+        .filter(|ws| !active.contains(&ws.id) && is_idle(ws.last_active, now, idle_after))
         .collect();
     idle.sort_by_key(|ws| (ws.last_active, ws.id));
     idle.into_iter().map(|ws| ws.id).collect()
 }
 
 /// Keeps the free-space floor: on each volume under its floor, evicts idle
-/// workspaces' reconstructible directories in [`eviction_order`] until free
+/// workspaces' reconstructible directories (idle for
+/// [`Budget::idle_after`]) in [`eviction_order`] until free
 /// space is 5% over the floor, so the next build's first files don't put it
 /// straight back under. Cargo's `incremental/` directories go first, in
 /// every idle workspace, before any whole directory: measurement S16 found
@@ -84,7 +86,7 @@ pub async fn free_to_floor(
         );
         return Ok(Vec::new());
     };
-    let order: Vec<&Workspace> = eviction_order(&workspaces, now, &active)
+    let order: Vec<&Workspace> = eviction_order(&workspaces, now, budget.idle_after(), &active)
         .into_iter()
         .filter_map(|id| workspaces.iter().find(|ws| ws.id == id))
         .collect();

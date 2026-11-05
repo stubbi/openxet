@@ -46,9 +46,12 @@ pub enum WorkspaceCommand {
         #[command(subcommand)]
         command: install::InstallCommand,
     },
-    /// Run the per-user daemon that `create` starts in the background
-    #[command(hide = true)]
-    Daemon,
+    /// Stop or restart the per-user daemon that `create` starts in the
+    /// background
+    Daemon {
+        #[command(subcommand)]
+        command: daemon::DaemonCommand,
+    },
 }
 
 /// Where the command runs: the registry's directory and the directory
@@ -117,7 +120,15 @@ pub fn run(command: &WorkspaceCommand, output: Output) -> Result<(), CliError> {
             WorkspaceCommand::Install {
                 command: install::InstallCommand::Claude(args),
             } => emit(output, &install::claude(args, &context)?),
-            WorkspaceCommand::Daemon => daemon::run(&context).await,
+            WorkspaceCommand::Daemon { command } => match command {
+                daemon::DaemonCommand::Run => daemon::run(&context).await,
+                daemon::DaemonCommand::Stop(args) => {
+                    emit(output, &daemon::control(false, args, &context).await?)
+                }
+                daemon::DaemonCommand::Restart(args) => {
+                    emit(output, &daemon::control(true, args, &context).await?)
+                }
+            },
         }
     })
 }
@@ -200,6 +211,17 @@ pub(crate) fn workspace_error(err: &WorkspaceError) -> CliError {
         WorkspaceError::DaemonRunning { .. } => (
             "Nothing to do: one daemon per user serves every workspace, and `openxet workspace \
              status` shows it running.",
+            ExitCode::FAILURE,
+        ),
+        WorkspaceError::DaemonStop { .. } => (
+            "Stop it with `kill` and the pid the message names (or `pkill -f 'openxet workspace \
+             daemon'` when it names none), then check `openxet workspace status`.",
+            ExitCode::FAILURE,
+        ),
+        WorkspaceError::DaemonStopping { .. } => (
+            "Nothing more to do to stop it: run `openxet workspace status` until \
+             `daemon_running` is false. If it never is, stop it with `kill` and the pid the \
+             message names.",
             ExitCode::FAILURE,
         ),
         WorkspaceError::MainWorktree(_) => (

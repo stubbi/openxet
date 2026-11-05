@@ -4,8 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
+use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::task::{Context, Waker};
 use std::time::{Duration, Instant, SystemTime};
 
 use notify::event::{AccessKind, AccessMode};
@@ -13,18 +16,28 @@ use notify::{EventKind, EventKindMask, RecursiveMode, Watcher as _};
 use tokio::sync::mpsc;
 
 use crate::dedup::TEMP_PREFIX;
+use crate::seed::CLONE_PROBE_PREFIX;
 use crate::{
     Budget, DedupOutcome, Presets, Registry, WorkspaceError, WorkspaceId, active_workspaces,
     dedup_file, evict_expired, free_to_floor, reconstructible_dirs, volume,
 };
 
 /// The daemon's lock file in the state directory, held exclusively while
-/// it runs.
+/// it runs, and holding its process id: empty before the daemon has
+/// written it and after the daemon has exited.
 pub const DAEMON_LOCK: &str = "daemon.lock";
+
+/// How long [`stop_daemon`] waits for the daemon to exit after asking it
+/// to. A daemon finishes the file it is deduplicating first.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// How long a starting daemon retries a held lock: [`daemon_running`]
 /// holds it for a moment to probe, and that must not stop a daemon.
 const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// How long [`stop_daemon`] waits for a daemon that holds the lock to
+/// write its pid, which it does right after taking the lock.
+const PID_WAIT: Duration = Duration::from_secs(2);
 
 /// How often free space is checked against the floor.
 const FLOOR_EVERY: Duration = Duration::from_secs(5);
@@ -86,6 +99,88 @@ pub fn daemon_running(state_dir: &Path) -> bool {
     matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock))
 }
 
+/// The process id of the daemon serving `state_dir`, or `None` when none
+/// runs or it recorded none.
+#[must_use]
+pub fn daemon_pid(state_dir: &Path) -> Option<u32> {
+    if !daemon_running(state_dir) {
+        return None;
+    }
+    std::fs::read_to_string(state_dir.join(DAEMON_LOCK))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Stops the daemon serving `state_dir`: sends it `SIGTERM`, the signal it
+/// stops cleanly on, and waits up to 10 seconds for it to release its
+/// lock. Returns the stopped daemon's process id, or `None` when none ran.
+///
+/// Only while a process holds the lock is the pid in the lock file
+/// signalled. A daemon empties the file before it releases the lock, so
+/// the pid of a daemon that exited cleanly is never signalled. One that was
+/// killed (`SIGKILL`, a crash) leaves its pid, and a new daemon replaces it
+/// right after taking the lock; only in that moment can a stale pid, which
+/// another process may have reused, be read. An empty file under a held
+/// lock is a daemon starting, and its pid is waited for.
+///
+/// # Errors
+///
+/// [`WorkspaceError::DaemonStop`] if the daemon records no process id
+/// within 2 seconds or can't be signalled, and
+/// [`WorkspaceError::DaemonStopping`] if it was signalled but hasn't exited
+/// within 10 seconds.
+pub async fn stop_daemon(state_dir: &Path) -> Result<Option<u32>, WorkspaceError> {
+    let deadline = tokio::time::Instant::now() + PID_WAIT;
+    let pid = loop {
+        if !daemon_running(state_dir) {
+            return Ok(None);
+        }
+        if let Some(pid) = daemon_pid(state_dir) {
+            break pid;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(WorkspaceError::DaemonStop {
+                pid: None,
+                reason: format!(
+                    "it recorded no process id within {} s of taking its lock",
+                    PID_WAIT.as_secs()
+                ),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let target = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| WorkspaceError::DaemonStop {
+            pid: Some(pid),
+            reason: "its recorded process id is not a valid one".to_owned(),
+        })?;
+    match rustix::process::kill_process(target, rustix::process::Signal::TERM) {
+        // Gone already: it is releasing the lock.
+        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+        Err(err) => {
+            return Err(WorkspaceError::DaemonStop {
+                pid: Some(pid),
+                reason: format!("it could not be signalled: {err}"),
+            });
+        }
+    }
+    let deadline = tokio::time::Instant::now() + STOP_WAIT;
+    while daemon_running(state_dir) {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(WorkspaceError::DaemonStopping {
+                pid,
+                waited: STOP_WAIT,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Ok(Some(pid))
+}
+
 /// Runs the daemon for the workspaces registered in `state_dir` until
 /// `shutdown` completes, the state directory is deleted, or no workspace
 /// has been registered for 10 minutes.
@@ -96,7 +191,9 @@ pub fn daemon_running(state_dir: &Path) -> bool {
 /// [`Budget::settle`]. Only those files: files it already deduplicated and
 /// that haven't changed since are skipped, so no clone is cloned again.
 /// Every 5 seconds it keeps the floor with [`free_to_floor`], and every
-/// 10 minutes it evicts expired workspaces with [`evict_expired`].
+/// 10 minutes it evicts expired workspaces with [`evict_expired`]. When no
+/// workspace is left, and as it exits, it truncates the registry's WAL
+/// ([`Registry::checkpoint`]).
 ///
 /// # Errors
 ///
@@ -124,20 +221,14 @@ pub async fn run_daemon(
         config,
     )
     .map_err(|err| watch_error(state_dir, err))?;
-    let mut daemon = Daemon {
-        reg,
-        budget,
-        state_dir: state_dir.to_path_buf(),
-        watcher,
-        workspaces: HashMap::new(),
-        pending: HashMap::new(),
-        done: HashMap::new(),
-        quiet: Vec::new(),
-        unsupported: HashSet::new(),
-        empty_since: None,
-    };
+    let mut daemon = Daemon::new(reg, budget, state_dir, watcher);
     daemon.refresh().await;
-    tracing::info!(state_dir = %state_dir.display(), "workspace daemon started");
+    tracing::info!(
+        state_dir = %state_dir.display(),
+        floor_bytes = budget.floor_bytes,
+        idle_ttl_secs = budget.idle_ttl.as_secs(),
+        "workspace daemon started"
+    );
 
     let mut floor = tokio::time::interval(FLOOR_EVERY);
     let mut ttl = tokio::time::interval(TTL_EVERY);
@@ -150,7 +241,11 @@ pub async fn run_daemon(
         tokio::select! {
             () = &mut shutdown => break,
             Some(event) = received.recv() => daemon.on_event(event).await,
-            _ = settle.tick() => daemon.dedup_settled().await,
+            _ = settle.tick() => {
+                if daemon.dedup_settled(&mut shutdown).await == Dedup::Stopped {
+                    break;
+                }
+            }
             _ = floor.tick() => {
                 if !daemon.keep_floor().await {
                     break;
@@ -159,8 +254,18 @@ pub async fn run_daemon(
             _ = ttl.tick() => daemon.expire().await,
         }
     }
+    daemon.checkpoint().await;
     tracing::info!("workspace daemon stopped");
     Ok(())
+}
+
+/// How [`Daemon::dedup_settled`] ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Dedup {
+    /// Every settled file it took was handled.
+    Done,
+    /// Shutdown was asked for, so the rest stay queued.
+    Stopped,
 }
 
 /// A file's identity and last change, to tell a file the daemon already
@@ -240,6 +345,26 @@ struct Daemon {
 }
 
 impl Daemon {
+    fn new(
+        reg: Registry,
+        budget: Budget,
+        state_dir: &Path,
+        watcher: notify::RecommendedWatcher,
+    ) -> Self {
+        Self {
+            reg,
+            budget,
+            state_dir: state_dir.to_path_buf(),
+            watcher,
+            workspaces: HashMap::new(),
+            pending: HashMap::new(),
+            done: HashMap::new(),
+            quiet: Vec::new(),
+            unsupported: HashSet::new(),
+            empty_since: None,
+        }
+    }
+
     /// Watches newly registered workspaces and drops unregistered ones.
     async fn refresh(&mut self) {
         let listed = match self.reg.list(None).await {
@@ -304,10 +429,11 @@ impl Daemon {
         let removed = matches!(event.kind, EventKind::Remove(_));
         self.quiet.retain(|(_, at)| at.elapsed() < EVICTED_QUIET);
         for path in event.paths {
-            if path
-                .file_name()
-                .is_some_and(|name| name.as_encoded_bytes().starts_with(TEMP_PREFIX.as_bytes()))
-                || self.quiet.iter().any(|(dir, _)| path.starts_with(dir))
+            if path.file_name().is_some_and(|name| {
+                [TEMP_PREFIX, CLONE_PROBE_PREFIX]
+                    .iter()
+                    .any(|own| name.as_encoded_bytes().starts_with(own.as_bytes()))
+            }) || self.quiet.iter().any(|(dir, _)| path.starts_with(dir))
             {
                 continue;
             }
@@ -351,8 +477,10 @@ impl Daemon {
     }
 
     /// Deduplicates the queued files no event has touched for the settle
-    /// window, if they are under a reconstructible directory.
-    async fn dedup_settled(&mut self) {
+    /// window, if they are under a reconstructible directory. Before each
+    /// file it checks `shutdown`, so a stop waits for one file at most,
+    /// not for a whole poll's worth: `stop_daemon` gives up after 10 s.
+    async fn dedup_settled<F: Future<Output = ()>>(&mut self, shutdown: &mut Pin<&mut F>) -> Dedup {
         let settle = self.budget.settle;
         let ready: Vec<PathBuf> = self
             .pending
@@ -362,6 +490,15 @@ impl Daemon {
             .take(MAX_PER_POLL)
             .collect();
         for path in ready {
+            // Polled without a waker of its own: the `select!` in
+            // `run_daemon` polls it again, with its waker, if it is pending.
+            if shutdown
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+            {
+                return Dedup::Stopped;
+            }
             self.pending.remove(&path);
             if !self.is_reconstructible(&path) {
                 continue;
@@ -399,6 +536,7 @@ impl Daemon {
                 Err(err) => tracing::warn!(error = %err, "could not deduplicate a file"),
             }
         }
+        Dedup::Done
     }
 
     /// Whether `path` is under a workspace's reconstructible directory,
@@ -434,6 +572,9 @@ impl Daemon {
         }
         self.refresh().await;
         if self.workspaces.is_empty() {
+            if self.empty_since.is_none() {
+                self.checkpoint().await;
+            }
             if self.empty_since.get_or_insert_with(Instant::now).elapsed() >= EXIT_WHEN_EMPTY {
                 tracing::info!("no workspace registered for 10 minutes");
                 return false;
@@ -454,6 +595,12 @@ impl Daemon {
             Err(err) => tracing::warn!(error = %err, "could not keep the free-space floor"),
         }
         true
+    }
+
+    async fn checkpoint(&self) {
+        if let Err(err) = self.reg.checkpoint().await {
+            tracing::debug!(error = %err, "could not truncate the registry's WAL");
+        }
     }
 
     async fn expire(&mut self) {
@@ -494,8 +641,22 @@ impl Daemon {
     }
 }
 
+/// The daemon's held lock. Dropping it empties the lock file before the
+/// lock is released (the file closes after `drop` runs), so no pid is left
+/// behind for [`stop_daemon`] to signal once the daemon is gone, on every
+/// way out of [`run_daemon`].
+struct DaemonLock(File);
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        if let Err(err) = self.0.set_len(0) {
+            tracing::warn!(error = %err, "could not clear the daemon's pid from its lock file");
+        }
+    }
+}
+
 /// Takes the daemon's lock in `state_dir`, creating both if missing.
-async fn lock(state_dir: &Path) -> Result<File, WorkspaceError> {
+async fn lock(state_dir: &Path) -> Result<DaemonLock, WorkspaceError> {
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -513,7 +674,16 @@ async fn lock(state_dir: &Path) -> Result<File, WorkspaceError> {
     let deadline = tokio::time::Instant::now() + LOCK_WAIT;
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => {
+                // For `stop_daemon`, replacing a killed daemon's pid. Each
+                // reader sees the old pid, nothing (starting) or this one.
+                let held = DaemonLock(file);
+                held.0.set_len(0).map_err(WorkspaceError::io(&path))?;
+                (&held.0)
+                    .write_all(format!("{}\n", std::process::id()).as_bytes())
+                    .map_err(WorkspaceError::io(&path))?;
+                return Ok(held);
+            }
             Err(TryLockError::WouldBlock) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -533,5 +703,40 @@ fn watch_error(state_dir: &Path, err: notify::Error) -> WorkspaceError {
     WorkspaceError::Io {
         path: state_dir.to_path_buf(),
         source,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// A stop asked for while a poll's files are queued is taken before
+    /// the next file, so `stop_daemon`'s 10 s are not spent on up to
+    /// [`MAX_PER_POLL`] files.
+    #[tokio::test]
+    async fn a_stop_ends_deduplication_before_the_next_file() {
+        let state = tempfile::tempdir().unwrap();
+        let reg = Registry::open(state.path()).await.unwrap();
+        let budget = Budget {
+            settle: Duration::ZERO,
+            ..Budget::default()
+        };
+        let watcher = notify::RecommendedWatcher::new(|_| {}, notify::Config::default()).unwrap();
+        let mut daemon = Daemon::new(reg, budget, state.path(), watcher);
+        for n in 0..3 {
+            daemon
+                .pending
+                .insert(state.path().join(n.to_string()), Instant::now());
+        }
+
+        let mut stopped = std::pin::pin!(std::future::ready(()));
+        assert_eq!(daemon.dedup_settled(&mut stopped).await, Dedup::Stopped);
+        assert_eq!(daemon.pending.len(), 3);
+
+        let mut running = std::pin::pin!(std::future::pending::<()>());
+        assert_eq!(daemon.dedup_settled(&mut running).await, Dedup::Done);
+        assert!(daemon.pending.is_empty());
     }
 }
