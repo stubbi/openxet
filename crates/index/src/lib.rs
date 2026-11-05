@@ -8,10 +8,13 @@
 //! the bucket's registration and xorb-owner records (ruling M1-R37).
 //! Nodes are stateless, so implementations must stay correct with several
 //! processes writing at once; SQLite ships now and Postgres comes behind the
-//! same traits in M3 (design §5.2, §5.8).
+//! same traits in M3 (design §5.2, §5.8). Every backend passes the same
+//! conformance suite (`conformance`, with the `test-support` feature).
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "test-support")]
+pub mod conformance;
 mod git;
 #[cfg(feature = "test-support")]
 mod rebuild;
@@ -30,13 +33,17 @@ pub use git::{
 #[cfg(feature = "test-support")]
 pub use rebuild::{FileRow, RebuildError, ScopeTables, rebuild_scope_tables};
 pub use repos::{AuditEntry, FileSummary, Page, Repo, RepoFilter, Repos, XetFile};
-#[cfg(feature = "fault-injection")]
-pub use sqlite::FAULT_AFTER_FIRST_FILE_SCOPE;
 pub use sqlite::SqliteIndex;
 pub use types::{
     ChunkLayout, ChunkTable, FileRecord, NewFile, Oid, PackId, ParseIdError, Registrant, RepoId,
     Scope, Term, TermBytes, Visibility,
 };
+
+/// With the `fault-injection` feature, every backend's
+/// [`Index::register_shard`] for this scope fails after writing its first
+/// file, so the conformance suite can check the transaction rolls back.
+#[cfg(feature = "fault-injection")]
+pub const FAULT_AFTER_FIRST_FILE_SCOPE: &str = "openxet-test/fault-after-first-file";
 
 /// The index's operations. Every write is idempotent: content is addressed by
 /// hash, so repeating a call with the same arguments changes nothing and

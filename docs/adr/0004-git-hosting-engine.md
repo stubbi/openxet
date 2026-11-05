@@ -940,12 +940,12 @@ results below are **observed**.
       `committed` → `superseded`; reindex → `committed` | `recovered`;
       `recovered` → `committed` | `lost`, by operator action only. Every
       transition is guarded by its `WHERE state =` clause.
-      Tests: `mark_pack_is_guarded`, `packs_list_every_state_and_delete_is_guarded`, `reindex_restore_and_discard` (`crates/index/tests/git_store.rs`); `failed_commit_marks_pack_lost` (`crates/git/tests/receive_pack.rs`); `pending_packs_aged_out_by_gc` (`crates/git/tests/repack.rs`).
+      Tests: `mark_pack_is_guarded`, `packs_list_every_state_and_delete_is_guarded`, `reindex_restore_and_discard` (`crates/index/src/conformance/git.rs`, run on every index backend); `failed_commit_marks_pack_lost` (`crates/git/tests/receive_pack.rs`); `pending_packs_aged_out_by_gc` (`crates/git/tests/repack.rs`).
     - [x] the commit transaction holds ref CAS, pack commit, the
       `full_repack_gen` check and the `ref_log` insert, atomically, for
       every ref writer. Any failure, the fence included, ends in `lost`
       or, after a crash, in `pending` and then `expired`.
-      Tests: `commit_applies_all_updates_or_none`, `commit_fenced_by_full_repack_gen`, `commit_writes_one_ref_log_row_per_update` (`crates/index/tests/git_store.rs`); `ref_log_in_cas_transaction`, `failed_commit_marks_pack_lost`, `publish_then_cas_survives_faults` (`crates/git/tests/receive_pack.rs`, `hub_objects.rs`, `repack.rs`); `pending_packs_aged_out_by_gc` (`crates/git/tests/repack.rs`).
+      Tests: `commit_applies_all_updates_or_none`, `commit_fenced_by_full_repack_gen`, `commit_writes_one_ref_log_row_per_update` (`crates/index/src/conformance/git.rs`, run on every index backend); `ref_log_in_cas_transaction`, `failed_commit_marks_pack_lost`, `publish_then_cas_survives_faults` (`crates/git/tests/receive_pack.rs`, `hub_objects.rs`, `repack.rs`); `pending_packs_aged_out_by_gc` (`crates/git/tests/repack.rs`).
     - [x] Hub ref writes and Hub commits obey the fence and the committed
       set: gix reads and writes only on the request snapshot, Hub commits
       pass a connectivity check against it before the commit
@@ -967,13 +967,13 @@ results below are **observed**.
     - [x] the v2 command allowlist: only `ls-refs` and `fetch`
       Tests: `v2_command_allowlist` (`crates/git/tests/upload_pack.rs`); `advertisement_filtered_to_the_allowlist` (`crates/git/src/ls_refs.rs`).
     - [x] the lease epoch check at every repack publish
-      Tests: `repack_publish_lease_fenced` (`crates/git/tests/repack.rs`); `publish_repack_rejects_stale_epoch_and_advanced_ref_log`, `lease_epoch_increases_and_expires` (`crates/index/tests/git_store.rs`).
+      Tests: `repack_publish_lease_fenced` (`crates/git/tests/repack.rs`); `publish_repack_rejects_stale_epoch_and_advanced_ref_log`, `lease_epoch_increases_and_expires` (`crates/index/src/conformance/git.rs`, run on every index backend).
     - [ ] `recovered` packs are never exposed, never repack inputs and
       never collected. `reindex_unplaced` entries (`commit`, `tag`,
       `pack`, `edge`) persist, become keep roots and never block a full
       repack. Only restore or discard clears them, and they have a
       metric and an alert.
-      Tests: `recovered_packs_never_exposed`, `reindex_unplaced_persisted`, `reindex_hold_never_blocks_repack` (`crates/git/tests/reindex.rs`); `unplaced_rows_persist_and_clear_by_coverage` (`crates/index/tests/git_store.rs`). Open: the metric and the alert ([#113](https://github.com/stubbi/openxet/issues/113)).
+      Tests: `recovered_packs_never_exposed`, `reindex_unplaced_persisted`, `reindex_hold_never_blocks_repack` (`crates/git/tests/reindex.rs`); `unplaced_rows_persist_and_clear_by_coverage` (`crates/index/src/conformance/git.rs`, run on every index backend). Open: the metric and the alert ([#113](https://github.com/stubbi/openxet/issues/113)).
     - [x] unplaced annotated tags stay protected across full repacks,
       and `restore` accepts a tag OID
       Tests: `reindex_unplaced_persisted` (`crates/git/tests/reindex.rs`: the tag of a tree survives a full repack, and `reindex_restore` takes the tag's OID).
@@ -982,11 +982,11 @@ results below are **observed**.
       Tests: `reindex_unplaced_persisted`, `discard_releases_committed_objects` (`crates/git/tests/reindex.rs`).
     - [x] `ref_log` has the retention of item 3, and the bucket ref log is
       derived from it, for every ref writer
-      Tests: `ref_log_in_cas_transaction` (`crates/git/tests/receive_pack.rs`, `hub_objects.rs`, and `repack.rs` for derivation and retention); `ref_log_head_and_prune` (`crates/index/tests/git_store.rs`).
+      Tests: `ref_log_in_cas_transaction` (`crates/git/tests/receive_pack.rs`, `hub_objects.rs`, and `repack.rs` for derivation and retention); `ref_log_head_and_prune` (`crates/index/src/conformance/git.rs`, run on every index backend).
     - [x] new snapshots expose exactly the `committed` packs of one
       database snapshot, refs included. In-flight requests keep their
       links.
-      Tests: `snapshot_exposes_only_its_pack_set` (in-flight links kept), `snapshot_serves_its_refs` (`crates/git/tests/snapshots.rs`); `snapshot_reads_refs_and_committed_packs_only` (`crates/index/tests/git_store.rs`).
+      Tests: `snapshot_exposes_only_its_pack_set` (in-flight links kept), `snapshot_serves_its_refs` (`crates/git/tests/snapshots.rs`); `snapshot_reads_refs_and_committed_packs_only` (`crates/index/src/conformance/git.rs`, run on every index backend).
     - [x] a push's own pack is visible only through its quarantine
       Tests: `push_cannot_use_foreign_pending_objects`, `push_round_trip` (`crates/git/tests/receive_pack.rs`); `hub_commit_retries_while_its_pack_is_being_deleted` (`crates/git/tests/hub_objects.rs`).
     - [x] hydration pins mtimes, and the leaseholder re-pins before a
@@ -998,7 +998,7 @@ results below are **observed**.
       Tests: `geometric_repack_drops_nothing_and_takes_no_fence` (`crates/git/tests/repack.rs`).
     - [x] full-repack fence in both directions: the `full_repack_gen` bump,
       and the publish abort on `ref_log` advance
-      Tests: `full_repack_fence_both_directions` (`crates/git/tests/repack.rs`); `commit_fenced_by_full_repack_gen` (`crates/index/tests/git_store.rs`).
+      Tests: `full_repack_fence_both_directions` (`crates/git/tests/repack.rs`); `commit_fenced_by_full_repack_gen` (`crates/index/src/conformance/git.rs`, run on every index backend).
     - [x] `.mtimes`, `.rev` and MIDX files travel through the bucket
       Tests: `mtimes_rev_midx_travel_through_bucket` (`crates/git/tests/repack.rs`); `midx_linked_only_when_covered` (`crates/git/tests/snapshots.rs`).
     - [x] GC deletes pack side files with their pack and superseded MIDX
