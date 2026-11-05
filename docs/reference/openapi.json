@@ -12568,7 +12568,7 @@
             "$ref": "#/components/responses/get_healthz_500"
           },
           "503": {
-            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`.",
+            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `index_busy`: index writes kept conflicting with concurrent ones. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`.",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/X-Request-Id"
@@ -13161,7 +13161,7 @@
             "$ref": "#/components/responses/get_v1_chunks_prefix_hash_500"
           },
           "503": {
-            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
+            "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `index_busy`: index writes kept conflicting with concurrent ones. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/Cache-Control"
@@ -15837,7 +15837,7 @@
         }
       },
       "get_v1_chunks_prefix_hash_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `index_busy`: index writes kept conflicting with concurrent ones. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -15978,7 +15978,7 @@
         }
       },
       "get_v1_reconstructions_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 5 s. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `index_busy`: index writes kept conflicting with concurrent ones. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 5 s. `Retry-After: 1`.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"
@@ -17222,7 +17222,7 @@
         }
       },
       "post_shards_503": {
-        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
+        "description": "`not_ready`: the server is starting. `Retry-After: 1`. `unavailable`: the index or bucket failed in a way a retry may fix. `index_busy`: index writes kept conflicting with concurrent ones. `authn_unavailable`: an OIDC token's issuer keys can't be fetched. `Retry-After: 1`. `memory_busy`: the memory budget stayed full for 120 s. `Retry-After: 1`.",
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/X-Request-Id"
