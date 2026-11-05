@@ -129,6 +129,53 @@ async fn daemon_truncates_the_registry_wal_on_exit() {
     assert_eq!(fs::metadata(&wal).map_or(0, |meta| meta.len()), 0);
 }
 
+/// `openxet workspace status` probes clone support with a file named
+/// `.openxet-clone-probe-*`; that is OpenXet's own write, not the
+/// workspace's activity, and must not keep it from going idle.
+#[tokio::test(flavor = "multi_thread")]
+async fn clone_probes_are_not_activity() {
+    let repo = Repo::new();
+    let state = tempfile::tempdir().unwrap();
+    let reg = Registry::open(state.path()).await.unwrap();
+    let path = repo.worktree("one", "main");
+    let idle_since = SystemTime::now() - Duration::from_hours(1);
+    reg.insert(&Workspace {
+        id: WorkspaceId::generate(),
+        project: ProjectId::discover(&path).unwrap(),
+        path: path.clone(),
+        branch: None,
+        created_at: idle_since,
+        last_active: idle_since,
+        adopted: false,
+    })
+    .await
+    .unwrap();
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to start", || daemon_running(state.path())).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let last_active = || async { reg.list(None).await.unwrap()[0].last_active };
+    let before = last_active().await;
+
+    let probe = path.join(".openxet-clone-probe-1-2");
+    fs::write(&probe, [0u8]).unwrap();
+    fs::remove_file(&probe).unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(last_active().await, before);
+
+    // The watch was in place: a file of the workspace's own is activity.
+    fs::write(path.join("notes.txt"), b"work").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while last_active().await == before {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no activity recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+}
+
 /// Writes `bytes` to `path` with an mtime long past any settle window.
 fn write_settled(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();

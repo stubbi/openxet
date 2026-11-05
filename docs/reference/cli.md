@@ -453,7 +453,11 @@ Cloned 38.0 MiB of build outputs from /src/app/.claude/worktrees/parser, sharing
   volume that holds a registered workspace (one made with `--path` on
   another disk), each with `path` (where it was measured: `volume_path`,
   or the first workspace on it), `free_bytes`, `floor_bytes`,
-  `reflink_supported` and `workspaces` (how many are on it).
+  `reflink_supported` and `workspaces` (how many are on it). Clone
+  support is probed with a one-byte file: in the Git directory for the
+  current volume, and for another volume in the nearest directory above
+  the workspace that no worktree contains, so the probe never shows in a
+  worktree or counts as a workspace's activity.
 
   ```json
   {"schema":"openxet.workspace.status.v1","volume_path":"/src/app/.git","volume_free_bytes":96636764160,"floor_bytes":53687091200,"reflink_supported":true,"daemon_running":true,"daemon_pid":4242,"workspaces":3,"deduplicated_bytes":1406992384,"volumes":[{"path":"/src/app/.git","free_bytes":96636764160,"floor_bytes":53687091200,"reflink_supported":true,"workspaces":2},{"path":"/Volumes/fast/review","free_bytes":214748364800,"floor_bytes":53687091200,"reflink_supported":true,"workspaces":1}]}

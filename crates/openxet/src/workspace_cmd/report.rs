@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use openxet_workspace::{
     Presets, ProjectId, Registry, WorkspaceError, allocated_bytes, daemon_pid, daemon_running,
-    is_idle, reconstructible_dirs, reflink_supported,
+    is_idle, reconstructible_dirs, reflink_supported, volume_reflink_supported,
 };
 use serde::Serialize;
 
@@ -217,13 +217,19 @@ pub(super) async fn status(context: &Context) -> Result<Status, CliError> {
             .map(|meta| (meta.dev(), ws.path.clone()))
     });
     let mut volumes = Vec::new();
-    for (path, workspaces) in by_volume((here, dir), on_volumes) {
+    for (n, (path, workspaces)) in by_volume((here, dir), on_volumes).into_iter().enumerate() {
         let measured = (context.volume)(&path).map_err(error)?;
         volumes.push(VolumeStatus {
             path: path.display().to_string(),
             free_bytes: measured.free_bytes,
             floor_bytes: budget.floor_for(measured),
-            reflink_supported: reflink_supported(&path),
+            // Every other volume's path is a workspace, which a probe in it
+            // would touch.
+            reflink_supported: if n == 0 {
+                reflink_supported(&path)
+            } else {
+                volume_reflink_supported(&path)
+            },
             workspaces,
         });
     }

@@ -14,6 +14,7 @@ use notify::{EventKind, RecursiveMode, Watcher as _};
 use tokio::sync::mpsc;
 
 use crate::dedup::TEMP_PREFIX;
+use crate::seed::CLONE_PROBE_PREFIX;
 use crate::{
     Budget, DedupOutcome, Presets, Registry, WorkspaceError, WorkspaceId, active_workspaces,
     dedup_file, evict_expired, free_to_floor, reconstructible_dirs, volume,
@@ -361,10 +362,11 @@ impl Daemon {
         let removed = matches!(event.kind, EventKind::Remove(_));
         self.quiet.retain(|(_, at)| at.elapsed() < EVICTED_QUIET);
         for path in event.paths {
-            if path
-                .file_name()
-                .is_some_and(|name| name.as_encoded_bytes().starts_with(TEMP_PREFIX.as_bytes()))
-                || self.quiet.iter().any(|(dir, _)| path.starts_with(dir))
+            if path.file_name().is_some_and(|name| {
+                [TEMP_PREFIX, CLONE_PROBE_PREFIX]
+                    .iter()
+                    .any(|own| name.as_encoded_bytes().starts_with(own.as_bytes()))
+            }) || self.quiet.iter().any(|(dir, _)| path.starts_with(dir))
             {
                 continue;
             }
