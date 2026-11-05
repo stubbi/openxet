@@ -478,7 +478,7 @@ with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
 (`hdiutil create -size 20g -fs APFS -type SPARSE`) mounted and named by
 `OPENXET_COMPAT_WORKSPACE_VOLUME`.
 
-<!-- table-caption: The agent workspaces gate, 2026-10-28 -->
+<!-- table-caption: The agent workspaces gate, 2026-10-28 to 2026-11-05 -->
 
 | Run | Solo build | Peak of six over baseline | Share of one build (bar 1.50) | Left after removal (bar 1% of baseline) | No-op ratio (bar 1.10) | Incremental ratio (bar 1.10) |
 |---|---|---|---|---|---|---|
@@ -489,12 +489,20 @@ with `mkfs.xfs -m reflink=1`; locally, a 20 GiB sparse APFS disk image
 | Local, with PR #133, 1 | 44.2 MiB | 44.8 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.548 | 0.660 |
 | Local, with PR #133, 2 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.986 | 0.802 |
 | Local, with PR #133, 3 | 44.4 MiB | 45.0 MiB | 1.014 | 0.4 MiB of 51.0 MiB | 0.988 | 1.169 (fails) |
-| CI, with PR #133 | 85.8 MiB | 80.7 MiB | 0.941 | 2.2 MiB under 426.4 MiB | 1.000 | 1.000 |
+| CI, with PR #133 | 85.8 MiB | 80.7 MiB | 0.941 | 2.2 MiB under 426.4 MiB | 1.000 (50 ms grid) | 1.000 (50 ms grid) |
+| CI, with PR #133, another run | 85.8 MiB | 80.8 MiB | 0.941 | 2.2 MiB under 426.4 MiB | 0.999 (50 ms grid) | 1.304 (50 ms grid, fails) |
+| CI, timed exactly, notify 8 | 85.8 MiB | 80.8 MiB | 0.941 | 2.2 MiB under 426.4 MiB | 1.070 | 1.067 |
+| CI, timed exactly, kernel-filtered watch | 85.8 MiB | 84.3 MiB | 0.982 | 2.2 MiB under 426.4 MiB | 0.992 | 1.024 |
 
 Local is the machine above, on a sparse APFS image, with other sessions'
 builds running. CI is the `workspaces-gate` job on `ubuntu-latest`, XFS
 with reflink on a loop file. Before PR #133, the registry was not opened
-before the baseline.
+before the baseline. The rows marked "50 ms grid" timed each build with
+Python's `Popen.wait(timeout=)`, which polls with sleeps growing to 50 ms,
+so every time came out as 31, 63, 113, 163, 213 or 313 ms; the local
+rows have the same flaw. The test now waits blocking, with a watchdog for
+the timeout. "notify 8" is the daemon's watch before it filtered event
+kinds.
 
 What the runs show:
 
@@ -513,12 +521,23 @@ What the runs show:
   the database file from 4 KiB to 48 KiB; together they are the 0.5 MiB
   left. No row is left: the workspace and dedup tables are empty after
   removal. The daemon's log is two lines (started, stopped).
+- **The daemon's watch must not queue an event per file a build opens.**
+  Timed exactly, a build in a workspace took 7% longer than in the plain
+  clone (no-op 1.070, incremental 1.067). The same comparison with no
+  daemon running gave 1.003 and 0.997, and with the daemon 1.050 and
+  1.062 (median of 15, one CI run). notify 8 watched for every inotify
+  event, so each file Cargo or rustc opened and each `write` queued one.
+  With notify 9's kernel-level filter, the daemon watches only creation,
+  removal, renames, metadata changes and finished writes, and the ratios
+  are 0.992 and 1.024. What is left of the incremental build's 2.4% is
+  not isolated; the daemon hashes and clones each build's outputs once
+  they settle, which overlaps the next round's builds.
 - **The CI job is the gate for build speed; local runs are indicative.**
   On a shared machine, local medians swing from 40 to 410 ms, so a single
   ratio can cross 1.10 without a regression. That happened in local run 3:
   incremental builds took 0.41 s in the workspace and 0.35 s in the plain
   clone. The other local runs gave 0.66 and 0.80, and CI's runner, whose
-  times spread far less, gave 1.000. A local failure on a busy host, with
+  times spread far less, gave 1.024. A local failure on a busy host, with
   CI green, is load, not a regression. This is how the latency gate treats
   slow runners.
 
