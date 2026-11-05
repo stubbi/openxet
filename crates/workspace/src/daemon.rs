@@ -48,11 +48,11 @@ const MAX_PER_POLL: usize = 256;
 ///
 /// Opens are left out: inotify queues one for every file a build reads,
 /// and with them a build in a watched workspace took 5 to 6% longer than
-/// in a plain clone in the CI gate (compat/tests/test_workspaces.py). On
-/// Linux a finished write is
-/// inotify's `CLOSE_WRITE`, so each `write` call's `MODIFY` is left out
-/// too; FSEvents (macOS) reports a write only as a data modification, and
-/// filters these kinds in user space, where leaving them out saves nothing.
+/// in a plain clone in the CI gate (`compat/tests/test_workspaces.py`). On
+/// Linux a finished write is inotify's `CLOSE_WRITE`, so each `write`
+/// call's `MODIFY` is left out too. `FSEvents` (macOS) reports a write only
+/// as a data modification, and filters these kinds in user space, where
+/// leaving them out saves nothing.
 #[cfg(target_os = "linux")]
 const WATCHED_EVENTS: EventKindMask = EventKindMask::CREATE
     .union(EventKindMask::REMOVE)
