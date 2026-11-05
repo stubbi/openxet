@@ -8,7 +8,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use openxet_workspace::{
-    Budget, ProjectId, Registry, Workspace, WorkspaceId, daemon_running, run_daemon,
+    Budget, ProjectId, Registry, Workspace, WorkspaceId, daemon_pid, daemon_running, run_daemon,
+    stop_daemon,
 };
 use support::Repo;
 use tokio::sync::oneshot;
@@ -68,6 +69,64 @@ async fn second_daemon_exits_when_lock_is_held() {
     stop.send(()).unwrap();
     first.await.unwrap().unwrap();
     assert!(!daemon_running(state.path()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_records_its_pid_while_it_runs() {
+    let state = tempfile::tempdir().unwrap();
+    assert_eq!(daemon_pid(state.path()), None);
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to record its pid", || {
+        daemon_pid(state.path()).is_some()
+    })
+    .await;
+
+    assert_eq!(daemon_pid(state.path()), Some(std::process::id()));
+
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+    assert_eq!(daemon_pid(state.path()), None);
+}
+
+#[tokio::test]
+async fn stopping_no_daemon_is_a_no_op() {
+    let state = tempfile::tempdir().unwrap();
+    assert_eq!(stop_daemon(state.path()).await.unwrap(), None);
+    // A pid left by a daemon that exited is not signalled: no process holds
+    // the lock.
+    fs::write(state.path().join("daemon.lock"), "1\n").unwrap();
+    assert_eq!(stop_daemon(state.path()).await.unwrap(), None);
+}
+
+/// The daemon checkpoints the registry as it exits, so removed workspaces
+/// leave no grown WAL behind (#132).
+#[tokio::test(flavor = "multi_thread")]
+async fn daemon_truncates_the_registry_wal_on_exit() {
+    let repo = Repo::new();
+    let state = tempfile::tempdir().unwrap();
+    let reg = Registry::open(state.path()).await.unwrap();
+    let path = repo.worktree("one", "main");
+    let now = SystemTime::now();
+    let ws = Workspace {
+        id: WorkspaceId::generate(),
+        project: ProjectId::discover(&path).unwrap(),
+        path,
+        branch: None,
+        created_at: now,
+        last_active: now,
+        adopted: false,
+    };
+    reg.insert(&ws).await.unwrap();
+    reg.remove(&ws.id).await.unwrap();
+    let wal = state.path().join("registry.sqlite3-wal");
+    assert!(fs::metadata(&wal).unwrap().len() > 0);
+    let (stop, daemon) = start(state.path());
+    wait_for("the daemon to start", || daemon_running(state.path())).await;
+
+    stop.send(()).unwrap();
+    daemon.await.unwrap().unwrap();
+
+    assert_eq!(fs::metadata(&wal).map_or(0, |meta| meta.len()), 0);
 }
 
 /// Writes `bytes` to `path` with an mtime long past any settle window.

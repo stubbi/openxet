@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
+use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -19,8 +20,12 @@ use crate::{
 };
 
 /// The daemon's lock file in the state directory, held exclusively while
-/// it runs.
+/// it runs, and holding its process id.
 pub const DAEMON_LOCK: &str = "daemon.lock";
+
+/// How long [`stop_daemon`] waits for the daemon to exit after asking it
+/// to. A daemon finishes the file it is deduplicating first.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// How long a starting daemon retries a held lock: [`daemon_running`]
 /// holds it for a moment to probe, and that must not stop a daemon.
@@ -67,6 +72,76 @@ pub fn daemon_running(state_dir: &Path) -> bool {
     matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock))
 }
 
+/// The process id of the daemon serving `state_dir`, or `None` when none
+/// runs or it recorded none.
+#[must_use]
+pub fn daemon_pid(state_dir: &Path) -> Option<u32> {
+    if !daemon_running(state_dir) {
+        return None;
+    }
+    std::fs::read_to_string(state_dir.join(DAEMON_LOCK))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Stops the daemon serving `state_dir`: sends it `SIGTERM`, the signal it
+/// stops cleanly on, and waits up to 10 seconds for it to release its
+/// lock. Returns the stopped daemon's process id, or `None` when none ran.
+///
+/// Only while a process holds the lock is the pid in the lock file
+/// signalled, and each daemon writes its own pid right after taking it, so
+/// the pid of a daemon that has exited is not signalled.
+///
+/// # Errors
+///
+/// [`WorkspaceError::DaemonStop`] if the daemon recorded no process id,
+/// can't be signalled, or doesn't exit in time.
+pub async fn stop_daemon(state_dir: &Path) -> Result<Option<u32>, WorkspaceError> {
+    if !daemon_running(state_dir) {
+        return Ok(None);
+    }
+    let Some(pid) = daemon_pid(state_dir) else {
+        // It exited since the check above, or recorded no pid.
+        if !daemon_running(state_dir) {
+            return Ok(None);
+        }
+        return Err(WorkspaceError::DaemonStop {
+            pid: None,
+            reason: "it recorded no process id".to_owned(),
+        });
+    };
+    let target = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| WorkspaceError::DaemonStop {
+            pid: Some(pid),
+            reason: "its recorded process id is not a valid one".to_owned(),
+        })?;
+    match rustix::process::kill_process(target, rustix::process::Signal::TERM) {
+        // Gone already: it is releasing the lock.
+        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+        Err(err) => {
+            return Err(WorkspaceError::DaemonStop {
+                pid: Some(pid),
+                reason: format!("it could not be signalled: {err}"),
+            });
+        }
+    }
+    let deadline = tokio::time::Instant::now() + STOP_WAIT;
+    while daemon_running(state_dir) {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(WorkspaceError::DaemonStop {
+                pid: Some(pid),
+                reason: format!("it did not exit within {} s", STOP_WAIT.as_secs()),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Ok(Some(pid))
+}
+
 /// Runs the daemon for the workspaces registered in `state_dir` until
 /// `shutdown` completes, the state directory is deleted, or no workspace
 /// has been registered for 10 minutes.
@@ -77,7 +152,9 @@ pub fn daemon_running(state_dir: &Path) -> bool {
 /// [`Budget::settle`]. Only those files: files it already deduplicated and
 /// that haven't changed since are skipped, so no clone is cloned again.
 /// Every 5 seconds it keeps the floor with [`free_to_floor`], and every
-/// 10 minutes it evicts expired workspaces with [`evict_expired`].
+/// 10 minutes it evicts expired workspaces with [`evict_expired`]. When no
+/// workspace is left, and as it exits, it truncates the registry's WAL
+/// ([`Registry::checkpoint`]).
 ///
 /// # Errors
 ///
@@ -138,6 +215,7 @@ pub async fn run_daemon(
             _ = ttl.tick() => daemon.expire().await,
         }
     }
+    daemon.checkpoint().await;
     tracing::info!("workspace daemon stopped");
     Ok(())
 }
@@ -413,6 +491,9 @@ impl Daemon {
         }
         self.refresh().await;
         if self.workspaces.is_empty() {
+            if self.empty_since.is_none() {
+                self.checkpoint().await;
+            }
             if self.empty_since.get_or_insert_with(Instant::now).elapsed() >= EXIT_WHEN_EMPTY {
                 tracing::info!("no workspace registered for 10 minutes");
                 return false;
@@ -433,6 +514,12 @@ impl Daemon {
             Err(err) => tracing::warn!(error = %err, "could not keep the free-space floor"),
         }
         true
+    }
+
+    async fn checkpoint(&self) {
+        if let Err(err) = self.reg.checkpoint().await {
+            tracing::debug!(error = %err, "could not truncate the registry's WAL");
+        }
     }
 
     async fn expire(&mut self) {
@@ -492,7 +579,14 @@ async fn lock(state_dir: &Path) -> Result<File, WorkspaceError> {
     let deadline = tokio::time::Instant::now() + LOCK_WAIT;
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => {
+                // For `stop_daemon`, replacing a previous daemon's pid.
+                file.set_len(0).map_err(WorkspaceError::io(&path))?;
+                (&file)
+                    .write_all(format!("{}\n", std::process::id()).as_bytes())
+                    .map_err(WorkspaceError::io(&path))?;
+                return Ok(file);
+            }
             Err(TryLockError::WouldBlock) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }

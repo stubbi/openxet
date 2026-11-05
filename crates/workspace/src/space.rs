@@ -11,7 +11,8 @@ use crate::WorkspaceError;
 /// The smallest default floor: 20 GiB.
 const MIN_FLOOR: u64 = 20 << 30;
 
-/// A workspace with no activity for this long is idle.
+/// A workspace with no activity for this long is idle, unless
+/// [`Budget::idle_ttl`] is shorter ([`Budget::idle_after`]).
 pub const IDLE_AFTER: Duration = Duration::from_mins(10);
 
 /// A volume's size and free space, in bytes.
@@ -95,6 +96,14 @@ enum Size {
 }
 
 impl Budget {
+    /// How long a workspace has no activity before it is idle: the shorter
+    /// of [`IDLE_AFTER`] and [`Budget::idle_ttl`], so the floor never
+    /// waits longer for a workspace than the TTL does.
+    #[must_use]
+    pub fn idle_after(&self) -> Duration {
+        IDLE_AFTER.min(self.idle_ttl)
+    }
+
     /// The floor for `volume`.
     #[must_use]
     pub fn floor_for(&self, volume: Volume) -> u64 {
@@ -203,11 +212,12 @@ fn split_number(text: &str) -> Option<(u64, &str)> {
     Some((number, text[digits..].trim_start()))
 }
 
-/// Whether a workspace last active at `last_active` is idle at `now`.
+/// Whether a workspace last active at `last_active` is idle at `now`, idle
+/// meaning no activity for `idle_after` ([`Budget::idle_after`]).
 #[must_use]
-pub fn is_idle(last_active: SystemTime, now: SystemTime) -> bool {
+pub fn is_idle(last_active: SystemTime, now: SystemTime, idle_after: Duration) -> bool {
     now.duration_since(last_active)
-        .is_ok_and(|idle| idle >= IDLE_AFTER)
+        .is_ok_and(|idle| idle >= idle_after)
 }
 
 /// The bytes the files under `path` take on disk, as `du` counts them: a
@@ -261,9 +271,11 @@ mod tests {
     #[test]
     fn idle_after_ten_minutes() {
         let now = SystemTime::now();
-        assert!(!is_idle(now - Duration::from_mins(9), now));
-        assert!(is_idle(now - Duration::from_mins(10), now));
-        assert!(!is_idle(now + Duration::from_secs(1), now));
+        assert!(!is_idle(now - Duration::from_mins(9), now, IDLE_AFTER));
+        assert!(is_idle(now - Duration::from_mins(10), now, IDLE_AFTER));
+        assert!(!is_idle(now + Duration::from_secs(1), now, IDLE_AFTER));
+        let ttl = Duration::from_mins(5);
+        assert!(is_idle(now - ttl, now, ttl));
     }
 
     #[test]

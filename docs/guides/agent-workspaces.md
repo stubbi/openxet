@@ -172,22 +172,28 @@ cat > ~/.config/openxet/workspace.toml <<'EOF'
 floor = "50 GiB"
 idle_ttl = "12h"
 EOF
+openxet workspace daemon restart
 openxet workspace status
 ```
 
 `floor` is a number of bytes or a whole number with `B`, `KiB`, `MiB`,
 `GiB` or `TiB`; `idle_ttl` a whole number with `s`, `m`, `h` or `d`. Any
-other key or value fails `create`, `status` and the daemon with `config`,
-naming the file. A running daemon keeps the limits it started with; stop
-it (`pkill -f 'openxet workspace daemon'`) and the next `create` starts it
-with the new ones.
+other key or value fails `create`, `list`, `status` and the daemon with
+`config`, naming the file. The daemon reads the file when it starts, so
+`daemon restart` applies new limits: it checks the file first and, if
+the file is invalid, fails with `config` and leaves the running daemon
+alone. `daemon stop` stops it until the next `create` starts it again.
 
 `status` reports, for the volume the current repository is on, the free
 space and the floor, whether files can be cloned there, whether the
 daemon runs, how many workspaces are registered, and how many bytes the
-daemon has replaced by clones of identical files. When free space is
+daemon has replaced by clones of identical files. It also reports every
+other volume that holds a workspace, such as one made with `--path` on
+another disk, with its own free space and floor. When free space is
 under the floor even after evicting, `create` fails with `disk_budget`
-and creates nothing, so agents back off instead of filling the disk.
+and creates nothing, so agents back off instead of filling the disk;
+`create --dry-run` reports the free space and the floor it would
+check, `volume_free_bytes` and `floor_bytes`, without evicting.
 
 ## What is evicted and what never is
 
@@ -204,7 +210,8 @@ Every path in a workspace is durable or reconstructible.
 
 The daemon evicts only reconstructible directories, and only of
 workspaces that no process has its current directory in. Under the floor,
-it takes workspaces idle for 10 minutes, least recently active first, and
+it takes workspaces idle for 10 minutes (or for `idle_ttl`, when that is
+shorter), least recently active first, and
 deletes Cargo's `incremental/` directories in all of them before any
 whole directory, until free space is 5% over the floor. `incremental/` is
 the part least shared between workspaces and the cheapest to lose. After

@@ -298,6 +298,8 @@ mod tests {
             r#"["workspace", "hook", "claude-create""#,
             r#"["workspace", "hook", "claude-remove""#,
             r#"["workspace", "install", "claude""#,
+            r#"["workspace", "daemon", "stop""#,
+            r#"["workspace", "daemon", "restart""#,
         ] {
             assert!(
                 listed.iter().any(|l| l == invocation),

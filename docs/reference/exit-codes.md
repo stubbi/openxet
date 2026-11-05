@@ -46,7 +46,9 @@ lines.
 | `invalid_hook_input` | 2 | A `workspace hook` command's stdin isn't the JSON its hook event sends: `cwd` and `name` for `claude-create`, `worktree_path` for `claude-remove`. Nothing was run; stdout is empty. |
 | `invalid_settings` | 1 | `workspace install claude` found a settings file that isn't a JSON object, or whose `hooks` isn't an object of arrays. Nothing was written. |
 | `hook_conflict` | 1 | `workspace install claude` found another tool's `WorktreeCreate` or `WorktreeRemove` hook in the settings file; the message names it. Nothing was written. |
-| `daemon_running` | 1 | The hidden `workspace daemon` found another daemon serving the same state directory; the message names its lock file. Nothing to do: one daemon per user serves every workspace, and `create` starts it only when none runs. |
+| `daemon_running` | 1 | The hidden `workspace daemon run` found another daemon serving the same state directory; the message names its lock file. Nothing to do: one daemon per user serves every workspace, and `create` starts it only when none runs. |
+| `daemon_stop` | 1 | `workspace daemon stop` or `restart` could not stop the running daemon: it recorded no process id, couldn't be signalled, or didn't exit within 10 seconds. The message names its pid when it recorded one; the hint says to stop it with `kill`. |
+| `daemon_start` | 1 | `workspace daemon restart` stopped the daemon but the new one didn't start within 10 seconds. Its reason is in `daemon.log` in the state directory, which the hint names. |
 | `registry` | 1 | The workspace registry couldn't be opened, migrated or read. |
 | `git` | 1 | A Git command a `workspace` command ran failed; the message is Git's. |
 | `no_key` | 1 | `token mint` found no signing key at `--key`, or `serve` found no transfer key at an explicitly set `cas.transfer_key_file`. |

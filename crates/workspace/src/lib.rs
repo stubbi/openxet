@@ -27,7 +27,7 @@ mod space;
 pub use activity::active_workspaces;
 pub use adopt::{Adoption, ScanReport, ScanSkip, adopt, adopt_scan};
 pub use classify::{Class, PROJECT_CONFIG, Presets, classify, reconstructible_dirs};
-pub use daemon::{DAEMON_LOCK, daemon_running, run_daemon};
+pub use daemon::{DAEMON_LOCK, daemon_pid, daemon_running, run_daemon, stop_daemon};
 pub use dedup::{DedupOutcome, DedupReport, MIN_DEDUP_SIZE, dedup_file, dedup_tree};
 pub use error::WorkspaceError;
 pub use evict::{evict_expired, eviction_order, free_to_floor};

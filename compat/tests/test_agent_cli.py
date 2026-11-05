@@ -59,6 +59,10 @@ JSON_COMMANDS = [
     ["workspace", "install", "claude", "--project", "--dry-run", "--json"],
     ["workspace", "install", "claude", "--project", "--json"],
     ["workspace", "install", "claude", "--user", "--json"],
+    ["workspace", "daemon", "stop", "--dry-run", "--json"],
+    ["workspace", "daemon", "stop", "--json"],
+    ["workspace", "daemon", "restart", "--dry-run", "--json"],
+    ["workspace", "daemon", "restart", "--json"],
 ]
 
 HOOK_INPUT = {

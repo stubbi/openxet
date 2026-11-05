@@ -40,6 +40,7 @@ STEPS = (
     "--discard",
     "openxet workspace adopt --scan",
     "workspace.toml",
+    "openxet workspace daemon restart",
     "openxet workspace status",
 )
 

@@ -92,6 +92,17 @@ pub enum WorkspaceError {
         /// The daemon's lock file.
         lock: PathBuf,
     },
+    /// The running daemon could not be stopped.
+    #[error(
+        "could not stop the OpenXet workspace daemon{}: {reason}",
+        .pid.map(|pid| format!(" (pid {pid})")).unwrap_or_default()
+    )]
+    DaemonStop {
+        /// Its process id, if it recorded one.
+        pid: Option<u32>,
+        /// Why it is still running.
+        reason: String,
+    },
     /// The main worktree was named where only a linked worktree may be:
     /// it is the human's checkout, never adopted, evicted or removed.
     #[error(
@@ -149,6 +160,7 @@ impl WorkspaceError {
             Self::UnknownRevision(_) => "unknown_revision",
             Self::DiskBudget { .. } => "disk_budget",
             Self::DaemonRunning { .. } => "daemon_running",
+            Self::DaemonStop { .. } => "daemon_stop",
             Self::MainWorktree(_) => "main_worktree",
             Self::HookInput(_) => "invalid_hook_input",
             Self::Settings { .. } => "invalid_settings",
