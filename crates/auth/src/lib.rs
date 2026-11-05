@@ -6,7 +6,8 @@
 //! - **Static tokens** for development, CI and small setups. Only their
 //!   SHA-256 is held; see [`StaticToken`].
 //! - **CAS tokens**: Ed25519-signed JWTs (`alg: EdDSA`), verified against a
-//!   key set selected by the header's `kid`. A token is valid while
+//!   key set selected by the header's `kid`, each key bound to one `alg`
+//!   (ADR 0011). A token is valid while
 //!   `now < exp` and invalid from the `exp` second on, with no leeway: stock
 //!   clients refresh by clock 30 s before `exp` and never react to a `401`.
 //!   See [`TokenSigner`] and [`PublicKey`].
@@ -41,9 +42,11 @@ use serde::{Deserialize, Serialize};
 
 pub use capability::{CapabilityQuery, CapabilitySigner};
 pub use error::{AuthError, AuthzError, CapabilityRefusal, ForbiddenReason, InvalidGlob};
-pub use jwt::{GeneratedKeypair, MAX_TOKEN_BYTES, PublicKey, TokenSigner, generate_keypair};
+pub use jwt::{
+    GeneratedKeypair, KeyAlg, MAX_TOKEN_BYTES, PublicKey, TokenSigner, generate_keypair,
+};
 pub use rules::{Action, Authorizer, Glob, Rule, RulesAuthorizer, Target};
-pub use signed_url::{TransferQuery, TransferUrls, UrlSigner, XorbUrls};
+pub use signed_url::{TransferQuery, TransferUrls, UrlSigner, XorbUrls, transfer_key_id};
 pub use static_tokens::{CasGrant, StaticToken, UserProfile};
 
 /// What a credential may do within its scope. `Write` implies `Read`.
@@ -379,4 +382,22 @@ pub(crate) fn check_lifetime(
             max,
         })
     }
+}
+
+/// The HMAC-SHA256 states of transfer verify keys (ruling M3-R15), wiping
+/// the caller's copies of the keys once derived.
+pub(crate) fn verify_macs(mut keys: Vec<[u8; 32]>) -> Vec<hmac::Hmac<sha2::Sha256>> {
+    use hmac::KeyInit as _;
+    use zeroize::Zeroize as _;
+    let macs = keys
+        .iter()
+        .map(|key| {
+            // `Hmac` takes a key of any length (RFC 2104 §2), so this never
+            // fails.
+            hmac::Hmac::<sha2::Sha256>::new_from_slice(key)
+                .unwrap_or_else(|_| unreachable!("HMAC accepts a 32-byte key"))
+        })
+        .collect();
+    keys.zeroize();
+    macs
 }

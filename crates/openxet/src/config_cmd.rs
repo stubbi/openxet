@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::config::{self, Overrides, Problem, Setting};
 use crate::error::CliError;
+use crate::keys::{self, KeyEntry};
 use crate::output::{HumanDisplay, Output};
 use crate::preflight;
 
@@ -36,6 +37,22 @@ struct Report {
     /// users may read.
     warnings: Vec<Problem>,
     settings: Vec<Setting>,
+    /// Every key the server would sign or verify with (ruling M3-R15).
+    keys: Vec<KeyEntry>,
+}
+
+fn write_key(out: &mut String, key: &KeyEntry) {
+    let age = key
+        .age_days
+        .map_or_else(|| "no file".to_owned(), |days| format!("{days} days old"));
+    let file = key.file.as_deref().unwrap_or("inline");
+    let _ = writeln!(
+        out,
+        "  {} {} {}, {age}  ({file})",
+        key.kind.as_str(),
+        key.id,
+        key.alg
+    );
 }
 
 fn write_problem(out: &mut String, problem: &Problem) {
@@ -82,6 +99,12 @@ impl HumanDisplay for Report {
                 write_problem(&mut out, problem);
             }
         }
+        if !self.keys.is_empty() {
+            let _ = writeln!(out, "\nKeys:");
+            for key in &self.keys {
+                write_key(&mut out, key);
+            }
+        }
         if !self.warnings.is_empty() {
             let _ = writeln!(out, "\n{} warning(s):", self.warnings.len());
             for warning in &self.warnings {
@@ -97,10 +120,14 @@ pub fn run(command: &ConfigCommand, output: Output) -> Result<(), CliError> {
     let loaded = config::load(file.as_deref(), std::env::vars_os(), &Overrides::default());
     let mut problems = loaded.problems;
     let mut warnings = Vec::new();
+    let mut keys = Vec::new();
     if let Some(config) = &loaded.config {
         let findings = preflight::check(config);
         problems.extend(findings.problems);
         warnings = findings.warnings;
+        let report = keys::report(config, std::time::SystemTime::now());
+        warnings.extend(report.warnings);
+        keys = report.keys;
     }
     let report = Report {
         schema: "openxet.config-check.v1",
@@ -114,6 +141,7 @@ pub fn run(command: &ConfigCommand, output: Output) -> Result<(), CliError> {
         problems,
         warnings,
         settings: loaded.settings,
+        keys,
     };
     output.emit(&report).map_err(|err| CliError::output(&err))?;
     if report.valid {

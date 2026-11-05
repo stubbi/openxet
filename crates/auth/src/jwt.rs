@@ -7,9 +7,11 @@
 //!
 //! - at most [`MAX_TOKEN_BYTES`], checked before any decoding;
 //! - exactly three segments, each canonical unpadded base64url;
-//! - a header that is exactly `{"alg":"EdDSA","typ":"JWT","kid":"…"}`, so
+//! - a header that is exactly `{"alg":"…","typ":"JWT","kid":"…"}`, so
 //!   key-carrying or critical parameters (`jku`, `jwk`, `x5u`, `crit`, ...)
 //!   can never take effect;
+//! - a `kid` naming a trusted key and an `alg` equal to that key's own
+//!   (ADR 0011 decision 3), so no token chooses its algorithm;
 //! - an Ed25519 signature over `header_b64.payload_b64` as received,
 //!   checked with `verify_strict` against the key named by `kid`;
 //! - claims `sub`, `scope`, `mode` (`"read"` or `"write"`), `exp` and `iat`,
@@ -42,6 +44,31 @@ pub const MAX_TOKEN_BYTES: usize = 8 * 1024;
 
 /// An Ed25519 signature (64 bytes) in unpadded base64url.
 const SIGNATURE_B64_LEN: usize = 86;
+
+/// The signature algorithm a key is bound to, by its key type (ADR 0011
+/// decision 3, ruling M3-R15). ML-DSA (RFC 9964) arrives as a new variant
+/// by its own ADR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAlg {
+    /// Ed25519 (RFC 8037).
+    EdDSA,
+}
+
+impl KeyAlg {
+    /// The JOSE `alg` header value (RFC 7518 §3.1, RFC 8037 §3.1).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EdDSA => "EdDSA",
+        }
+    }
+}
+
+impl fmt::Display for KeyAlg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// An Ed25519 public key trusted to sign CAS tokens.
 #[derive(Clone)]
@@ -76,6 +103,13 @@ impl PublicKey {
     #[must_use]
     pub fn kid(&self) -> &str {
         &self.kid
+    }
+
+    /// The algorithm this key verifies, and the only `alg` a token naming
+    /// this key may carry: [`KeyAlg::EdDSA`] for an Ed25519 key.
+    #[must_use]
+    pub const fn alg(&self) -> KeyAlg {
+        KeyAlg::EdDSA
     }
 
     fn from_verifying_key(key: &VerifyingKey) -> Self {
@@ -203,7 +237,8 @@ impl TokenSigner {
                 reason: "exp is further ahead than the maximum token lifetime",
             });
         }
-        let header = serde_json::json!({ "alg": "EdDSA", "typ": "JWT", "kid": self.kid });
+        let header =
+            serde_json::json!({ "alg": KeyAlg::EdDSA.as_str(), "typ": "JWT", "kid": self.kid });
         let mut claims = serde_json::json!({
             "sub": subject, "scope": scope, "mode": mode, "exp": exp, "iat": now,
         });
@@ -364,12 +399,13 @@ pub(crate) fn verify(
     };
 
     let header: Header = decode_json(header_b64)?;
-    if header.alg != "EdDSA" || header.typ != "JWT" {
+    if header.typ != "JWT" {
         return Err(AuthError::Invalid);
     }
     let key = keys
         .iter()
         .find(|k| k.kid == header.kid)
+        .filter(|k| header.alg == k.alg().as_str())
         .ok_or(AuthError::Invalid)?;
     verify_signature(&key.key, header_b64, payload_b64, signature_b64)?;
 

@@ -7,8 +7,12 @@
 //! `"xorb\n{xorb_hex}\n{start}-{end}\n{exp}"`. It is valid while
 //! `now < exp`, and only when fetched with `Range: bytes={start}-{end}`
 //! exactly, so a leaked URL yields that one range and nothing more.
+//!
+//! A signer may also hold verify keys: previous transfer keys whose URLs it
+//! still accepts and never signs with, so the key rotates within one URL
+//! lifetime (ruling M3-R15).
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -16,11 +20,28 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use openxet_protocol::{MerkleHash, hash_to_hex};
 use serde::Deserialize;
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 use url::Url;
 use zeroize::Zeroize as _;
 
 use crate::{AuthError, ForbiddenReason};
+
+/// The id of a transfer key, as `openxet config check` reports it: the
+/// first 16 lowercase hex characters of the SHA-256 of
+/// `"openxet-transfer-key-id-v1\n"` and the key. It names the key without
+/// revealing it, and equals no MAC OpenXet computes under the key.
+#[must_use]
+pub fn transfer_key_id(key: &[u8; 32]) -> String {
+    let digest = Sha256::new()
+        .chain_update(b"openxet-transfer-key-id-v1\n")
+        .chain_update(key)
+        .finalize();
+    let mut id = String::with_capacity(16);
+    for byte in &digest[..8] {
+        let _ = write!(id, "{byte:02x}");
+    }
+    id
+}
 
 /// The query parameters of a signed transfer URL, as the CAS route
 /// extracts them.
@@ -47,6 +68,8 @@ impl fmt::Debug for TransferQuery {
 /// Signs and checks transfer URLs with an HMAC key shared by every node.
 pub struct UrlSigner {
     mac: Hmac<Sha256>,
+    /// Keys accepted by [`UrlSigner::check`] and never used to sign.
+    verify: Vec<Hmac<Sha256>>,
     lifetime: Duration,
 }
 
@@ -85,7 +108,20 @@ impl UrlSigner {
         let mac = mac.map_err(|_| AuthError::InvalidKey {
             reason: "the URL-signing key was rejected by HMAC-SHA256",
         })?;
-        Ok(Self { mac, lifetime })
+        Ok(Self {
+            mac,
+            verify: Vec::new(),
+            lifetime,
+        })
+    }
+
+    /// This signer, also accepting URLs signed with any of `keys`, which it
+    /// never signs with: the previous transfer keys during a rotation
+    /// (ruling M3-R15). The local copies of `keys` are wiped.
+    #[must_use]
+    pub fn with_verify_keys(mut self, keys: Vec<[u8; 32]>) -> Self {
+        self.verify = crate::verify_macs(keys);
+        self
     }
 
     /// A URL under `base` serving bytes `start..=end_incl` of `xorb`, valid
@@ -144,7 +180,8 @@ impl UrlSigner {
     ///
     /// - [`AuthError::BadRange`] if `range_header` is absent (HTTP `400`).
     /// - [`AuthError::Forbidden`] (HTTP `403`) if the signature does not
-    ///   match (compared in constant time), the URL is at or past `exp`, its
+    ///   match under the signing key or a verify key (each compared in
+    ///   constant time), the URL is at or past `exp`, its
     ///   `exp` is more than this signer's lifetime plus
     ///   [`MAX_CLOCK_SKEW`](crate::MAX_CLOCK_SKEW) ahead, or `range_header`
     ///   is not exactly `bytes={start}-{end}`.
@@ -162,9 +199,15 @@ impl UrlSigner {
         let sig = URL_SAFE_NO_PAD
             .decode(&query.sig)
             .map_err(|_| forbidden(ForbiddenReason::BadSignature))?;
-        self.mac_for(&hash_to_hex(xorb), start, end, query.exp)
-            .verify_slice(&sig)
-            .map_err(|_| forbidden(ForbiddenReason::BadSignature))?;
+        let xorb_hex = hash_to_hex(xorb);
+        let signed_by = |keyed: &Hmac<Sha256>| {
+            mac_for(keyed, &xorb_hex, start, end, query.exp)
+                .verify_slice(&sig)
+                .is_ok()
+        };
+        if !(signed_by(&self.mac) || self.verify.iter().any(signed_by)) {
+            return Err(forbidden(ForbiddenReason::BadSignature));
+        }
         if now >= query.exp {
             return Err(forbidden(ForbiddenReason::Expired));
         }
@@ -179,17 +222,18 @@ impl UrlSigner {
         }
         Ok((start, end))
     }
+}
 
-    fn mac_for(&self, xorb_hex: &str, start: u64, end: u64, exp: u64) -> Hmac<Sha256> {
-        let mut mac = xorb_mac(&self.mac, xorb_hex);
-        range_mac(
-            &mut mac,
-            itoa::Buffer::new().format(start),
-            itoa::Buffer::new().format(end),
-            itoa::Buffer::new().format(exp),
-        );
-        mac
-    }
+/// The MAC under `keyed` of the whole canonical string.
+fn mac_for(keyed: &Hmac<Sha256>, xorb_hex: &str, start: u64, end: u64, exp: u64) -> Hmac<Sha256> {
+    let mut mac = xorb_mac(keyed, xorb_hex);
+    range_mac(
+        &mut mac,
+        itoa::Buffer::new().format(start),
+        itoa::Buffer::new().format(end),
+        itoa::Buffer::new().format(exp),
+    );
+    mac
 }
 
 /// The MAC over the canonical string's first part, `"xorb\n{xorb_hex}\n"`.
@@ -307,6 +351,7 @@ impl fmt::Debug for UrlSigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UrlSigner")
             .field("mac", &"<redacted>")
+            .field("verify_keys", &self.verify.len())
             .field("lifetime", &self.lifetime)
             .finish()
     }
@@ -336,8 +381,7 @@ mod tests {
             range: "9-7".to_owned(),
             exp,
             sig: URL_SAFE_NO_PAD.encode(
-                signer
-                    .mac_for(&hash_to_hex(&xorb), 9, 7, exp)
+                mac_for(&signer.mac, &hash_to_hex(&xorb), 9, 7, exp)
                     .finalize()
                     .into_bytes(),
             ),

@@ -470,6 +470,81 @@ async fn refresh(href: &str, authorization: Option<&str>) -> (u16, Value) {
     (status, response.json().await.unwrap_or(Value::Null))
 }
 
+/// Ruling M3-R15 end to end for LFS: a server that signs with a new
+/// transfer key and lists the old one in `cas.transfer_verify_key_files`
+/// answers the capability `href`s the old key signed, and signs new ones
+/// with the new key only, so a server holding just the old key refuses
+/// them.
+#[cfg(unix)]
+#[tokio::test]
+async fn transfer_key_rotation_keeps_issued_capabilities() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TempDir::new().unwrap();
+    let data = dir.path().join("data");
+    let (old, new) = (dir.path().join("old.key"), dir.path().join("new.key"));
+    for (path, byte) in [(&old, "a1"), (&new, "b2")] {
+        std::fs::write(path, format!("{}\n", byte.repeat(32))).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let start = |key: &Path, verify: &[&Path]| {
+        let key = key.display().to_string();
+        let verify = format!("{verify:?}");
+        Server::start_with(
+            &data,
+            None,
+            "0",
+            &[
+                ("OPENXET_CAS__TRANSFER_KEY_FILE", key.as_str()),
+                ("OPENXET_CAS__TRANSFER_VERIFY_KEY_FILES", verify.as_str()),
+            ],
+        )
+    };
+    // The signature covers the scope, operation and expiry, not the host,
+    // so an `href` is moved to the restarted server's port.
+    let on = |server: &Server, href: &str, issued_by: &str| {
+        href.replacen(issued_by, &server.endpoint, 1)
+    };
+
+    let server = start(&old, &[]);
+    let token = server.token.clone();
+    let src = dir.path().join("src");
+    local_repo(&src, &[("a.txt", b"a\n")]);
+    must(
+        &src,
+        &[
+            "push",
+            "-q",
+            url(&server, "/dev/rotate", &token).as_str(),
+            "main",
+        ],
+        &[],
+    );
+    let old_href = lfs_upload_action(&server, "dev/rotate", &token).await["href"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let old_endpoint = server.endpoint.clone();
+    server.stop();
+
+    let server = start(&new, &[&old]);
+    let (status, answer) = refresh(&on(&server, &old_href, &old_endpoint), None).await;
+    assert_eq!(status, 200, "{answer}");
+    let new_href = lfs_upload_action(&server, "dev/rotate", &token).await["href"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(refresh(&new_href, None).await.0, 200);
+    let new_endpoint = server.endpoint.clone();
+    server.stop();
+
+    let server = start(&old, &[]);
+    let (status, answer) = refresh(&on(&server, &new_href, &new_endpoint), None).await;
+    assert_eq!(status, 403, "the verify key signed {new_href}: {answer}");
+    let (status, answer) = refresh(&on(&server, &old_href, &old_endpoint), None).await;
+    assert_eq!(status, 200, "{answer}");
+    server.stop();
+}
+
 /// `restart_keeps_repos_tokens_and_capabilities`: after a restart on the
 /// same data directory, pushed repositories clone, the dev token still
 /// works, a CAS token the Hub handed out before the restart is still

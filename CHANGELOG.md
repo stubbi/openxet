@@ -14,6 +14,15 @@ and newer uploads to and downloads from the CAS directly. The
 [storage-only quickstart](docs/quickstart-storage-only.md) run as written
 in CI.
 
+### Added in M3
+
+- Keys rotate without refusing a credential handed out under them:
+  `cas.transfer_verify_key_files` lists previous transfer keys that are
+  accepted and never sign; each CAS token key is bound to its `alg`; and
+  `openxet config check` lists every key with its id, algorithm and age,
+  warning past `auth.key_max_age` (default `180d`)
+  ([rotating keys](docs/reference/config.md#rotating-keys)).
+
 ### Added in M2
 
 - Hub token, resolve and tree answer within 10 ms at p99 on an idle node,

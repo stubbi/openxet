@@ -394,16 +394,7 @@ pub fn transfer_key(path: &Path) -> Result<(Zeroizing<[u8; 32]>, bool), CliError
 pub fn cas_token_key(path: &Path) -> Result<(openxet_auth::TokenSigner, bool), CliError> {
     load_or_create(
         path,
-        |text| {
-            openxet_auth::TokenSigner::from_pem(text).map_err(|_| {
-                CliError::new(
-                    "invalid_key",
-                    format!("{} is not an Ed25519 private key", path.display()),
-                    "Restore the file, or remove it to generate a new key, which invalidates \
-                     the CAS tokens the Hub handed out (clients fetch new ones).",
-                )
-            })
-        },
+        |text| parse_cas_token_key(path, text),
         || {
             let pair = openxet_auth::generate_keypair().map_err(|_| {
                 CliError::new(
@@ -415,6 +406,25 @@ pub fn cas_token_key(path: &Path) -> Result<(openxet_auth::TokenSigner, bool), C
             Ok(Zeroizing::new(pair.private_pem().to_owned()))
         },
     )
+}
+
+/// The server's CAS token key at `path`, or `None` if the file doesn't
+/// exist.
+pub fn read_cas_token_key(path: &Path) -> Result<Option<openxet_auth::TokenSigner>, CliError> {
+    read(path)?
+        .map(|text| parse_cas_token_key(path, &text))
+        .transpose()
+}
+
+fn parse_cas_token_key(path: &Path, text: &str) -> Result<openxet_auth::TokenSigner, CliError> {
+    openxet_auth::TokenSigner::from_pem(text).map_err(|_| {
+        CliError::new(
+            "invalid_key",
+            format!("{} is not an Ed25519 private key", path.display()),
+            "Restore the file, or remove it to generate a new key, which invalidates the CAS \
+             tokens the Hub handed out (clients fetch new ones).",
+        )
+    })
 }
 
 fn parse_key(text: &str) -> Option<Zeroizing<[u8; 32]>> {
