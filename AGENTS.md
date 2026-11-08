@@ -273,7 +273,8 @@ the machine, in `docs/reference/benchmarks.md`.
 ```bash
 cargo build                                                # build the workspace
 scripts/fetch-reference-files.sh                           # fetch + verify golden-test fixtures (once)
-cargo nextest run --workspace                              # run all tests
+cargo nextest run --workspace                              # run all tests (service tests print why and skip without their OPENXET_TEST_* URL)
+OPENXET_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/postgres cargo nextest run -p openxet-index -E 'binary(postgres_conformance)' # the Postgres index against the conformance suite; creates and drops a database per case (CI gate, OPENXET_REQUIRE_SERVICES=1)
 cargo nextest run --release -p openxet-protocol -E 'binary(file_hash_streaming)' # incremental file hash, release build (CI gate)
 cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # reconstruction p99 < 50 ms, release build, quiet machine (CI gate, absolute on main)
 OPENXET_LATENCY_GATE=measure OPENXET_LATENCY_GATE_BUILD=$(git rev-parse HEAD) cargo nextest run --release -p openxet-cas -E 'binary(latency_gate)' --no-capture # the same, printing the JSON lines without asserting (CI, on a pull request: base, then head)

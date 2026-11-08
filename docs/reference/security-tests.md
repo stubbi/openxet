@@ -149,6 +149,11 @@ scanned at teardown for every credential its clients sent
 | 7 | `tenant_limits_record_reaches_bucket_first` | pending (M3, `crates/hub/tests/admin_limits.rs`) | M3 (tenant-limit records, Task 16) |
 | 7 | `concurrent_put_xorb_two_pools` | `crates/index/tests/sqlite_conformance.rs` | M3 (index conformance, every backend, Task 2) |
 | 7 | `concurrent_register_same_shard_two_pools` | `crates/index/tests/sqlite_conformance.rs` | M3 (index conformance, every backend, Task 2) |
+| 7 | `concurrent_put_xorb_two_pools` | `crates/index/tests/postgres_conformance.rs` | M3 (Postgres, Task 3) |
+| 7 | `concurrent_register_same_shard_two_pools` | `crates/index/tests/postgres_conformance.rs` | M3 (Postgres, Task 3) |
+| 7 | `concurrent_overlapping_shards_keep_the_lowest_two_pools` | `crates/index/tests/sqlite_conformance.rs` | M3 (index conformance, every backend, Task 3) |
+| 7 | `concurrent_overlapping_shards_keep_the_lowest_two_pools` | `crates/index/tests/postgres_conformance.rs` | M3 (Postgres, Task 3) |
+| 7 | `deadlocks_retry_then_busy` | `crates/index/tests/postgres_conformance.rs` | M3 (Postgres, Task 3) |
 | 8 | `v2_want_unreachable_refused` | `crates/git/tests/reachability.rs` | M2 |
 | 8 | `hub_read_by_sha_obeys_r22` | `crates/git/tests/hub_objects.rs` | M2 |
 | 8 | `writer_cannot_make_unreachable_reachable` | `crates/git/tests/thin_bases.rs` | M2 (pushes) |
@@ -216,14 +221,24 @@ Notes on what some tests cover:
   scans for each token and each Basic header's base64. The compatibility
   suite repeats the scan for every server it starts
   (`assert_no_credential_in_log` below).
-- `concurrent_put_xorb_two_pools`, `concurrent_register_same_shard_two_pools`
+- `concurrent_put_xorb_two_pools`, `concurrent_register_same_shard_two_pools`,
+  `concurrent_overlapping_shards_keep_the_lowest_two_pools` (multi-file
+  shards whose files are new for some racing calls and registered already
+  for others, so inserts and updates of one row race)
   and `concurrent_hub_commits_two_pools_one_winner` are cases of the index
   conformance suite (`crates/index/src/conformance/`), which every index
-  backend runs from its own test binary; SQLite's is named here. Each
-  sends 16 concurrent calls over two handles on one database, as two
-  nodes would: every xorb and shard write succeeds and is readable from
-  both handles, of racing registrations of one file the lowest-numbered
-  is kept (ruling M1-R37), and of racing ref commits exactly one wins.
+  backend runs from its own test binary. Each is named here for SQLite,
+  and for Postgres once it implements the case's trait (`Index` now, the
+  ref commits with Task 4). Each sends 16 concurrent calls
+  over two handles on one database, as two nodes would: every xorb and
+  shard write succeeds and is readable from both handles, of racing
+  registrations of one file the lowest-numbered is kept (ruling M1-R37),
+  and of racing ref commits exactly one wins.
+- `deadlocks_retry_then_busy` makes Postgres itself raise the deadlock
+  error (`40P01`) in a write's transaction: the write is retried up to
+  three times, and one that fails every time is an error with nothing
+  recorded (`503 index_busy`), never a silent success (ruling M3-R2). The
+  error is injected; it exercises the retry loop, not deadlock detection.
 - `upload_pack_needs_read_and_hides_private` and `receive_pack_needs_write`
   call every Git smart HTTP route, unprefixed, with `.git` and under a
   typed prefix, with `Bearer` and Basic credentials that can't read the
@@ -255,7 +270,10 @@ requirement that the named tests don't.
 | 4 | `a_scope_named_like_a_tenant_stays_out_of_it` | `crates/cas/tests/dedup.rs` | A credential naming no tenant is in tenant `scope:{scope}`, so a scope named like a tenant never sees that tenant's xorbs, nor the other way round (ruling M1-R43). |
 | 4 | `register_shard_rejects_invisible_xorb_without_revealing_existence` | `crates/index/tests/sqlite_conformance.rs` | On every index backend, registering over a xorb another tenant stores fails exactly as over one never stored, so registration can't probe other tenants. |
 | 4 | `dedup_shard_xorbs_respects_tenant_and_visibility` | `crates/index/tests/sqlite_conformance.rs` | On every index backend, a multi-xorb dedup answer under `per-tenant` never comes from another tenant's shard. |
+| 4 | `register_shard_rejects_invisible_xorb_without_revealing_existence` | `crates/index/tests/postgres_conformance.rs` | The same on Postgres. |
+| 4 | `dedup_shard_xorbs_respects_tenant_and_visibility` | `crates/index/tests/postgres_conformance.rs` | The same on Postgres. |
 | 7 | `register_shard_is_atomic` | `crates/index/tests/sqlite_conformance.rs` | On every index backend, a registration that fails midway records nothing. |
+| 7 | `register_shard_is_atomic` | `crates/index/tests/postgres_conformance.rs` | The same on Postgres. |
 | 8 | `commit_fenced_by_full_repack_gen` | `crates/index/tests/sqlite_conformance.rs` | On every index backend, a ref commit from a snapshot older than a full repack is refused and rolled back whole (ADR 0004 item 3). |
 | 7 | `index_scope_tables_rebuild_from_the_bucket` | `crates/cas/tests/bucket_truth.rs` | Every acknowledged registration and ownership is in the bucket: the index's scope tables rebuild from it alone (ruling M1-R37). |
 | 6 | `auth_errors_never_contain_the_credential` | `crates/auth/tests/auth.rs` | Credential errors never carry the credential. |

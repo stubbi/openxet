@@ -304,6 +304,12 @@ pub enum CasError {
         limit: usize,
     },
 
+    /// A write to the index kept conflicting with concurrent writes from
+    /// other nodes and was given up after its retries (ruling M3-R2).
+    /// `503 index_busy` with `Retry-After: 1`, which clients retry.
+    #[error("the server's index is busy with concurrent writes to the same data")]
+    IndexBusy(#[source] Cause),
+
     /// The index or the bucket failed in a way a retry may fix.
     /// `503 unavailable`, which clients retry.
     #[error("the server's {component} is temporarily unavailable")]
@@ -367,6 +373,7 @@ impl From<IndexError> for CasError {
                 component: "index",
                 source: e.into(),
             },
+            IndexError::Busy(_) => Self::IndexBusy(e.into()),
             // A corrupt row or invalid input stays wrong on retry.
             IndexError::Corrupt(_) | IndexError::InvalidInput(_) => Self::internal(e),
             // A variant added upstream (or the test-only injected fault) is
@@ -636,6 +643,13 @@ impl CasError {
                 "payload_too_large",
                 "Send a smaller body.",
             ),
+            Self::IndexBusy(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "index_busy",
+                "Retry after the `Retry-After` delay; stock clients do so automatically. If it \
+                 persists, the operator should check the index database for load or long-held \
+                 locks.",
+            ),
             Self::Unavailable { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, "unavailable", RETRY_HINT)
             }
@@ -674,7 +688,11 @@ impl CasError {
     pub(crate) fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Unavailable { .. } | Self::NotReady | Self::MemoryBusy | Self::AuthnUnavailable
+            Self::Unavailable { .. }
+                | Self::IndexBusy(_)
+                | Self::NotReady
+                | Self::MemoryBusy
+                | Self::AuthnUnavailable
         )
     }
 
@@ -716,7 +734,12 @@ impl IntoResponse for CasError {
         if let Some(challenge) = self.challenge() {
             response.headers_mut().insert(WWW_AUTHENTICATE, challenge);
         }
-        if let Self::NotReady | Self::DedupBusy | Self::MemoryBusy | Self::AuthnUnavailable = self {
+        if let Self::NotReady
+        | Self::DedupBusy
+        | Self::MemoryBusy
+        | Self::IndexBusy(_)
+        | Self::AuthnUnavailable = self
+        {
             response
                 .headers_mut()
                 .insert(RETRY_AFTER, HeaderValue::from_static("1"));
@@ -1026,6 +1049,17 @@ mod tests {
             "unavailable",
         )
         .await;
+        assert_no_detail(&reply, &["pool"]);
+    }
+
+    /// Ruling M3-R2: a write that kept conflicting with concurrent ones is
+    /// `503 index_busy` with `Retry-After: 1`, which clients retry.
+    #[tokio::test]
+    async fn index_busy_is_a_retryable_503_with_retry_after() {
+        let e = CasError::from(IndexError::Busy(sqlx::Error::PoolTimedOut));
+        assert!(e.is_retryable());
+        let reply = assert_maps(e, StatusCode::SERVICE_UNAVAILABLE, "index_busy").await;
+        assert_eq!(reply.headers[RETRY_AFTER], "1");
         assert_no_detail(&reply, &["pool"]);
     }
 

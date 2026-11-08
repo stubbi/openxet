@@ -2,9 +2,10 @@
 //! [`Repos`] and [`GitStore`] that holds for any backend, written once
 //! against a [`Fixture`] and run by each backend's test binary through
 //! [`index_conformance!`](crate::index_conformance). SQLite runs it in
-//! `crates/index/tests/sqlite_conformance.rs`; Postgres joins in M3 (ADR
-//! 0015). What only one backend can show (its file locks, its query plans,
-//! its migrations of old databases) stays in that backend's own tests.
+//! `crates/index/tests/sqlite_conformance.rs`, Postgres in
+//! `crates/index/tests/postgres_conformance.rs` (ADR 0015). What only one
+//! backend can show (its file locks, its query plans, its migrations of old
+//! databases, its retries) stays in that backend's own tests.
 //!
 //! Each case is a `pub async fn <name><F: Fixture>(f: &F)` in [`cas`],
 //! [`repos`] or [`git`] and runs as its own `#[test]`, named
@@ -23,13 +24,17 @@ use std::future::Future;
 
 use openxet_protocol::{MerkleHash, chunk_hash};
 
-use crate::HubIndex;
+use crate::Index;
 
 /// How the suite gets indexes of one backend.
+///
+/// The `cas` group needs only an [`Index`]; the `repos` and `git` groups
+/// need a [`HubIndex`](crate::HubIndex), so a backend can pass the CAS
+/// cases before it implements the rest.
 #[async_trait::async_trait]
 pub trait Fixture: Send + Sync {
     /// The backend's index.
-    type Index: HubIndex;
+    type Index: Index;
 
     /// An empty, migrated index of its own: no other case's rows.
     async fn fresh(&self) -> Self::Index;
@@ -60,6 +65,34 @@ pub fn block_on(case: impl Future<Output = ()>) {
         .block_on(case);
 }
 
+/// Set to `1` (as CI does) to make a test whose service isn't configured
+/// fail instead of skipping, so no job passes by skipping.
+pub const REQUIRE_SERVICES: &str = "OPENXET_REQUIRE_SERVICES";
+
+/// The URL of the service a test needs, from the environment variable
+/// `var`, or `None` after printing why the test is skipped. `example`
+/// shows what to set it to.
+///
+/// # Panics
+///
+/// If `var` is unset or empty while [`REQUIRE_SERVICES`] is `1`.
+#[must_use]
+pub fn service_url(var: &str, example: &str) -> Option<String> {
+    match std::env::var(var) {
+        Ok(url) if !url.is_empty() => Some(url),
+        _ if std::env::var(REQUIRE_SERVICES).as_deref() == Ok("1") => panic!(
+            "{var} is unset, and {REQUIRE_SERVICES}=1 requires the service: set it, for \
+             example {var}={example}"
+        ),
+        _ => {
+            eprintln!(
+                "skipped: {var} is unset; set it to run this test, for example {var}={example}"
+            );
+            None
+        }
+    }
+}
+
 /// The cases `source` defines that `listed` leaves out: what
 /// [`index_conformance!`](crate::index_conformance) checks, so a case
 /// added to a group but not to the macro's list fails instead of never
@@ -84,12 +117,13 @@ pub fn unlisted(group: &str, listed: &[&str]) -> Vec<String> {
 
 /// Expands to the conformance suite's tests, one `#[test]` per case, for
 /// the [`Fixture`] the function `$fixture` (in the invoking module, taking
-/// no arguments) returns. The groups to run follow the colon: `cas`
-/// ([`Index`](crate::Index)), `repos` ([`Repos`](crate::Repos)) and `git`
-/// ([`GitStore`](crate::GitStore)).
+/// no arguments) returns, or for none if it returns `None`: a backend whose
+/// service isn't configured skips (see [`service_url`]). The groups to run
+/// follow the colon: `cas` ([`Index`](crate::Index)), `repos`
+/// ([`Repos`](crate::Repos)) and `git` ([`GitStore`](crate::GitStore)).
 ///
 /// ```ignore
-/// fn sqlite() -> SqliteFixture { /* ... */ }
+/// fn sqlite() -> Option<SqliteFixture> { /* ... */ }
 /// openxet_index::index_conformance!(sqlite: cas, repos, git);
 /// ```
 #[macro_export]
@@ -130,6 +164,7 @@ macro_rules! index_conformance {
             distinct_concurrent_writers_never_fail,
             concurrent_put_xorb_two_pools,
             concurrent_register_same_shard_two_pools,
+            concurrent_overlapping_shards_keep_the_lowest_two_pools,
         ]);
     };
     (@repos $fixture:ident) => {
@@ -173,7 +208,9 @@ macro_rules! index_conformance {
                 #[test]
                 fn $case() {
                     $crate::conformance::block_on(async {
-                        let fixture = super::$fixture();
+                        let Some(fixture) = super::$fixture() else {
+                            return;
+                        };
                         $crate::conformance::$group::$case(&fixture).await;
                     });
                 }

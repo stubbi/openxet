@@ -29,6 +29,7 @@ pub(crate) fn doc(summary: &'static str, write: bool) -> Doc {
         .error(
             StatusCode::SERVICE_UNAVAILABLE,
             "`unavailable`: the index or bucket failed in a way a retry may fix. \
+             `index_busy`: index writes kept conflicting with concurrent ones. \
              `authn_unavailable`: an OIDC token's issuer keys can't be fetched. \
              `Retry-After: 1`.",
         );

@@ -72,6 +72,7 @@ These answers can come from any route:
 | `408` | `body_timeout` | The body stalled for `server.body_read_timeout`, or fell below `server.body_min_rate` ([config](config.md#server)). The answer closes the connection. Clients retry. |
 | `503` | `not_ready` | The server is starting; the index and bucket are not open yet. `Retry-After: 1`; clients retry. |
 | `503` | `unavailable` | The index or bucket failed in a way a retry may fix. Clients retry. |
+| `503` | `index_busy` | On a Postgres index, a write deadlocked with concurrent writes from other nodes, and so did each of its 3 retries (ruling M3-R2). Nothing was recorded. `Retry-After: 1`; clients retry. |
 | `503` | `authn_unavailable` | An [OIDC](config.md#oidc) token can't be verified now: its issuer's keys can't be fetched, and the cached ones are too old or lack its key. `Retry-After: 1`. Never an accept. |
 | `503` | `memory_busy` | The server's memory budget stayed full for the request's wait: 120 s for an upload, 5 s for a reconstruction that doesn't fit at once ([config](config.md#memory)). `Retry-After: 1`; clients retry. A refused upload's body is not read, and the answer closes the connection. |
 | `413` | `answer_too_large` | One reconstruction answer would hold more than an eighth of the server's memory budget. Final: ask for the file by range, as `hf_xet` does, or put fewer files in a batch; the operator can raise `server.memory_budget`. |
@@ -200,7 +201,7 @@ sees:
   `unknown_xorb` below): its message, with `retryable: false`.
 - A server fault: a generic message with the request id, and
   `retryable: true` if a retry may help (the index or bucket was
-  unavailable), `false` for a bug. A retryable error makes `hf_xet` resend
+  unavailable, or the index busy), `false` for a bug. A retryable error makes `hf_xet` resend
   the whole shard.
 
 A client that disconnects mid-stream doesn't stop the work: the shard is
@@ -220,6 +221,7 @@ the scope, `{"result": 0}` if not. Failures are statuses:
 | `400` | `unknown_xorb` | A file references a xorb that isn't stored, or isn't visible to the tenant. The message names the xorb and says that if the server was reset, the client's Xet cache for this endpoint (`~/.cache/huggingface/xet` or `$HF_XET_CACHE`) must be cleared before uploading again ([stale client caches](config.md#stale-client-caches)). Final. |
 | `413` | `shard_too_large` | The body is over 64 MiB. |
 | `503` | `unavailable` | Storage or index failure. Clients retry. |
+| `503` | `index_busy` | Index writes deadlocked with concurrent ones through their retries. `Retry-After: 1`; clients retry. |
 
 `hf_xet` doesn't show a `/v1/shards` error body, so each rejected shard is
 also logged at `warn` with its full reason under the request id.

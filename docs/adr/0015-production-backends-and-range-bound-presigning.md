@@ -62,9 +62,10 @@ What we checked, and how:
    a lost race is success. The row of the lowest `(seq, shard, tenant)`
    (ruling M1-R37) is kept by a conditional upsert. A ref commit locks
    the repository row (`SELECT ... FOR UPDATE`) in the transaction that
-   checks the fence (ADR 0004 item 3). A serialization failure or
-   deadlock (`40001`, `40P01`) is retried up to 3 times, then answered
-   `503 index_busy` with `Retry-After: 1`.
+   checks the fence (ADR 0004 item 3). Write transactions run at
+   `READ COMMITTED`, set per transaction, so Postgres aborts one for a
+   conflict only on a deadlock (`40P01`); that is retried up to 3 times,
+   then answered `503 index_busy` with `Retry-After: 1`.
 3. **Configuration.** `[index] url` takes a `sqlite:` path or a
    `postgres://` URL (default: the data directory's `index.sqlite`),
    `max_connections` (default 4 × CPUs, bounds 2 to 1024) and an optional
