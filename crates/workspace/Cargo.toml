@@ -14,7 +14,7 @@ libc = "0.2.191"
 # 9.0 for `Config::with_event_kinds`, which keeps inotify from queueing an
 # event for every file a build opens; pinned exactly while 9.0 is a
 # release candidate.
-notify = "=9.0.0-rc.6"
+notify = "=9.0.0-rc.7"
 # Copy-on-write clones: `clonefile` on APFS, `FICLONE` on Btrfs and XFS.
 reflink-copy = "0.1.30"
 # `statvfs` for the volume's free space, errno values, and `kill` to stop
